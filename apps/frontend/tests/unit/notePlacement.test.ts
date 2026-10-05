@@ -4,7 +4,7 @@ import type { ChartData } from '../../src/controller/types';
 import { chartBarCallout, chartNoteTarget, chartObstacles, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 import {
   DATA_CLEARANCE,
-  barLeader,
+  calloutLeader,
   hiddenFillArea,
   hiddenTraceLength,
   layoutNotes,
@@ -455,7 +455,7 @@ describe('a note on a bar chart', () => {
       wholly: true,
     };
     const callout = chartBarCallout(data, anchor, scales)!;
-    return { field, point: at(target.point), from: target.from!, value: rect(callout.label), bar: rect(callout.bar.rect) };
+    return { field, point: at(target.point), from: target.from!, value: rect(callout.label), mark: rect(callout.bar.rect) };
   }
   const straddles = (card: Rect, plot: Rect) => {
     const inside = card.left >= plot.left && card.right <= plot.right && card.top >= plot.top && card.bottom <= plot.bottom;
@@ -530,7 +530,7 @@ describe('a note on a bar chart', () => {
     const point = { x: 120, y: 175 };
     const marks = [...bars, value];
     const near = (_near: Rect, visit: (mark: Rect) => void) => marks.forEach(visit);
-    const route = barLeader(box(200, 100, 300, 120), point, 'above', near);
+    const route = calloutLeader(box(200, 100, 300, 120), point, 'above', near);
     expect(route.clear).toBe(true);
     expect(route.path[0].x).toBe(200);
     // Along at a height over the taller bar, and down onto the point.
@@ -551,7 +551,7 @@ describe('a note on a bar chart', () => {
     const named = box(300, 300, 40, 300);
     const marks = [box(0, 0, 290, 600), named, box(305, 284, 30, 13), box(350, 0, 40, 600)];
     const field: NoteField = { area: box(0, 0, 1000, 600), plot: box(0, 0, 1000, 600), marks, wholly: true };
-    const placed = layoutNotes([{ id: 'a', width: 300, height: 80, point: { x: 320, y: 281 }, from: 'above', bar: named }], field).get('a')!;
+    const placed = layoutNotes([{ id: 'a', width: 300, height: 80, point: { x: 320, y: 281 }, from: 'above', mark: named }], field).get('a')!;
     expect(marks.every((mark) => !overlaps(placed.rect, mark))).toBe(true);
   });
 
@@ -565,7 +565,7 @@ describe('a note on a bar chart', () => {
     const near = (_near: Rect, visit: (mark: Rect) => void) => marks.forEach(visit);
     // A card right of the neighbour, its run at the point's height.
     const card = box(170, 120, 200, 120);
-    const route = barLeader(card, { x: 110, y: 181 }, 'left', near, { value });
+    const route = calloutLeader(card, { x: 110, y: 181 }, 'left', near, { value });
     expect(route.path.at(-1)).toEqual({ x: 110, y: 181 });
     expect(route.clear).toBe(false);
   });
@@ -575,7 +575,7 @@ describe('a note on a bar chart', () => {
     const bar = box(100, 200, 40, 300);
     const marks = [bar, box(108, 184, 24, 13)];
     const near = (_near: Rect, visit: (mark: Rect) => void) => marks.forEach(visit);
-    const route = barLeader(box(80, 520, 200, 60), { x: 120, y: 181 }, 'above', near, { bar });
+    const route = calloutLeader(box(80, 520, 200, 60), { x: 120, y: 181 }, 'above', near, { mark: bar });
     expect(route.clear).toBe(false);
   });
 
@@ -585,6 +585,130 @@ describe('a note on a bar chart', () => {
     expect(straddles(place.rect, field.plot!)).toBe(false);
   });
 
+});
+
+// Kayne, round 4: the line, area and scatter notes kept the old rules --
+// a card across the plot's top border (the training goldens), a leader
+// faded to nothing on its way and free to cross the other line, the noted
+// point marked only by the marker. They follow the bar chart's now: a card
+// wholly in or out of the plot, a leader onto the value the chart prints
+// by the ringed point, from past it, through no other mark or line.
+describe('a note on a line, area or scatter chart', () => {
+  const training: ChartData = {
+    xLabel: 'EPOCH', yLabel: 'LOSS', xMax: 40, yMin: 0.08, yMax: 0.3, marker: { x: 32, series: 'VAL LOSS' },
+    series: [
+      { name: 'TRAIN LOSS', values: [0.277, 0.262, 0.249, 0.236, 0.225, 0.214, 0.204, 0.195, 0.186, 0.178, 0.17, 0.162, 0.155, 0.148, 0.142, 0.136, 0.131, 0.126, 0.121, 0.117, 0.113, 0.11, 0.108, 0.106, 0.105, 0.1041] },
+      { name: 'VAL LOSS', values: [0.284, 0.269, 0.254, 0.24, 0.227, 0.216, 0.206, 0.197, 0.189, 0.181, 0.175, 0.169, 0.164, 0.159, 0.155, 0.152, 0.15, 0.151, 0.154, 0.158, 0.164, 0.171, 0.179, 0.188, 0.197, 0.1832] },
+    ],
+  };
+  // The chart as a page draws it, every note's point named: its frame at
+  // `scale`, `top` down a layer and centred across it.
+  function drawn(data: ChartData, anchors: Array<{ x: number; series?: string }>, scale: number, top: number, layer: { width: number; height: number }) {
+    const left = (layer.width - 1000 * scale) / 2;
+    const at = (p: Point): Point => ({ x: left + p.x * scale, y: top + p.y * scale });
+    const rect = (r: Rect): Rect => ({ left: left + r.left * scale, top: top + r.top * scale, right: left + r.right * scale, bottom: top + r.bottom * scale });
+    const scales = chartScales(data);
+    const obstacles = chartObstacles(data, scales, anchors);
+    const field: NoteField = {
+      area: box(0, 0, layer.width, layer.height),
+      plot: rect(scales.plot),
+      traces: obstacles.lines.map((line) => line.map(at)),
+      marks: obstacles.marks.map(rect),
+      fills: obstacles.fills.map((piece) => piece.map(at)),
+      labels: obstacles.labels.map(rect),
+      wholly: true,
+    };
+    const targets = anchors.map((anchor) => {
+      const target = chartNoteTarget(data, anchor, scales, anchors)!;
+      return { point: at(target.point), from: target.from, mark: rect(target.mark), value: rect(target.value) };
+    });
+    return { field, targets };
+  }
+  const wholly = (card: Rect, plot: Rect) =>
+    (card.left >= plot.left && card.right <= plot.right && card.top >= plot.top && card.bottom <= plot.bottom) ||
+    card.right <= plot.left || card.left >= plot.right || card.bottom <= plot.top || card.top >= plot.bottom;
+  // How near a leader, short of its last few pixels, comes to a line.
+  const nearest = (leader: Point[], traces: Point[][]) => {
+    let least = Infinity;
+    const steps = leader.slice(1).flatMap((b, index) => {
+      const a = leader[index];
+      const count = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y));
+      return Array.from({ length: count + 1 }, (_, step) => ({ x: a.x + ((b.x - a.x) * step) / Math.max(1, count), y: a.y + ((b.y - a.y) * step) / Math.max(1, count) }));
+    });
+    for (const p of steps.slice(0, -6)) {
+      for (const trace of traces) {
+        for (let index = 1; index < trace.length; index += 1) {
+          if (hiddenTraceLength(box(p.x - 0.5, p.y - 0.5, 1, 1), [[trace[index - 1], trace[index]]]) > 0) least = 0;
+          else least = Math.min(least, Math.min(Math.hypot(p.x - trace[index].x, p.y - trace[index].y)));
+        }
+      }
+    }
+    return least;
+  };
+
+  for (const view of [
+    // The training goldens' slots: 1440x900 and 2560x1080.
+    { name: 'at 1440x900', scale: 0.937, top: 47, layer: { width: 937, height: 562 }, card: { width: 394, height: 118 } },
+    { name: 'at 2560x1080', scale: 1.294, top: 9, layer: { width: 2008, height: 665 }, card: { width: 680, height: 86 } },
+  ]) {
+    it(`lies wholly in or out of the plot, its leader onto the point's value from above, ${view.name}`, () => {
+      const anchor = { x: 32, series: 'VAL LOSS' };
+      const { field, targets } = drawn(training, [anchor], view.scale, view.top, view.layer);
+      const [target] = targets;
+      expect(target.from).toBe('above');
+      const place = layoutNotes([{ id: 'note', ...view.card, ...target }], field).get('note')!;
+      expect(wholly(place.rect, field.plot!)).toBe(true);
+      // Clear of the lines, the ring and its value.
+      expect(hiddenTraceLength(inflate(place.rect, DATA_CLEARANCE), field.traces!)).toBe(0);
+      expect(field.marks!.every((mark) => !overlaps(place.rect, mark))).toBe(true);
+      expect(place.leader.at(-1)).toEqual(target.point);
+      expect(place.leader.at(-1)!.y).toBeLessThan(target.value.top);
+      expect(nearest(place.leader, field.traces!)).toBeGreaterThan(3);
+      // Short: the card is near the point it names.
+      const length = place.leader.slice(1).reduce((sum: number, p: Point, index: number) => sum + Math.hypot(p.x - place.leader[index].x, p.y - place.leader[index].y), 0);
+      expect(length).toBeLessThan(200);
+    });
+  }
+
+  it('reaches a point under another line from below it, never across that line', () => {
+    // TRAIN LOSS at epoch 6 lies just under VAL LOSS: its value is printed
+    // below it, and the leader comes up from a card below.
+    const anchors = [{ x: 32, series: 'VAL LOSS' }, { x: 6, series: 'TRAIN LOSS' }];
+    const { field, targets } = drawn(training, anchors, 0.937, 47, { width: 937, height: 562 });
+    expect(targets[1].from).toBe('below');
+    const placed = layoutNotes(
+      [{ id: 'late', width: 394, height: 118, ...targets[0] }, { id: 'early', width: 394, height: 60, ...targets[1] }],
+      field,
+    );
+    for (const [index, id] of ['late', 'early'].entries()) {
+      const place = placed.get(id)!;
+      expect(wholly(place.rect, field.plot!)).toBe(true);
+      expect(place.leader.at(-1)).toEqual(targets[index].point);
+      expect(nearest(place.leader, field.traces!)).toBeGreaterThan(3);
+    }
+    expect(overlaps(placed.get('late')!.rect, placed.get('early')!.rect)).toBe(false);
+  });
+
+  it('keeps a card that names no point on a line chart off the plot border too', () => {
+    const { field } = drawn(training, [], 0.937, 47, { width: 937, height: 562 });
+    const place = layoutNotes([{ id: 'general', width: 394, height: 118 }], field).get('general')!;
+    expect(wholly(place.rect, field.plot!)).toBe(true);
+  });
+
+  it('has no clear route across a line it does not name', () => {
+    // A card above a line, the point below it.
+    const line: [Point, Point] = [{ x: 0, y: 300 }, { x: 1000, y: 300 }];
+    const linesNear = (_near: Rect, visit: (segment: [Point, Point]) => void) => visit(line);
+    const card = box(100, 100, 300, 100);
+    const point = { x: 250, y: 400 };
+    const noMarks = () => {};
+    expect(calloutLeader(card, point, 'above', noMarks).clear).toBe(true);
+    expect(calloutLeader(card, point, 'above', noMarks, { linesNear }).clear).toBe(false);
+    // Beside a card below the line, a run along under it is clear.
+    const beside = calloutLeader(box(400, 420, 300, 100), { x: 250, y: 400 }, 'below', noMarks, { linesNear });
+    expect(beside.clear).toBe(true);
+    expect(beside.path.at(-1)).toEqual({ x: 250, y: 400 });
+  });
 });
 
 // A card whose own width has no clear place on the chart takes a narrower
@@ -644,7 +768,7 @@ describe('the note left out for the rail', () => {
   });
 });
 
-// Placement ran barLeader for every place it tried, before it knew the
+// Placement ran calloutLeader for every place it tried, before it knew the
 // place could not win, and tried every other size again in each run for
 // the rail: a 40-category chart of four series with five notes took over a
 // second, at mount and on every resize frame (review finding).
@@ -663,7 +787,7 @@ describe('placing notes on a dense bar chart', () => {
     const field: NoteField = { area: box(0, 0, 1000, 540), plot: scales.plot, marks: obstacles.marks, labels: obstacles.labels, wholly: true };
     const notes: NoteToPlace[] = anchors.map((anchor, index) => {
       const target = chartNoteTarget(data, anchor, scales)!;
-      return { id: `n${index}`, width: 420, height: 110, point: target.point, from: target.from, bar: target.bar, sizes: [{ width: 336, height: 130 }, { width: 269, height: 150 }, { width: 180, height: 210 }] };
+      return { id: `n${index}`, width: 420, height: 110, point: target.point, from: target.from, mark: target.mark, sizes: [{ width: 336, height: 130 }, { width: 269, height: 150 }, { width: 180, height: 210 }] };
     });
     layoutNotes(notes, field, { spill: true });
     const start = performance.now();

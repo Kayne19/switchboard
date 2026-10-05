@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
@@ -14,7 +14,7 @@ import {
   type ViewPoint,
   type ViewRect,
 } from '../primitives/chartGeometry';
-import { layoutNotes, NOTE_CARD_CUT, routeLeader, type NoteField, type NoteToPlace, type Point, type Rect } from '../primitives/notePlacement';
+import { layoutNotes, type NoteField, type NoteToPlace, type Point, type Rect } from '../primitives/notePlacement';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** One note on a chart: a note object, or the spoken explanation standing in for one. */
@@ -42,18 +42,19 @@ const MIN_CARD_WIDTH = 180;
 const WIDER = [1.25, 1.5, 1.75];
 const MAX_CARD_SHARE = 0.8;
 
-/**
- * Where on the chart a note names a point, if it names one there, and the
- * side its leader must come from: on a bar chart the bar's callout, past
- * its end.
- */
-export function chartNotePoint(
+// Where on the chart a note names a point, if it names one there: the
+// point's callout -- where its leader lands, past the value the chart
+// prints, the side it comes from, and the mark and value it names.
+// `named` is every point the chart's notes name, which the callouts keep
+// clear of one another by.
+function chartNotePoint(
   note: NoteData,
   chart: SceneObject<ChartData>,
-  scales?: ChartScales,
-): { point: ViewPoint; from?: ChartSide; bar?: ViewRect; value?: ViewRect } | undefined {
+  scales: ChartScales,
+  named: ChartAnchor[],
+): { point: ViewPoint; from: ChartSide; mark: ViewRect; value: ViewRect } | undefined {
   if (note.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
-  return chartNoteTarget(chart.data, { x: note.anchor.x, series: note.anchor.series }, scales);
+  return chartNoteTarget(chart.data, { x: note.anchor.x, series: note.anchor.series }, scales, named);
 }
 
 /** The points the notes on a chart name on it, for the chart to mark. */
@@ -99,20 +100,21 @@ const snap = (value: number) => Math.round(value - 0.5) + 0.5;
 /**
  * The notes on one chart, laid over its panel rather than in a band that
  * shrinks the plot. Every note the chart carries is shown: one that names a
- * point on this chart centres over it where it can and runs a leader to it;
- * one that names none sits in a corner. The layer measures the cards, the
- * chart's drawn geometry and itself, and `placeNotes` decides where each
- * card goes, so no card covers another, its own point, or the data the
- * chart draws where a clear place exists.
+ * point on this chart sits near it, wholly in or out of the plot, and runs a
+ * leader to the value the chart prints there; one that names none sits in a
+ * corner. The layer measures the cards, the chart's drawn geometry and
+ * itself, and `layoutNotes` decides where each card goes, so no card covers
+ * another, a point a note names, or the data the chart draws where a clear
+ * place exists.
  *
- * Where the scene gives it `onRailNote` and some card has no place clear
- * of the data -- every bar standing to the top, say -- one note is handed
- * to the rail instead (`layoutNotes`' `spill`: a note naming no point
- * wherever its absence leaves no more cards astray, else the one whose
- * absence leaves the fewest). The layer names it through `onRailNote`,
- * keeps its card out of view (still measured, so it comes back the moment
- * the chart has room); the chart keeps the point it names marked, as it
- * marks every point a note names.
+ * Where the scene gives it `onRailNote` and some card has no place that
+ * keeps those rules -- every bar standing to the top, say -- one note is
+ * handed to the rail instead, where that leaves fewer cards astray
+ * (`layoutNotes`' `spill`: the one whose absence leaves the fewest, a note
+ * naming no point first among those). The layer names it through
+ * `onRailNote` and keeps its card out of view (still measured, so it comes
+ * back the moment the chart has room); the chart keeps the point it names
+ * marked, as it marks every point a note names.
  */
 export function ChartNotes({
   chart,
@@ -128,7 +130,6 @@ export function ChartNotes({
   onRailNote?: (chartId: string, key: string, away: boolean) => void;
 }) {
   const reduced = useReducedMotion();
-  const gradientBase = useId().replace(/:/g, '');
   const layerRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const [layout, setLayout] = useState<NotesLayout | null>(null);
@@ -182,15 +183,16 @@ export function ChartNotes({
         return { left: a.x, top: a.y, right: b.x, bottom: b.y };
       };
       const scales = chartScales(data, frame);
+      const named = chartNoteAnchors(chartRef.current, current);
       if (toLayer) {
-        const obstacles = chartObstacles(data, scales, chartNoteAnchors(chartRef.current, current));
+        const obstacles = chartObstacles(data, scales, named);
         field.plot = rectToLayer(scales.plot);
         field.traces = obstacles.lines.map((line) => line.map(toLayer!));
         field.marks = obstacles.marks.map(rectToLayer);
         field.fills = obstacles.fills.map((piece) => piece.map(toLayer!));
         field.labels = obstacles.labels.map(rectToLayer);
-        // Bars rise to the plot's border: a card lies wholly inside the plot or wholly outside it.
-        field.wholly = scales.kind === 'bar';
+        // A card lies wholly inside the plot, in clear space, or wholly outside it, never across its border.
+        field.wholly = true;
       }
 
       // A card is measured at the width the stylesheet gives it, whatever
@@ -221,15 +223,12 @@ export function ChartNotes({
           const wider = sizeAt(element, cssWidths.get(note.key)! * share);
           if (wider.fits) size = wider;
         }
-        const target = toLayer ? chartNotePoint(note.data, chartRef.current, scales) : undefined;
+        const target = toLayer ? chartNotePoint(note.data, chartRef.current, scales, named) : undefined;
         toPlace.push({
           id: note.key,
           width: size.width,
           height: size.height,
-          point: target && toLayer!(target.point),
-          from: target?.from,
-          bar: target?.bar && rectToLayer(target.bar),
-          value: target?.value && rectToLayer(target.value),
+          ...(target ? { point: toLayer!(target.point), from: target.from, mark: rectToLayer(target.mark), value: rectToLayer(target.value) } : {}),
         });
       }
       const options = { spill, leaderOverlap: 1 };
@@ -267,13 +266,9 @@ export function ChartNotes({
         next.cards[note.id] = rounded;
         // A card placed narrower than the stylesheet has it is drawn so.
         if (Math.abs(width - (cssWidths.get(note.id) ?? width)) > 0.5) next.widths[note.id] = width;
-        if (note.point) {
-          // The leader begins on the card's one-pixel border, so the two
-          // read as one line. A bar's is the route the placement scored on
-          // the card's whole pixels; any other runs out of the facing edge.
-          const leader = note.from ? place!.leader : routeLeader(rounded, note.point, { cutTop: NOTE_CARD_CUT.top, overlap: 1 });
-          if (leader.length > 1) next.leaders[note.id] = leader.map((point) => ({ x: snap(point.x), y: snap(point.y) }));
-        }
+        // The leader begins on the card's one-pixel border, so the two read
+        // as one line: the route the placement scored on the card's whole pixels.
+        if (place!.leader.length > 1) next.leaders[note.id] = place!.leader.map((point) => ({ x: snap(point.x), y: snap(point.y) }));
       }
       setLayout((previous) => (sameLayout(previous, next) ? previous : next));
     };
@@ -288,11 +283,11 @@ export function ChartNotes({
     return () => observer.disconnect();
   }, [signature, chart.data, spill]);
 
-  // What each note names on the chart, worked out once a render: whether it
-  // has a point there, and whether that point is a bar's.
-  const targets = useMemo(() => {
+  // Which notes name a point on the chart, worked out once a render.
+  const anchored = useMemo(() => {
     const scales = chartScales(chart.data);
-    return new Map(notes.map((note) => [note.key, chartNotePoint(note.data, chart, scales)]));
+    const named = chartNoteAnchors(chart, notes);
+    return new Set(notes.filter((note) => chartNotePoint(note.data, chart, scales, named) !== undefined).map((note) => note.key));
   }, [chart, notes]);
 
   // The rail shows the note this chart leaves out, for as long as it does:
@@ -314,36 +309,20 @@ export function ChartNotes({
           {notes.map((note) => {
             const leader = layout?.leaders[note.key];
             if (!leader) return null;
-            // A leader to a bar keeps its full colour to the end: it lands
-            // by the bar's printed value, over bars it must not fade into.
-            const toBar = targets.get(note.key)?.from !== undefined;
-            const start = leader[0];
-            const end = leader[leader.length - 1];
-            // Named for its note, so a leader fading out keeps its own.
-            const gradientId = `${gradientBase}-leader-${note.key.replace(/[^\w-]/g, '_')}`;
+            // In the card's edge colour, a shade firmer, the whole way: it
+            // lands by the value the chart prints, over data it must not
+            // fade into.
             return (
               <motion.g
                 key={note.key}
-                className={`chart-note-leader${toBar ? ' chart-note-leader--bar' : ''}`}
+                className="chart-note-leader"
                 data-note={note.key}
                 initial={reduced ? false : { opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.2, delay: reduced ? 0 : 0.12 }}
               >
-                <defs>
-                  <linearGradient id={gradientId} gradientUnits="userSpaceOnUse" x1={start.x} y1={start.y} x2={end.x} y2={end.y}>
-                    <stop className="chart-note-leader__stop chart-note-leader__stop--card" offset="0" />
-                    <stop className="chart-note-leader__stop chart-note-leader__stop--mid" offset="0.5" />
-                    <stop className="chart-note-leader__stop chart-note-leader__stop--point" offset="1" />
-                  </linearGradient>
-                </defs>
-                <polyline
-                  className="chart-note-leader__line"
-                  points={leader.map((point) => `${point.x},${point.y}`).join(' ')}
-                  fill="none"
-                  stroke={`url(#${gradientId})`}
-                />
+                <polyline className="chart-note-leader__line" points={leader.map((point) => `${point.x},${point.y}`).join(' ')} fill="none" />
               </motion.g>
             );
           })}
@@ -352,7 +331,6 @@ export function ChartNotes({
       <AnimatePresence initial={false}>
         {notes.map((note) => {
           const card = layout?.cards[note.key];
-          const anchored = targets.get(note.key) !== undefined;
           // The note the rail carries keeps its card here out of view, so
           // the layer still measures it and can take it back.
           const away = layout?.away === note.key;
@@ -363,7 +341,7 @@ export function ChartNotes({
                 if (element) cardRefs.current.set(note.key, element);
                 else cardRefs.current.delete(note.key);
               }}
-              className={`chart-note${anchored ? ' chart-note--anchored' : ''}${away ? ' chart-note--away' : ''}`}
+              className={`chart-note${anchored.has(note.key) ? ' chart-note--anchored' : ''}${away ? ' chart-note--away' : ''}`}
               data-note={note.key}
               aria-hidden={away ? true : undefined}
               style={card ? { left: card.left, top: card.top, ...(layout?.widths[note.key] !== undefined ? { width: layout.widths[note.key] } : {}) } : undefined}

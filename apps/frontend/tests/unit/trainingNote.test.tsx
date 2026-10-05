@@ -11,7 +11,7 @@ import { SceneShell } from '../../src/components/Scenes';
 import { ControllerProvider } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
 import type { ControllerAction, ControllerState } from '../../src/controller/types';
-import { chartBarCallout, chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { chartBarCallout, chartPointCallouts, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 
 const chart: ControllerAction = {
   op: 'show',
@@ -134,20 +134,23 @@ describe('chart notes', () => {
     expect(panel.classList.contains('chart-object--noted')).toBe(false);
   });
 
-  it('runs a leader from the card\'s border to the point on the line', () => {
+  it('runs a leader from the card\'s border to the value printed by the point on the line', () => {
     mount([chart, note('loss-note', { target: 'loss', x: 30, series: 'VAL LOSS' })]);
     const box = card('loss-note')!;
     const points = leader('loss-note')!;
-    const point = chartSeriesPoint(chartData, 30, 'VAL LOSS')!;
+    const [callout] = chartPointCallouts(chartData, [{ x: 30, series: 'VAL LOSS' }]);
 
     // It grows out of the card's one-pixel bottom border...
     expect(points[0].y).toBeCloseTo(box.bottom - 0.5, 0);
     expect(points[0].x).toBeGreaterThanOrEqual(box.left);
     expect(points[0].x).toBeLessThanOrEqual(box.right);
-    // ...and ends on the drawn point, on the half pixel.
+    // ...and ends just past the value the chart prints by the ringed point,
+    // on the half pixel, coming down onto it.
+    expect(callout.from).toBe('above');
     const end = points[points.length - 1];
-    expect(Math.abs(end.x - point.x)).toBeLessThanOrEqual(0.5);
-    expect(Math.abs(end.y - (SVG_TOP + point.y))).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(end.x - callout.point.x)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(end.y - (SVG_TOP + callout.point.y))).toBeLessThanOrEqual(0.5);
+    expect(host.querySelector('.chart-marker[data-x="30"] .chart-marker__value')?.textContent).toBe(callout.value.text);
     // Every run is straight or at 45 degrees, and at least one is at 45.
     const runs = points.slice(1).map((p, index) => ({ dx: p.x - points[index].x, dy: p.y - points[index].y }));
     for (const { dx, dy } of runs) {
@@ -156,26 +159,28 @@ describe('chart notes', () => {
     expect(runs.some(({ dx, dy }) => dx !== 0 && dy !== 0)).toBe(true);
   });
 
-  it('fades the leader in the colour of the card\'s border', () => {
+  // The leader to a point faded to a fifth of its colour on its way, so it
+  // read as stopping short over the lines; a bar's kept its colour.
+  it('keeps the leader its colour to the end, as a bar\'s does', () => {
     mount([chart, note('loss-note', { target: 'loss', x: 30 })]);
-    const stops = [...host.querySelectorAll('.chart-note-leader stop')];
-    expect(stops.map((stop) => stop.getAttribute('class'))).toEqual([
-      'chart-note-leader__stop chart-note-leader__stop--card',
-      'chart-note-leader__stop chart-note-leader__stop--mid',
-      'chart-note-leader__stop chart-note-leader__stop--point',
-    ]);
-    // The colour comes from the stylesheet's shared edge token, not inline.
-    for (const stop of stops) expect(stop.getAttribute('stop-color')).toBeNull();
+    const line = host.querySelector('.chart-note-leader polyline')!;
+    expect(line.getAttribute('class')).toBe('chart-note-leader__line');
+    expect(host.querySelector('.chart-note-leader stop, .chart-note-leader linearGradient')).toBeNull();
+    // The colour comes from the stylesheet, not inline.
+    expect(line.getAttribute('stroke')).toBeNull();
   });
 
-  it('never covers the point it names', () => {
-    // The point at x = 0 is the top of the plot: the card moves off it.
-    mount([chart, note('loss-note', { target: 'loss', x: 0 })]);
+  it('never covers the point it names, nor the value printed by it', () => {
+    // The point at x = 5 is near the top of the plot, where the top row of
+    // the layer would cover it: the card moves off it.
+    mount([chart, note('loss-note', { target: 'loss', x: 5 })]);
     const box = card('loss-note')!;
-    const point = chartSeriesPoint(chartData, 0)!;
-    const y = SVG_TOP + point.y;
-    const covered = point.x > box.left && point.x < box.right && y > box.top && y < box.bottom;
-    expect(covered).toBe(false);
+    expect(box.element.classList.contains('chart-note--away')).toBe(false);
+    const [callout] = chartPointCallouts(chartData, [{ x: 5 }]);
+    for (const rect of [callout.ring, callout.label]) {
+      const apart = rect.right <= box.left || box.right <= rect.left || SVG_TOP + rect.bottom <= box.top || box.bottom <= SVG_TOP + rect.top;
+      expect(apart).toBe(true);
+    }
     expect(leader('loss-note')).not.toBeNull();
   });
 
@@ -200,10 +205,10 @@ describe('chart notes', () => {
     // A panel twice the chart's aspect: the chart is drawn 1000 wide in the
     // middle of a 2000-wide svg box, 500 in from its left.
     svgWidth = 2000;
-    mount([chart, note('loss-note', { target: 'loss', x: 20 })]);
-    const point = chartSeriesPoint(chartData, 20)!;
+    mount([chart, note('loss-note', { target: 'loss', x: 10 })]);
+    const [callout] = chartPointCallouts(chartData, [{ x: 10 }]);
     const end = leader('loss-note')!.at(-1)!;
-    expect(Math.abs(end.x - (500 + point.x))).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(end.x - (500 + callout.point.x))).toBeLessThanOrEqual(0.5);
   });
 
   it('moves the leader with the card when a new x moves the card', () => {
@@ -311,7 +316,6 @@ describe('chart notes', () => {
     expect(Math.abs(b.y - (SVG_TOP + callout.point.y))).toBeLessThanOrEqual(0.5);
     expect(b.x - a.x).toBeCloseTo(0, 6);
     expect(b.y).toBeGreaterThan(a.y);
-    expect(host.querySelector('.chart-note-leader[data-note="suite-note"]')!.classList.contains('chart-note-leader--bar')).toBe(true);
   });
 
   // The tag read "TARGET / LOSS / X 32 / VAL LOSS": the chart's object id,

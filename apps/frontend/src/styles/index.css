@@ -957,31 +957,14 @@ button {
   overflow: visible;
   pointer-events: none;
 }
-/* One pixel, as the card's border is, fading on its way to the point but
-   still there when it meets it, so it never reads as stopping short. */
+/* One pixel, as the card's border is. It lands by the value the chart
+   prints at the point, over data it would fade into: it keeps the card's
+   edge colour, a shade firmer, the whole way. */
 .chart-note-leader__line {
+  stroke: rgba(var(--orange-rgb), 0.8);
   stroke-width: 1;
   stroke-linejoin: miter;
   stroke-linecap: butt;
-}
-.chart-note-leader__stop {
-  stop-color: var(--chart-note-edge);
-}
-.chart-note-leader__stop--card {
-  stop-opacity: 1;
-}
-.chart-note-leader__stop--mid {
-  stop-opacity: 0.5;
-}
-.chart-note-leader__stop--point {
-  stop-opacity: 0.2;
-}
-
-/* A leader to a bar lands by its printed value, among bars it would fade
-   into: it keeps the card's edge colour, a shade firmer, the whole way. */
-.chart-note-leader--bar .chart-note-leader__stop {
-  stop-color: rgba(var(--orange-rgb), 0.8);
-  stop-opacity: 1;
 }
 .chart-note {
   position: absolute;

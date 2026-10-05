@@ -27,6 +27,7 @@ import {
   chartClip,
   chartFrame,
   chartLegendBox,
+  chartNoteTarget,
   chartObstacles,
   chartPad,
   chartPointCallouts,
@@ -702,6 +703,12 @@ describe('a marked point', () => {
     expect(overlaps(callouts[1].ring, callouts[0].label)).toBe(false);
   });
 
+  it("is what a note's leader lands by, as a bar's printed end is", () => {
+    const line: ChartData = { xMax: 4, yMin: 0, yMax: 10, series: [{ name: 'A', values: [1, 1.5, 4, 1.5, 1] }] };
+    const [callout] = chartPointCallouts(line, [{ x: 2 }]);
+    expect(chartNoteTarget(line, { x: 2 })).toEqual({ point: callout.point, from: callout.from, mark: callout.ring, value: callout.label });
+    expect(chartPointCallouts({ ...line, kind: 'bar', labels: ['a', 'b', 'c', 'd', 'e'] }, [{ x: 2 }])).toEqual([]);
+  });
 });
 
 // The noted bar was shown only by a small ring on its top edge, and a
