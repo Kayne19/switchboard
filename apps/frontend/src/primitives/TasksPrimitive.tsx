@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { Fragment, useMemo } from 'react';
 import type { TaskItem, TasksData, TaskState } from '../controller/types';
 import { parseTimeValue, type TimeValue } from '../controller/validation';
 import { ListViewport } from './ListViewport';
@@ -21,8 +21,10 @@ export type TasksVariant = 'full' | 'focus' | 'compact';
 /** A list longer than this counts its done tasks in the main slot. */
 export const LONG_TASK_LIST = 14;
 
-/** How a task's due day stands against the list's `today`. */
-export type DueStanding = 'overdue' | 'today' | 'tomorrow' | 'later' | 'undated';
+/** How a task's due day stands against the list's `today`: `past` is a
+ * day gone by on a task done (so not overdue); `unjudged` a day the list
+ * has no `today` to set against. */
+export type DueStanding = 'overdue' | 'past' | 'today' | 'tomorrow' | 'later' | 'unjudged';
 
 export interface TaskDue {
   standing: DueStanding;
@@ -42,10 +44,13 @@ export function taskDue(task: TaskItem, today: TimeValue | null): TaskDue | null
   const due = task.due === undefined ? null : parseTimeValue(task.due);
   if (!due) return null;
   const clock = due.form === 'wall' ? clockText(due) : '';
-  if (!today) return { standing: 'undated', when: [dayText(due), clock].filter(Boolean).join(' ') };
+  if (!today) return { standing: 'unjudged', when: [dayText(due), clock].filter(Boolean).join(' ') };
   const days = daysFrom(today, due);
-  const done = task.state === 'done';
-  if (days < 0 && !done) return { standing: 'overdue', word: 'OVERDUE', when: dayText(due, today) };
+  if (days < 0) {
+    return task.state === 'done'
+      ? { standing: 'past', when: [dayText(due, today), clock].filter(Boolean).join(' ') }
+      : { standing: 'overdue', word: 'OVERDUE', when: dayText(due, today) };
+  }
   if (days === 0) return { standing: 'today', word: 'TODAY', when: clock };
   if (days === 1) return { standing: 'tomorrow', word: 'TOMORROW', when: clock };
   return { standing: 'later', when: [dayText(due, today), clock].filter(Boolean).join(' ') };
@@ -104,7 +109,14 @@ function DueLabel({ due, compact }: { due: TaskDue; compact: boolean }) {
   const parts = compact ? [due.standing === 'today' && due.when ? due.when : (due.word ?? due.when)] : [due.word, due.when];
   return (
     <span className={`task-row__due task-row__due--${due.standing} tech`}>
-      {parts.filter(Boolean).map((part, index) => <span key={index} className={index === 0 && due.word && !compact ? 'task-row__due-word' : 'task-row__due-when'}>{part}</span>)}
+      {/* A space between the parts, which the column's layout drops, so
+          the label reads 'OVERDUE FRI OCT 2', not 'OVERDUEFRI OCT 2'. */}
+      {parts.filter(Boolean).map((part, index) => (
+        <Fragment key={index}>
+          {index > 0 ? ' ' : null}
+          <span className={index === 0 && due.word && !compact ? 'task-row__due-word' : 'task-row__due-when'}>{part}</span>
+        </Fragment>
+      ))}
     </span>
   );
 }
@@ -156,7 +168,7 @@ function SectionHead({ section, today, doneCounted }: { section: TaskSection; to
   const overdue = section.tasks.filter((task) => taskDue(task, today)?.standing === 'overdue').length;
   return (
     <div className="task-section__head">
-      <span className="task-section__name tech">{section.group ?? 'OTHER'}</span>
+      <span className="task-section__name tech" role="heading" aria-level={3}>{section.group ?? 'OTHER'}</span>
       <span className="task-section__count tech micro">
         {sectionCount(section, doneCounted)}
         {overdue > 0 ? <span className="task-section__overdue"> / {overdue} OVERDUE</span> : null}
@@ -209,7 +221,7 @@ export function TasksPrimitive({ data, variant = 'full', marked }: { data: Tasks
                   ))}
                   {countRow ? (
                     <li className="task-row task-row--done task-row--counted">
-                      <StepGlyph state="done" className="task-row__glyph" />
+                      <StepGlyph state="done" className="task-row__glyph" decorative />
                       <span className="task-row__count tech">{hidden} DONE</span>
                     </li>
                   ) : null}

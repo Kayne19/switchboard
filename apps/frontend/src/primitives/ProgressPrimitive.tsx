@@ -38,9 +38,12 @@ export function aheadStepWindow(steps: ProgressStep[]): { start: number; end: nu
  * so a reader of the DOM, or of a screen reader, gets the word the agent
  * sent.
  */
-export function StepGlyph({ state, className = 'progress-step__glyph' }: { state: ProgressStepState; className?: string }) {
+export function StepGlyph({ state, className = 'progress-step__glyph', decorative = false }: { state: ProgressStepState; className?: string; decorative?: boolean }) {
+  // A `decorative` glyph beside words that already say its state (a count
+  // of the steps done) is hidden from a screen reader, which would read the
+  // state twice.
   return (
-    <svg className={className} viewBox="0 0 12 12" role="img" aria-label={state}>
+    <svg className={className} viewBox="0 0 12 12" {...(decorative ? { 'aria-hidden': true } : { role: 'img', 'aria-label': state })}>
       {state === 'todo' ? (
         <rect x="0.75" y="0.75" width="10.5" height="10.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
       ) : (

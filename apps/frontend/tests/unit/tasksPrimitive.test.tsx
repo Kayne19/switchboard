@@ -63,7 +63,7 @@ describe('taskDue', () => {
   });
 
   it('is not overdue once done', () => {
-    expect(taskDue(task({ due: '2026-10-02', state: 'done' }), today)).toEqual({ standing: 'later', when: 'FRI OCT 2' });
+    expect(taskDue(task({ due: '2026-10-02', state: 'done' }), today)).toEqual({ standing: 'past', when: 'FRI OCT 2' });
   });
 
   it('compares the day, not the time: a task due this morning is due today, not overdue', () => {
@@ -78,7 +78,7 @@ describe('taskDue', () => {
   });
 
   it('judges nothing without a today: no page clock', () => {
-    expect(taskDue(task({ due: '2026-10-02T17:00' }), null)).toEqual({ standing: 'undated', when: 'FRI OCT 2 17:00' });
+    expect(taskDue(task({ due: '2026-10-02T17:00' }), null)).toEqual({ standing: 'unjudged', when: 'FRI OCT 2 17:00' });
     expect(taskDue(task({}), today)).toBeNull();
   });
 });
@@ -124,10 +124,10 @@ describe('TasksPrimitive', () => {
     const list = render(week);
     const passport = list.querySelector('[data-item="passport"] .task-row__due')!;
     expect(passport.classList.contains('task-row__due--overdue')).toBe(true);
-    expect(passport.textContent).toBe('OVERDUEFRI OCT 2');
+    expect(passport.textContent).toBe('OVERDUE FRI OCT 2');
     const review = list.querySelector('[data-item="pr"] .task-row__due')!;
     expect(review.classList.contains('task-row__due--today')).toBe(true);
-    expect(review.textContent).toBe('TODAY17:00');
+    expect(review.textContent).toBe('TODAY 17:00');
   });
 
   it('lists the done tasks of a short list, quieter', () => {
@@ -146,6 +146,15 @@ describe('TasksPrimitive', () => {
     // The section heads count done tasks only while they are listed.
     expect(list.querySelector('.task-section__count')?.textContent).toBe('4 OPEN');
     expect(list.querySelector('[data-item="t2"] .note-badge')?.textContent).toBe('NOTE');
+  });
+
+  it('names its sections as headings, and hides the glyph of a count row that already says DONE', () => {
+    const items = Array.from({ length: LONG_TASK_LIST + 2 }, (_, index) => task({ id: `t${index}`, group: 'Home', state: index < 3 ? 'done' : 'todo' }));
+    const list = render({ items });
+    expect(list.querySelector('.task-section__name')?.getAttribute('role')).toBe('heading');
+    const counted = list.querySelector('.task-row--counted')!;
+    expect(counted.querySelector('.task-row__glyph')?.getAttribute('aria-hidden')).toBe('true');
+    expect(counted.querySelector('[role="img"]')).toBeNull();
   });
 
   it('lists every task in focus, done ones too', () => {
