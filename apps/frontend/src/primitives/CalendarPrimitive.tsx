@@ -5,6 +5,7 @@ import { useElementSize, type ElementSize } from '../hooks/useElementSize';
 import {
   agendaEntries,
   agendaLead,
+  AXIS,
   axisY,
   calendarDay,
   clockText,
@@ -58,8 +59,8 @@ const GUTTER_PX = 42;
 const PAGE_RAIL_PX = 20;
 /** The least width a day column holds a title in. */
 const MIN_COLUMN_PX = 76;
-/** The least a time grid is read in: its day row, a lane and four hours. */
-const MIN_GRID_PX = 168;
+/** The fewest hours a time grid shows at its least hour before the view is better read as the agenda. */
+const MIN_GRID_HOURS = 8;
 /** The day row over a grid's columns, and one lane of all-day bars. */
 const DAY_ROW_PX = 36;
 const LANE_PX = 19;
@@ -89,8 +90,14 @@ interface LayoutChoice {
   columns: number;
 }
 
-/** The layout a view takes in a body of `size`; an unmeasured body draws the view whole. */
-export function chooseLayout(data: CalendarData, size: ElementSize, dayCount: number): LayoutChoice {
+/** The height of a time grid's pinned head: its day row and the all-day lanes it draws. */
+function gridHeadPx(lanes: number): number {
+  const rows = lanes > MAX_WEEK_LANES ? MAX_WEEK_LANES : lanes;
+  return DAY_ROW_PX + rows * LANE_PX + (rows > 0 ? 6 : 0);
+}
+
+/** The layout a view takes in a body of `size` (its grid's head `headPx` tall); an unmeasured body draws the view whole. */
+export function chooseLayout(data: CalendarData, size: ElementSize, dayCount: number, headPx = gridHeadPx(0)): LayoutChoice {
   const measured = size.width > 0 && size.height > 0;
   if (data.view === 'agenda') return { layout: 'agenda', columns: dayCount };
   if (data.view === 'month') {
@@ -101,7 +108,7 @@ export function chooseLayout(data: CalendarData, size: ElementSize, dayCount: nu
     return { layout: roomy ? 'month' : 'month-marks', columns: 7 };
   }
   if (!measured) return { layout: 'grid', columns: dayCount };
-  if (size.height < MIN_GRID_PX) return { layout: 'agenda', columns: dayCount };
+  if (size.height - headPx < MIN_GRID_HOURS * AXIS.minHourPx) return { layout: 'agenda', columns: dayCount };
   const fit = Math.floor((size.width - GUTTER_PX) / MIN_COLUMN_PX);
   if (fit >= dayCount) return { layout: 'grid', columns: dayCount };
   const paged = Math.floor((size.width - GUTTER_PX - 2 * PAGE_RAIL_PX) / MIN_COLUMN_PX);
@@ -196,7 +203,7 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
   const lanes = laneCount(bars);
   const shownLanes = Math.min(lanes, lanes > MAX_WEEK_LANES ? MAX_WEEK_LANES - 1 : MAX_WEEK_LANES);
   const stripRows = lanes > shownLanes ? shownLanes + 1 : shownLanes;
-  const headHeight = DAY_ROW_PX + stripRows * LANE_PX + (stripRows > 0 ? 6 : 0);
+  const headHeight = gridHeadPx(lanes);
   const segments = daySegments(model.placed, days);
   const nowDay = model.now === undefined ? undefined : Math.floor(model.now / MINUTES_PER_DAY);
   const nowColumn = nowDay === undefined ? -1 : days.indexOf(nowDay);
@@ -793,7 +800,7 @@ export function CalendarPrimitive({ data, marked, focused = false }: { data: Cal
   const bodyRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(bodyRef);
   const model = useMemo(() => calendarModel(data), [data]);
-  const choice = chooseLayout(data, size, model.days.length);
+  const choice = chooseLayout(data, size, model.days.length, gridHeadPx(laneCount(dayBars(model.placed, model.days))));
   const count = data.events.length;
   // The meta line: what is shown and how much; an aux cell and focus have no scene frame to say it.
   const meta = (

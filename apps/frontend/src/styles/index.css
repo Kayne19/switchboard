@@ -2733,9 +2733,11 @@ button {
   grid-column: 1;
   grid-row: 1;
   align-self: center;
+  overflow: hidden;
   color: rgba(232, 230, 223, 0.35);
   font-size: 7px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 .calendar-grid__strip-cell {
   grid-row: 1 / -1;
@@ -3204,6 +3206,7 @@ button {
 .calendar-month--marks .calendar-month__cell {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 3px;
 }
 .calendar-marks {

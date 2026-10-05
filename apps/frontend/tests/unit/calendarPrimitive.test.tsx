@@ -194,4 +194,9 @@ describe('the layout a box gives a view', () => {
     expect(chooseLayout(week, { width: 330, height: 500 }, 7)).toEqual({ layout: 'grid', columns: 3 });
     expect(chooseLayout(week, { width: 200, height: 500 }, 7).layout).toBe('agenda');
   });
+  it('is the agenda where the grid under its day row and lanes would hold fewer than eight hours', () => {
+    // An aux cell on a tall portrait stage: 254 px, of which the day row and two lanes take 80.
+    expect(chooseLayout(week, { width: 730, height: 254 }, 7, 80).layout).toBe('agenda');
+    expect(chooseLayout(week, { width: 730, height: 300 }, 7, 80).layout).toBe('grid');
+  });
 });
