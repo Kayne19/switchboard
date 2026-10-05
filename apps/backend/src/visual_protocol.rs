@@ -1978,8 +1978,8 @@ fn validate_weather_data(data: &Map<String, Value>) -> Result<Value, String> {
     check_unknown_keys(
         data,
         &[
-            "title", "subtitle", "context", "caption", "location", "units", "current", "hourly",
-            "daily", "alert",
+            "title", "subtitle", "context", "caption", "location", "units", "current", "today",
+            "hourly", "daily", "alert",
         ],
         "weather data",
     )?;
@@ -1990,6 +1990,12 @@ fn validate_weather_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("location".into(), location.into());
     out.insert("units".into(), units.into());
     out.insert("current".into(), current);
+    // The day the forecast is read on, as calendar, tasks and inbox take it:
+    // the page has no clock of its own to tell it.
+    if let Some(today) = data.get("today") {
+        read_time(Some(today), &[TimeForm::Date], "weather.today")?;
+        out.insert("today".into(), today.clone());
+    }
     if let Some(hourly) = data.get("hourly") {
         let hours = hourly
             .as_array()

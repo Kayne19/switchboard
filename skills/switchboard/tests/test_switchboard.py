@@ -336,9 +336,16 @@ class CallsTest(ModuleTestCase):
             {"id": "odd", "label": "Odd zone", "endsAt": datetime.datetime(
                 2026, 10, 6, 1, 15, tzinfo=datetime.timezone(datetime.timedelta(hours=5, seconds=30)))},
         ]}
+        forecast = {
+            "location": "San Francisco", "units": "F", "current": {"temp": 61, "condition": "fog"},
+            "today": datetime.date(2026, 10, 7),
+            "daily": [{"date": datetime.date(2026, 10, 8), "high": 61, "low": 55, "condition": "rain"}],
+        }
         self.run_call(switchboard.display, op="show", id="week", type="calendar", data=week)
         self.run_call(switchboard.display, op="show", id="kitchen", type="timer", data=timers)
+        self.run_call(switchboard.display, op="show", id="weather", type="weather", data=forecast)
         sent = [call["args"]["action"]["data"] for call in host.calls()]
+        self.assertEqual((sent[2]["today"], sent[2]["daily"][0]["date"]), ("2026-10-07", "2026-10-08"))
         self.assertEqual(sent[0], {
             "view": "week", "start": "2026-10-05", "now": "2026-10-07T09:40",
             "events": [

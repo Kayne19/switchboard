@@ -1558,7 +1558,7 @@ function validateWeatherDay(d: unknown, seen: Set<string>): { ok: true; day: Wea
 function validateWeatherData(data: Fields): { ok: true; data: WeatherData } | { ok: false; error: string } {
   const unknownKey = checkUnknownKeys(
     data,
-    new Set(['title', 'subtitle', 'context', 'caption', 'location', 'units', 'current', 'hourly', 'daily', 'alert']),
+    new Set(['title', 'subtitle', 'context', 'caption', 'location', 'units', 'current', 'today', 'hourly', 'daily', 'alert']),
     'weather data',
   );
   if (unknownKey) return { ok: false, error: unknownKey };
@@ -1568,6 +1568,13 @@ function validateWeatherData(data: Fields): { ok: true; data: WeatherData } | { 
   const current = validateWeatherCurrent(data.current);
   if (!current.ok) return current;
   const out: Fields = { location: data.location, units: data.units, current: current.current };
+  // The day the forecast is read on, as calendar, tasks and inbox take it:
+  // the page has no clock of its own to tell it.
+  if (data.today !== undefined) {
+    const today = readTime(data.today, ['date'], 'weather.today');
+    if (!today.ok) return today;
+    out.today = data.today;
+  }
   if (data.hourly !== undefined) {
     if (!Array.isArray(data.hourly) || data.hourly.length > MAX_WEATHER_HOURS) {
       return { ok: false, error: `weather.hourly must be an array of at most ${MAX_WEATHER_HOURS} items` };

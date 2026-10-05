@@ -1730,6 +1730,9 @@
         "current": {
           "$ref": "#/definitions/WeatherCurrent"
         },
+        "today": {
+          "$ref": "#/definitions/DateValue"
+        },
         "hourly": {
           "type": "array",
           "items": {

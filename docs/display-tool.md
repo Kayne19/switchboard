@@ -84,7 +84,7 @@ type DisplayAction =
 | `calendar` | `{ view: "day"\|"week"\|"month"\|"agenda", start: Date, days?, today?: Date, now?: WallTime, events: [{ id, title, start, end?, location?, detail?, semantic?, status?, active? }], title?, subtitle?, context?, caption? }` | a day, a week, a month or an agenda of events (see "Personal-assistant types") |
 | `tasks` | `{ items: [{ id, text, state?, due?, priority?, group?, detail?, tags? }], today?: Date, title?, subtitle?, context?, caption? }` | a to-do list, in groups, overdue marked against `today` |
 | `timer` | `{ timers: [{ id, label, endsAt: Instant, startedAt?, state?, remaining? }], title?, subtitle?, context?, caption? }` | countdowns and reminders, counted on the page clock, done at zero (see "timer") |
-| `weather` | `{ location, units: "C"\|"F", current: { temp, condition, ... }, hourly?, daily?, alert?, title?, subtitle?, context?, caption? }` | conditions now, by the hour and by the day |
+| `weather` | `{ location, units: "C"\|"F", current: { temp, condition, ... }, today?, hourly?, daily?, alert?, title?, subtitle?, context?, caption? }` | conditions now, by the hour and by the day |
 | `inbox` | `{ messages: [{ id, from, subject?, snippet?, time, channel?, unread?, flagged?, semantic? }], today?: Date, title?, subtitle?, context?, caption? }` | a list of messages in the order sent |
 
 Each document paragraph is read as the same small Markdown subset the conversation surfaces use (`apps/frontend/src/primitives/markdown.ts`): `#` headings (shown as a bold line), `**bold**`, `*italic*`, `` `inline code` ``, `-` and `1.` lists, and fenced code blocks. A newline inside a paragraph is a line break; a blank line starts a new paragraph. It is never HTML: markup stays literal text, and a link shows only its label.
@@ -229,6 +229,7 @@ How the page draws a calendar (`CalendarPrimitive`, laid out by `calendarLayout.
 
 - `location` (required, <= 128) and `units` (required, `C` or `F`). Every temperature is in `units`; the page converts none. A forecast with no `title` is named by its `location` in `view`'s report.
 - `current` (required): `{ temp, condition, summary? (<= 256), high?, low?, feelsLike?, humidity?, precip?, wind? (<= 128) }`. Temperatures are finite numbers; `humidity` and `precip` (the chance of precipitation) are percents, 0 to 100.
+- `today` (a date): the day the forecast is read on, as calendar, tasks and inbox take it; the page has no clock to tell it. It is not compared with the hours or the days.
 - `hourly`: 0 to 48 `{ time, temp, condition, precip? }`, `time` a wall time, no two hours with one `time`. `daily`: 0 to 14 `{ date, high, low, condition, precip? }`, no two days with one `date`. `alert`: <= 256.
 - `condition` is one of `clear`, `partly-cloudy`, `cloudy`, `fog`, `drizzle`, `rain`, `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`. The page draws each as a glyph in the design system's sharp vector geometry, never as an emoji or an image.
 - What the page draws: the conditions now as the hero (the glyph, the temperature large with its unit, the condition, high and low, the summary, and the readings it was given: feels like, humidity, chance of precipitation, wind), with `alert` on an amber rule; the hours as a strip, the temperature traced over each hour's chance of rain, labelled as often as the slot's width allows (a 48-hour strip stays on one screen); the days as rows, each day's low-to-high a bar on one scale shared by all the days. A temperature is shown to a tenth at most. Where the parts stand is the slot's decision; a small slot shows the conditions and one list, and one too short for a list shows the days to come as a row beside the conditions (a first day whose `high` and `low` are the conditions' `high` and `low` is taken to be today, which the conditions say already, and is left out of that row). The hour or day a note names (`anchor.item`, the hour's `time` or the day's `date`) carries the NOTE badge, and the rail card names it in the forecast's words (`THU OCT 8`, `WED 14:00`).
@@ -237,6 +238,7 @@ How the page draws a calendar (`CalendarPrimitive`, laid out by `calendarLayout.
 { "op": "show", "id": "weather", "type": "weather", "data": {
   "location": "San Francisco, CA", "units": "F",
   "current": { "temp": 61, "condition": "fog", "summary": "Fog burning off by noon", "high": 68, "low": 54, "humidity": 84 },
+  "today": "2026-10-07",
   "hourly": [ { "time": "2026-10-07T12:00", "temp": 64, "condition": "partly-cloudy" }, { "time": "2026-10-07T13:00", "temp": 67, "condition": "clear" } ],
   "daily": [ { "date": "2026-10-08", "high": 61, "low": 55, "condition": "rain", "precip": 80 } ] } }
 ```

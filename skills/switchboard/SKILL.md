@@ -118,7 +118,8 @@ Types and their `data` shapes (each type takes only its own shape):
   plus `hourly: [{time, temp, condition}]` (up to 48), `daily: [{date, high,
   low, condition}]` (up to 14) and an `alert`. `condition` is one of
   `clear`, `partly-cloudy`, `cloudy`, `fog`, `drizzle`, `rain`,
-  `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`.
+  `heavy-rain`, `thunder`, `snow`, `sleet`, `hail`, `wind`, `haze`. Give
+  `today` so a small screen shows the days after it beside the conditions.
 - inbox: `{messages: [{id, from, time}]}` (1 to 50, shown in your order),
   each with optional `subject`, `snippet`, `channel` (a short label such
   as `email`, `slack` or `sms`), `unread`, `flagged`. Give `today` so today's messages show their
@@ -154,6 +155,7 @@ switchboard.display(op="show", id="kitchen", type="timer", data={"timers": [
 switchboard.display(op="show", id="weather", type="weather", data={
     "location": "San Francisco", "units": "F",
     "current": {"temp": 61, "condition": "fog", "summary": "Fog burning off by noon"},
+    "today": "2026-10-07",
     "daily": [{"date": "2026-10-08", "high": 61, "low": 55, "condition": "rain", "precip": 80}]})
 switchboard.display(op="show", id="inbox", type="inbox", data={"today": "2026-10-07", "messages": [
     {"id": "dentist", "from": "Dr. Okafor's office", "subject": "Appointment today",
