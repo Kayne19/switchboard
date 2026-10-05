@@ -114,8 +114,9 @@ primary's shorter cell, an aux cell, focus):
    tenths of the view's height, they are compact, the names alone in
    shallower boxes, the NOTE marker beside its actor's name rather than
    under it. On a phone that is the difference between three messages in
-   view and six; a view with the room (focus, a wider slot) keeps the
-   details.
+   view and six. A view with the room (a wider or taller slot) keeps the
+   details, and so does focus, where the reader went for the whole
+   exchange, unless even there they would take half its height.
 4. **Focus gives it the stage.** The same rule runs in the focus layer's
    larger viewport, so focus shows more of it at once. Focus keeps the
    note about the diagram, which the rail carried: the node or actor it

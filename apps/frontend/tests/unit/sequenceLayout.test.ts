@@ -371,11 +371,24 @@ describe('the headers pinned over a long exchange', () => {
     }
   });
 
-  it('keep their details where the view has the room: focus, a tall or a wide slot', () => {
+  it('keep their details where the view has the room: a tall or a wide slot', () => {
     for (const viewport of [{ width: 366, height: 726 }, { width: 726, height: 531 }, { width: 914, height: 526 }, { width: 1325, height: 792 }, { width: 1980, height: 604 }]) {
       const view = viewSequence(traceDiagram, { ...viewport, scrollbar: 0 }, 'pbx');
       expect(view.layout.headers.style, `${viewport.width}x${viewport.height}`).toBe('full');
       expect(pinnedDepth(view.layout) * view.fit.scale).toBeLessThanOrEqual(0.3 * viewport.height);
+    }
+  });
+
+  it('keep their details in focus, a phone\'s held either way, its note beside or under the drawing', () => {
+    // Focus on a phone: upright with the note under the drawing, and on its
+    // side with and without the note's column.
+    for (const viewport of [{ width: 367, height: 640 }, { width: 776, height: 343 }, { width: 530, height: 343 }]) {
+      const slot = viewSequence(traceDiagram, { ...viewport, scrollbar: 0 }, 'pbx');
+      const focus = viewSequence(traceDiagram, { ...viewport, scrollbar: 0 }, 'pbx', true);
+      expect(slot.layout.headers.style, `${viewport.width}x${viewport.height}`).toBe('compact');
+      expect(focus.layout.headers.style, `focus ${viewport.width}x${viewport.height}`).toBe('full');
+      expect(focus.layout.actors.some((actor) => actor.subLines.length > 0)).toBe(true);
+      expect(pinnedDepth(focus.layout) * focus.fit.scale).toBeLessThanOrEqual(0.5 * viewport.height);
     }
   });
 

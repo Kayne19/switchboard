@@ -693,22 +693,25 @@ export function pinnedDepth(layout: SequenceLayout): number {
 export const headerReading = ({ layout }: SequenceView) => `${layout.headers.style}/${layout.headers.rows}`;
 
 // Pinned, the headers may take up to this share of the view's height in
-// full; past it they are compact.
-const HEADER_SHARE = 0.3;
+// full; past it they are compact. Focus, where the reader went for the
+// whole of the exchange, keeps them in full up to half its height.
+const HEADER_SHARE = { slot: 0.3, focus: 0.5 } as const;
 
 /**
  * How a sequence is shown in a viewport (CSS pixels): the geometry for its
  * shape, fitted (drawingFit.ts). One too wide to read at the readable
  * minimum is recomposed to the viewport's width, so that it scrolls down,
  * in the order its messages run, and never across. One that scrolls down
- * under headers that would take more than HEADER_SHARE of the view (a
- * phone's slot: two staggered rows with their details) has compact
- * headers, its actors' labels alone, so the view shows more messages; a
- * view with the room for them (focus, a taller slot) keeps the details.
+ * under headers that would take more than their share of the view
+ * (HEADER_SHARE: a phone's slot, two staggered rows with their details)
+ * has compact headers, its actors' labels alone, so the view shows more
+ * messages; the details stay where the view has the room for them, and
+ * in focus (`focused`) unless even there they would take half of it.
  */
-export function viewSequence(data: SequenceDiagramData, viewport: Viewport, anchor?: string): SequenceView {
+export function viewSequence(data: SequenceDiagramData, viewport: Viewport, anchor?: string, focused = false): SequenceView {
   const full = viewWith(data, viewport, anchor, 'full');
-  if (!full.fit.scrollY || pinnedDepth(full.layout) * full.fit.scale <= HEADER_SHARE * viewport.height) return full;
+  const share = HEADER_SHARE[focused ? 'focus' : 'slot'];
+  if (!full.fit.scrollY || pinnedDepth(full.layout) * full.fit.scale <= share * viewport.height) return full;
   return viewWith(data, viewport, anchor, 'compact');
 }
 

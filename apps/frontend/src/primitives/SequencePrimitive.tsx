@@ -69,8 +69,8 @@ export function SequencePrimitive({
   // The geometry follows the viewport's shape, and the drawing is fitted to
   // it, or scrolled in it once fitting would make it too small to read.
   const { layout, fit, strip } = useMemo(
-    () => viewWithMap({ width, height, scrollbar }, (viewport) => viewSequence(data, viewport, anchoredActorId), headerReading),
-    [data, width, height, scrollbar, anchoredActorId],
+    () => viewWithMap({ width, height, scrollbar }, (viewport) => viewSequence(data, viewport, anchoredActorId, focused), headerReading),
+    [data, width, height, scrollbar, anchoredActorId, focused],
   );
   // What the viewport tells a reader of an exchange that scrolls: its
   // messages, counted past each edge and kept whole at rest, and the
