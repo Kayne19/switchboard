@@ -126,6 +126,20 @@ describe('flat days', () => {
   });
 });
 
+describe('a short slot', () => {
+  it('stands the days beside the conditions: each its name, glyph, high and low', () => {
+    // The today scene's forecast cell on a phone: 334x128, with an alert.
+    const page = render(forecast, undefined, { width: 334, height: 128 });
+    expect(page.querySelector('.weather__field')!.getAttribute('data-parts')).toBe('now');
+    const days = [...page.querySelectorAll('.weather-outlook__day')];
+    expect(days.map((day) => day.getAttribute('data-item'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09']);
+    expect(days[1].querySelector('.weather-outlook__name')!.textContent).toBe('THU 8');
+    expect(days[1].querySelector('.weather-glyph')!.getAttribute('aria-label')).toBe('rain');
+    expect(days[1].querySelector('.weather-outlook__high')!.textContent).toBe('61°');
+    expect(days[1].querySelector('.weather-outlook__low')!.textContent).toBe('55°');
+  });
+});
+
 describe('the arrangement follows the box', () => {
   it.each([
     [{ width: 1000, height: 620 }, 'wide', 'now hourly daily'],
@@ -177,10 +191,25 @@ describe('a note on one hour or day', () => {
     expect(hourPage.querySelector('.weather-spot')!.textContent).toBe('NOTETHU 03:00' + '65°' + '68%');
     act(() => root!.unmount());
     host!.remove();
-    // Too short for any list: the day the note names, the same way.
-    const dayPage = render(forecast, '2026-10-08', { width: 340, height: 150 });
+    // Too short for any list or for the outlook's columns under the alert:
+    // the day the note names, the same way.
+    const dayPage = render(forecast, '2026-10-08', { width: 340, height: 110 });
+    expect(dayPage.querySelector('.weather-outlook')).toBeNull();
     expect(marks(dayPage)).toEqual(['2026-10-08']);
     expect(dayPage.querySelector('.weather-spot')!.textContent).toBe('NOTETHU OCT 8' + '55° / 61°' + '80%');
+  });
+
+  it('a short slot with the outlook marks the day in its column, past the first days if it must', () => {
+    const tenDays: WeatherData = {
+      ...forecast,
+      daily: Array.from({ length: 10 }, (_, index) => ({ date: `2026-10-${String(7 + index).padStart(2, '0')}`, high: 60 + index, low: 50 + index, condition: 'clear' as const })),
+    };
+    // jsdom gives every element the box's width: 160px holds three columns.
+    const page = render(tenDays, '2026-10-14', { width: 160, height: 128 });
+    expect(page.querySelector('.weather__field')!.getAttribute('data-parts')).toBe('now');
+    expect([...page.querySelectorAll('.weather-outlook__day')].map((day) => day.getAttribute('data-item'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-14']);
+    expect(marks(page)).toEqual(['2026-10-14']);
+    expect(page.querySelector('.weather-spot')).toBeNull();
   });
 
   it('marks nothing for a time the forecast does not hold', () => {

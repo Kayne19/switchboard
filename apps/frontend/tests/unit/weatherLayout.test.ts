@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { WeatherData, WeatherHour } from '../../src/controller/types';
 import {
+  ALERT_LINE,
+  SPOT_LINE,
+  STACKED_HERO_HEIGHT,
   COMPACT_HEIGHT,
   COMPACT_LIST_HEIGHT,
   COMPACT_STRIP_HEIGHT,
@@ -17,6 +20,11 @@ import {
   hourLabelStep,
   hourLong,
   labelledHours,
+  OUTLOOK_COLUMN,
+  OUTLOOK_GAP,
+  OUTLOOK_HEIGHT,
+  outlookCount,
+  outlookDays,
   rangeOnScale,
   tempScale,
   weatherItemName,
@@ -89,8 +97,37 @@ describe('weatherLayout', () => {
     expect(weatherLayout(250, COMPACT_STRIP_HEIGHT, { ...all, markedHour: true })).toMatchObject({ hourly: true, daily: false });
   });
 
-  it('a slot too short for a list row holds the conditions alone', () => {
-    expect(weatherLayout(340, COMPACT_LIST_HEIGHT - 1, all)).toMatchObject({ arrangement: 'compact', hourly: false, daily: false });
+  it('a slot too short for a list row holds the conditions and the days beside them, where a column fits under the head', () => {
+    // The today scene's forecast cell on a phone (334x128, with an alert)
+    // showed the conditions alone.
+    expect(weatherLayout(334, 128, { ...all, alert: true })).toMatchObject({ arrangement: 'compact', hourly: false, daily: false, outlook: true });
+    expect(weatherLayout(340, COMPACT_LIST_HEIGHT - 1, all)).toMatchObject({ arrangement: 'compact', hourly: false, daily: false, outlook: true });
+    expect(weatherLayout(340, OUTLOOK_HEIGHT, all).outlook).toBe(true);
+    // An alert's line takes room above the columns.
+    expect(weatherLayout(340, OUTLOOK_HEIGHT + ALERT_LINE - 1, { ...all, alert: true }).outlook).toBe(false);
+    // Shorter (844x390's cell, 88px): the conditions alone, never a cut column.
+    expect(weatherLayout(252, 88, { ...all, alert: true })).toMatchObject({ hourly: false, daily: false, outlook: false });
+    expect(weatherLayout(340, OUTLOOK_HEIGHT - 1, all).outlook).toBe(false);
+    // No days, no outlook; and a slot with room for the list lists them.
+    expect(weatherLayout(340, 150, { hourly: true, daily: false }).outlook).toBe(false);
+    expect(weatherLayout(250, COMPACT_LIST_HEIGHT, all)).toMatchObject({ daily: true, outlook: false });
+    expect(weatherLayout(1000, 620, all).outlook).toBe(false);
+  });
+
+  it('keeps the room for the spot line of an hour a note names, which no list there draws', () => {
+    expect(weatherLayout(334, 128, { ...all, alert: true, markedHour: true }).outlook).toBe(false);
+    expect(weatherLayout(334, OUTLOOK_HEIGHT + ALERT_LINE + SPOT_LINE, { ...all, alert: true, markedHour: true }).outlook).toBe(true);
+  });
+
+  it('sets the condition beside the temperature where the slot is too short to stack them', () => {
+    // 844x390's forecast cell, 88px with an alert: stacked, the condition
+    // and the high and low ran past its foot.
+    expect(weatherLayout(252, 88, { ...all, alert: true }).inline).toBe(true);
+    expect(weatherLayout(252, STACKED_HERO_HEIGHT - 1, all).inline).toBe(true);
+    expect(weatherLayout(252, STACKED_HERO_HEIGHT, all).inline).toBe(false);
+    expect(weatherLayout(334, 128, { ...all, alert: true }).inline).toBe(false);
+    expect(weatherLayout(250, 240, all).inline).toBe(false);
+    expect(weatherLayout(0, 0, all).inline).toBe(false);
   });
 
   it('sets the conditions larger when they stand alone', () => {
@@ -110,6 +147,27 @@ describe('weatherLayout', () => {
       expect(temp).toBeGreaterThanOrEqual(arrangement === 'compact' ? 26 : 44);
       expect(temp).toBeLessThanOrEqual(132);
     }
+  });
+});
+
+describe('the outlook', () => {
+  it('shows as many days as whole columns fit its width, none cut at the edge', () => {
+    const columns = (count: number) => count * OUTLOOK_COLUMN + (count - 1) * OUTLOOK_GAP;
+    expect(outlookCount(columns(3), 10)).toBe(3);
+    expect(outlookCount(columns(3) - 1, 10)).toBe(2);
+    expect(outlookCount(columns(12), 10)).toBe(10);
+    expect(outlookCount(OUTLOOK_COLUMN - 1, 10)).toBe(0);
+    expect(outlookCount(0, 10)).toBe(0);
+  });
+
+  it('shows the first days, and a day a note names past them in the last column', () => {
+    const days = ['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11'].map((date) => ({ date }));
+    const dates = (shown: Array<{ date: string }>) => shown.map((day) => day.date);
+    expect(dates(outlookDays(days, 3))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09']);
+    expect(dates(outlookDays(days, 3, '2026-10-08'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09']);
+    expect(dates(outlookDays(days, 3, '2026-10-11'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-11']);
+    expect(dates(outlookDays(days, 3, '2026-10-20'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09']);
+    expect(outlookDays(days, 0, '2026-10-11')).toEqual([]);
   });
 });
 

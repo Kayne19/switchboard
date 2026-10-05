@@ -208,6 +208,38 @@ for (const geometry of geometries) {
   });
 }
 
+test('on a phone the today scene\'s forecast cell stands the days beside the conditions, each column whole', async ({ page }) => {
+  // The cell is about 130px tall: too short for a list under the
+  // conditions, which once stood there alone.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.clock.setFixedTime(T0);
+  await page.goto('/?scene=today&chrome=0');
+  const weather = page.locator('.composed-aux [data-testid="weather"]');
+  await expect(weather).toHaveAttribute('data-layout', 'compact');
+  const days = weather.locator('.weather-outlook__day');
+  await expect.poll(() => days.count()).toBeGreaterThanOrEqual(3);
+  await expect(days.first().locator('.weather-outlook__name')).toHaveText('WED 7');
+  const cell = (await weather.boundingBox())!;
+  for (const box of await days.evaluateAll((elements) => elements.map((element) => element.getBoundingClientRect().toJSON() as DOMRect))) {
+    expect(box.left).toBeGreaterThanOrEqual(cell.x - 1);
+    expect(box.right).toBeLessThanOrEqual(cell.x + cell.width + 1);
+    expect(box.bottom).toBeLessThanOrEqual(cell.y + cell.height + 1);
+  }
+  expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
+});
+
+test('a forecast cell too short for the outlook\'s columns keeps the conditions alone, uncut', async ({ page }) => {
+  // 844x390: the today scene's forecast cell is under 100px tall.
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.clock.setFixedTime(T0);
+  await page.goto('/?scene=today&chrome=0');
+  const weather = page.locator('.composed-aux [data-testid="weather"]');
+  await expect(weather).toHaveAttribute('data-layout', 'compact');
+  await page.waitForTimeout(200);
+  await expect(weather.locator('.weather-outlook')).toHaveCount(0);
+  expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
+});
+
 test('a forecast longer than a phone frame scrolls inside it and says so', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.clock.setFixedTime(T0);

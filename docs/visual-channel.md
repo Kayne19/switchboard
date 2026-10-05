@@ -442,7 +442,13 @@ the conditions now stand beside the days and the hours run across the
 foot; on a tall one the three stand down the box and scroll as one; a
 small slot (an aux cell) holds the conditions on one line and one list,
 the days or, when the note names an hour, the hours; a slot too short for
-a list row holds the conditions alone. The hours are a strip, a column
+a list row (a phone's cell in the today scene) holds the conditions with
+the days beside them as a row of columns, each its name, glyph, high and
+low, as many as whole columns fit beside the figure, a day the note names
+taking the last column when it lies past them; one too short even for
+those columns holds the conditions alone, the condition beside the
+temperature where stacked they would run past its foot. The hours are a
+strip, a column
 each: the temperature traced over the chance of rain, labelled every 1,
 2, 3, 4, 6, 8, 12 or 24 hours so the labels stand at least 34px apart,
 which keeps 48 hours readable on a phone without scrolling sideways; the

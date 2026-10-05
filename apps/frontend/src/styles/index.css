@@ -2684,6 +2684,86 @@ button {
 }
 /* The item a note names, where the slot has no list to show it in: one
    line on the orange rule, its badge first. */
+.weather-now__body--outlook,
+.weather__field[data-parts="now"] .weather-now__body--outlook {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+/* A slot too short to stack them: the condition beside the temperature. */
+.weather-now--inline .weather-now__figure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 12px;
+}
+
+.weather-now--inline .weather-now__condition {
+  margin-top: 0;
+}
+
+/* The days beside the conditions in a slot too short for a list: whole
+   columns only (outlookCount), each its name, glyph, high and low. */
+.weather-outlook {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-outlook__day {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 46px;
+  padding: 8px 0 2px;
+  border-top: 1px solid rgba(232, 230, 223, 0.16);
+  line-height: 1.15;
+}
+
+.weather-outlook__name {
+  color: rgba(232, 230, 223, 0.6);
+  white-space: nowrap;
+}
+
+.weather-outlook__glyph {
+  width: 18px;
+  height: 18px;
+}
+
+.weather-outlook__high {
+  color: var(--paper);
+}
+
+.weather-outlook__low {
+  color: rgba(232, 230, 223, 0.55);
+}
+
+.weather-outlook__day--marked {
+  border-top-color: var(--orange);
+  background: linear-gradient(180deg, rgba(var(--orange-rgb), 0.12), transparent 80%);
+}
+
+.weather-outlook__day--marked > .weather-outlook__name {
+  color: var(--orange);
+}
+
+.weather-outlook__badge {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  translate: -50% -50%;
+  /* Over the column's top rule, the badge's tint is laid on black. */
+  background: linear-gradient(rgba(var(--orange-rgb), 0.25), rgba(var(--orange-rgb), 0.25)) #000;
+}
+
 .weather-spot {
   display: flex;
   flex: none;
