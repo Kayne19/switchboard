@@ -60,7 +60,11 @@ A progress object with `steps` may omit `value`: the service fills in the
 share of steps done, so "I am on step three of five" is spoken while the
 screen shows the five, their states, and a bar that agrees with them. The
 page decides how much of a long plan each slot shows; the whole plan is a
-focus away.
+focus away. A plan reads best beside the work it is about: shown next to a
+visual primary it is a module in the rail, read the way the metrics above
+it are (its label and share done on one row, the steps still to do under
+the bar). Shown as the primary, its frame fits the plan and sits in the
+middle of the column, and only a plan longer than the column fills it.
 
 ### Composition & focus
 

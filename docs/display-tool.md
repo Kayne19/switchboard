@@ -97,7 +97,7 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 ### Progress steps
 - `steps`: 1 to 30 items, each `{ label (<= 128), state?, detail? (<= 256) }`. A step without a `state` reads as `todo`.
 - When `steps` is present, `value` may be left out: both validators fill it in as the share of steps whose state is `done` (`done / total * 100`, rounded to two decimals), so the normalized action and the page always carry a value. A `value` sent beside `steps` is kept as sent. A progress with neither is rejected (`progress requires value or steps`).
-- The page draws the bar as before and lists the steps under it with a glyph per state. A compact slot (the rail, a cell in the aux row) shows a window of a few steps around the first step still open and counts the rest; the main slot and focus list the whole plan, scrolling inside the frame when it is long.
+- The page draws the bar as before and lists the steps under it with a glyph per state. A cell in the aux row shows a window of a few steps around the first step still open and counts the rest. In the rail a progress reads as the metrics above it: a row with its label and the share done, the bar, one row counting the steps done, and a row per step still to do, a few at most. As the primary it is framed to its own height and centred in the column. The main slot and focus list the whole plan, scrolling inside the frame when it is longer than the slot.
 
 ### Diagram v1 rules
 - Diagram data requires `mode: "graph"` or `mode: "sequence"`; both validators read `mode` first and judge the rest by that mode's rules. Mermaid source (`source`) is rejected/deferred in v1 in either mode.
