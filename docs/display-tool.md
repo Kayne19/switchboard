@@ -109,7 +109,8 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
   - `actors`: 1 to 12 items, `{ id, label, sub?, semantic? }`. Actor IDs must be unique strings (1-128 UTF-16 code units); `label` and `sub` are <= 256.
   - `messages`: 0 to 100 items, `{ from, to, label, kind?, active? }`, drawn in the order given. `from` and `to` name actors; `label` is required (<= 256); `kind` is `call` (default), `return` or `async`; `active` is a boolean. A self-message (`from === to`) and a repeated `(from, to)` pair are both allowed.
   - `nodes` and `edges` are rejected by name.
-- `note.anchor.node` may name a node id or an actor id. The graph places a fitting note as a callout beside its node; a sequence marks the actor and keeps the note in the rail.
+- `note.anchor.node` may name a node id or an actor id. The graph places a fitting note as a callout beside its node when the drawing fits its viewport; otherwise, and always for a sequence, the note stays in the rail and the node or actor is marked.
+- Size is the page's decision. A diagram is never drawn with its text below the page's smallest type; one too large for that is recomposed for its viewport and scrolls inside it, and focus gives it the whole stage (`docs/visual-channel.md`, "Diagrams that outgrow the frame"). An agent may send the diagram the explanation needs; it does not have to trim it to fit a screen.
 
 ### Table v1 rules
 - `columns`: 1 to 12 items, each `{ label, semantic? }` with `label` <= 64 UTF-16 code units. A column's `semantic` colours its header; a cell's `semantic` colours that cell.

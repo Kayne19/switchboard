@@ -41,10 +41,75 @@ Diagram node styling stays restricted to semantic classes and states, enforced s
 
 A sequence diagram is the same `diagram` type under `mode: "sequence"`: the
 agent names the actors and the messages in order, and the page sizes the
-columns to the labels, wraps a long message over its span, and scales the
-drawing to the stage as the exchange grows. A self-message draws as a loop;
-a `return` is dashed; an `async` message has an open arrowhead; an `active`
-message glows like an active edge of a graph.
+columns to the labels and wraps a long message over its span. A self-message
+draws as a loop; a `return` is dashed; an `async` message has an open
+arrowhead; an `active` message glows like an active edge of a graph. How a
+graph or a sequence too large for its slot is drawn is the next section's
+rule.
+
+### Diagrams that outgrow the frame
+
+Agents send diagrams of the size of what they explain: the switchboard's own
+parts are twenty-odd nodes with long names (fixture `topology`), a CI
+pipeline is forty steps in layers ten wide (`pipeline`), a call traced end to
+end is eight actors and thirty messages (`trace`). Scaled to fit a slot,
+those drew their text at 1 to 4 px. One rule now holds for both diagram
+modes, wherever the drawing is placed (the diagram slot, a composed
+primary's shorter cell, an aux cell, focus):
+
+1. **A drawing never shows its text below the page's smallest type.** The
+   floor is the page's own: the `.micro` face never sets below 7px, the
+   `.tech` face below 8px (`TYPE_FLOOR_PX` in
+   `apps/frontend/src/design/tokens.ts`, held to the stylesheet by a test).
+   A graph's node subs (9 units) and a sequence's actor subs keep the
+   first, its labels the second; for a graph that is a scale of 7/9. A
+   node's detail line is a dim tertiary note and may fall below. A drawing
+   that fits its viewport at that scale or more is contained, as large as
+   fits, as before; one that would overflow by a sliver (4%) is contained
+   too, rather than scrolled for a few pixels.
+2. **Past that, it scrolls inside its viewport, one way where it can.** It
+   is drawn at the readable minimum, fills the other axis up to its own
+   size, and scrolls along the axis it overflows. The viewport is clipped
+   to its box, which in the diagram slot stands between the frame's rails,
+   so a drawing neither crosses the frame nor meets the rails. It scrolls
+   only when it overflows. It opens on the node its note names (or on
+   where it begins), fades each edge it continues past into the black,
+   and a sequence keeps its actor headers pinned at the top as its
+   messages scroll under them. A drawing that scrolls places no callout,
+   which could sit out of view: its note stays in the rail and the node
+   carries the NOTE marker.
+3. **It is recomposed for the viewport, not scaled down.** A graph that
+   does not read whole is laid out again for a frame of the viewport's
+   size at the readable minimum, once in each direction: a layer too wide
+   for the frame across wraps into several (its edges pass the other parts
+   as long edges do), every layer keeps inside the frame across, long
+   edges run as a bundle, and a top-down drawing in a narrow frame wraps
+   its node text narrower. Of the two and the drawing as first laid out,
+   the one asking the least scrolling is kept (a viewport's worth of
+   reading is the unit, so scrolling both ways costs most), the stage's own
+   direction preferred. A sequence too wide is recomposed to the
+   viewport's width: the columns share it, headers wrap and, when they
+   must, stand in two staggered rows, and a label that does not fit
+   between its lifelines takes its own line over its arrow, so the
+   exchange grows down, in the order it runs, and never scrolls across.
+4. **Focus gives it the stage.** The same rule runs in the focus layer's
+   larger viewport, so focus shows more of it at once, at the same scale or
+   larger.
+
+Why this rule and not another. A diagram exists to be read; a drawing too
+small to read is not a smaller answer but no answer, and the caller cannot
+pinch-zoom a page they are holding on a call. Scrolling is how this page
+already handles content larger than its frame (code, documents, tables, long
+plans), inside the frame's viewport and only when it overflows, so a large
+diagram scrolls by the same rules rather than shrinking. The floor comes
+from the page's own smallest type rather than a new number, so a diagram is
+never the least readable thing on screen. Recomposing rather than scaling
+is the portrait rule: a phone reads a graph top down with its wide layers
+wrapped, and a long exchange as a column, instead of a desktop drawing at a
+third of its size. What is still open: a dense graph (the forty-step
+pipeline) in a phone's slot scrolls both ways, since wrapping its layers
+multiplies the long edges past them; a lane layout (one column of nodes,
+edges in tracks beside it) would be the next step.
 
 A chart's `kind` says how its series are drawn, and the page decides the rest
 from geometry. Categorical `labels` replace the numeric x ticks; when a row of
