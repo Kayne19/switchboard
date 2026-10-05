@@ -386,7 +386,8 @@ go out because the link's socket is already closing gets `failed` at once.
 The service reads frames with serde_json, which refuses three things that
 are valid JSON: a string with half of a UTF-16 surrogate pair (`"\ud83d"`,
 an emoji cut in two), a number beyond a double (`1e400`), and arrays or
-objects nested deeper than 128 levels. This host agent writes only the last
+objects nested deeper than 127 levels (serde_json's recursion limit refuses
+the 128th; `MAX_FRAME_DEPTH` in `hosts.rs`). This host agent writes only the last
 of them: its `JSON.stringify` writes no number beyond a double, and it writes
 every lone surrogate as U+FFFD (below). When the whole frame cannot be read,
 the service still reads its `type`, `id`, `epoch`, `session` and `call`
@@ -413,7 +414,11 @@ string it sends (daemon text, a saved session's first message, a relayed
 call's arguments) goes out as U+FFFD, so the frame is not lost to it. A
 clipped tool `args` or `result` preview is cut between whole characters, so
 it makes none. The skill module refuses a lone surrogate before sending, so a
-relayed call is not changed in practice.
+relayed call is not changed in practice. It holds a display call to the depth
+the service reads, too (`_MAX_FRAME_DEPTH`, the same number as
+`MAX_FRAME_DEPTH`; `scripts/check_hygiene.mjs` keeps them equal): the request
+line it writes nests the call's `args` one level in, as the host agent's
+`module_call` frame does, so a line within the cap is a frame within it.
 
 Going the other way, the host agent logs and drops a service frame that is
 not a JSON object, a `module_reply` whose call is no longer waiting (it
@@ -474,7 +479,11 @@ A request that is not JSON gets `refused`, `bad_request`.
 
 The module checks the call before it connects: a value JSON cannot carry (a
 NaN, an infinity, or a string holding half of a surrogate pair) raises in
-the agent's code, and nothing is sent.
+the agent's code, and nothing is sent. So, naming the field, does a value the
+service would read as another: an integer beyond 2^53 (the service and the
+page read numbers as doubles, which hold every integer exactly only that far;
+one beyond a double's range became `null`), or arrays and objects nested
+deeper than the service reads (above).
 
 ### Delivery
 

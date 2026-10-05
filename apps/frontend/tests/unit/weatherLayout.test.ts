@@ -190,16 +190,35 @@ describe('the outlook', () => {
     expect(outlookCount(0, 10)).toBe(0);
   });
 
-  it('offers the days to come: a first day whose high and low the figure shows already is left out', () => {
+  it('offers the days after the forecast\'s today', () => {
+    const dates = (offered: Array<{ date: string }>) => offered.map((day) => day.date);
+    const week = [
+      { date: '2026-10-06', high: 66, low: 52 },
+      { date: '2026-10-07', high: 70, low: 55 },
+      { date: '2026-10-08', high: 68, low: 54 },
+      { date: '2026-10-09', high: 61, low: 55 },
+    ];
+    // Today and the day before go, whatever their numbers; the days after stay.
+    expect(dates(outlookOffer(week, { current: { high: 68, low: 54 }, today: '2026-10-07' }))).toEqual(['2026-10-08', '2026-10-09']);
+    // A forecast that opens on tomorrow with today's numbers keeps tomorrow:
+    // the numbers are no longer taken for today.
+    expect(dates(outlookOffer(week.slice(2), { current: { high: 68, low: 54 }, today: '2026-10-07' }))).toEqual(['2026-10-08', '2026-10-09']);
+    // A day a note names stays, in its place, today included.
+    expect(dates(outlookOffer(week, { current: {}, today: '2026-10-07' }, '2026-10-07'))).toEqual(['2026-10-07', '2026-10-08', '2026-10-09']);
+    // A today past every day leaves none to come.
+    expect(outlookOffer(week, { current: {}, today: '2026-10-20' })).toEqual([]);
+  });
+
+  it('without today, takes a first day whose high and low the figure shows for today and leaves it out', () => {
     const days = [{ date: '2026-10-07', high: 68, low: 54 }, { date: '2026-10-08', high: 61, low: 55 }];
     const dates = (offered: Array<{ date: string }>) => offered.map((day) => day.date);
-    expect(dates(outlookOffer(days, { high: 68, low: 54 }))).toEqual(['2026-10-08']);
+    expect(dates(outlookOffer(days, { current: { high: 68, low: 54 } }))).toEqual(['2026-10-08']);
     // Not said by the figure: a different high, or none.
-    expect(dates(outlookOffer(days, { high: 70, low: 54 }))).toEqual(['2026-10-07', '2026-10-08']);
-    expect(dates(outlookOffer(days, {}))).toEqual(['2026-10-07', '2026-10-08']);
+    expect(dates(outlookOffer(days, { current: { high: 70, low: 54 } }))).toEqual(['2026-10-07', '2026-10-08']);
+    expect(dates(outlookOffer(days, { current: {} }))).toEqual(['2026-10-07', '2026-10-08']);
     // A day a note names stays, in its place.
-    expect(dates(outlookOffer(days, { high: 68, low: 54 }, '2026-10-07'))).toEqual(['2026-10-07', '2026-10-08']);
-    expect(outlookOffer([], { high: 68, low: 54 })).toEqual([]);
+    expect(dates(outlookOffer(days, { current: { high: 68, low: 54 } }, '2026-10-07'))).toEqual(['2026-10-07', '2026-10-08']);
+    expect(outlookOffer([], { current: { high: 68, low: 54 } })).toEqual([]);
   });
 
   it('shows the first days, and a day a note names past them in the last column', () => {

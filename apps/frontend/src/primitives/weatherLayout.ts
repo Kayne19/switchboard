@@ -172,13 +172,23 @@ export function outlookCount(width: number, days: number): number {
 }
 
 /**
- * The days an outlook offers: the days to come. A first day whose high and
- * low the conditions now show already (`H 68° L 54°`: today, as a forecast
- * usually opens) is left out, unless a note names it: the figure has said it.
+ * The days an outlook offers: the days to come, after the forecast's
+ * `today`. A forecast with no `today` leaves the page to guess: a first day
+ * whose high and low the conditions now show already (`H 68° L 54°`: today,
+ * as a forecast usually opens) is taken for today and left out. A day a
+ * note names stays either way, in its place.
  */
-export function outlookOffer<T extends { date: string; high: number; low: number }>(days: T[], current: { high?: number; low?: number }, marked?: string): T[] {
+export function outlookOffer<T extends { date: string; high: number; low: number }>(
+  days: T[],
+  forecast: { current: { high?: number; low?: number }; today?: string },
+  marked?: string,
+): T[] {
+  const today = parseTimeValue(forecast.today);
+  if (today) {
+    return days.filter((day) => day.date === marked || (parseTimeValue(day.date)?.dayNumber ?? today.dayNumber) > today.dayNumber);
+  }
   const [first] = days;
-  const said = first !== undefined && first.date !== marked && current.high === first.high && current.low === first.low;
+  const said = first !== undefined && first.date !== marked && forecast.current.high === first.high && forecast.current.low === first.low;
   return said ? days.slice(1) : days;
 }
 

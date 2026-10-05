@@ -26,6 +26,42 @@ pub const CONTENT_TYPES: [&str; 14] = [
     "calendar", "tasks", "timer", "weather", "inbox",
 ];
 
+// The names a field takes from a fixed set, each in the schema's order. A
+// refused name is `invalid_name`'s text, which lists them.
+const OPS: [&str; 5] = ["show", "hide", "focus", "say", "clear"];
+const ROLES: [&str; 4] = ["primary", "compare", "secondary", "ambient"];
+const SEMANTICS: [&str; 7] = ["red", "orange", "green", "cyan", "amber", "paper", "muted"];
+const METRIC_TRENDS: [&str; 3] = ["up", "down", "flat"];
+/// A progress step's state and a diagram node's state.
+const STEP_STATES: [&str; 4] = ["done", "active", "todo", "blocked"];
+const DIAGRAM_MODES: [&str; 2] = ["graph", "sequence"];
+const MESSAGE_KINDS: [&str; 3] = ["call", "return", "async"];
+const DOCUMENT_KINDS: [&str; 2] = ["email", "document"];
+const IMAGE_FORMATS: [&str; 3] = ["png", "jpeg", "webp"];
+const WEATHER_UNITS: [&str; 2] = ["C", "F"];
+
+/// The one refusal of a name outside its set, required or optional alike
+/// (docs/display-tool.md, "How the two validators agree"): the field and
+/// every name it takes, so an agent can mend the action from the error
+/// alone. The browser's `invalidName` writes the same text, and the module
+/// calls word their own refused names with it.
+pub(crate) fn invalid_name(field: &str, allowed: &[&str]) -> String {
+    format!("invalid {field}: expected one of {}", allowed.join(", "))
+}
+
+/// `value` when it is one of `allowed`; anything else, a missing field, a
+/// non-string or `null` included, is `invalid_name`'s refusal.
+fn read_name<'a>(
+    value: Option<&'a Value>,
+    allowed: &[&str],
+    field: &str,
+) -> Result<&'a str, String> {
+    value
+        .and_then(Value::as_str)
+        .filter(|name| allowed.contains(name))
+        .ok_or_else(|| invalid_name(field, allowed))
+}
+
 // The table contract (docs/display-tool.md, "Table v1 rules"); the browser's
 // validateTableData holds the same numbers.
 const MAX_TABLE_COLUMNS: usize = 12;
@@ -217,31 +253,16 @@ fn copy_optional_string(
     Ok(())
 }
 
-fn is_valid_semantic(s: &str) -> bool {
-    matches!(
-        s,
-        "red" | "orange" | "green" | "cyan" | "amber" | "paper" | "muted"
-    )
-}
-
 /// Copies an optional `semantic`. Anything but one of the seven names, a
-/// non-string or `null` included, is `invalid {field_name}`, as the
-/// browser's `ALLOWED_SEMANTICS.has` check refuses it: a field the browser
-/// refuses is refused here, never dropped.
+/// non-string or `null` included, is refused, as the browser's
+/// `isName(value, SEMANTICS)` check refuses it: a field the browser refuses
+/// is refused here, never dropped.
 fn copy_optional_semantic(
     data: &Map<String, Value>,
     out: &mut Map<String, Value>,
     field_name: &str,
 ) -> Result<(), String> {
-    let Some(value) = data.get("semantic") else {
-        return Ok(());
-    };
-    let semantic = value
-        .as_str()
-        .filter(|s| is_valid_semantic(s))
-        .ok_or_else(|| format!("invalid {field_name}"))?;
-    out.insert("semantic".into(), semantic.into());
-    Ok(())
+    copy_optional_name(data, out, "semantic", &SEMANTICS, field_name)
 }
 
 fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
@@ -268,13 +289,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
 
     let kind = match data.get("kind") {
         None => None,
-        Some(v) => {
-            let k = v
-                .as_str()
-                .filter(|k| CHART_KINDS.contains(k))
-                .ok_or("invalid chart.kind")?;
-            Some(k)
-        }
+        Some(v) => Some(read_name(Some(v), &CHART_KINDS, "chart.kind")?),
     };
     let labels = match data.get("labels") {
         None => None,
@@ -432,13 +447,7 @@ fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("value".into(), value.into());
     copy_optional_semantic(data, &mut out, "metric.semantic")?;
     copy_optional_string(data, &mut out, "caption", 128, "metric.caption")?;
-    if let Some(trend) = data.get("trend") {
-        let t = trend
-            .as_str()
-            .filter(|t| matches!(*t, "up" | "down" | "flat"))
-            .ok_or("invalid metric.trend")?;
-        out.insert("trend".into(), t.into());
-    }
+    copy_optional_name(data, &mut out, "trend", &METRIC_TRENDS, "metric.trend")?;
     copy_optional_string(
         data,
         &mut out,
@@ -494,13 +503,13 @@ fn validate_progress_steps(value: &Value) -> Result<Vec<Value>, String> {
         }
         let mut step_out = Map::new();
         step_out.insert("label".into(), label.into());
-        if let Some(state) = sm.get("state") {
-            let st = state
-                .as_str()
-                .filter(|st| matches!(*st, "done" | "active" | "todo" | "blocked"))
-                .ok_or("invalid progress step.state")?;
-            step_out.insert("state".into(), st.into());
-        }
+        copy_optional_name(
+            sm,
+            &mut step_out,
+            "state",
+            &STEP_STATES,
+            "progress step.state",
+        )?;
         copy_optional_string(sm, &mut step_out, "detail", 256, "progress step.detail")?;
         clean_steps.push(Value::Object(step_out));
     }
@@ -571,10 +580,9 @@ fn validate_diagram_data(data: &Map<String, Value>) -> Result<Value, String> {
     if data.contains_key("source") {
         return Err("diagram data source field is forbidden in v1".into());
     }
-    match data.get("mode").and_then(Value::as_str) {
-        Some("graph") => validate_graph_diagram_data(data),
-        Some("sequence") => validate_sequence_diagram_data(data),
-        _ => Err("diagram.mode must be \"graph\" or \"sequence\"".into()),
+    match read_name(data.get("mode"), &DIAGRAM_MODES, "diagram.mode")? {
+        "graph" => validate_graph_diagram_data(data),
+        _ => validate_sequence_diagram_data(data),
     }
 }
 
@@ -638,13 +646,13 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
         copy_optional_string(nm, &mut node_out, "sub", 256, "diagram node.sub")?;
         copy_optional_string(nm, &mut node_out, "detail", 256, "diagram node.detail")?;
         copy_optional_semantic(nm, &mut node_out, "diagram node.semantic")?;
-        if let Some(state) = nm.get("state") {
-            let st = state
-                .as_str()
-                .filter(|st| matches!(*st, "done" | "active" | "todo" | "blocked"))
-                .ok_or("invalid diagram node.state")?;
-            node_out.insert("state".into(), st.into());
-        }
+        copy_optional_name(
+            nm,
+            &mut node_out,
+            "state",
+            &STEP_STATES,
+            "diagram node.state",
+        )?;
         clean_nodes.push(Value::Object(node_out));
     }
 
@@ -824,13 +832,13 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
         message_out.insert("from".into(), from.into());
         message_out.insert("to".into(), to.into());
         message_out.insert("label".into(), label.into());
-        if let Some(kind) = mm.get("kind") {
-            let k = kind.as_str().ok_or("invalid diagram message.kind")?;
-            if !matches!(k, "call" | "return" | "async") {
-                return Err("invalid diagram message.kind".into());
-            }
-            message_out.insert("kind".into(), k.into());
-        }
+        copy_optional_name(
+            mm,
+            &mut message_out,
+            "kind",
+            &MESSAGE_KINDS,
+            "diagram message.kind",
+        )?;
         if let Some(active) = mm.get("active") {
             let b = active
                 .as_bool()
@@ -904,13 +912,7 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("subject".into(), subject.into());
     out.insert("paragraphs".into(), Value::Array(clean_paras));
 
-    if let Some(kind) = data.get("kind") {
-        let k = kind
-            .as_str()
-            .filter(|k| matches!(*k, "email" | "document"))
-            .ok_or("invalid document.kind")?;
-        out.insert("kind".into(), k.into());
-    }
+    copy_optional_name(data, &mut out, "kind", &DOCUMENT_KINDS, "document.kind")?;
 
     for (k, max_len) in [("context", 256), ("source", 256)] {
         if let Some(v) = data.get(k) {
@@ -1258,13 +1260,16 @@ fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
         "image data",
     )?;
 
-    let format = data.get("format").and_then(Value::as_str);
-    if matches!(format, Some("svg") | Some("svg+xml")) {
-        return Err("image.format svg is refused: an image is raster bytes, not markup".into());
+    if matches!(
+        data.get("format").and_then(Value::as_str),
+        Some("svg") | Some("svg+xml")
+    ) {
+        return Err(format!(
+            "{} (svg is refused: an image is raster bytes, not markup)",
+            invalid_name("image.format", &IMAGE_FORMATS)
+        ));
     }
-    let format = format
-        .filter(|f| matches!(*f, "png" | "jpeg" | "webp"))
-        .ok_or("image.format must be one of png, jpeg, webp")?;
+    let format = read_name(data.get("format"), &IMAGE_FORMATS, "image.format")?;
 
     let bytes = data
         .get("bytes")
@@ -1534,7 +1539,7 @@ fn copy_optional_bool(
 }
 
 /// An optional name from `allowed`; anything else, `null` included, is
-/// `invalid {field}`.
+/// `invalid_name`'s refusal.
 fn copy_optional_name(
     data: &Map<String, Value>,
     out: &mut Map<String, Value>,
@@ -1543,10 +1548,7 @@ fn copy_optional_name(
     field: &str,
 ) -> Result<(), String> {
     if let Some(value) = data.get(key) {
-        let name = value
-            .as_str()
-            .filter(|name| allowed.contains(name))
-            .ok_or_else(|| format!("invalid {field}"))?;
+        let name = read_name(Some(value), allowed, field)?;
         out.insert(key.into(), name.into());
     }
     Ok(())
@@ -1668,11 +1670,7 @@ fn validate_calendar_data(data: &Map<String, Value>) -> Result<Value, String> {
         ],
         "calendar data",
     )?;
-    let view = data
-        .get("view")
-        .and_then(Value::as_str)
-        .filter(|view| CALENDAR_VIEWS.contains(view))
-        .ok_or("calendar.view must be one of day, week, month, agenda")?;
+    let view = read_name(data.get("view"), &CALENDAR_VIEWS, "calendar.view")?;
     read_time(data.get("start"), &[TimeForm::Date], "calendar.start")?;
     let mut out = Map::new();
     out.insert("view".into(), view.into());
@@ -1895,11 +1893,7 @@ fn copy_condition(
     out: &mut Map<String, Value>,
     field: &str,
 ) -> Result<(), String> {
-    let condition = data
-        .get("condition")
-        .and_then(Value::as_str)
-        .filter(|condition| WEATHER_CONDITIONS.contains(condition))
-        .ok_or_else(|| format!("{field} must be one of {}", WEATHER_CONDITIONS.join(", ")))?;
+    let condition = read_name(data.get("condition"), &WEATHER_CONDITIONS, field)?;
     out.insert("condition".into(), condition.into());
     Ok(())
 }
@@ -1985,22 +1979,24 @@ fn validate_weather_data(data: &Map<String, Value>) -> Result<Value, String> {
     check_unknown_keys(
         data,
         &[
-            "title", "subtitle", "context", "caption", "location", "units", "current", "hourly",
-            "daily", "alert",
+            "title", "subtitle", "context", "caption", "location", "units", "current", "today",
+            "hourly", "daily", "alert",
         ],
         "weather data",
     )?;
     let location = required_string(data, "location", 128, "weather.location")?;
-    let units = data
-        .get("units")
-        .and_then(Value::as_str)
-        .filter(|units| matches!(*units, "C" | "F"))
-        .ok_or("weather.units must be \"C\" or \"F\"")?;
+    let units = read_name(data.get("units"), &WEATHER_UNITS, "weather.units")?;
     let current = validate_weather_current(data.get("current"))?;
     let mut out = Map::new();
     out.insert("location".into(), location.into());
     out.insert("units".into(), units.into());
     out.insert("current".into(), current);
+    // The day the forecast is read on, as calendar, tasks and inbox take it:
+    // the page has no clock of its own to tell it.
+    if let Some(today) = data.get("today") {
+        read_time(Some(today), &[TimeForm::Date], "weather.today")?;
+        out.insert("today".into(), today.clone());
+    }
     if let Some(hourly) = data.get("hourly") {
         let hours = hourly
             .as_array()
@@ -2310,11 +2306,7 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
     if json_len(action) > size_cap {
         return Err("action exceeds size limit".into());
     }
-    let op = map
-        .get("op")
-        .and_then(Value::as_str)
-        .filter(|op| matches!(*op, "show" | "hide" | "focus" | "say" | "clear"))
-        .ok_or("unknown operation")?;
+    let op = read_name(map.get("op"), &OPS, "op")?;
 
     if let Some(k) = forbidden_layout(action) {
         return Err(format!("model-controlled layout field is forbidden: {k}"));
@@ -2338,22 +2330,11 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
                 .ok_or("show.id must be a non-empty identifier")?;
             let clean_id = check_identifier(id_str, "show.id")?;
 
-            let ty = map
-                .get("type")
-                .and_then(Value::as_str)
-                .ok_or("show.type is unknown")?;
-            if !CONTENT_TYPES.contains(&ty) {
-                return Err("show.type is unknown".into());
-            }
+            let ty = read_name(map.get("type"), &CONTENT_TYPES, "show.type")?;
 
-            let role_opt = if let Some(r) = map.get("role") {
-                let role_str = r.as_str().ok_or("show.role is unknown")?;
-                if !matches!(role_str, "primary" | "compare" | "secondary" | "ambient") {
-                    return Err("show.role is unknown".into());
-                }
-                Some(role_str.to_string())
-            } else {
-                None
+            let role_opt = match map.get("role") {
+                Some(role) => Some(read_name(Some(role), &ROLES, "show.role")?),
+                None => None,
             };
 
             let data_obj = map
@@ -2376,7 +2357,7 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
                 "timer" => validate_timer_data(data_obj)?,
                 "weather" => validate_weather_data(data_obj)?,
                 "inbox" => validate_inbox_data(data_obj)?,
-                _ => return Err("show.type is unknown".into()),
+                _ => return Err(invalid_name("show.type", &CONTENT_TYPES)),
             };
 
             out.insert("op".into(), "show".into());
@@ -2467,7 +2448,7 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
             check_unknown_keys(map, &["op"], "clear action")?;
             out.insert("op".into(), "clear".into());
         }
-        _ => return Err("unknown operation".into()),
+        _ => return Err(invalid_name("op", &OPS)),
     }
 
     let normalized = Value::Object(out);
@@ -2475,6 +2456,49 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
         return Err("action exceeds size limit".into());
     }
     Ok(normalized)
+}
+
+/// The shared validator corpus, `apps/frontend/tests/fixtures/validator-corpus.json`:
+/// each case an action and what both validators make of it, its exact
+/// `error`, or `accepted` with the `normalized` action when that is not the
+/// action as sent. `{"$repeat": s, "times": n}` in a case stands for `s`
+/// repeated `n` times, so a case at a length cap stays one readable line; it
+/// is expanded here as the browser's `validatorCorpus.ts` expands it. This
+/// module's tests run every case through `validate_action`, and the
+/// module-call tests run every refused one through a display call.
+#[cfg(test)]
+pub(crate) fn validator_corpus() -> Vec<Value> {
+    fn expand(value: &Value) -> Value {
+        match value {
+            Value::Object(map) => {
+                if map.len() == 2 {
+                    if let (Some(Value::String(text)), Some(times)) =
+                        (map.get("$repeat"), map.get("times").and_then(Value::as_u64))
+                    {
+                        return Value::String(text.repeat(times as usize));
+                    }
+                }
+                Value::Object(
+                    map.iter()
+                        .map(|(key, value)| (key.clone(), expand(value)))
+                        .collect(),
+                )
+            }
+            Value::Array(items) => Value::Array(items.iter().map(expand).collect()),
+            other => other.clone(),
+        }
+    }
+    let corpus: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/apps/frontend/tests/fixtures/validator-corpus.json"
+    )))
+    .unwrap();
+    corpus["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(expand)
+        .collect()
 }
 
 #[cfg(test)]

@@ -179,6 +179,14 @@ describe('a short slot', () => {
     expect((page.querySelector('.weather-now__main') as HTMLElement).style.getPropertyValue('--weather-temp')).toBe('28px');
   });
 
+  it('stands the days after the forecast\'s today beside the conditions, whatever their numbers', () => {
+    // A forecast that opens on tomorrow, whose high and low are the figure's:
+    // without `today` the page took that day for today and left it out.
+    const opensTomorrow = { ...forecast, today: '2026-10-07', daily: [{ ...forecast.daily![1], high: 68, low: 54 }, forecast.daily![2]] };
+    const page = render(opensTomorrow, undefined, { width: 334, height: 128, main: 140 });
+    expect([...page.querySelectorAll('.weather-outlook__day')].map((day) => day.getAttribute('data-item'))).toEqual(['2026-10-08', '2026-10-09']);
+  });
+
   it('draws no outlook when the forecast holds no day to come', () => {
     const page = render({ ...forecast, daily: [forecast.daily![0]] }, undefined, { width: 334, height: 128, main: 140 });
     expect(page.querySelector('.weather-outlook')).toBeNull();

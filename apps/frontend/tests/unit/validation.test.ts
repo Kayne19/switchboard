@@ -77,25 +77,13 @@ describe('blank text', () => {
   });
 });
 
+// What both validators make of an action, the page's validateControllerAction
+// among them, is the shared corpus's to pin (validatorCorpus.test.ts). These
+// are the actions it cannot hold, and the throwing form of the validator.
 describe('display protocol validation', () => {
-  it('accepts and normalizes all canonical valid fixtures', () => {
-    for (const testCase of fixtures.valid) {
-      const result = validateControllerAction(testCase.action);
-      expect(result.ok, `Expected valid fixture "${testCase.name}" to pass`).toBe(true);
-      if (result.ok) {
-        expect(result.action, `Normalized action for "${testCase.name}" should match`).toEqual(testCase.normalized);
-      }
-    }
-  });
-
-  it('rejects all canonical invalid fixtures', () => {
-    for (const testCase of fixtures.invalid) {
-      const result = validateControllerAction(testCase.action);
-      expect(result.ok, `Expected invalid fixture "${testCase.name}" to be rejected`).toBe(false);
-    }
-  });
-
-  it('rejects non-finite mutations (NaN, Infinity, -Infinity)', () => {
+  // JSON cannot hold a NaN or an infinity (display-actions.json says why),
+  // but in-page code can hand the controller one.
+  it('refuses non-finite mutations (NaN, Infinity, -Infinity)', () => {
     for (const mutation of fixtures.nonFiniteMutations) {
       const cloned = JSON.parse(JSON.stringify(mutation.baseAction));
       let target: any = cloned;
@@ -111,18 +99,17 @@ describe('display protocol validation', () => {
         target[lastKey] = Number.NaN;
       }
 
-      const result = validateControllerAction(cloned);
-      expect(result.ok, `Expected non-finite mutation "${mutation.name}" to be rejected`).toBe(false);
+      expect(validateControllerAction(cloned), mutation.name).toEqual({ ok: false, error: 'action contains a non-finite number' });
     }
   });
 
   it('assertControllerAction returns action on valid input and throws on invalid input', () => {
-    const valid = fixtures.valid[0].action;
+    const valid = { op: 'show', id: 'chart-1', type: 'chart', data: { series: [{ name: 'CPU', values: [10, 20, 30] }] } };
     expect(() => assertControllerAction(valid)).not.toThrow();
     const action = assertControllerAction(valid);
     expect(action.op).toBe('show');
 
-    expect(() => assertControllerAction({ op: 'listen', on: true })).toThrow(/unknown operation/);
+    expect(() => assertControllerAction({ op: 'listen', on: true })).toThrow('invalid op: expected one of show, hide, focus, say, clear');
     expect(() => assertControllerAction({ op: 'show', id: '__runtime/x', type: 'metric', data: { label: 'L', value: '1' } })).toThrow(/reserved identifier namespace/);
   });
 
@@ -130,7 +117,7 @@ describe('display protocol validation', () => {
 
 // ---- image -----------------------------------------------------------------
 
-/** A real 1x1 PNG (69 bytes), the same one display-actions.json carries. */
+/** A real 1x1 PNG (69 bytes), the same one the validator corpus carries. */
 const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC';
 
 const SIGNATURES: Record<'png' | 'jpeg' | 'webp', number[]> = {

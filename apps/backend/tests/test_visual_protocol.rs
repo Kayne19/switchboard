@@ -192,7 +192,7 @@ fn show_types_and_their_required_data_follow_the_schema() {
 
 // ---- image -----------------------------------------------------------------
 
-/// A real 1x1 PNG (69 bytes), the same one `display-actions.json` carries.
+/// A real 1x1 PNG (69 bytes), the same one the validator corpus carries.
 const PNG_1X1: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC";
 
@@ -470,30 +470,6 @@ fn time_values_count_days_from_1970_and_order_instants_by_the_moment() {
 
 // ---- the shared corpus -------------------------------------------------------
 
-/// `{"$repeat": s, "times": n}` in the corpus stands for `s` repeated `n`
-/// times, so a case at a length cap stays one readable line. The browser's
-/// `validatorCorpus.test.ts` expands it the same way.
-fn expand_corpus_value(value: &Value) -> Value {
-    match value {
-        Value::Object(map) => {
-            if map.len() == 2 {
-                if let (Some(Value::String(text)), Some(times)) =
-                    (map.get("$repeat"), map.get("times").and_then(Value::as_u64))
-                {
-                    return Value::String(text.repeat(times as usize));
-                }
-            }
-            Value::Object(
-                map.iter()
-                    .map(|(key, value)| (key.clone(), expand_corpus_value(value)))
-                    .collect(),
-            )
-        }
-        Value::Array(items) => Value::Array(items.iter().map(expand_corpus_value).collect()),
-        other => other.clone(),
-    }
-}
-
 /// JSON equality with numbers compared by value, as the browser compares
 /// them: the corpus's `1.0` and the validator's `1` are one number.
 fn same_json(a: &Value, b: &Value) -> bool {
@@ -520,17 +496,11 @@ fn same_json(a: &Value, b: &Value) -> bool {
 /// browser validates what this side normalized.
 #[test]
 fn agrees_with_the_shared_validator_corpus() {
-    let corpus: Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/apps/frontend/tests/fixtures/validator-corpus.json"
-    )))
-    .unwrap();
-    let cases = corpus["cases"].as_array().unwrap();
+    let cases = validator_corpus();
     let mut failures = Vec::new();
-    for case in cases {
+    for case in &cases {
         let name = case["name"].as_str().unwrap();
-        let action = expand_corpus_value(&case["action"]);
-        let got = validate_action(&action);
+        let got = validate_action(&case["action"]);
         match (case.get("error"), case.get("accepted")) {
             (Some(Value::String(error)), None) => {
                 if got.as_ref() != Err(error) {
@@ -538,9 +508,9 @@ fn agrees_with_the_shared_validator_corpus() {
                 }
             }
             (None, Some(Value::Bool(true))) => {
-                let wanted = expand_corpus_value(case.get("normalized").unwrap_or(&case["action"]));
+                let wanted = case.get("normalized").unwrap_or(&case["action"]);
                 match got {
-                    Ok(normalized) if same_json(&normalized, &wanted) => {
+                    Ok(normalized) if same_json(&normalized, wanted) => {
                         let again = validate_action(&normalized);
                         if again.as_ref() != Ok(&normalized) {
                             failures.push(format!(

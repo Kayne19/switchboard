@@ -33,6 +33,11 @@ pub const OLDEST_HOST_LINK_PROTOCOL: u64 = 1;
 
 /// Largest frame a host may send; a snapshot is the biggest one.
 const MAX_HOST_FRAME_BYTES: usize = 16 * 1024 * 1024;
+/// How deep arrays and objects may nest in a frame the service reads:
+/// serde_json's recursion limit refuses the 128th level. The skill module
+/// holds a call to the same depth before sending (`_MAX_FRAME_DEPTH`;
+/// `scripts/check_hygiene.mjs` keeps the two equal).
+const MAX_FRAME_DEPTH: usize = 127;
 /// Close code for a link a newer link of the same host replaced.
 const CLOSE_FENCED: u16 = 4001;
 /// Close code for a link that missed too many pongs.
@@ -240,7 +245,9 @@ fn parse_cause(error: &serde_json::Error) -> String {
         }
         "number out of range" => "a number is beyond what a double can hold".to_owned(),
         "recursion limit exceeded" => {
-            "arrays and objects nest deeper than the service reads (128 levels)".to_owned()
+            format!(
+                "arrays and objects nest deeper than the service reads ({MAX_FRAME_DEPTH} levels)"
+            )
         }
         other => other.to_owned(),
     }
