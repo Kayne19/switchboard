@@ -417,7 +417,7 @@ describe('chart kinds', () => {
     }
     // The value ticks run along the bottom, and the axis names follow their axes.
     const valueTicks = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="middle"]')];
-    expect(valueTicks.map((tick) => tick.textContent)).toContain('0.00');
+    expect(valueTicks.map((tick) => tick.textContent)).toEqual(['0', '200', '400', '600']);
     const axisLabels = [...host.querySelectorAll<SVGTextElement>('.chart-axis-label')].map((label) => label.textContent);
     expect(axisLabels).toEqual(['MS', 'TEST FILE']);
     // The bars run from the left, and the marker rings the named bar's end.
@@ -430,10 +430,18 @@ describe('chart kinds', () => {
   });
 
   it('never prints a value tick as negative zero', () => {
-    renderWith({ kind: 'bar', labels: ['a', 'b'], series: [{ name: 'A', values: [102.9, 1] }] });
+    // Both ends given: the axis is divided evenly, and the division that
+    // lands on zero computes to a rounding error below it.
+    renderWith({ kind: 'bar', labels: ['a', 'b'], yMin: -0.3, yMax: 0.6, series: [{ name: 'A', values: [0.5, -0.2] }] });
     const ticks = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="end"]')].map((tick) => tick.textContent);
     expect(ticks).toContain('0.00');
     expect(ticks).not.toContain('-0.00');
+  });
+
+  it('labels a value axis the page chooses at round values, printed as such', () => {
+    renderWith({ kind: 'bar', labels: ['a', 'b'], series: [{ name: 'A', values: [102.9, 1] }] });
+    const ticks = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="end"]')].map((tick) => tick.textContent);
+    expect(ticks).toEqual(['0', '25', '50', '75', '100', '125']);
   });
 
   it('resolves every kind in with the same widening clip, and not at all under reduced motion', () => {

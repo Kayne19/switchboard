@@ -32,8 +32,6 @@ export function chartSeriesColor(series: ChartSeries, index: number): string {
   return semanticColor[series.semantic ?? fallbackSeriesSemantics[index % fallbackSeriesSemantics.length]];
 }
 
-function niceTicks(min:number,max:number,count=4){return Array.from({length:count},(_,i)=>max-((max-min)*i)/(count-1));}
-
 // The x axis is labelled at round values of its domain -- steps of 1, 2, 2.5
 // or 5 times a power of ten, at most five of them -- and each label is the
 // value its gridline sits at. Evenly spaced quarters labelled with rounded
@@ -53,10 +51,20 @@ function formatXTick(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
 }
 
-// A tick computed down from the top of the domain can land a rounding
-// error below zero, which would print as "-0.00".
-function formatValueTick(value: number): string {
-  return (Math.abs(value) < 1e-9 ? 0 : value).toFixed(2);
+// A value tick is printed with its step's decimals. A tick computed down
+// from the top of the domain can land a rounding error below zero, which
+// would print as "-0.00".
+function formatValueTick(value: number, decimals: number): string {
+  return (Math.abs(value) < 1e-9 ? 0 : value).toFixed(decimals);
+}
+
+// The value gridlines: one per tick, and the domain's ends too, so the grid
+// stays closed where an end the chart gives falls between round values.
+function valueGridLines(scales: ChartScales): Array<{ value: number; tick: boolean }> {
+  const { valueTicks, yMin, yMax } = scales;
+  const near = (a: number, b: number) => Math.abs(a - b) <= Math.abs(yMax - yMin) * 1e-9;
+  const ends = [yMax, yMin].filter((end) => !valueTicks.some((tick) => near(tick, end)));
+  return [...valueTicks.map((value) => ({ value, tick: true })), ...ends.map((value) => ({ value, tick: false }))];
 }
 
 const point = (p: { x: number; y: number }) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
@@ -84,17 +92,17 @@ function LegendKey({ kind, color }: { kind: ChartKind; color: string }) {
 // The gridlines and tick labels along the category (or numeric x) axis and
 // the value axis, whichever way the chart runs.
 function Grid({ scales }: { scales: ChartScales }) {
-  const { plot, categories, horizontal, yMin, yMax, xMax, xAt, valueAt, kind } = scales;
-  const valueTicks = niceTicks(yMin, yMax);
+  const { plot, categories, horizontal, xMax, xAt, valueAt, kind, valueDecimals } = scales;
+  const valueLines = valueGridLines(scales);
   const categorical = categories.categories !== undefined;
   // Category gridlines belong to a line through the categories; bars stand
   // in their bands with no line between them.
   const categoryLines = categorical && kind !== 'bar';
   if (horizontal) {
     return <g className="chart-grid" data-axis="horizontal">
-      {valueTicks.map((tick, index) => {
-        const x = valueAt(tick);
-        return <g key={index}><line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/><text x={x} y={plot.bottom + CHART_TICK_BASELINE} textAnchor="middle">{formatValueTick(tick)}</text></g>;
+      {valueLines.map(({ value, tick }, index) => {
+        const x = valueAt(value);
+        return <g key={index}><line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/>{tick ? <text x={x} y={plot.bottom + CHART_TICK_BASELINE} textAnchor="middle">{formatValueTick(value, valueDecimals)}</text> : null}</g>;
       })}
       <line x1={plot.left} y1={plot.top} x2={plot.right} y2={plot.top}/>
       <line x1={plot.left} y1={plot.bottom} x2={plot.right} y2={plot.bottom}/>
@@ -107,9 +115,9 @@ function Grid({ scales }: { scales: ChartScales }) {
   // categorical axis closes the grid at both edges and labels neither.
   const xGrid = categorical ? [] : xMax > 0 && xTicks[xTicks.length - 1] < xMax ? [...xTicks, xMax] : xTicks;
   return <g className="chart-grid">
-    {valueTicks.map((tick, index) => {
-      const y = valueAt(tick);
-      return <g key={index}><line x1={plot.left} y1={y} x2={plot.right} y2={y}/><text x={plot.left - 14} y={y + 4} textAnchor="end">{formatValueTick(tick)}</text></g>;
+    {valueLines.map(({ value, tick }, index) => {
+      const y = valueAt(value);
+      return <g key={index}><line x1={plot.left} y1={y} x2={plot.right} y2={y}/>{tick ? <text x={plot.left - 14} y={y + 4} textAnchor="end">{formatValueTick(value, valueDecimals)}</text> : null}</g>;
     })}
     {xGrid.map((value) => {
       const x = xAt(value);

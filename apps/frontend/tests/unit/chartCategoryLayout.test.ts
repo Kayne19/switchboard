@@ -21,6 +21,7 @@ import {
   chartPad,
   chartScales,
   chartSeriesPoint,
+  chartValueAxis,
 } from '../../src/primitives/chartGeometry';
 
 const plotWidth = CHART_VIEW_WIDTH - CHART_PAD.left - CHART_PAD.right;
@@ -337,5 +338,65 @@ describe('chart series point on a labelled chart', () => {
       expect(point.y).toBeLessThanOrEqual(plot.bottom + 1e-9);
       expect(point.x).toBeLessThanOrEqual(plot.right + 1e-9);
     }
+  });
+});
+
+// A value axis is read off its ticks: round values, and room past the
+// tallest bar. The comparison chart's axis was labelled 0.00, 34.30, 68.60
+// and 102.90, its tallest bar touching the top of the plot, so a note had
+// no place inside it.
+describe('chart value axis', () => {
+  const suite: ChartData = {
+    kind: 'bar',
+    labels: ['backend', 'frontend unit', 'frontend visual', 'host agent', 'skill', 'hygiene'],
+    series: [
+      { name: 'THIS RUN', values: [41.8, 3.3, 96.4, 6.1, 0.3, 0.4] },
+      { name: 'PREVIOUS RUN', values: [44.0, 3.1, 102.9, 6.4, 0.3, 0.4] },
+    ],
+  };
+
+  it('labels a bar chart at round values, with headroom above its tallest bar', () => {
+    const axis = chartValueAxis(suite);
+    expect(axis).toEqual({ min: 0, max: 125, ticks: [0, 25, 50, 75, 100, 125], decimals: 0 });
+    const scales = chartScales(suite);
+    const tallest = Math.min(...chartBars(suite, scales).map((bar) => bar.rect.top));
+    const plotHeight = scales.plot.bottom - scales.plot.top;
+    expect(tallest - scales.plot.top).toBeGreaterThanOrEqual(0.1 * plotHeight);
+  });
+
+  it('keeps both ends a chart gives, labelled at even divisions as before', () => {
+    const axis = chartValueAxis({ yMin: 0.08, yMax: 0.3, series: [{ name: 'LOSS', values: [0.2, 0.1] }] });
+    expect(axis.min).toBe(0.08);
+    expect(axis.max).toBe(0.3);
+    expect(axis.ticks.map((tick) => Number(tick.toFixed(4)))).toEqual([0.3, 0.2267, 0.1533, 0.08]);
+    expect(axis.decimals).toBe(2);
+  });
+
+  it('keeps the end a chart gives and rounds the other', () => {
+    const axis = chartValueAxis({ kind: 'bar', yMax: 100, labels: ['a', 'b'], series: [{ name: 'UP', values: [99.9, 99.6] }] });
+    expect(axis.min).toBe(0);
+    expect(axis.max).toBe(100);
+    expect(axis.ticks).toEqual([0, 20, 40, 60, 80, 100]);
+  });
+
+  it("rounds a line's own domain out to round values, with no headroom it does not need", () => {
+    expect(chartValueAxis({ kind: 'scatter', xMax: 10, series: [{ name: 'MS', values: [8.1, 90, 41] }] })).toEqual({
+      min: 0, max: 100, ticks: [0, 20, 40, 60, 80, 100], decimals: 0,
+    });
+    expect(chartValueAxis({ series: [{ name: 'LOSS', values: [0.31, 0.12, 0.18] }] })).toEqual({
+      min: 0.1, max: 0.35, ticks: [0.1, 0.15, 0.2, 0.25, 0.3, 0.35], decimals: 2,
+    });
+  });
+
+  it('leaves headroom past the most negative bar too, and prints a step of 2.5 with its decimal', () => {
+    expect(chartValueAxis({ kind: 'bar', labels: ['a', 'b'], series: [{ name: 'S', values: [-30, 20] }] }).ticks).toEqual([-40, -20, 0, 20, 40]);
+    expect(chartValueAxis({ kind: 'bar', labels: ['a'], series: [{ name: 'S', values: [10.4] }] })).toEqual({
+      min: 0, max: 12.5, ticks: [0, 2.5, 5, 7.5, 10, 12.5], decimals: 1,
+    });
+  });
+
+  it('gives a flat series a domain to stand in', () => {
+    expect(chartValueAxis({ series: [{ name: 'S', values: [5, 5, 5] }] })).toMatchObject({ min: 4, max: 6 });
+    expect(chartValueAxis({ kind: 'bar', labels: ['a'], series: [{ name: 'S', values: [0] }] }).max).toBeGreaterThan(0);
   });
 });

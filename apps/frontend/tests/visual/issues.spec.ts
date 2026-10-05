@@ -331,9 +331,10 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 720
   });
 }
 
-// Where every bar stands to the top and the band above the plot is shorter
-// than the card, no place on the chart is clear of the data: the note goes
-// to the rail, still naming its target, and the point it names stays ringed.
+// Where every bar stands to the top of the domain the chart gives and the
+// band above the plot is shorter than the card, no place on the chart is
+// clear of the data: the note goes to the rail, still naming its target,
+// and the point it names stays ringed.
 test('a note with no clear place on its bar chart is shown in the rail, its point ringed', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/?scene=comparison&chrome=0');
@@ -346,6 +347,8 @@ test('a note with no clear place on its bar chart is shown in the rail, its poin
         op: 'show', id: 'uptime', type: 'chart', role: 'primary',
         data: {
           kind: 'bar', title: 'FLEET / NODE UPTIME', labels: ['us-east', 'us-west', 'eu-west', 'eu-north', 'ap-south', 'ap-east'],
+          // The domain is given: one the page chooses leaves headroom.
+          yMax: 100,
           series: [
             { name: 'THIS MONTH', semantic: 'green', values: [99.9, 99.7, 100, 99.8, 99.95, 99.6] },
             { name: 'LAST MONTH', semantic: 'muted', values: [99.8, 99.9, 99.9, 99.95, 100, 99.7] },

@@ -276,6 +276,82 @@ export function chartPad(data: ChartData): ChartPad {
   };
 }
 
+/** The value axis: its domain, and the values it is labelled at. */
+export interface ChartValueAxis {
+  min: number;
+  max: number;
+  /** The labelled values, each with a gridline. */
+  ticks: number[];
+  /** How many decimals a tick is printed with. */
+  decimals: number;
+}
+
+// How much of its span a value axis the page chooses leaves above its
+// largest bar or area (and below its most negative one): room for the
+// value a noted bar prints past its end, and a place inside the plot for
+// the note itself.
+export const CHART_HEADROOM = 0.1;
+// About how many intervals a value axis is cut into.
+const CHART_VALUE_INTERVALS = 5;
+
+// A round step -- 1, 2, 2.5 or 5 times a power of ten -- that cuts `span`
+// into at most about `intervals` pieces.
+function niceStep(span: number, intervals: number): number {
+  const raw = span / intervals;
+  const magnitude = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map((factor) => factor * magnitude).find((candidate) => candidate >= raw * (1 - 1e-9)) ?? 10 * magnitude;
+}
+
+function decimalsOf(step: number): number {
+  const text = String(Number(step.toPrecision(12)));
+  const point = text.indexOf('.');
+  return point < 0 ? 0 : text.length - point - 1;
+}
+
+/**
+ * The value axis for this data. An end the chart gives is kept as given;
+ * an end the page chooses is the data's own (bars and areas reach their
+ * baseline at 0), rounded out to a round step, and a bar or area chart's
+ * leaves `CHART_HEADROOM` of the span past its tallest value first. The
+ * axis is labelled at every multiple of the step inside the domain. A chart
+ * that gives both ends is labelled at four even divisions of it, ends
+ * included, as it always was: its domain is the agent's, not a round one.
+ */
+export function chartValueAxis(data: ChartData): ChartValueAxis {
+  const kind = chartKind(data);
+  const values = data.series.flatMap((series) => series.values).filter((value) => Number.isFinite(value));
+  // Bars and areas are read against their baseline, so their y domain
+  // reaches it unless the chart says otherwise.
+  const grounded = kind === 'bar' || kind === 'area';
+  const low = data.yMin ?? (values.length === 0 ? 0 : grounded ? Math.min(0, ...values) : Math.min(...values));
+  const high = data.yMax ?? (values.length === 0 ? 1 : grounded ? Math.max(0, ...values) : Math.max(...values));
+  if (data.yMin !== undefined && data.yMax !== undefined) {
+    const ticks = Array.from({ length: 4 }, (_, index) => high - ((high - low) * index) / 3);
+    return { min: low, max: high, ticks, decimals: 2 };
+  }
+  const span = high - low > 0 ? high - low : Math.abs(high) || 1;
+  const reachHigh = data.yMax ?? (grounded && high > 0 ? high + span * CHART_HEADROOM : high);
+  const reachLow = data.yMin ?? (grounded && low < 0 ? low - span * CHART_HEADROOM : low);
+  const flat = reachHigh - reachLow <= 0;
+  const step = niceStep(flat ? span : reachHigh - reachLow, CHART_VALUE_INTERVALS);
+  const round = (value: number) => Number((Math.round(value / step) * step).toPrecision(12));
+  let min = data.yMin ?? Number((Math.floor(reachLow / step + 1e-9) * step).toPrecision(12));
+  let max = data.yMax ?? Number((Math.ceil(reachHigh / step - 1e-9) * step).toPrecision(12));
+  // A flat series still gets a domain to stand in: a step either side of
+  // a line, a step past the baseline for bars.
+  if (max <= min) {
+    if (data.yMax !== undefined) min = Number((max - step).toPrecision(12));
+    else if (data.yMin !== undefined || grounded) max = Number((min + step).toPrecision(12));
+    else {
+      min = Number((min - step).toPrecision(12));
+      max = Number((max + step).toPrecision(12));
+    }
+  }
+  const ticks: number[] = [];
+  for (let value = round(Math.ceil(min / step - 1e-9) * step); value <= max + step * 1e-9; value = round(value + step)) ticks.push(value);
+  return { min, max, ticks, decimals: decimalsOf(step) };
+}
+
 export interface ChartScales {
   kind: ChartKind;
   categories: ChartCategoryLayout;
@@ -287,6 +363,9 @@ export interface ChartScales {
   yMax: number;
   /** The value bars and areas rise from: 0 when the y domain spans it, else the end of the domain nearest it. */
   baseline: number;
+  /** The values the value axis is labelled at, and how many decimals each is printed with. */
+  valueTicks: number[];
+  valueDecimals: number;
   /** A bar chart's band per category along the category axis; 0 for the other kinds. */
   band: number;
   /** Where a domain x (an epoch, or a category index, continuous) sits along the category axis. */
@@ -309,12 +388,7 @@ export function chartScales(data: ChartData): ChartScales {
   const kind = chartKind(data);
   const categories = chartCategoryLayout(data);
   const horizontal = categories.horizontal;
-  const values = data.series.flatMap((series) => series.values);
-  // Bars and areas are read against their baseline, so their y domain
-  // reaches it unless the chart says otherwise.
-  const grounded = kind === 'bar' || kind === 'area';
-  const yMin = data.yMin ?? (grounded ? Math.min(0, ...values) : Math.min(...values));
-  const yMax = data.yMax ?? (grounded ? Math.max(0, ...values) : Math.max(...values));
+  const { min: yMin, max: yMax, ticks: valueTicks, decimals: valueDecimals } = chartValueAxis(data);
   const baseline = Math.min(yMax, Math.max(yMin, 0));
   const count = categories.categories?.length;
   const maxCount = Math.max(2, ...data.series.map((series) => series.values.length));
@@ -341,6 +415,8 @@ export function chartScales(data: ChartData): ChartScales {
     yMin,
     yMax,
     baseline,
+    valueTicks,
+    valueDecimals,
     band,
     xAt,
     valueAt,

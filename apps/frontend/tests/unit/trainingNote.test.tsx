@@ -234,13 +234,15 @@ describe('chart notes', () => {
   });
 
   it('hands the rail a note the chart has no place for clear of its bars, and rings the point it names', () => {
-    // Every bar stands to the top of the plot, the gaps between them are
+    // Every bar stands to the top of the domain the chart gives (a domain
+    // the page chooses leaves headroom), the gaps between them are
     // narrower than a card, and the card is taller than the band above the
     // plot: no place on the chart is clear of the data.
     CARD.height = 120;
     const bars = {
       kind: 'bar' as const,
       labels: ['us-east', 'us-west', 'eu-west', 'eu-north'],
+      yMax: 100,
       series: [{ name: 'UPTIME', values: [100, 100, 100, 100] }],
     };
     mount([
@@ -263,7 +265,7 @@ describe('chart notes', () => {
 
   it('keeps the note in the rail when a new primary chart leaves out the same note the old one did', () => {
     CARD.height = 120;
-    const bars = (values: number[]) => ({ kind: 'bar' as const, labels: ['a', 'b', 'c', 'd'], series: [{ name: 'UPTIME', values }] });
+    const bars = (values: number[]) => ({ kind: 'bar' as const, labels: ['a', 'b', 'c', 'd'], yMax: 100, series: [{ name: 'UPTIME', values }] });
     const show = (id: string, values: number[]): ControllerAction => ({ op: 'show', id, type: 'chart', role: 'primary', data: bars(values) });
     mount([show('march', [100, 100, 100, 100]), note('uptime-note', { target: 'march', x: 2 }, 'Held a full month.')]);
     expect(host.querySelector('.content-rail .rail-note')?.textContent).toContain('Held a full month.');
