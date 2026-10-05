@@ -619,11 +619,17 @@ describe('what a note names on a chart', () => {
     expect(chartTargetText({ x: 1696512345678 }, { xMax: 1696512399999, series: [{ name: 'S', values: [1, 2] }] })).toBe('X 1696512345678');
   });
 
-  it('names the series alone for an anchor with no x, and nothing where the chart draws no point', () => {
-    expect(chartTargetText({ series: 'S' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBe('S');
-    expect(chartTargetText({ series: 'NOPE' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
-    expect(chartTargetText({}, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
-    expect(chartTargetText({ x: 2 }, { xMax: 0, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
+  // An anchor with no x and a series the chart does not carry named
+  // nothing, so the card printed the anchor as sent: the chart's object id
+  // (line-notes review L5).
+  it('names the series alone for an anchor with no x, and the chart itself where it names no point the chart draws', () => {
+    const titled = { title: 'RUN / GRAPE-AMODAL-04', labels: ['a'], series: [{ name: 'S', values: [1] }] };
+    expect(chartTargetText({ series: 'S' }, titled)).toBe('S');
+    expect(chartTargetText({ series: 'NOPE' }, titled)).toBe('RUN / GRAPE-AMODAL-04');
+    expect(chartTargetText({}, titled)).toBe('RUN / GRAPE-AMODAL-04');
+    expect(chartTargetText({ x: 2 }, { ...titled, labels: undefined, xMax: 0, series: [{ name: 'S', values: [1, 2] }] })).toBe('RUN / GRAPE-AMODAL-04');
+    // A chart with no title is the chart.
+    expect(chartTargetText({ series: 'NOPE' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBe('CHART');
   });
 
   it('names the series a labelled chart marks wherever it draws more than one', () => {

@@ -221,13 +221,15 @@ export function chartCategories(data: ChartData): string[] | undefined {
  * the series wherever the anchor names one or the chart draws more than
  * one. The series and the x are the ones the chart marks: a name the chart
  * does not carry is its first series, and an x past the domain its nearest
- * end. An anchor with no x names its series alone; undefined where it names
- * neither, or no point the chart can draw.
+ * end. An anchor with no x names its series alone. One that names no
+ * series the chart carries and no x, or no point the chart can draw, names
+ * the chart itself: its title, or `CHART` where it has none.
  */
-export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData, scales: ChartScales = chartScales(data)): string | undefined {
-  if (anchor.x === undefined) return data.series.find((candidate) => candidate.name === anchor.series)?.name;
+export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData, scales: ChartScales = chartScales(data)): string {
+  const chart = data.title ?? 'CHART';
+  if (anchor.x === undefined) return data.series.find((candidate) => candidate.name === anchor.series)?.name ?? chart;
   const sample = seriesSample(data, anchor.x, anchor.series, scales);
-  if (!sample) return undefined;
+  if (!sample) return chart;
   const series = anchor.series !== undefined || data.series.length > 1 ? ` / ${data.series[sample.series].name}` : '';
   const labels = data.labels;
   if (labels && labels.length > 0) return `${labels[Math.round(sample.x)]}${series}`;

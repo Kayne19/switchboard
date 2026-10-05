@@ -537,7 +537,10 @@ the band above the plot. The card's tag names what it points at as the caller
 reads it, never the object's id or an index the agent sent: the category on a
 chart with labels (`TARGET / FRONTEND VISUAL / THIS RUN`), the x axis's name
 and the value on any other (`TARGET / EPOCH 32 / VAL LOSS`), and the series
-wherever the anchor names one or the chart draws more than one.
+wherever the anchor names one or the chart draws more than one. An anchor
+with no `x` names its series; one that names no series the chart carries
+and no `x`, or no point the chart draws, names the chart: its `title`, or
+`CHART`.
 
 On every kind of chart a card lies wholly inside the plot, a few pixels in
 from its border, in clear space, or wholly outside it, never across it. Its
