@@ -179,9 +179,36 @@ them does not fit, the page staggers them onto two rows, and when even that
 does not fit it draws every n-th label. A bar chart whose labels do not fit a
 row is drawn with its bars running across and a labelled row per category,
 as long as the rows fit the plot; otherwise its labels are staggered or thinned
-like any other chart's. There is no pie chart and no sparkline: a single
-series with no axes is a `metric`, and a share of a whole reads better as a
-bar per part.
+like any other chart's. Down the left a label takes at most three tenths of
+the width: a longer one wraps onto as many lines as its row holds (up to
+three), after a space or a path separator where it can, and is cut only past
+them -- a path at its start, so its file name stays. There is no pie chart and
+no sparkline: a single series with no axes is a `metric`, and a share of a
+whole reads better as a bar per part.
+
+The value axis is read off round numbers. An end the agent gives (`yMin`,
+`yMax`) is kept; an end the page chooses is rounded out to a step of 1, 2, 2.5
+or 5 times a power of ten, and a bar or area chart first leaves a tenth of its
+span past its tallest value, room for a note inside the plot. A chart that
+gives both ends is labelled at four even divisions of it, as before. A
+percentage that must stop at 100 says `yMax: 100`.
+
+A bar that a `marker` or a note names is marked as a bar: outlined in the
+annotation colour, its value printed past its end. A ring marks a point on a
+line, area or scatter chart.
+
+A chart is drawn in a frame its slot decides, by the slot's geometry alone.
+The approved 1000x500 canvas holds wherever it reads: its text at or above
+the page's type floors (the same `TYPE_FLOOR_PX` the diagrams keep), and the
+slot no more than a quarter taller than the canvas drawn across it; a slot
+wider than the canvas keeps it whole, the room beside it the notes'. Anywhere
+else -- a phone, a portrait tablet, a chart in an aux cell, a portrait focus
+-- the chart is recomposed: its frame takes the slot's own shape, so the plot
+fills the slot rather than shrinking inside bands of black, at the scale that
+fits but never under the readable one. A bar chart whose labels then no longer
+fit a row under its bars turns on its side. A slot too small for the chart's
+least frame (320x240 units) at that scale draws it smaller; an aux cell keeps
+a chart's cell at least that tall, so the aux row scrolls instead.
 
 A progress object with `steps` may omit `value`: the service fills in the
 share of steps done, so "I am on step three of five" is spoken while the
@@ -241,14 +268,33 @@ or `clear`. A note may carry a semantic `anchor` naming another object's id and
 an optional chart `x`/`series` or diagram `node`; the browser owns the resulting
 placement. On a chart page a note lies over the chart it names, clear of what
 the chart draws: a bar or a scatter point is an area, not the line round it,
-and a card keeps a few pixels from it; lines, the marker ring, the legend and
-the axis labels are kept clear too, and an area chart's fill is given up only
-where nothing else is free. The page looks for such a place anywhere within
-reach of the named point, including the band above the plot. Where the chart
-has none for a card (every bar standing to the top and the band shorter than
-the card, say), one note is shown in the rail instead -- the one whose absence
-leaves the others clear, a note naming no point first -- still naming its
-target, and the point it names keeps a ring on the chart. A note anchored to a
+and a card keeps a few pixels from it; lines, the marker ring, a bar's printed
+value, the legend and the axis labels are kept clear too, and an area chart's
+fill is given up only where nothing else is free. The page looks for such a
+place anywhere within reach of the named point, including the band above the
+plot. On a chart with labels the card's tag names what it points at in the
+chart's own words (`TARGET / FRONTEND VISUAL / THIS RUN`), not the index the
+agent sent.
+
+On a bar chart a card lies wholly inside the plot, a few pixels in from its
+border, or wholly outside it, never across it, and its leader comes onto the
+bar's printed value from past the bar's end: out of the card's facing edge
+from a card past that end, or out of its side, along over the bars between and
+a 45-degree turn onto the value, from a card beside it. It never runs alongside
+the bar it names or through any other. A card with no clear place at its own
+width, or a long way from its bar, tries narrower widths its text still fits
+at; one whose text would scroll at its width takes a wider one (on any kind of
+chart). The rule of wholly in or out, and the leader from past a bar's end,
+are a bar chart's: on a line, area or scatter chart a card may still lie
+across the plot's top border, as the training goldens were approved with.
+
+Where the chart has no place for a card (every bar standing to the top of a
+domain the agent gave, and no band as tall as the card, say), one note is
+shown in the rail instead, still naming its target: a note naming no point
+first, wherever its absence leaves no more cards astray (it loses nothing
+there, while an anchored note would lose its leader), even if that clears no
+card; else the one whose absence leaves the fewest astray. A bar it names
+stays marked; a point on a line keeps a ring. A note anchored to a
 visual on a chart page that is not a chart (one in the aux row) is shown in
 the rail too. The rail holds one note, so: only the primary chart hands one
 over; only the first note about a visual off the charts goes there (later

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primitives/ChartPrimitive';
 import {
@@ -10,6 +10,7 @@ import {
   CHART_TICK_CHAR_ADVANCE,
   CHART_TICK_GAP,
   CHART_TICK_ROW_HEIGHT,
+  CHART_READABLE_SCALE,
   chartBars,
   chartLegendLayout,
   chartPad,
@@ -32,6 +33,13 @@ let root: Root;
 
 beforeAll(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  // The chart measures its slot; jsdom lays nothing out, so the slot reads
+  // 0 x 0 and the chart keeps the approved canvas unless a test sizes it.
+  globalThis.ResizeObserver ??= class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
 });
 
 afterEach(() => {
@@ -410,30 +418,68 @@ describe('chart kinds', () => {
     expect(host.querySelector('.chart-primitive')!.getAttribute('data-orientation')).toBe('horizontal');
     const scales = chartScales(chart);
     const labels = [...host.querySelectorAll<SVGTextElement>('.chart-grid__category')];
-    expect(labels.map((label) => label.textContent)).toEqual(chart.labels);
+    // Each label whole, on its lines (a label past its column wraps).
+    const drawn = (label: SVGTextElement) =>
+      label.querySelectorAll('tspan').length > 0 ? [...label.querySelectorAll('tspan')].map((line) => line.textContent).join('') : label.textContent;
+    expect(labels.map(drawn)).toEqual(chart.labels);
     for (const label of labels) {
       expect(label.getAttribute('text-anchor')).toBe('end');
       expect(Number(label.getAttribute('x'))).toBeLessThan(scales.plot.left);
     }
     // The value ticks run along the bottom, and the axis names follow their axes.
     const valueTicks = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="middle"]')];
-    expect(valueTicks.map((tick) => tick.textContent)).toContain('0.00');
+    expect(valueTicks.map((tick) => tick.textContent)).toEqual(['0', '200', '400', '600']);
     const axisLabels = [...host.querySelectorAll<SVGTextElement>('.chart-axis-label')].map((label) => label.textContent);
     expect(axisLabels).toEqual(['MS', 'TEST FILE']);
-    // The bars run from the left, and the marker rings the named bar's end.
+    // The bars run from the left, and the marker marks the named bar as a
+    // bar: outlined, its value printed past its end.
     const bar = host.querySelector<SVGRectElement>('.chart-bar')!;
     expect(Number(bar.getAttribute('x'))).toBeCloseTo(scales.plot.left, 1);
-    const marker = host.querySelector<SVGCircleElement>('.chart-marker__point')!;
-    const end = chartSeriesPoint(chart, 1, undefined, scales)!;
-    expect(Number(marker.getAttribute('cx'))).toBeCloseTo(end.x, 1);
-    expect(Number(marker.getAttribute('cy'))).toBeCloseTo(end.y, 1);
+    expect(host.querySelector('.chart-marker')).toBeNull();
+    const callout = host.querySelector('.chart-callout')!;
+    expect(callout.getAttribute('data-index')).toBe('1');
+    const named = chartBars(chart, scales)[1];
+    const outline = callout.querySelector('.chart-callout__outline')!;
+    expect(Number(outline.getAttribute('x'))).toBeCloseTo(named.rect.left, 1);
+    expect(Number(outline.getAttribute('width'))).toBeCloseTo(named.rect.right - named.rect.left, 1);
+    const value = callout.querySelector('.chart-callout__value')!;
+    expect(value.textContent).toBe('390');
+    expect(Number(value.getAttribute('x'))).toBeGreaterThan(named.rect.right);
+  });
+
+  // A horizontal bar near the plot's end, too short to hold its value,
+  // printed it past the plot inside the plot's clip: cut away (review).
+  it("draws a marked bar's value outside the plot's clip, its outline inside it", () => {
+    renderWith({ kind: 'bar', labels: ['a', 'b'], series: [{ name: 'S', values: [3, 1] }], marker: { x: 1 } });
+    const callout = host.querySelector('.chart-callout')!;
+    expect(callout.closest('[clip-path]')).toBeNull();
+    expect(callout.querySelector('.chart-callout__outline')!.getAttribute('clip-path')).toMatch(/^url\(#/);
+  });
+
+  it('marks each bar a note names, as it marks its marker', () => {
+    const chart: ChartData = { kind: 'bar', labels: ['a', 'b', 'c'], series: [{ name: 'S', values: [3, 1, 2] }] };
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<ChartPrimitive data={chart} named={[{ x: 2 }]} />));
+    const callouts = [...host.querySelectorAll('.chart-callout')];
+    expect(callouts.map((callout) => callout.getAttribute('data-index'))).toEqual(['2']);
+    expect(callouts[0].querySelector('.chart-callout__value')!.textContent).toBe('2');
   });
 
   it('never prints a value tick as negative zero', () => {
-    renderWith({ kind: 'bar', labels: ['a', 'b'], series: [{ name: 'A', values: [102.9, 1] }] });
+    // Both ends given: the axis is divided evenly, and the division that
+    // lands on zero computes to a rounding error below it.
+    renderWith({ kind: 'bar', labels: ['a', 'b'], yMin: -0.3, yMax: 0.6, series: [{ name: 'A', values: [0.5, -0.2] }] });
     const ticks = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="end"]')].map((tick) => tick.textContent);
     expect(ticks).toContain('0.00');
     expect(ticks).not.toContain('-0.00');
+  });
+
+  it('labels a value axis the page chooses at round values, printed as such', () => {
+    renderWith({ kind: 'bar', labels: ['a', 'b'], series: [{ name: 'A', values: [102.9, 1] }] });
+    const ticks = [...host.querySelectorAll<SVGTextElement>('.chart-grid text[text-anchor="end"]')].map((tick) => tick.textContent);
+    expect(ticks).toEqual(['0', '25', '50', '75', '100', '125']);
   });
 
   it('resolves every kind in with the same widening clip, and not at all under reduced motion', () => {
@@ -501,5 +547,74 @@ describe('chart kinds keep the line chart as it was', () => {
     const half = (labels[2].length * CHART_TICK_CHAR_ADVANCE) / 2;
     expect(Number(last.getAttribute('x')) + half).toBeLessThanOrEqual(1000);
     expect(Number(last.getAttribute('x'))).toBeLessThan(1000 - 28);
+  });
+});
+
+// The chart's frame is its slot's to decide (chartGeometry's chartFrame):
+// a phone's slot gets a frame of its own shape, not the desktop canvas drawn
+// at a third of its size.
+describe('chart frame', () => {
+  function renderInSlot(chart: ChartData, slot: { width: number; height: number }) {
+    const width = vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('chart-primitive') ? slot.width : 0;
+    });
+    const height = vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('chart-primitive') ? slot.height : 0;
+    });
+    try {
+      renderWith(chart);
+    } finally {
+      width.mockRestore();
+      height.mockRestore();
+    }
+    return host.querySelector('.chart-primitive svg')!;
+  }
+  const suite: ChartData = {
+    kind: 'bar',
+    labels: ['backend', 'frontend unit', 'frontend visual', 'host agent', 'skill', 'hygiene'],
+    xLabel: 'PACKAGE',
+    yLabel: 'SECONDS',
+    series: [{ name: 'THIS RUN', values: [41.8, 3.3, 96.4, 6.1, 0.3, 0.4] }],
+  };
+
+  it('keeps the approved canvas in a landscape slot', () => {
+    const svg = renderInSlot(suite, { width: 937, height: 561 });
+    expect(svg.getAttribute('viewBox')).toBe('0 0 1000 500');
+  });
+
+  it("recomposes for a phone's slot, its plot filling the slot and its bars turned on their side", () => {
+    const svg = renderInSlot(suite, { width: 342, height: 393 });
+    const width = Math.floor(342 / CHART_READABLE_SCALE);
+    const height = Math.floor(393 / CHART_READABLE_SCALE);
+    expect(svg.getAttribute('viewBox')).toBe(`0 0 ${width} ${height}`);
+    // The labels no longer fit a row under bars this narrow, so the bars run across.
+    expect(host.querySelector('.chart-primitive')!.getAttribute('data-orientation')).toBe('horizontal');
+    const scales = chartScales(suite, { width, height });
+    // The axis names sit at the frame's own edges.
+    const names = [...host.querySelectorAll<SVGTextElement>('.chart-axis-label')];
+    expect(Number(names[0].getAttribute('y'))).toBe(height - 2);
+    expect(Number(names[0].getAttribute('x'))).toBe(width / 2);
+    const bar = host.querySelector<SVGRectElement>('.chart-bar')!;
+    expect(Number(bar.getAttribute('x'))).toBeCloseTo(scales.plot.left, 1);
+    expect(scales.plot.right).toBe(width - 28);
+  });
+});
+
+describe('chart category labels down the left', () => {
+  it('wraps a long label onto lines centred on its row, its whole name kept', () => {
+    const labels = ['apps/backend/tests/test_visual_protocol.rs', 'apps/frontend/tests/unit/notePlacement.test.ts', 'skills/switchboard/tests/test_display.py'];
+    renderWith({ kind: 'bar', labels, series: [{ name: 'S', values: [3, 2, 1] }] });
+    const scales = chartScales({ kind: 'bar', labels, series: [{ name: 'S', values: [3, 2, 1] }] });
+    const texts = [...host.querySelectorAll<SVGTextElement>('.chart-grid__category')];
+    expect(texts).toHaveLength(3);
+    texts.forEach((text, index) => {
+      const lines = [...text.querySelectorAll('tspan')];
+      expect(lines.length).toBeGreaterThan(1);
+      expect(lines.map((line) => line.textContent).join('')).toBe(labels[index]);
+      expect(text.querySelector('title')!.textContent).toBe(labels[index]);
+      const ys = lines.map((line) => Number(line.getAttribute('y')));
+      const middle = (ys[0] + ys[ys.length - 1]) / 2;
+      expect(middle).toBeCloseTo(scales.xAt(index) + 4, 6);
+    });
   });
 });

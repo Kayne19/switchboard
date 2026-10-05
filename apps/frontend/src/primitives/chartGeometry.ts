@@ -1,10 +1,75 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
+import { readableScale, type DrawingText } from './drawingFit';
 
-// The chart's viewBox is a fixed geometry. The chart draws in it, and the
-// notes laid over a chart map their points and the drawn traces through it,
-// so both read the same scales from here instead of re-declaring them.
+// The chart draws in a viewBox -- its frame -- and the notes laid over a
+// chart map their points and the drawn marks through the same frame, so both
+// read the same scales from here instead of re-declaring them. The approved
+// canvas is 1000 by 500 units; a slot it does not read well in gets a frame
+// of its own shape (`chartFrame`).
 export const CHART_VIEW_WIDTH = 1000;
 export const CHART_VIEW_HEIGHT = 500;
+
+/** The chart's viewBox, in its own units. */
+export interface ChartFrame {
+  width: number;
+  height: number;
+}
+
+/** The approved canvas: the frame every chart is drawn in where it reads. */
+export const CHART_FRAME: ChartFrame = { width: CHART_VIEW_WIDTH, height: CHART_VIEW_HEIGHT };
+
+// The chart's text, in viewBox units, and the page face whose floor each
+// line keeps: the tick text is 13 units, the legend and the axis names 11
+// (styles/index.css; a test holds the two in step).
+export const CHART_TEXT: DrawingText[] = [
+  { size: 13, floor: 'tech' },
+  { size: 11, floor: 'micro' },
+];
+/** The least scale at which every line of a chart's text meets the page's type floors. */
+export const CHART_READABLE_SCALE = readableScale(CHART_TEXT);
+// How much taller than the approved canvas drawn across it a slot may be
+// before the chart is recomposed for it: the landscape slots the canvas was
+// approved in leave up to a fifth of their height to the band above and
+// below it, where the notes sit.
+const CHART_TALL_SLACK = 1.25;
+// The least frame a chart is recomposed into: room for its legend, its
+// axes' text and a plot a few rows of tick text tall. A slot too small to
+// give it at the readable scale draws it smaller instead; the aux row keeps
+// a chart's cell at least this tall (styles/index.css), so only a slot with
+// nowhere to grow (a phone's focus box on its side, say) ever does.
+export const CHART_MIN_FRAME: ChartFrame = { width: 320, height: 240 };
+
+/** A frame for a slot, and the CSS pixels per unit it is drawn at there. */
+export interface ChartFit extends ChartFrame {
+  scale: number;
+}
+
+/**
+ * The frame a chart is drawn in, for a slot of this size in CSS pixels:
+ * decided by the slot's geometry alone, never by the viewport. The
+ * approved canvas holds wherever it reads -- its text at or above the
+ * page's floors, and the slot no taller than a little more than the canvas
+ * drawn across it; a slot wider than the canvas keeps it whole, with the
+ * room beside it for the notes. Anywhere else the chart is recomposed: its
+ * frame takes the slot's own shape, so the plot follows the slot instead of
+ * shrinking inside bands of black, at the scale that fits the slot's width
+ * or height but never below the readable one -- unless the slot cannot
+ * hold even the least frame (`CHART_MIN_FRAME`) at that scale. A slot not
+ * yet measured gets the approved canvas.
+ */
+export function chartFrame(slot: { width: number; height: number }): ChartFit {
+  if (!(slot.width > 0) || !(slot.height > 0)) return { ...CHART_FRAME, scale: 1 };
+  const fit = Math.min(slot.width / CHART_VIEW_WIDTH, slot.height / CHART_VIEW_HEIGHT);
+  if (fit >= CHART_READABLE_SCALE && slot.height <= CHART_VIEW_HEIGHT * fit * CHART_TALL_SLACK) return { ...CHART_FRAME, scale: fit };
+  const scale = Math.min(
+    Math.max(CHART_READABLE_SCALE, fit),
+    slot.width / CHART_MIN_FRAME.width,
+    slot.height / CHART_MIN_FRAME.height,
+  );
+  // Whole units, rounded down so the slot draws them at the scale or more.
+  return { width: Math.floor(slot.width / scale), height: Math.floor(slot.height / scale), scale };
+}
+
 // The padding for a chart whose legend fits on one row. A legend that wraps
 // grows `top` past this floor (see `chartPad`) so the plot never sits under
 // a wrapped row; the base value is what every existing chart still gets.
@@ -45,8 +110,13 @@ export const CHART_TICK_BASELINE = CHART_PAD.bottom - 20;
 // A horizontal bar chart's category labels end 14 before the plot, as the y
 // ticks do, and leave the rotated axis label its strip on the far left.
 const CHART_CATEGORY_PAD_GAP = 40;
-// The most of the width those labels may take; a longer one is truncated.
-export const CHART_CATEGORY_PAD_MAX = 340;
+// The most of the width those labels may take, three tenths of it: a
+// longer one wraps (`wrapLabel`), so the bars keep the rest. A frame
+// narrower than the approved canvas gives them the same share of its width.
+export const CHART_CATEGORY_PAD_MAX = 300;
+function categoryPadMax(frame: ChartFrame): number {
+  return Math.min(CHART_CATEGORY_PAD_MAX, (CHART_CATEGORY_PAD_MAX * frame.width) / CHART_VIEW_WIDTH);
+}
 // The share of a bar chart's band its group of bars fills.
 const CHART_BAR_GROUP_SHARE = 0.72;
 
@@ -90,7 +160,7 @@ function truncateLabel(name: string, maxWidth: number, advance: number): { text:
   if (name.length * advance <= maxWidth) return { text: name, truncated: false };
   // Reserve one character's width for the ellipsis itself.
   const maxChars = Math.max(0, Math.floor(maxWidth / advance) - 1);
-  return { text: `${name.slice(0, maxChars)}${CHART_ELLIPSIS}`, truncated: true };
+  return { text: `${name.slice(0, maxChars).trimEnd()}${CHART_ELLIPSIS}`, truncated: true };
 }
 
 /**
@@ -142,11 +212,32 @@ export function chartCategories(data: ChartData): string[] | undefined {
   return count > 0 ? Array.from({ length: count }, (_, index) => String(index)) : undefined;
 }
 
+/**
+ * What a note's anchor names on a labelled chart, in the chart's own words:
+ * the category at its x and the series, as `FRONTEND VISUAL / THIS RUN`
+ * reads -- not the index the agent sent. Undefined where the chart has no
+ * labels, or the anchor no x; a card then names the anchor as sent.
+ */
+export function chartTargetText(anchor: { x?: number; series?: string }, data: ChartData): string | undefined {
+  const labels = data.labels;
+  if (!labels || labels.length === 0 || anchor.x === undefined || !Number.isFinite(anchor.x)) return undefined;
+  // The series and the category the chart marks: a name the chart does
+  // not carry falls back to its first series, and an x past a short
+  // series' end to its last value, as the chart's point and callout do.
+  const named = anchor.series ? data.series.findIndex((candidate) => candidate.name === anchor.series) : -1;
+  const series = data.series[named >= 0 ? named : 0];
+  const last = Math.min(labels.length, series?.values.length ?? labels.length) - 1;
+  const label = labels[Math.round(Math.min(Math.max(0, last), Math.max(0, anchor.x)))];
+  return anchor.series && series ? `${label} / ${series.name}` : label;
+}
+
 /** One category label drawn on the axis. */
 export interface ChartTick {
   index: number;
   /** The label actually drawn: the category, or an ellipsis-truncated prefix of it. */
   text: string;
+  /** The lines it is drawn on: one, but a horizontal bar chart's label wraps where its row has the room. */
+  lines: string[];
   truncated: boolean;
   /** Which staggered row the label sits on below the plot, 0-based. */
   row: number;
@@ -164,6 +255,95 @@ export interface ChartCategoryLayout {
   step: number;
 }
 
+// The most lines a horizontal bar chart's category label wraps onto.
+const CHART_CATEGORY_LINES = 3;
+
+/**
+ * A label set on at most `lines` lines of at most `width` characters: a
+ * line breaks after a space, a path's separator or a dot, or inside a
+ * camel-cased name before a capital, where it can; inside a word only where
+ * a word alone is too long. A label that needs more lines is cut with an
+ * ellipsis: at its start when it is a path (a slash and no space), whose
+ * file name at the end is what tells it apart, else at its end.
+ */
+export function wrapLabel(label: string, width: number, lines: number): { text: string; lines: string[]; truncated: boolean } {
+  const room = Math.max(2, width);
+  if (label.length <= room) return { text: label, lines: [label], truncated: false };
+  const pieces = labelPieces(label);
+  const set = fill(pieces, room);
+  if (set.length <= lines) return { text: label, lines: set.map((line) => line.trim()), truncated: false };
+  if (label.includes('/') && !/\s/.test(label)) {
+    // From the end: the pieces filled backward, the last lines kept, and
+    // the first of them led by the ellipsis.
+    const back = fill([...pieces].reverse(), room - 1, true).reverse().map((line) => line.trim());
+    const kept = back.slice(-lines);
+    kept[0] = `${CHART_ELLIPSIS}${kept[0]}`;
+    return { text: kept.join(' '), lines: kept, truncated: true };
+  }
+  // The lines kept as set, and what the label says after them, cut.
+  const kept = set.slice(0, lines - 1);
+  const rest = label.slice(kept.reduce((sum, line) => sum + line.length, 0)).trim();
+  const last = truncateLabel(rest, room * CHART_TICK_CHAR_ADVANCE, CHART_TICK_CHAR_ADVANCE).text;
+  const shown = [...kept.map((line) => line.trim()), last];
+  return { text: shown.join(' '), lines: shown, truncated: true };
+}
+
+// The pieces a line may end after: each run up to and including a space, a
+// path's separator or a dot, or up to a capital that starts a word inside
+// a camel-cased name (`note|Placement.|test.ts`).
+function labelPieces(label: string): string[] {
+  const pieces: string[] = [];
+  let piece = '';
+  for (let index = 0; index < label.length; index += 1) {
+    const char = label[index];
+    const next = label[index + 1] ?? '';
+    piece += char;
+    const separator = /[\s/_.:-]/.test(char) && !/[\s/_.:-]/.test(next);
+    const camel = /[a-z]/.test(char) && /[A-Z]/.test(next);
+    if (separator || camel) {
+      pieces.push(piece);
+      piece = '';
+    }
+  }
+  if (piece) pieces.push(piece);
+  return pieces;
+}
+
+// Pieces set on lines of at most `room` characters (spaces at a line's
+// ends not counted), in order -- or, with `backward`, the pieces given last
+// first, each line grown at its start. The lines keep their spaces, so in
+// order they join back into the label.
+function fill(pieces: string[], room: number, backward = false): string[] {
+  const set: string[] = [];
+  let line = '';
+  const join = (piece: string) => (backward ? piece + line : line + piece);
+  for (const piece of pieces) {
+    let rest = piece;
+    while (rest.length > 0) {
+      if (join(rest).trim().length <= room) {
+        line = join(rest);
+        rest = '';
+      } else if (line.trim().length > 0) {
+        set.push(line);
+        line = '';
+      } else if (backward) {
+        set.push(rest.slice(-room) + line);
+        rest = rest.slice(0, -room);
+        line = '';
+      } else {
+        set.push(line + rest.slice(0, room));
+        rest = rest.slice(room);
+        line = '';
+      }
+    }
+  }
+  if (line.length > 0) {
+    if (line.trim().length > 0 || set.length === 0) set.push(line);
+    else set[set.length - 1] = backward ? line + set[set.length - 1] : set[set.length - 1] + line;
+  }
+  return set;
+}
+
 function upright(categories: string[] | undefined, ticks: ChartTick[], rows: number, step: number): ChartCategoryLayout {
   return { categories, horizontal: false, ticks, rows, step };
 }
@@ -174,9 +354,9 @@ function upright(categories: string[] | undefined, ticks: ChartTick[], rows: num
  * last categories sit on the plot's edges, and a long label centred there
  * would run past them.
  */
-export function chartCategoryLabelX(x: number, text: string): number {
+export function chartCategoryLabelX(x: number, text: string, frameWidth: number = CHART_VIEW_WIDTH): number {
   const half = (text.length * CHART_TICK_CHAR_ADVANCE) / 2;
-  return Math.min(CHART_VIEW_WIDTH - half, Math.max(half, x));
+  return Math.min(frameWidth - half, Math.max(half, x));
 }
 
 // How many legend rows the plot's top padding grows by. A line passes
@@ -203,21 +383,21 @@ function legendRowsAbovePlot(kind: ChartKind, legendRows: number): number {
  * are drawn (`chartCategoryLabelX`), still clear each other on every row:
  * an edge label held in moves toward its neighbour.
  */
-export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
+export function chartCategoryLayout(data: ChartData, frame: ChartFrame = CHART_FRAME): ChartCategoryLayout {
   const categories = chartCategories(data);
   if (!categories) return upright(undefined, [], 1, 1);
   const count = categories.length;
   const kind = chartKind(data);
-  const plotWidth = CHART_VIEW_WIDTH - CHART_PAD.left - CHART_PAD.right;
-  const legendRows = chartLegendLayout(data).rows;
-  const plotHeight = CHART_VIEW_HEIGHT - CHART_PAD.top - legendRowsAbovePlot(kind, legendRows) * CHART_LEGEND_ROW_HEIGHT - CHART_PAD.bottom;
+  const plotWidth = frame.width - CHART_PAD.left - CHART_PAD.right;
+  const legendRows = chartLegendLayout(data, plotWidth).rows;
+  const plotHeight = frame.height - CHART_PAD.top - legendRowsAbovePlot(kind, legendRows) * CHART_LEGEND_ROW_HEIGHT - CHART_PAD.bottom;
   const widest = Math.max(...categories.map((label) => label.length)) * CHART_TICK_CHAR_ADVANCE + CHART_TICK_GAP;
   // Bars take a band each; the other kinds spread their categories edge to edge.
   const slot = kind === 'bar' ? plotWidth / count : count > 1 ? plotWidth / (count - 1) : plotWidth;
   // Every `step`-th category labelled, the labels taking `rows` rows in turn.
   const laid = (rows: number, step: number): ChartTick[] => {
     const ticks: ChartTick[] = [];
-    for (let index = 0; index < count; index += step) ticks.push({ index, text: categories[index], truncated: false, row: (index / step) % rows });
+    for (let index = 0; index < count; index += step) ticks.push({ index, text: categories[index], lines: [categories[index]], truncated: false, row: (index / step) % rows });
     return ticks;
   };
   // Where an upright chart puts each category along its x axis (`xAt`).
@@ -226,7 +406,7 @@ export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
     const ends = new Map<number, number>();
     for (const tick of ticks) {
       const half = (tick.text.length * CHART_TICK_CHAR_ADVANCE) / 2;
-      const x = chartCategoryLabelX(centre(tick.index), tick.text);
+      const x = chartCategoryLabelX(centre(tick.index), tick.text, frame.width);
       const end = ends.get(tick.row);
       if (end !== undefined && x - half - end < CHART_TICK_GAP) return false;
       ends.set(tick.row, x + half);
@@ -235,11 +415,15 @@ export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
   };
   if (widest <= slot && clear(laid(1, 1))) return upright(categories, laid(1, 1), 1, 1);
   if (kind === 'bar' && count * CHART_TICK_ROW_HEIGHT <= plotHeight) {
-    const ticks = categories.map((label, index) => ({
-      index,
-      ...truncateLabel(label, CHART_CATEGORY_PAD_MAX - CHART_CATEGORY_PAD_GAP, CHART_TICK_CHAR_ADVANCE),
-      row: 0,
-    }));
+    // A label too long for its room wraps onto as many lines as its row
+    // holds, up to three, and is truncated only past them. The row is
+    // judged with the legend as it wraps over the narrowest plot the label
+    // column can leave, so the lines never outgrow it.
+    const narrowest = chartLegendLayout(data, frame.width - categoryPadMax(frame) - CHART_PAD.right).rows;
+    const rowsHeight = frame.height - CHART_PAD.top - legendRowsAbovePlot(kind, narrowest) * CHART_LEGEND_ROW_HEIGHT - CHART_PAD.bottom;
+    const lines = Math.max(1, Math.min(CHART_CATEGORY_LINES, Math.floor(rowsHeight / count / CHART_TICK_ROW_HEIGHT)));
+    const room = Math.floor((categoryPadMax(frame) - CHART_CATEGORY_PAD_GAP) / CHART_TICK_CHAR_ADVANCE);
+    const ticks = categories.map((label, index) => ({ index, ...wrapLabel(label, room, lines), row: 0 }));
     return { categories, horizontal: true, ticks, rows: 1, step: 1 };
   }
   if (widest <= 2 * slot && clear(laid(2, 1))) return upright(categories, laid(2, 1), 2, 1);
@@ -260,14 +444,14 @@ export function chartCategoryLayout(data: ChartData): ChartCategoryLayout {
  * a horizontal bar chart's category labels, so none of them runs into the
  * plot.
  */
-export function chartPad(data: ChartData): ChartPad {
-  const categories = chartCategoryLayout(data);
+export function chartPad(data: ChartData, frame: ChartFrame = CHART_FRAME): ChartPad {
+  const categories = chartCategoryLayout(data, frame);
   let left: number = CHART_PAD.left;
   if (categories.horizontal) {
-    const widest = Math.max(0, ...categories.ticks.map((tick) => tick.text.length)) * CHART_TICK_CHAR_ADVANCE;
-    left = Math.min(CHART_CATEGORY_PAD_MAX, Math.max(CHART_PAD.left, Math.ceil(widest + CHART_CATEGORY_PAD_GAP)));
+    const widest = Math.max(0, ...categories.ticks.flatMap((tick) => tick.lines.map((line) => line.length))) * CHART_TICK_CHAR_ADVANCE;
+    left = Math.min(categoryPadMax(frame), Math.max(CHART_PAD.left, Math.ceil(widest + CHART_CATEGORY_PAD_GAP)));
   }
-  const legendRows = chartLegendLayout(data, CHART_VIEW_WIDTH - left - CHART_PAD.right).rows;
+  const legendRows = chartLegendLayout(data, frame.width - left - CHART_PAD.right).rows;
   return {
     left,
     right: CHART_PAD.right,
@@ -276,7 +460,100 @@ export function chartPad(data: ChartData): ChartPad {
   };
 }
 
+/** The value axis: its domain, and the values it is labelled at. */
+export interface ChartValueAxis {
+  min: number;
+  max: number;
+  /** The labelled values, each with a gridline. */
+  ticks: number[];
+  /** How many decimals a tick is printed with. */
+  decimals: number;
+}
+
+// How much of its span a value axis the page chooses leaves above its
+// largest bar or area (and below its most negative one): room for the
+// value a noted bar prints past its end, and a place inside the plot for
+// the note itself.
+const CHART_HEADROOM = 0.1;
+// About how many intervals a value axis is cut into, and the most ticks it
+// is ever labelled at.
+const CHART_VALUE_INTERVALS = 5;
+const CHART_MAX_TICKS = 12;
+
+// A round step -- 1, 2, 2.5 or 5 times a power of ten -- that cuts `span`
+// into at most about `intervals` pieces.
+function niceStep(span: number, intervals: number): number {
+  const raw = span / intervals;
+  const magnitude = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 2.5, 5, 10].map((factor) => factor * magnitude).find((candidate) => candidate >= raw * (1 - 1e-9)) ?? 10 * magnitude;
+}
+
+// How many decimals print a multiple of `step` exactly: 2 for 0.25, 0 for 50.
+function decimalsOf(step: number): number {
+  for (let decimals = 0; decimals < 20; decimals += 1) {
+    const scaled = step * 10 ** decimals;
+    if (Math.round(scaled) >= 1 && Math.abs(scaled - Math.round(scaled)) < 1e-6 * scaled) return decimals;
+  }
+  return 20;
+}
+
+/**
+ * The value axis for this data. An end the chart gives is kept as given;
+ * an end the page chooses is the data's own (bars and areas reach their
+ * baseline at 0), rounded out to a round step, and a bar or area chart's
+ * leaves `CHART_HEADROOM` of the span past its tallest value first. The
+ * axis is labelled at every multiple of the step inside the domain. A chart
+ * that gives both ends is labelled at four even divisions of it, ends
+ * included, as it always was: its domain is the agent's, not a round one.
+ */
+export function chartValueAxis(data: ChartData): ChartValueAxis {
+  const kind = chartKind(data);
+  const values = data.series.flatMap((series) => series.values).filter((value) => Number.isFinite(value));
+  // Bars and areas are read against their baseline, so their y domain
+  // reaches it unless the chart says otherwise.
+  const grounded = kind === 'bar' || kind === 'area';
+  const low = data.yMin ?? (values.length === 0 ? 0 : grounded ? Math.min(0, ...values) : Math.min(...values));
+  const high = data.yMax ?? (values.length === 0 ? 1 : grounded ? Math.max(0, ...values) : Math.max(...values));
+  if (data.yMin !== undefined && data.yMax !== undefined) {
+    const ticks = Array.from({ length: 4 }, (_, index) => high - ((high - low) * index) / 3);
+    return { min: low, max: high, ticks, decimals: 2 };
+  }
+  const span = high - low > 0 ? high - low : Math.abs(high) || 1;
+  const reachHigh = data.yMax ?? (grounded && high > 0 ? high + span * CHART_HEADROOM : high);
+  const reachLow = data.yMin ?? (grounded && low < 0 ? low - span * CHART_HEADROOM : low);
+  const flat = reachHigh - reachLow <= 0;
+  const step = niceStep(flat ? span : reachHigh - reachLow, CHART_VALUE_INTERVALS);
+  // Fifteen digits: a multiple of the step stays itself next to values as
+  // large as epoch milliseconds.
+  const precise = (value: number) => Number(value.toPrecision(15));
+  let min = data.yMin ?? precise(Math.floor(reachLow / step + 1e-9) * step);
+  let max = data.yMax ?? precise(Math.ceil(reachHigh / step - 1e-9) * step);
+  // A flat series still gets a domain to stand in: a step either side of
+  // a line, a step past the baseline for bars.
+  if (max <= min) {
+    if (data.yMax !== undefined) min = precise(max - step);
+    else if (data.yMin !== undefined || grounded) max = precise(min + step);
+    else {
+      min = precise(min - step);
+      max = precise(max + step);
+    }
+  }
+  // The ticks by their index along the step, so there are always a few of
+  // them; a domain whose step its magnitude drowns falls back to even
+  // divisions.
+  const first = Math.ceil(min / step - 1e-9);
+  const count = Math.floor(max / step + 1e-9) - first + 1;
+  if (!(count >= 1 && count <= CHART_MAX_TICKS) || !(max > min)) {
+    const ticks = Array.from({ length: 4 }, (_, index) => max - ((max - min) * index) / 3);
+    return { min, max, ticks, decimals: 2 };
+  }
+  const ticks = Array.from({ length: count }, (_, index) => precise((first + index) * step));
+  return { min, max, ticks, decimals: decimalsOf(step) };
+}
+
 export interface ChartScales {
+  /** The frame the chart is drawn in. */
+  frame: ChartFrame;
   kind: ChartKind;
   categories: ChartCategoryLayout;
   /** Bars run across the chart: the value axis is x and the category axis y. */
@@ -287,6 +564,9 @@ export interface ChartScales {
   yMax: number;
   /** The value bars and areas rise from: 0 when the y domain spans it, else the end of the domain nearest it. */
   baseline: number;
+  /** The values the value axis is labelled at, and how many decimals each is printed with. */
+  valueTicks: number[];
+  valueDecimals: number;
   /** A bar chart's band per category along the category axis; 0 for the other kinds. */
   band: number;
   /** Where a domain x (an epoch, or a category index, continuous) sits along the category axis. */
@@ -301,20 +581,15 @@ export interface ChartScales {
   plot: ViewRect;
 }
 
-export function chartScales(data: ChartData): ChartScales {
-  const pad = chartPad(data);
-  const plot = { left: pad.left, top: pad.top, right: CHART_VIEW_WIDTH - pad.right, bottom: CHART_VIEW_HEIGHT - pad.bottom };
+export function chartScales(data: ChartData, frame: ChartFrame = CHART_FRAME): ChartScales {
+  const pad = chartPad(data, frame);
+  const plot = { left: pad.left, top: pad.top, right: frame.width - pad.right, bottom: frame.height - pad.bottom };
   const plotWidth = plot.right - plot.left;
   const plotHeight = plot.bottom - plot.top;
   const kind = chartKind(data);
-  const categories = chartCategoryLayout(data);
+  const categories = chartCategoryLayout(data, frame);
   const horizontal = categories.horizontal;
-  const values = data.series.flatMap((series) => series.values);
-  // Bars and areas are read against their baseline, so their y domain
-  // reaches it unless the chart says otherwise.
-  const grounded = kind === 'bar' || kind === 'area';
-  const yMin = data.yMin ?? (grounded ? Math.min(0, ...values) : Math.min(...values));
-  const yMax = data.yMax ?? (grounded ? Math.max(0, ...values) : Math.max(...values));
+  const { min: yMin, max: yMax, ticks: valueTicks, decimals: valueDecimals } = chartValueAxis(data);
   const baseline = Math.min(yMax, Math.max(yMin, 0));
   const count = categories.categories?.length;
   const maxCount = Math.max(2, ...data.series.map((series) => series.values.length));
@@ -334,6 +609,7 @@ export function chartScales(data: ChartData): ChartScales {
   const valueAt = (value: number): number =>
     horizontal ? plot.left + share(value) * plotWidth : plot.top + (1 - share(value)) * plotHeight;
   return {
+    frame,
     kind,
     categories,
     horizontal,
@@ -341,6 +617,8 @@ export function chartScales(data: ChartData): ChartScales {
     yMin,
     yMax,
     baseline,
+    valueTicks,
+    valueDecimals,
     band,
     xAt,
     valueAt,
@@ -391,6 +669,145 @@ export function chartBars(data: ChartData, scales: ChartScales = chartScales(dat
     });
   });
   return bars;
+}
+
+/** The side of a point a leader arrives from. */
+export type ChartSide = 'above' | 'below' | 'left' | 'right';
+
+/** A point on the chart something names: a marker, or a note's anchor. */
+export interface ChartAnchor {
+  x: number;
+  series?: string;
+}
+
+/**
+ * A bar marked as the one a marker or a note names: the bar itself is
+ * outlined, its value printed past its end, and a leader to it lands just
+ * past that value, from the bar's open end -- never along or through the
+ * bar it means.
+ */
+export interface ChartBarCallout {
+  bar: ChartBar;
+  /** The value printed past the bar's end; inside its end where the plot has no room past it. */
+  value: { text: string; x: number; y: number; anchor: 'start' | 'middle' | 'end'; inside: boolean };
+  /** The printed value's box. */
+  label: ViewRect;
+  /** Where a leader to the bar lands. */
+  point: ViewPoint;
+  /** The side of `point` a leader comes from: past the bar's end. */
+  from: ChartSide;
+}
+
+// The space between a bar's end and the value printed past it, and between
+// that value and the end of a leader that names the bar.
+const CALLOUT_GAP = 6;
+const CALLOUT_LANDING = 3;
+// The value is the tick text's face (13 units): about 10 units above its
+// baseline, 3 below.
+const CALLOUT_ASCENT = 10;
+const CALLOUT_DESCENT = 3;
+
+function calloutText(value: number): string {
+  return String(Number(value.toPrecision(6)));
+}
+
+/**
+ * The callout for the bar at `x` in the named series (the first series for
+ * a name the chart does not carry), or undefined on a chart that is not a
+ * bar chart or has no bar there.
+ */
+export function chartBarCallout(data: ChartData, anchor: ChartAnchor, scales: ChartScales = chartScales(data)): ChartBarCallout | undefined {
+  if (scales.kind !== 'bar' || !Number.isFinite(anchor.x)) return undefined;
+  const named = anchor.series ? data.series.findIndex((candidate) => candidate.name === anchor.series) : -1;
+  const which = named >= 0 ? named : 0;
+  const last = (data.series[which]?.values.length ?? 0) - 1;
+  if (last < 0) return undefined;
+  const index = Math.round(Math.min(last, Math.max(0, anchor.x)));
+  const bars = chartBars(data, scales);
+  const bar = bars.find((candidate) => candidate.series === which && candidate.index === index);
+  if (!bar) return undefined;
+  const { plot, horizontal } = scales;
+  const text = calloutText(bar.value);
+  const width = text.length * CHART_TICK_CHAR_ADVANCE;
+  const positive = bar.value >= scales.baseline;
+  // Along the value axis (y upright, x across) the way the bar grows, and
+  // across it the category axis.
+  const grows = horizontal ? (positive ? 1 : -1) : positive ? -1 : 1;
+  const valueOf = (point: ViewPoint) => (horizontal ? point.x : point.y);
+  const mid = horizontal ? bar.end.y : bar.end.x;
+  const span: [number, number] = horizontal ? [mid - 6, mid + 5] : [mid - width / 2, mid + width / 2];
+  const size = horizontal ? width : CALLOUT_ASCENT + CALLOUT_DESCENT;
+  const [low, high] = horizontal ? [plot.left, plot.right] : [plot.top, plot.bottom];
+  const end = valueOf(bar.end);
+  // Past the end of every bar on the same side that the value's text would
+  // otherwise lie over: a grouped neighbour taller than the bar it names.
+  let far = end;
+  for (const other of bars) {
+    const [from, to] = horizontal ? [other.rect.top, other.rect.bottom] : [other.rect.left, other.rect.right];
+    if (other === bar || to <= span[0] || from >= span[1] || other.value >= scales.baseline !== positive) continue;
+    far = grows > 0 ? Math.max(far, valueOf(other.end)) : Math.min(far, valueOf(other.end));
+  }
+  const outsideNear = far + grows * CALLOUT_GAP;
+  const outsideFar = outsideNear + grows * size;
+  const fitsOutside = grows > 0 ? outsideFar + CALLOUT_LANDING <= high : outsideFar - CALLOUT_LANDING >= low;
+  // Inside the bar's end where the plot has no room past it, if the bar
+  // holds the text.
+  const length = horizontal ? bar.rect.right - bar.rect.left : bar.rect.bottom - bar.rect.top;
+  const thickness = horizontal ? bar.rect.bottom - bar.rect.top : bar.rect.right - bar.rect.left;
+  const holds = length >= size + 2 * CALLOUT_GAP && (horizontal || thickness + 4 >= width);
+  const inside = !fitsOutside && holds;
+  const near = inside ? end - grows * CALLOUT_GAP : outsideNear;
+  const away = inside ? -grows : grows;
+  const [from, to] = [Math.min(near, near + away * size), Math.max(near, near + away * size)];
+  const label: ViewRect = horizontal ? { left: from, right: to, top: span[0], bottom: span[1] } : { left: span[0], right: span[1], top: from, bottom: to };
+  const tip = (inside ? end : near + away * size) + grows * CALLOUT_LANDING;
+  if (horizontal) {
+    return {
+      bar,
+      value: { text, x: near, y: mid + 4.5, anchor: away > 0 ? 'start' : 'end', inside },
+      label,
+      point: { x: tip, y: mid },
+      from: positive ? 'right' : 'left',
+    };
+  }
+  return {
+    bar,
+    value: { text, x: mid, y: label.bottom - CALLOUT_DESCENT, anchor: 'middle', inside },
+    label,
+    point: { x: mid, y: tip },
+    from: positive ? 'above' : 'below',
+  };
+}
+
+/** The callouts a bar chart draws: its marker's bar and each bar a note names, once each. */
+export function chartBarCallouts(data: ChartData, named: ChartAnchor[] = [], scales: ChartScales = chartScales(data)): ChartBarCallout[] {
+  const callouts: ChartBarCallout[] = [];
+  for (const anchor of [...(data.marker ? [data.marker] : []), ...named]) {
+    const callout = chartBarCallout(data, anchor, scales);
+    if (callout && !callouts.some((other) => other.bar === callout.bar || (other.bar.series === callout.bar.series && other.bar.index === callout.bar.index))) {
+      callouts.push(callout);
+    }
+  }
+  return callouts;
+}
+
+/**
+ * Where a note's leader lands on the chart, and from which side: on a bar
+ * chart the bar's callout point, from past its end, the bar itself and its
+ * printed value;
+ * elsewhere the point on the drawn series, from any side.
+ */
+export function chartNoteTarget(
+  data: ChartData,
+  anchor: ChartAnchor,
+  scales: ChartScales = chartScales(data),
+): { point: ViewPoint; from?: ChartSide; bar?: ViewRect; value?: ViewRect } | undefined {
+  if (scales.kind === 'bar') {
+    const callout = chartBarCallout(data, anchor, scales);
+    return callout ? { point: callout.point, from: callout.from, bar: callout.bar.rect, value: callout.label } : undefined;
+  }
+  const point = chartSeriesPoint(data, anchor.x, anchor.series, scales);
+  return point ? { point } : undefined;
 }
 
 /** The radius of a scatter chart's point markers, in viewBox units. */
@@ -460,7 +877,7 @@ export function chartClip(scales: ChartScales): ViewRect {
   return { left: plot.left - reach, top: plot.top - reach, right: plot.right + reach, bottom: plot.bottom + reach };
 }
 
-export function chartObstacles(data: ChartData, scales: ChartScales = chartScales(data)): ChartObstacles {
+export function chartObstacles(data: ChartData, scales: ChartScales = chartScales(data), named: ChartAnchor[] = []): ChartObstacles {
   const { plot, kind } = scales;
   // What the chart's clip lets through: the bars, the points and the ring
   // are drawn inside it.
@@ -489,13 +906,18 @@ export function chartObstacles(data: ChartData, scales: ChartScales = chartScale
       }
     }
   }
-  const marker = data.marker ? chartSeriesPoint(data, data.marker.x, data.marker.series, scales) : undefined;
-  if (marker) {
-    const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
-    const ring = cut({ left: marker.x - r, top: marker.y - r, right: marker.x + r, bottom: marker.y + r }, clip);
-    if (ring) marks.push(ring);
+  if (kind === 'bar') {
+    // A marked bar's printed value is read as part of it.
+    for (const callout of chartBarCallouts(data, named, scales)) marks.push(callout.label);
+  } else {
+    const marker = data.marker ? chartSeriesPoint(data, data.marker.x, data.marker.series, scales) : undefined;
+    if (marker) {
+      const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
+      const ring = cut({ left: marker.x - r, top: marker.y - r, right: marker.x + r, bottom: marker.y + r }, clip);
+      if (ring) marks.push(ring);
+    }
   }
-  return { marks, lines, fills, labels: [chartLegendBox(data), ...chartAxisBoxes(plot)] };
+  return { marks, lines, fills, labels: [chartLegendBox(data, scales.frame), ...chartAxisBoxes(plot, scales.frame)] };
 }
 
 /**
@@ -537,9 +959,9 @@ export function chartSeriesPoint(
 
 /** The legend's own box, across the top of the plot, in viewBox units: every
  * row its items wrap onto, each as wide as its longest item's real content. */
-export function chartLegendBox(data: ChartData): ViewRect {
-  const pad = chartPad(data);
-  const layout = chartLegendLayout(data, CHART_VIEW_WIDTH - pad.left - pad.right);
+export function chartLegendBox(data: ChartData, frame: ChartFrame = CHART_FRAME): ViewRect {
+  const pad = chartPad(data, frame);
+  const layout = chartLegendLayout(data, frame.width - pad.left - pad.right);
   // Its keys sit on this line, its 11-unit labels across it.
   const left = pad.left + 8;
   const line = CHART_PAD.top + 12;
@@ -552,9 +974,9 @@ export function chartLegendBox(data: ChartData): ViewRect {
 }
 
 /** The axis labels' strips beside and beneath a chart's plot, in viewBox units. */
-export function chartAxisBoxes(plot: ViewRect): ViewRect[] {
+export function chartAxisBoxes(plot: ViewRect, frame: ChartFrame = CHART_FRAME): ViewRect[] {
   return [
     { left: 0, top: plot.top - 8, right: plot.left, bottom: plot.bottom + 8 },
-    { left: plot.left - 20, top: plot.bottom, right: CHART_VIEW_WIDTH, bottom: CHART_VIEW_HEIGHT },
+    { left: plot.left - 20, top: plot.bottom, right: frame.width, bottom: frame.height },
   ];
 }

@@ -887,6 +887,27 @@ button {
   fill: rgba(232, 230, 223, 0.62);
   font-size: 11px;
 }
+
+/* A bar a marker or a note names is marked as a bar: outlined in the
+   annotation colour, its value printed past its end in the tick text's
+   face, where a note's leader lands. */
+.chart-callout__outline {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-callout__value {
+  fill: var(--orange);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.chart-callout__value--inside {
+  fill: var(--black);
+}
 .compare-label {
   position: absolute;
   z-index: 3;
@@ -940,6 +961,13 @@ button {
 .chart-note-leader__stop--point {
   stop-opacity: 0.2;
 }
+
+/* A leader to a bar lands by its printed value, among bars it would fade
+   into: it keeps the card's edge colour, a shade firmer, the whole way. */
+.chart-note-leader--bar .chart-note-leader__stop {
+  stop-color: rgba(var(--orange-rgb), 0.8);
+  stop-opacity: 1;
+}
 .chart-note {
   position: absolute;
   left: 0;
@@ -951,14 +979,21 @@ button {
   background: #000;
   pointer-events: auto;
 }
+/* A narrow card puts what it names on a line of its own rather than cut
+   it to an ellipsis beside the tag. */
+.chart-note .annotation-card__header {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
 .chart-note .annotation-card {
   height: auto;
   min-height: 0;
   padding: clamp(10px, 1cqw, 16px) clamp(12px, 1.2cqw, 18px)
     clamp(10px, 1cqw, 16px);
   border: 1px solid var(--chart-note-edge);
-  /* The layer's leader router cuts the same share (CARD_CUT) from the top
-     edge it may leave by. */
+  /* The leader router keeps off the same cut (notePlacement's
+     NOTE_CARD_CUT: 8% of the top edge, 23% of the right side). */
   clip-path: polygon(0 0, 92% 0, 100% 23%, 100% 100%, 0 100%);
 }
 /* The note a chart leaves out so the others are clear of its data is shown
@@ -1226,6 +1261,14 @@ button {
 }
 .composed-aux-object--visual {
   min-height: var(--aux-visual-floor);
+}
+
+/* A chart's floor is its least frame at the readable scale
+   (chartGeometry.ts: CHART_MIN_FRAME 240 units tall, CHART_READABLE_SCALE
+   7/11 px a unit, so 153px) inside the cell's padding: shorter, its text
+   would fall below the page's floors, so the row scrolls instead. */
+.composed-aux-object--chart {
+  min-height: max(var(--aux-visual-floor), calc(153px + 2 * clamp(12px, 1.4cqw, 22px)));
 }
 .composed-primary-object > .focusable-content,
 .composed-aux-object > .focusable-content {
@@ -3064,11 +3107,13 @@ button {
     width: 94vw;
     height: 86vh;
   }
+  /* The chart's frame follows its box (chartFrame), so a portrait focus
+     gives it a square to read in rather than a 2:1 strip. */
   .focus-layer__content--chart {
     width: 94vw;
     height: auto;
-    max-height: none;
-    aspect-ratio: 2 / 1;
+    max-height: 70vh;
+    aspect-ratio: 1 / 1;
   }
   .focus-layer__content--note,
   .focus-layer__content--metric,

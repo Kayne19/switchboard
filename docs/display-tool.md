@@ -93,6 +93,8 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 - `labels`: 1 to 100 categorical x labels, each a string of at most 64 UTF-16 code units. When present the x domain is the label indices (`0` to `labels.length - 1`), the x ticks are the labels, and `xMax` is ignored. Every `series.values` must be no longer than `labels`; a shorter series ends early.
 - `marker.x`, a note's `anchor.x` and `say at.x` name a label index on a labelled chart, and the numeric x otherwise.
 - Bars are grouped per category across the series. A bar chart without `labels` takes the value indices as its categories, so `xMax` is ignored there too. Whether bars run up or across is the page's decision (`docs/visual-channel.md`).
+- `yMin` and `yMax` are kept as given. An end left out is the page's: rounded out to a round value, a bar or area chart's with headroom past its tallest value. Give `yMax: 100` for a percentage that must stop there.
+- A bar that `marker` or a note's `anchor` names is outlined and its value printed; on a chart with `labels`, a note's tag names the category and series it points at.
 
 ### Progress steps
 - `steps`: 1 to 30 items, each `{ label (<= 128), state?, detail? (<= 256) }`. A step without a `state` reads as `todo`.

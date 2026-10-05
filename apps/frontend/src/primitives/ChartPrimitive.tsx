@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'motion/react';
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useRef } from 'react';
 import type { ChartData, ChartKind, ChartSeries, Semantic } from '../controller/types';
 import {
   CHART_LEGEND_KEY_WIDTH,
@@ -11,16 +11,18 @@ import {
   CHART_POINT_RADIUS,
   CHART_TICK_BASELINE,
   CHART_TICK_ROW_HEIGHT,
-  CHART_VIEW_HEIGHT,
-  CHART_VIEW_WIDTH,
+  chartBarCallouts,
   chartBars,
   chartCategoryLabelX,
   chartClip,
+  chartFrame,
   chartLegendLayout,
   chartScales,
   chartSeriesPoint,
+  type ChartAnchor,
   type ChartScales,
 } from './chartGeometry';
+import { useElementSize } from '../hooks/useElementSize';
 
 const semanticColor: Record<Semantic,string> = {
   red:'var(--red)',orange:'var(--orange)',green:'var(--green)',cyan:'var(--cyan)',amber:'var(--amber)',paper:'var(--paper)',muted:'var(--muted)'
@@ -31,8 +33,6 @@ const fallbackSeriesSemantics: Semantic[] = ['green', 'orange', 'cyan', 'amber',
 export function chartSeriesColor(series: ChartSeries, index: number): string {
   return semanticColor[series.semantic ?? fallbackSeriesSemantics[index % fallbackSeriesSemantics.length]];
 }
-
-function niceTicks(min:number,max:number,count=4){return Array.from({length:count},(_,i)=>max-((max-min)*i)/(count-1));}
 
 // The x axis is labelled at round values of its domain -- steps of 1, 2, 2.5
 // or 5 times a power of ten, at most five of them -- and each label is the
@@ -53,10 +53,20 @@ function formatXTick(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
 }
 
-// A tick computed down from the top of the domain can land a rounding
-// error below zero, which would print as "-0.00".
-function formatValueTick(value: number): string {
-  return (Math.abs(value) < 1e-9 ? 0 : value).toFixed(2);
+// A value tick is printed with its step's decimals. A tick computed down
+// from the top of the domain can land a rounding error below zero, which
+// would print as "-0.00".
+function formatValueTick(value: number, decimals: number): string {
+  return (Math.abs(value) < 1e-9 ? 0 : value).toFixed(decimals);
+}
+
+// The value gridlines: one per tick, and the domain's ends too, so the grid
+// stays closed where an end the chart gives falls between round values.
+function valueGridLines(scales: ChartScales): Array<{ value: number; tick: boolean }> {
+  const { valueTicks, yMin, yMax } = scales;
+  const near = (a: number, b: number) => Math.abs(a - b) <= Math.abs(yMax - yMin) * 1e-9;
+  const ends = [yMax, yMin].filter((end) => !valueTicks.some((tick) => near(tick, end)));
+  return [...valueTicks.map((value) => ({ value, tick: true })), ...ends.map((value) => ({ value, tick: false }))];
 }
 
 const point = (p: { x: number; y: number }) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
@@ -84,21 +94,28 @@ function LegendKey({ kind, color }: { kind: ChartKind; color: string }) {
 // The gridlines and tick labels along the category (or numeric x) axis and
 // the value axis, whichever way the chart runs.
 function Grid({ scales }: { scales: ChartScales }) {
-  const { plot, categories, horizontal, yMin, yMax, xMax, xAt, valueAt, kind } = scales;
-  const valueTicks = niceTicks(yMin, yMax);
+  const { plot, categories, horizontal, xMax, xAt, valueAt, kind, valueDecimals, frame } = scales;
+  const valueLines = valueGridLines(scales);
   const categorical = categories.categories !== undefined;
   // Category gridlines belong to a line through the categories; bars stand
   // in their bands with no line between them.
   const categoryLines = categorical && kind !== 'bar';
   if (horizontal) {
     return <g className="chart-grid" data-axis="horizontal">
-      {valueTicks.map((tick, index) => {
-        const x = valueAt(tick);
-        return <g key={index}><line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/><text x={x} y={plot.bottom + CHART_TICK_BASELINE} textAnchor="middle">{formatValueTick(tick)}</text></g>;
+      {valueLines.map(({ value, tick }, index) => {
+        const x = valueAt(value);
+        return <g key={index}><line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/>{tick ? <text x={x} y={plot.bottom + CHART_TICK_BASELINE} textAnchor="middle">{formatValueTick(value, valueDecimals)}</text> : null}</g>;
       })}
       <line x1={plot.left} y1={plot.top} x2={plot.right} y2={plot.top}/>
       <line x1={plot.left} y1={plot.bottom} x2={plot.right} y2={plot.bottom}/>
-      {categories.ticks.map((tick) => <text key={tick.index} className="chart-grid__category" x={plot.left - 14} y={xAt(tick.index) + 4} textAnchor="end">{tick.text}{tick.truncated ? <title>{categories.categories![tick.index]}</title> : null}</text>)}
+      {categories.ticks.map((tick) => {
+        // A wrapped label's lines are centred on its row.
+        const top = xAt(tick.index) + 4 - ((tick.lines.length - 1) * CHART_TICK_ROW_HEIGHT) / 2;
+        return <text key={tick.index} className="chart-grid__category" x={plot.left - 14} y={top} textAnchor="end">
+          {tick.lines.length > 1 ? tick.lines.map((line, index) => <tspan key={index} x={plot.left - 14} y={top + index * CHART_TICK_ROW_HEIGHT}>{line}</tspan>) : tick.text}
+          {tick.truncated || tick.lines.length > 1 ? <title>{categories.categories![tick.index]}</title> : null}
+        </text>;
+      })}
     </g>;
   }
   const xTicks = categorical ? [] : chartXTicks(xMax);
@@ -107,9 +124,9 @@ function Grid({ scales }: { scales: ChartScales }) {
   // categorical axis closes the grid at both edges and labels neither.
   const xGrid = categorical ? [] : xMax > 0 && xTicks[xTicks.length - 1] < xMax ? [...xTicks, xMax] : xTicks;
   return <g className="chart-grid">
-    {valueTicks.map((tick, index) => {
-      const y = valueAt(tick);
-      return <g key={index}><line x1={plot.left} y1={y} x2={plot.right} y2={y}/><text x={plot.left - 14} y={y + 4} textAnchor="end">{formatValueTick(tick)}</text></g>;
+    {valueLines.map(({ value, tick }, index) => {
+      const y = valueAt(value);
+      return <g key={index}><line x1={plot.left} y1={y} x2={plot.right} y2={y}/>{tick ? <text x={plot.left - 14} y={y + 4} textAnchor="end">{formatValueTick(value, valueDecimals)}</text> : null}</g>;
     })}
     {xGrid.map((value) => {
       const x = xAt(value);
@@ -123,7 +140,7 @@ function Grid({ scales }: { scales: ChartScales }) {
       const x = xAt(tick.index);
       return <g key={tick.index}>
         {categoryLines ? <line x1={x} y1={plot.top} x2={x} y2={plot.bottom}/> : null}
-        <text className="chart-grid__category" x={chartCategoryLabelX(x, tick.text)} y={plot.bottom + CHART_TICK_BASELINE + tick.row * CHART_TICK_ROW_HEIGHT} textAnchor="middle">{tick.text}</text>
+        <text className="chart-grid__category" x={chartCategoryLabelX(x, tick.text, frame.width)} y={plot.bottom + CHART_TICK_BASELINE + tick.row * CHART_TICK_ROW_HEIGHT} textAnchor="middle">{tick.text}</text>
       </g>;
     })}
   </g>;
@@ -132,14 +149,22 @@ function Grid({ scales }: { scales: ChartScales }) {
 export function ChartPrimitive({
   data,
   focused = false,
+  named,
 }: {
   data: ChartData;
   focused?: boolean;
+  /** The points the notes on this chart name: a bar chart marks each one's bar as it marks its marker's. */
+  named?: ChartAnchor[];
 }) {
   const reduced = useReducedMotion();
   const clipId = useId().replace(/:/g,'');
-  const width=CHART_VIEW_WIDTH,height=CHART_VIEW_HEIGHT;
-  const scales=useMemo(()=>chartScales(data),[data]);
+  // The frame is the slot's to decide: the approved canvas where it reads,
+  // else one of the slot's own shape (`chartFrame`).
+  const hostRef = useRef<HTMLDivElement>(null);
+  const slot = useElementSize(hostRef);
+  const fit = chartFrame(slot);
+  const width = fit.width, height = fit.height;
+  const scales=useMemo(()=>chartScales(data,{width,height}),[data,width,height]);
   const {plot,kind,horizontal,baseline,valueAt}=scales;
   // The plot's own padding grows to clear a legend that wraps, a second
   // row of category labels, and a horizontal bar chart's labels down the
@@ -160,12 +185,18 @@ export function ChartPrimitive({
   // of its own -- a full-height dashed rule read as a stray line through
   // the plot, and ran on past the point beneath any leader that met it
   // there.
-  const markerPoint=data.marker ? chartSeriesPoint(data,data.marker.x,data.marker.series,scales) : undefined;
+  // A bar is marked as a bar: outlined, its value printed past its end
+  // (`chartBarCallouts`), not a ring on its edge.
+  const markerPoint=data.marker && kind!=='bar' ? chartSeriesPoint(data,data.marker.x,data.marker.series,scales) : undefined;
+  // Kept while what the notes name is the same: the scene builds a new
+  // array of it every render, so the memo reads `named` through its key.
+  const namedKey=(named??[]).map((anchor)=>`${anchor.x}\u0000${anchor.series??''}`).join('\u0001');
+  const callouts=useMemo(()=>chartBarCallouts(data,named,scales),[data,namedKey,scales]);
   const grounded=kind==='bar'||kind==='area';
   const base=valueAt(baseline);
   const clip=chartClip(scales);
 
-  return <div className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
+  return <div ref={hostRef} className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={data.title ?? 'Chart'}>
       <defs>
         {/* A scatter chart's points at the ends of its domain sit on the
@@ -196,12 +227,22 @@ export function ChartPrimitive({
             {kind==='bar' ? series.bars.map((bar)=><rect key={bar.index} className="chart-bar" x={bar.rect.left} y={bar.rect.top} width={Math.max(0.5,bar.rect.right-bar.rect.left)} height={Math.max(0.5,bar.rect.bottom-bar.rect.top)} fill={color}/>) : null}
           </motion.g>;
         })}
+
         {markerPoint ? (
           <motion.g className="chart-marker" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
             <circle className="chart-marker__point" cx={markerPoint.x} cy={markerPoint.y} r={focused?CHART_MARKER_RADIUS+2:CHART_MARKER_RADIUS} fill="#000" stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
           </motion.g>
         ) : null}
       </g>
+      {/* A marked bar's printed value may stand past the plot's edge, so
+          only its outline is cut to the plot, as the bar is. */}
+      {callouts.map((callout)=>{
+        const {rect}=callout.bar;
+        return <motion.g key={`${callout.bar.series}-${callout.bar.index}`} className="chart-callout" data-series={data.series[callout.bar.series]?.name} data-index={callout.bar.index} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
+          <rect className="chart-callout__outline" clipPath={`url(#${clipId})`} x={rect.left} y={rect.top} width={Math.max(0.5,rect.right-rect.left)} height={Math.max(0.5,rect.bottom-rect.top)}/>
+          <text className={`chart-callout__value${callout.value.inside?' chart-callout__value--inside':''}`} x={callout.value.x} y={callout.value.y} textAnchor={callout.value.anchor}>{callout.value.text}</text>
+        </motion.g>;
+      })}
       {/* The axis names follow their axes: a horizontal bar chart's
           categories run down the left and its values along the bottom. */}
       <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{(horizontal ? data.yLabel : data.xLabel) ?? (horizontal ? 'Y' : 'X')}</text>
