@@ -54,7 +54,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^(?!__runtime/).+$"
+      "pattern": "^(?!__runtime/)"
     },
     "Role": {
       "type": "string",
@@ -632,7 +632,7 @@
         "highlight": {
           "type": "array",
           "items": {
-            "type": "integer"
+            "type": "number"
           }
         }
       },
@@ -1261,7 +1261,14 @@
           "maxLength": 50000
         },
         "target": {
-          "$ref": "#/definitions/Identifier"
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "at": {
           "oneOf": [

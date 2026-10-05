@@ -135,6 +135,7 @@
     {"name": "show_id_65_astral", "error": "show.id exceeds maximum length of 128 UTF-16 code units", "action": {"op": "show", "id": {"$repeat": "\ud83d\ude00", "times": 65}, "type": "metric", "data": {"label": "L", "value": "1"}}},
     {"name": "show_id_reserved", "error": "reserved identifier namespace: __runtime/conversation", "action": {"op": "show", "id": "__runtime/conversation", "type": "metric", "data": {"label": "L", "value": "1"}}},
     {"name": "show_id_reserved_needs_the_slash", "accepted": true, "action": {"op": "show", "id": "__runtime", "type": "metric", "data": {"label": "L", "value": "1"}}},
+    {"name": "show_id_with_a_line_break_inside", "accepted": true, "action": {"op": "show", "id": "build\nstep 2", "type": "metric", "data": {"label": "L", "value": "1"}}},
     {"name": "show_id_reserved_is_a_prefix", "accepted": true, "action": {"op": "show", "id": " __runtime/x", "type": "metric", "data": {"label": "L", "value": "1"}}},
     {"name": "show_type_missing", "error": "show.type is unknown", "action": {"op": "show", "id": "x", "data": {"label": "L", "value": "1"}}},
     {"name": "show_type_card", "error": "show.type is unknown", "action": {"op": "show", "id": "x", "type": "card", "data": {}}},
