@@ -1654,8 +1654,11 @@ button {
    reads at that size; otherwise drawn at its readable minimum and scrolled
    inside it, along the axis it overflows, clipped to its box. Its auto
    margins centre a drawing smaller than the box without ever cutting off
-   the start of one larger. An edge the drawing continues past fades into
-   the black field. */
+   the start of one larger. A drawing that scrolls says where its reader is
+   in its own marks rather than with a scroll bar (drawingScroll.ts): it
+   rests between its parts, each edge it continues past counts what lies
+   that way and fades over what it cuts, a line leaving the view names
+   where it goes, and its map stands in the corner. */
 .drawing-viewport {
   position: relative;
   width: 100%;
@@ -1665,10 +1668,15 @@ button {
   overflow: hidden;
 }
 .drawing-viewport__scroll {
+  position: relative;
   display: flex;
   width: 100%;
   height: 100%;
   overflow: hidden;
+  scrollbar-width: none;
+}
+.drawing-viewport__scroll::-webkit-scrollbar {
+  display: none;
 }
 .drawing-viewport__scroll > svg {
   display: block;
@@ -1680,19 +1688,54 @@ button {
 .drawing-viewport--scrolling > .drawing-viewport__scroll {
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
 }
 .drawing-viewport--scrolling > .drawing-viewport__scroll > svg {
   flex: none;
   margin: auto;
+}
+/* At rest the drawing stands at a stop (restStops): each stop is a band
+   reaching to the next, and the browser settles the drawing at a band's
+   start. The end marker holds the content open to where the last stop
+   needs it (restEnd), a little past the drawing's end when its last
+   place to rest must not cut a part. A wheel, a trackpad or a drag on
+   the map lets go of the stops (DrawingViewport sets the scroller's own
+   snap type) until it pauses. */
+.drawing-viewport[data-scroll="x"] > .drawing-viewport__scroll {
+  scroll-snap-type: x mandatory;
+}
+.drawing-viewport[data-scroll="y"] > .drawing-viewport__scroll {
+  scroll-snap-type: y mandatory;
+}
+.drawing-viewport[data-scroll="both"] > .drawing-viewport__scroll {
+  scroll-snap-type: both mandatory;
+}
+.drawing-viewport__stops {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+/* A stop spans the content across, so it is in view at any position on
+   the other axis: a browser only snaps to an area it can see. */
+.drawing-viewport__stop {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+.drawing-viewport__end {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
 }
 .drawing-viewport__pinned {
   position: absolute;
   z-index: 2;
   top: 0;
   left: 0;
-  right: var(--bar-y, 0px);
+  right: 0;
   visibility: hidden;
   pointer-events: none;
   background: #000;
@@ -1710,49 +1753,242 @@ button {
   height: 100%;
   overflow: visible;
 }
-.drawing-viewport__pinned::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 100%;
-  height: clamp(12px, 3%, 24px);
-  background: linear-gradient(to bottom, #000, transparent);
-}
+/* An edge the drawing continues past: a fade as deep as the part it cuts
+   reaches in (DrawingViewport sets the depth), darkest at the rim, so a
+   cut part reads as the next one coming rather than as broken. */
 .drawing-viewport__more {
   position: absolute;
   z-index: 1;
   pointer-events: none;
 }
-/* The fades keep off the scroll bars (--bar-x, --bar-y: their thickness,
-   set by DrawingViewport), so a bar's track is never dimmed. */
 .drawing-viewport__more--left,
 .drawing-viewport__more--right {
   top: 0;
-  bottom: var(--bar-x, 0px);
-  width: clamp(24px, 6%, 56px);
+  bottom: 0;
 }
 .drawing-viewport__more--top,
 .drawing-viewport__more--bottom {
   left: 0;
-  right: var(--bar-y, 0px);
-  height: clamp(24px, 8%, 56px);
+  right: 0;
 }
 .drawing-viewport__more--left {
   left: 0;
-  background: linear-gradient(to right, #000, transparent);
+  background: linear-gradient(to left, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
 .drawing-viewport__more--right {
-  right: var(--bar-y, 0px);
-  background: linear-gradient(to left, #000, transparent);
+  right: 0;
+  background: linear-gradient(to right, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
 .drawing-viewport__more--top {
   top: 0;
-  background: linear-gradient(to bottom, #000, transparent);
+  background: linear-gradient(to top, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
 .drawing-viewport__more--bottom {
-  bottom: var(--bar-x, 0px);
-  background: linear-gradient(to top, #000, transparent);
+  bottom: 0;
+  background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
+}
+/* On the rim, the rail (drawingScroll.ts RAIL deep): the drawing's cut,
+   a dashed orange line on the outside and a faint one within, holding the
+   edge's count and the names of the lines that leave there. */
+.drawing-viewport__rail {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  --cut: rgba(var(--orange-rgb), 0.62);
+  --within: rgba(var(--orange-rgb), 0.16);
+}
+.drawing-viewport__rail--left,
+.drawing-viewport__rail--right {
+  top: 0;
+  bottom: 0;
+  width: 18px;
+}
+.drawing-viewport__rail--top,
+.drawing-viewport__rail--bottom {
+  left: 0;
+  right: 0;
+  height: 18px;
+}
+.drawing-viewport__rail--left {
+  left: 0;
+  border-left: 1px dashed var(--cut);
+  box-shadow: inset -1px 0 var(--within);
+}
+.drawing-viewport__rail--right {
+  right: 0;
+  border-right: 1px dashed var(--cut);
+  box-shadow: inset 1px 0 var(--within);
+}
+.drawing-viewport__rail--top {
+  top: 0;
+  border-top: 1px dashed var(--cut);
+  box-shadow: inset 0 -1px var(--within);
+}
+.drawing-viewport__rail--bottom {
+  bottom: 0;
+  border-bottom: 1px dashed var(--cut);
+  box-shadow: inset 0 1px var(--within);
+}
+/* A rail's count: how many parts lie that way, and a chevron pointing
+   there, set along the rail in the rail face (drawingScroll.ts
+   `tagLength`). A tap on it turns a page that way. On the left and right
+   rails a tag is turned a quarter so it runs along the rail, its top (and
+   its chevron) facing out: the left one reads up, as a spine does. */
+.drawing-viewport__rim {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  border: 1px solid rgba(var(--orange-rgb), 0.85);
+  background: #000;
+  color: var(--orange);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.drawing-viewport__rim--left,
+.drawing-viewport__rim--right {
+  top: 50%;
+  translate: -50% -50%;
+}
+.drawing-viewport__rim--left {
+  left: 9px;
+  rotate: -90deg;
+}
+.drawing-viewport__rim--right {
+  left: calc(100% - 9px);
+  rotate: 90deg;
+}
+.drawing-viewport__rim--top,
+.drawing-viewport__rim--bottom {
+  left: 50%;
+  translate: -50% 0;
+}
+.drawing-viewport__rim--top {
+  top: 0;
+}
+.drawing-viewport__rim--bottom {
+  bottom: 0;
+}
+.drawing-viewport__chevron {
+  flex: none;
+  width: 8px;
+  height: 6px;
+  fill: currentColor;
+}
+.drawing-viewport__rim--bottom .drawing-viewport__chevron {
+  rotate: 180deg;
+}
+/* A line that leaves the view: on the rail where it leaves, the name of
+   the part it goes to, in the line's colour, its chevron pointing out,
+   turned as a rail's count is. drawingScroll.ts places it by this face and
+   these sizes (TAG_ADVANCE, TAG_PAD, TAG_DEPTH); DrawingViewport sets its
+   centre. */
+.drawing-viewport__exits {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.drawing-viewport__exit {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 15px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 16%, #000);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  white-space: nowrap;
+  translate: -50% -50%;
+}
+.drawing-viewport__exit::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 5px;
+  background: currentColor;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.drawing-viewport__exit--left {
+  rotate: -90deg;
+}
+.drawing-viewport__exit--right {
+  rotate: 90deg;
+}
+.drawing-viewport__exit--bottom::before {
+  rotate: 180deg;
+}
+/* The map: the whole drawing in a corner, its parts and lines, and the
+   view boxed in orange. A tap or a drag on it moves the view there. */
+.drawing-viewport__map {
+  position: absolute;
+  z-index: 3;
+  box-sizing: content-box;
+  padding: 4px;
+  background: rgba(0, 0, 0, 0.92);
+  cursor: pointer;
+  touch-action: none;
+}
+.drawing-viewport__map--bottom-right {
+  right: 6px;
+  bottom: 6px;
+}
+.drawing-viewport__map--bottom-left {
+  left: 6px;
+  bottom: 6px;
+}
+.drawing-viewport__map--top-right {
+  right: 6px;
+  top: 6px;
+}
+.drawing-viewport__map--top-left {
+  left: 6px;
+  top: 6px;
+}
+.drawing-viewport__map-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: none;
+  stroke: rgba(232, 230, 223, 0.3);
+  stroke-width: 1;
+}
+.drawing-viewport__map-sketch {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.drawing-viewport__map-line {
+  fill: none;
+  stroke-opacity: 0.32;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.drawing-viewport__map-box {
+  fill-opacity: 0.72;
+}
+.drawing-viewport__map-view {
+  fill: rgba(var(--orange-rgb), 0.12);
+  stroke: var(--orange);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
 }
 /* Entry motion stays in CSS on elements that carry no SVG positioning
    transform: a CSS transform on a translated node group replaces its

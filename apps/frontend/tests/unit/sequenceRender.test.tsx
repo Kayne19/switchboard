@@ -102,6 +102,24 @@ describe('sequence rendering', () => {
     expect(host.querySelector('.sequence-actor__body--anchored')).toBeNull();
   });
 
+  it('gives the actor an anchored note names the NOTE marker, as a graph gives its node, and no other actor', () => {
+    render(<SequencePrimitive data={traceDiagram} id="trace" note={{ segments: [{ text: 'x' }], anchor: { target: 'trace', node: 'pbx' } }} />);
+    const markers = [...host.querySelectorAll('.sequence-actors .sequence-actor__marker')];
+    // The headers, and their pinned copy when the exchange scrolls.
+    expect(markers.length).toBeGreaterThanOrEqual(1);
+    for (const marker of markers) {
+      expect(marker.closest('.sequence-actor__body')?.querySelector('.sequence-actor-label')?.textContent).toBe('PBX');
+      expect(marker.textContent).toBe('NOTE');
+      const rect = marker.querySelector('rect');
+      expect([rect?.getAttribute('width'), rect?.getAttribute('height')]).toEqual(['30', '15']);
+      expect(rect?.getAttribute('stroke')).toBe('var(--orange)');
+    }
+    act(() => root.unmount());
+    host.remove();
+    render(<SequencePrimitive data={traceDiagram} id="trace" note={{ segments: [{ text: 'x' }], anchor: { target: 'other', node: 'pbx' } }} />);
+    expect(host.querySelector('.sequence-actor__marker')).toBeNull();
+  });
+
   it('gives an anchored actor its glow on every side of the frame', () => {
     render(<SequencePrimitive data={data} id="seq" note={{ segments: [{ text: 'x' }], anchor: { target: 'seq', node: 'pbx' } }} />);
     const frame = host.querySelector('.sequence-actor__body--anchored .sequence-actor__frame');
