@@ -301,12 +301,66 @@ wire rules are in `docs/display-tool.md` ("Time values" and
   the list.
 
 Each is a visual like a table: shown alone it takes the main slot, and
-beside another primary it takes a cell in the aux row. Until the render
-slice draws them, the page shows all five with one stand-in, a framed list
-of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`),
+beside another primary it takes a cell in the aux row. The timer and the
+forecast have primitives of their own (below); the calendar, the to-do
+list and the inbox are drawn for now by one stand-in, a framed list of the
+fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`),
 so an accepted object is never dropped and the fixtures (`calendar`,
 `tasks`, `timer`, `weather`, `inbox`, and `today`, an agenda with the
 forecast, the to-do list and the inbox beside it) load.
+
+### The page clock
+
+A timer is the only thing on the page that reads the time, and it reads
+it from one clock (`apps/frontend/src/hooks/usePageClock.ts`): one
+timeout for the whole page, ticking on the wall clock's whole seconds
+while a countdown on screen is running, and none while every timer is
+paused or none is shown. Two timers therefore turn over on the same tick,
+and a page with eight timers runs one timeout, not eight. What a timer
+reads at a moment is pure (`readTimer`): the digits round up, so they show
+`00:01` until the end and `00:00` only at `endsAt`; from that moment it is
+done, in the warning colour, and counts how long ago it ended; a paused
+timer is held at `remaining` whatever the clock does; a `startedAt` still
+to come (the agent's clock ahead of the page's) reads as nothing gone yet,
+and the countdown still runs to `endsAt`. The share gone is a bar that
+sweeps from tick to tick by a CSS transition; with reduced motion the
+transition goes and the bar steps with the digits. Tests drive the clock:
+Vitest's fake timers in the unit tests, Playwright's clock in the browser.
+
+### Timers and forecasts in their slot
+
+A set of timers is laid out for its box: a grid whose columns give the
+largest countdown digits (no cell beside another narrower than its label
+needs), each countdown as large as its cell allows, up to 200px; where no
+grid gives readable digits (five timers on a phone, several in an aux
+cell) they are rows of a list that scrolls inside its frame.
+
+A forecast is laid out for its box too (`weatherLayout`): on a wide box
+the conditions now stand beside the days and the hours run across the
+foot; on a tall one the three stand down the box and scroll as one; a
+small slot (an aux cell) holds the conditions on one line and one list,
+the days or, when the note names an hour, the hours; a slot too short for
+a list row holds the conditions alone. The hours are a strip, a column
+each: the temperature traced over the chance of rain, labelled every 1,
+2, 3, 4, 6, 8, 12 or 24 hours so the labels stand at least 34px apart,
+which keeps 48 hours readable on a phone without scrolling sideways; the
+hour a note names, each midnight (the day's name) and the first hour are
+always labelled, in that order of claim. The days are rows whose ranges
+are bars on one scale, the lowest low to the highest high, so a cold day
+reads as cold beside a warm one. An alert stands on an amber rule.
+
+### Lists that outgrow the frame
+
+A list longer than its slot (a forecast's days, timers in a small slot,
+and the other assistant lists) scrolls up and down inside its frame in a
+`ListViewport`, the HTML twin of a drawing's viewport: on each edge it
+continues past it draws the same fade, dashed cut line and tag, the tag
+counting the items that lie that way (a row of which no more than a
+sliver shows counts as past the edge), or saying MORE where none does. A
+tap on the tag turns a page and does not expand the object; the keys that
+scroll a focused list scroll it. It opens on the item a note names, never
+under the fade, and keeps the reader's place through an update. Focus
+gives the list the whole stage.
 
 ### Composition & focus
 
