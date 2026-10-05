@@ -5628,6 +5628,24 @@ button {
   .content-grid--staged {
     bottom: 6.4cqh;
   }
+  /* On the stage the frame's words keep one line, the subtitle after the
+     title, cut at the stage's edge before the title is, and the primary
+     starts a line higher: the line the subtitle had earns nothing while
+     the primary has the stage. */
+  .scene--staged .scene-heading {
+    right: var(--edge);
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: 1.6em;
+  }
+  .scene--staged :is(.scene-heading__title, .scene-heading__sub) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .scene--staged .content-grid {
+    top: 7.6cqh;
+  }
   .content-rail--folded {
     grid-template-rows: auto auto;
     row-gap: clamp(6px, 0.9cqh, 10px);

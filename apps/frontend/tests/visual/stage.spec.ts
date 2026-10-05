@@ -158,6 +158,29 @@ for (const { name, scene, actions, sizes } of outgrowing) {
   }
 }
 
+// Folded, the frame's subtitle had a line of its own over the primary,
+// which earns nothing while the primary has the stage.
+const box = async (page: Page, selector: string) => (await page.locator(selector).first().boundingBox())!;
+
+test('folded, the frame\'s subtitle runs after its title and the primary starts a line higher', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'topology');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  const title = await box(page, '.scene-heading__title');
+  const sub = await box(page, '.scene-heading__sub');
+  // One line: the subtitle after the title, both inside the stage.
+  expect(Math.abs(sub.y + sub.height - (title.y + title.height))).toBeLessThan(2);
+  expect(sub.x).toBeGreaterThan(title.x + title.width);
+  expect(sub.x + sub.width).toBeLessThanOrEqual(390);
+  expect((await box(page, '.content-grid > .content-main')).y).toBeLessThan(title.y + title.height + 16);
+  // Opened, the frame's words are as they were: the subtitle on its own line.
+  await page.locator('button.rail-handle').click();
+  await expect(page.locator('.content-rail--open')).toBeVisible();
+  await page.waitForTimeout(500);
+  const openTitle = await box(page, '.scene-heading__title');
+  expect((await box(page, '.scene-heading__sub')).y).toBeGreaterThanOrEqual(openTitle.y + openTitle.height - 1);
+});
+
 test('a note on a folded rail stays matched to the node it names', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, 'pipeline');
