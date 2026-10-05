@@ -4,10 +4,11 @@ import type { DiagramEdge, DiagramNode } from '../../src/controller/types';
 import { leastCpuMs } from './cpuTime';
 
 // Layering a graph of a few nodes is quick whatever its cycles: a cycle
-// that sent the layering round until some cap would show here as time.
+// that sent the layering round until some cap would show here as time
+// (CPU time, the least of three runs: cpuTime.ts says why).
 function layerIds(nodes: DiagramNode[], edges: DiagramEdge[]) {
   let layers: DiagramNode[][] = [];
-  expect(leastCpuMs(() => (layers = createLayers(nodes, edges)), 1)).toBeLessThan(10);
+  expect(leastCpuMs(() => (layers = createLayers(nodes, edges)))).toBeLessThan(10);
   return layers.map((layer) => layer.map((node) => node.id));
 }
 

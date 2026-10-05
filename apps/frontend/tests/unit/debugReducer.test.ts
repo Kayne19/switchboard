@@ -211,7 +211,8 @@ describe('debug reducer', () => {
       }
     }
     expect(frames.length).toBeGreaterThan(6000);
-    // Budgets in CPU time (cpuTime.ts says why).
+    // Budgets in CPU time (cpuTime.ts says why), one run each: the fold
+    // builds on its own state, and a second run would fold a full log.
     let state = initialDebugState();
     const spent = leastCpuMs(() => {
       for (let index = 0; index < frames.length; index += 25) state = reduceFrames(state, frames.slice(index, index + 25));

@@ -66,7 +66,8 @@ const arrowhead = (points: Point[]): Box => {
 };
 const within = (box: Box, width: number, height: number) => box.x >= 0 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= height;
 
-// Budgets are CPU time, the least of a few runs (cpuTime.ts says why).
+// Budgets are CPU time (cpuTime.ts says why): the least of a few runs, or
+// one run per seed in the sixty-seed fuzz, each seed its own graph.
 describe('diagram layout stays quick at the largest allowed graph', () => {
   it('lays out 100 nodes and 200 edges within a frame budget', () => {
     for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {

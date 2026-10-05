@@ -12,14 +12,16 @@
 // (a core shared with another thread, a lower clock): up to about 2x at load
 // 50, measured. So each budget is at least twice what its work costs at that
 // load on the machine they were measured on (a Ryzen 9 5900X), room for a
-// slower runner, and still under the cost of the regression it was written
-// to catch. The least of a few tries leaves out a one-off pause in one of
-// them: the first compile of the code, a major collection.
+// slower runner, and, where the regression it was written to catch was
+// measured, still under its cost. The least of a few tries leaves out a
+// one-off pause in one of them: the first compile of the code, a major
+// collection.
 //
 // The thread's figure, not the process's: V8 collects and compiles on
 // threads of its own, which doubled the process's figure and made it noisy.
 export function leastCpuMs(work: () => unknown, runs = 3): number {
-  // Node 22.19 or later; package.json allows 22.18 for the host agent.
+  // Node 22.19 or later (README.md, "Building and testing"); package.json
+  // allows 22.18, which the host agent runs on.
   if (typeof process.threadCpuUsage !== 'function') throw new Error('budget tests read the thread CPU time: run them on Node 22.19 or later');
   let least = Infinity;
   for (let run = 0; run < runs; run += 1) {
