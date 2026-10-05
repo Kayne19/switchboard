@@ -1173,7 +1173,8 @@ button {
    objects, the other visuals, secondary progress) get an explicit visible
    slot below it, so an accepted object is never lost to the layout. The row
    takes what its cells need up to two fifths of the column, so the primary
-   keeps the larger share; past that the row scrolls inside itself. */
+   keeps the larger share; past that the row scrolls inside itself. (A metric
+   primary's card keeps its own height instead, and the row takes the rest.) */
 .composed-main {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
@@ -1186,8 +1187,9 @@ button {
      a scroll region, without moving the cells. */
   --aux-bleed: 6px;
   /* The readable floor of a visual's cell: the head of a table or a code
-     pane and its first rows, a chart's plot, a figure with its caption. */
-  --aux-visual-floor: clamp(132px, 18cqh, 200px);
+     pane and its first rows, a chart's plot, a figure with its caption. On
+     a short stage it fits the row's cap, so one cell shows whole. */
+  --aux-visual-floor: clamp(112px, 18cqh, 200px);
   grid-row: 2;
   min-width: 0;
   min-height: calc(clamp(96px, 15cqh, 210px) + 2 * var(--aux-bleed));

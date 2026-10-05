@@ -72,7 +72,7 @@ describe('the aux row', () => {
     const floor = topLevel('.composed-aux', '--aux-visual-floor') ?? '';
     const least = /^clamp\((\d+)px,/.exec(floor);
     expect(least, floor).not.toBeNull();
-    expect(Number(least![1])).toBeGreaterThanOrEqual(120);
+    expect(Number(least![1])).toBeGreaterThanOrEqual(100);
   });
 
   it('keeps a metric, a note or a progress at its own height', () => {
@@ -81,7 +81,7 @@ describe('the aux row', () => {
 
   it('is never reset to collapse a cell by a geometry rule', () => {
     const resets = all.filter((rule) => rule.conditional
-      && rule.selectors.some((s) => /^\.composed-aux-object(--visual)?$/.test(s))
+      && rule.selectors.some((s) => /(^|[\s>])\.composed-aux-object(--visual)?$/.test(s))
       && rule.declarations.has('min-height'));
     expect(resets.map((rule) => rule.selectors.join(', '))).toEqual([]);
   });

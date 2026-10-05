@@ -125,6 +125,23 @@ describe('a visual beside the primary', () => {
       .toEqual(['table', 'image']);
   });
 
+  it('an ambient chart beside a chart primary shares the chart row', () => {
+    const page = render([show('loss', 'chart', 'primary'), show('context', 'chart', 'ambient')]);
+    expect(page.querySelectorAll('.training-charts [data-testid="chart"]')).toHaveLength(2);
+    expect(page.querySelector('.composed-aux')).toBeNull();
+  });
+
+  it('a chart primary keeps its progress under the charts until a visual stands beside it', () => {
+    const alone = render([show('loss', 'chart', 'primary'), show('deploy', 'progress')]);
+    expect(alone.querySelectorAll('.training-progress [data-testid="progress"]')).toHaveLength(1);
+    act(() => runActions([show('matrix', 'table')]));
+    // Then it joins the table in the aux row, so the charts keep their share.
+    expect(alone.querySelector('.training-progress')).toBeNull();
+    expect([...alone.querySelectorAll('.composed-aux [data-testid]')].map((node) => node.getAttribute('data-testid')))
+      .toEqual(['table', 'progress']);
+    expect(alone.querySelectorAll('[data-testid="progress"]')).toHaveLength(1);
+  });
+
   // Every primary against every visual beside it: each visual on stage is
   // drawn exactly once, whatever the scene.
   for (const primary of primaries) {

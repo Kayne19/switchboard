@@ -279,9 +279,16 @@ interface SceneContent {
 
 function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneContent | null {
   const charts = objectsOfType<ChartData>(state, 'chart');
-  const [progress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
+  const [firstProgress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
   const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
   if (!primary) return null;
+  // Every chart is drawn here, the primary's neighbours beside it; any other
+  // visual goes in the aux row under them. With visuals there, the progress
+  // that sits under the charts joins them in the row, as progress does in
+  // the composed workspace, so the charts keep the main slot's share of a
+  // short stage instead of giving it to the bar and its steps.
+  const besideCharts = besideVisuals(buildCompositionModel(state)).filter((object) => object.type !== 'chart');
+  const progress = besideCharts.length > 0 ? undefined : firstProgress;
   // The notes lie over the panel of the chart they annotate rather than in a
   // band that shrinks it; the layer keeps them clear of one another, of the
   // points they name, and of the traces wherever the panel has the room.
@@ -299,9 +306,7 @@ function trainingContent({ state, onFocus, onOpenHistory }: SceneProps): SceneCo
     // The notes sit on the charts here, so the rail carries none.
     note: null,
     progressList: railProgress,
-    // Every chart is drawn here, the primary's neighbours beside it; any
-    // other visual goes in the aux row under them.
-    aux: besideVisuals(buildCompositionModel(state)).filter((object) => object.type !== 'chart'),
+    aux: firstProgress && !progress ? [...besideCharts, firstProgress] : besideCharts,
     main: (
       <motion.div className="content-main training-main" layout>
         <div className={`training-charts${charts.length > 1 ? ' training-charts--compare' : ''}`}>

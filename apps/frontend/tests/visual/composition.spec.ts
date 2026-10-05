@@ -60,8 +60,16 @@ async function auxGeometry(page: Page) {
   });
 }
 
-for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-  test(`no visual in a crowded aux row collapses; the row scrolls instead / ${viewport.width}`, async ({ page }) => {
+// Wide, portrait, and a landscape phone: the shortest stage, where a crowded
+// row has the least room.
+const viewports = [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 844, height: 390 }];
+// The least a visual's cell may get: the floor's clamp minimum on a short
+// stage, its share of the stage height on a taller one.
+const floorFor = (viewport: { height: number }) => (viewport.height < 500 ? 100 : 120);
+
+for (const viewport of viewports) {
+  const size = `${viewport.width}x${viewport.height}`;
+  test(`no visual in a crowded aux row collapses; the row scrolls instead / ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await show(page, crowded);
     const geometry = await auxGeometry(page);
@@ -70,7 +78,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       'composed-aux-object--image', 'composed-aux-object--progress',
     ]);
     for (const cell of geometry.cells) {
-      expect(cell.cell.height, cell.kind).toBeGreaterThanOrEqual(cell.visual ? 120 : 40);
+      expect(cell.cell.height, cell.kind).toBeGreaterThanOrEqual(cell.visual ? floorFor(viewport) : 40);
     }
     // The row stays inside the main column (its bleed aside) and scrolls
     // whatever it cannot show.
@@ -78,7 +86,39 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     if (viewport.width < viewport.height) expect(geometry.row.scrollHeight).toBeGreaterThan(geometry.row.clientHeight);
   });
 
-  test(`an image in a crowded aux row is contained, not cropped / ${viewport.width}`, async ({ page }) => {
+  test(`under a visual primary a crowded aux row keeps to its share and scrolls / ${size}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await show(page, [
+      { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'a', label: 'CALLER' }, { id: 'b', label: 'PBX' }], edges: [{ from: 'a', to: 'b' }] } },
+      ...crowded.filter((action) => action.type !== 'metric' && action.type !== 'progress'),
+    ]);
+    const geometry = await auxGeometry(page);
+    expect(geometry.cells).toHaveLength(4);
+    for (const cell of geometry.cells) expect(cell.cell.height, cell.kind).toBeGreaterThanOrEqual(floorFor(viewport));
+    // Two fifths of the column at most; the rest is the diagram's.
+    expect(geometry.row.bottom - geometry.row.top).toBeLessThanOrEqual(geometry.main!.height * 0.4 + 13);
+    expect(geometry.row.scrollHeight).toBeGreaterThan(geometry.row.clientHeight);
+  });
+
+  test(`a chart primary keeps its share when a progress and a table stand beside it / ${size}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await show(page, [
+      { op: 'show', id: 'loss', type: 'chart', role: 'primary', data: { title: 'LOSS', series: [{ name: 'TRAIN', values: [0.3, 0.25, 0.2, 0.18] }] } },
+      crowded.find((action) => action.id === 'deploy'),
+      { op: 'show', id: 'matrix', type: 'table', data: table },
+    ]);
+    const heights = await page.evaluate(() => {
+      const height = (selector: string) => document.querySelector(selector)?.getBoundingClientRect().height ?? 0;
+      return { charts: height('.training-charts'), aux: height('.composed-aux'), underCharts: height('.training-progress') };
+    });
+    // The progress joins the table in the aux row rather than taking the
+    // charts' height from under them.
+    expect(heights.underCharts).toBe(0);
+    expect(await page.locator('.composed-aux [data-testid="progress"]').count()).toBe(1);
+    expect(heights.charts).toBeGreaterThan(heights.aux);
+  });
+
+  test(`an image in a crowded aux row is contained, not cropped / ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     // The mix that cropped the picture to its top band at 390x844.
     await show(page, crowded.filter((action) => ['latency', 'figure', 'trend', 'deploy'].includes(action.id)));
@@ -92,7 +132,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     expect(image.caption!.bottom).toBeLessThanOrEqual(image.cell.bottom);
   });
 
-  test(`a visual primary keeps the larger share over a table and an image beside it / ${viewport.width}`, async ({ page }) => {
+  test(`a visual primary keeps the larger share over a table and an image beside it / ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto('/?scene=composed&chrome=0');
     await expect(page.locator('[data-scene="architecture"] .composed-aux [data-testid="table"]')).toBeVisible();
@@ -102,6 +142,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       return { main: height('.content-grid > .content-main'), diagram: height('.diagram-object'), aux: height('.composed-aux') };
     });
     expect(shares.diagram).toBeGreaterThan(shares.aux);
+    expect(shares.aux).toBeLessThanOrEqual(shares.main * 0.4 + 13);
   });
 }
 
