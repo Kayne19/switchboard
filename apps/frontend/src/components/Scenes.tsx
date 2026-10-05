@@ -1073,7 +1073,7 @@ export function SceneShell(props: SceneProps) {
 
   return (
     <motion.section
-      className={`scene scene--${layout}${content ? ` scene--${kind}` : ''}`}
+      className={`scene scene--${layout}${content ? ` scene--${kind}` : ''}${staged ? ' scene--staged' : ''}`}
       data-scene={content ? kind : layout}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}

@@ -93,6 +93,10 @@ export interface WeatherLayout {
   outlook: boolean;
   /** The condition and the high and low beside the temperature, not under it: a slot too short for both. */
   inline: boolean;
+  /** The alert stands on its line above the figure. A slot too short for that line and the item a note names gives the line to the item: the head carries the alert's tag, and focus shows it whole. */
+  alertLine: boolean;
+  /** Beside an outlook, the figure's width (outlookFigure), CSS pixels, the days taking the room it leaves; 0 where no outlook stands. */
+  figure: number;
 }
 
 /** Below either, the box is a small slot. */
@@ -110,7 +114,7 @@ export const OUTLOOK_HEIGHT = 96;
 /** The room an alert's line takes above the figure, and a spot line (the
  * hour a note names, `Spot`) under it, with their gaps. */
 export const ALERT_LINE = 30;
-export const SPOT_LINE = 30;
+export const SPOT_LINE = 32;
 /** A short slot lower than this (an alert's line more where there is one)
  * sets the condition beside the temperature: stacked under it, the figure
  * would run past the slot's foot. */
@@ -118,6 +122,17 @@ export const STACKED_HERO_HEIGHT = 72;
 /** A small slot shorter than this has no room for the hourly strip under
  * the conditions (the strip's rows need 120px); it shows the days. */
 export const COMPACT_STRIP_HEIGHT = 260;
+/** The head and the figure set on one line under it (`inline`): the least
+ * a short slot holds of the conditions. */
+export const INLINE_HERO_HEIGHT = 52;
+/** The least a figure beside an outlook is drawn at: a compact figure's
+ * least. A slot whose columns would leave the figure smaller holds no
+ * outlook. */
+export const OUTLOOK_TEMP_LEAST = 26;
+/** The hourly strip's height down the box (`tall`), and its least where it
+ * grows into the box's room (no days under it). The stylesheet takes it
+ * from the field's style. */
+export const STRIP_LEAST = 172;
 
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
@@ -125,21 +140,42 @@ export function weatherLayout(
   width: number,
   height: number,
   // `ahead`: the days an outlook would show (outlookOffer), where they are
-  // not all of `daily`; `markedDay`/`markedHour`: a note names one.
-  has: { hourly: boolean; daily: boolean; ahead?: boolean; markedHour?: boolean; markedDay?: boolean; alert?: boolean },
+  // not all of `daily`; `markedDay`/`markedHour`: a note names one; `temp`:
+  // the figure's temperature as written (formatTemp), and `condition` the
+  // width its condition line is drawn at (CSS pixels, read from the page:
+  // its face follows the stage), for the room a figure leaves an outlook.
+  has: { hourly: boolean; daily: boolean; ahead?: boolean; markedHour?: boolean; markedDay?: boolean; alert?: boolean; temp?: string; condition?: number },
 ): WeatherLayout {
-  const none = { outlook: false, inline: false };
+  const alertLine = has.alert === true;
+  const none = { outlook: false, inline: false, alertLine, figure: 0 };
   if (width < COMPACT_WIDTH || height < COMPACT_HEIGHT) {
     const temp = Math.round(clamp(Math.min(width * 0.13, height * 0.22), 26, 48));
     // Before the box is measured (0) it is drawn whole, as it is in a test.
     if (height > 0 && height < COMPACT_LIST_HEIGHT) {
+      // Beside an outlook the figure is fitted to the slot less one column,
+      // and the days take the room it leaves: none where the figure, as
+      // wide as its temperature row or its condition line, leaves no
+      // column, or would be drawn smaller than a compact figure's least.
+      const tempText = has.temp ?? '';
+      const fitted = heroTempFit(width - OUTLOOK_SPACE - OUTLOOK_COLUMN, tempText, temp);
+      const figure = outlookFigure(fitted, tempText, has.condition ?? 0);
+      const beside = (has.ahead ?? has.daily) === true && fitted >= OUTLOOK_TEMP_LEAST && width - OUTLOOK_SPACE - figure >= OUTLOOK_COLUMN;
       // What stands above and under the figure: an alert's line, and the
       // spot line of an hour a note names (no list here draws it), or of a
       // day where the outlook does not stand.
-      const above = has.alert ? ALERT_LINE : 0;
-      const outlook = (has.ahead ?? has.daily) && height >= OUTLOOK_HEIGHT + above + (has.markedHour ? SPOT_LINE : 0);
-      const spot = has.markedHour === true || (has.markedDay === true && !outlook);
-      return { arrangement: 'compact', temp, hourly: false, daily: false, outlook, inline: height < STACKED_HERO_HEIGHT + above + (spot ? SPOT_LINE : 0) };
+      const plan = (alert: boolean): WeatherLayout => {
+        const above = alert ? ALERT_LINE : 0;
+        const outlook = beside && height >= OUTLOOK_HEIGHT + above + (has.markedHour ? SPOT_LINE : 0);
+        const spot = has.markedHour === true || (has.markedDay === true && !outlook);
+        const inline = height < STACKED_HERO_HEIGHT + above + (spot ? SPOT_LINE : 0);
+        return { arrangement: 'compact', temp: outlook ? fitted : temp, hourly: false, daily: false, outlook, inline, alertLine: alert, figure: outlook ? figure : 0 };
+      };
+      // A slot too short for the head, the alert's line, the figure on one
+      // line and the line of the item a note names gives the alert's line
+      // to the item: the card on screen names the item, so the item is
+      // what stays.
+      const spotted = has.markedHour === true || has.markedDay === true;
+      return plan(alertLine && !(spotted && height < INLINE_HERO_HEIGHT + ALERT_LINE + SPOT_LINE));
     }
     const hourly = has.hourly && (!has.daily || has.markedHour === true) && (height === 0 || height >= COMPACT_STRIP_HEIGHT);
     if (!hourly && !has.daily) return { arrangement: 'compact', temp, hourly: false, daily: false, ...none };
@@ -211,6 +247,28 @@ export function outlookDays<T extends { date: string }>(days: T[], count: number
  */
 export function heroEms(tempText: string): number {
   return 1.1 + 0.24 + tempText.length * 0.6 + 0.55;
+}
+
+/** The glyph's width beside a compact figure in ems of its temperature
+ * (heroEms' first term, as its gap is its second), and the gap a compact
+ * figure draws after it, CSS pixels. */
+const GLYPH_EMS = 1.1;
+const HERO_GAP_EMS = 0.24;
+export const COMPACT_FIGURE_GAP = 10;
+/** The gap between the condition and the high and low on the condition
+ * line under the temperature. The stylesheet takes it from the forecast's
+ * style. */
+export const CONDITION_GAP = 16;
+
+/**
+ * A compact figure's width at temperature `temp`: its glyph and its
+ * temperature row (heroEms), or its glyph and the condition line under the
+ * temperature (`condition`, as drawn), whichever is wider. Beside an
+ * outlook the figure stands this wide, and the days take the rest.
+ */
+export function outlookFigure(temp: number, tempText: string, condition: number): number {
+  // The row's gap after the glyph is the compact figure's, not heroEms' 0.24em.
+  return Math.ceil(Math.max(temp * (heroEms(tempText) - HERO_GAP_EMS) + COMPACT_FIGURE_GAP, temp * GLYPH_EMS + COMPACT_FIGURE_GAP + condition));
 }
 
 /** The hero temperature for a column `width` wide: the layout's size, or less so the row fits. */

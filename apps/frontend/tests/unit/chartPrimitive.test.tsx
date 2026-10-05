@@ -19,6 +19,7 @@ import {
   chartPad,
   chartPointCallouts,
   chartScales,
+  chartScrollHeight,
   chartSeriesPoint,
 } from '../../src/primitives/chartGeometry';
 
@@ -625,7 +626,7 @@ describe('chart frame', () => {
       width.mockRestore();
       height.mockRestore();
     }
-    return host.querySelector('.chart-primitive svg')!;
+    return host.querySelector('.chart-primitive > svg, .chart-primitive__canvas > svg')!;
   }
   const suite: ChartData = {
     kind: 'bar',
@@ -655,6 +656,33 @@ describe('chart frame', () => {
     const bar = host.querySelector<SVGRectElement>('.chart-bar')!;
     expect(Number(bar.getAttribute('x'))).toBeCloseTo(scales.plot.left, 1);
     expect(scales.plot.right).toBe(width - 28);
+  });
+
+  it('draws a bar chart too long for its slot on its side at its least height, to scroll in the slot, its value axis over the rows', () => {
+    // Sixty services on a phone's stage: too many for a row each in 560px.
+    const sixty: ChartData = {
+      kind: 'bar',
+      labels: Array.from({ length: 60 }, (_, index) => `service-${String(index).padStart(2, '0')}`),
+      series: [{ name: 'THIS WEEK', values: Array.from({ length: 60 }, (_, index) => 10 + ((index * 37) % 80)) }],
+    };
+    const slot = { width: 358, height: 560 };
+    renderInSlot(sixty, slot);
+    const chart = host.querySelector('.chart-primitive')!;
+    expect(chart.className).toContain('chart-primitive--scrolls');
+    expect(chart.getAttribute('data-orientation')).toBe('horizontal');
+    const canvas = host.querySelector<HTMLElement>('.chart-primitive__canvas')!;
+    expect(canvas.style.height).toBe(`${chartScrollHeight(sixty, slot)}px`);
+    expect(host.querySelectorAll('.chart-primitive__canvas > svg .chart-grid__category')).toHaveLength(60);
+    // The value axis's labels, pinned over the rows, are its own.
+    const axis = [...host.querySelectorAll('.list-viewport__head .chart-primitive__axis text')].map((text) => text.textContent);
+    const ticks = [...host.querySelectorAll('.chart-primitive__canvas > svg .chart-grid > g > text')].map((text) => text.textContent);
+    expect(axis.length).toBeGreaterThan(1);
+    expect(ticks.slice(0, axis.length)).toEqual(axis);
+    // A chart whose rows fit its slot draws in it, as before.
+    act(() => root.unmount());
+    host.remove();
+    renderInSlot(sixty, { width: 358, height: 1200 });
+    expect(host.querySelector('.chart-primitive')!.className).not.toContain('chart-primitive--scrolls');
   });
 });
 

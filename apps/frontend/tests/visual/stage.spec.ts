@@ -158,6 +158,62 @@ for (const { name, scene, actions, sizes } of outgrowing) {
   }
 }
 
+// Folded, a diagram's frame gave some 150px of the phone to what earns
+// nothing while the primary has the stage: the subtitle's own line over
+// the frame, and rail bands of a tenth of the slot each, above and below
+// the drawing.
+const box = async (page: Page, selector: string) => (await page.locator(selector).first().boundingBox())!;
+
+test('folded, the frame\'s subtitle runs after its title and the primary starts a line higher', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'topology');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  const title = await box(page, '.scene-heading__title');
+  const sub = await box(page, '.scene-heading__sub');
+  // One line: the subtitle after the title, both inside the stage.
+  expect(Math.abs(sub.y + sub.height - (title.y + title.height))).toBeLessThan(2);
+  expect(sub.x).toBeGreaterThan(title.x + title.width);
+  expect(sub.x + sub.width).toBeLessThanOrEqual(390);
+  expect((await box(page, '.content-grid > .content-main')).y).toBeLessThan(title.y + title.height + 16);
+  // Opened, the frame's words are as they were: the subtitle on its own line.
+  await page.locator('button.rail-handle').click();
+  await expect(page.locator('.content-rail--open')).toBeVisible();
+  await page.waitForTimeout(500);
+  const openTitle = await box(page, '.scene-heading__title');
+  expect((await box(page, '.scene-heading__sub')).y).toBeGreaterThanOrEqual(openTitle.y + openTitle.height - 1);
+});
+
+test('folded, a diagram\'s rails keep the depth they have in a slot of some 400px, the drawing taking the rest', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'topology');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  const object = await box(page, '.content-grid > .content-main .diagram-object');
+  const view = await box(page, '.content-grid > .content-main .drawing-viewport');
+  expect(view.y - object.y).toBeLessThanOrEqual(51);
+  expect(object.y + object.height - (view.y + view.height)).toBeLessThanOrEqual(51);
+  // 458px of the 844 before; some 518 now.
+  expect(view.height).toBeGreaterThan(844 * 0.6);
+  // Opened, the bands are a tenth of the slot, as they were.
+  await page.locator('button.rail-handle').click();
+  await expect(page.locator('.content-rail--open')).toBeVisible();
+  await page.waitForTimeout(500);
+  const shared = await box(page, '.content-grid > .content-main .diagram-object');
+  const sharedView = await box(page, '.content-grid > .content-main .drawing-viewport');
+  expect(Math.abs(sharedView.y - shared.y - (shared.height * 0.1 + 10))).toBeLessThan(1.5);
+});
+
+test('folded on a tall stage, a diagram\'s rails stay wholly inside its slot', async ({ page }) => {
+  // On a portrait tablet's stage (891px) the rails' outer line, at 42 of
+  // the frame's 700 units, sat a pixel above the slot, over the grid's gap.
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await open(page, 'trace');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  const object = await box(page, '.content-grid > .content-main .diagram-object');
+  const frame = await box(page, '.content-grid > .content-main .diagram-object > .tech-frame');
+  expect(frame.y + (frame.height * 42) / 700).toBeGreaterThanOrEqual(object.y + 8);
+  expect(frame.y + (frame.height * 652) / 700).toBeLessThanOrEqual(object.y + object.height - 8);
+});
+
 test('a note on a folded rail stays matched to the node it names', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, 'pipeline');
@@ -241,6 +297,74 @@ test('a bar chart of forty-five categories takes the stage and gives each a labe
   for (const index of [0, 22, 44]) expect(labels).toContain(`service-${String(index).padStart(2, '0')}`);
 });
 
+// Past what even the stage holds a row each for, the bars stood upright
+// again on a phone, a few of sixty names under bars a few pixels wide.
+const sixtyBars = [
+  { op: 'clear' },
+  {
+    op: 'show', id: 'minutes', type: 'chart', role: 'primary',
+    data: { kind: 'bar', title: 'CI / 60 SERVICES', labels: Array.from({ length: 60 }, (_, index) => `service-${String(index).padStart(2, '0')}`), series: [{ name: 'THIS WEEK', values: Array.from({ length: 60 }, (_, index) => 10 + ((index * 37) % 80)) }] },
+  },
+];
+
+test('a bar chart of sixty categories on a phone lies on its side and scrolls in its frame, every row named', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'idle', sixtyBars);
+  const chart = page.locator('.chart-primitive');
+  await expect(chart).toHaveAttribute('data-orientation', 'horizontal');
+  await expect(chart).toHaveClass(/chart-primitive--scrolls/);
+  // Every category has its row, its name at a readable size.
+  const labels = chart.locator('.chart-grid__category');
+  await expect(labels).toHaveCount(60);
+  const sizes = await labels.evaluateAll((texts) => texts.map((text) => text.getBoundingClientRect().height));
+  expect(Math.min(...sizes)).toBeGreaterThanOrEqual(8);
+  // The rows past the foot are counted there, and a tap turns a page.
+  const rim = chart.locator('.drawing-viewport__rim--bottom');
+  await expect(rim).toHaveText(/\d+ BARS/);
+  // The last row is reached inside the frame, the value axis still over it.
+  await chart.locator('.list-viewport__scroll').evaluate((scroll) => scroll.scrollTo({ top: scroll.scrollHeight }));
+  await page.waitForTimeout(300);
+  const view = (await chart.locator('.list-viewport__port').boundingBox())!;
+  const last = (await labels.last().boundingBox())!;
+  expect(last.y).toBeGreaterThanOrEqual(view.y - 1);
+  expect(last.y + last.height).toBeLessThanOrEqual(view.y + view.height + 1);
+  await expect(chart.locator('.chart-primitive__axis text').first()).toBeVisible();
+  await expect(chart.locator('.drawing-viewport__rim--top')).toHaveText(/\d+ BARS/);
+});
+
+// A note on a scrolled chart is laid over its whole canvas, so its card
+// and leader keep to the bar they name as the rows scroll; the card stays
+// a control of its own, beside the chart's expand control, not in it.
+const hundredShortBars = [
+  { op: 'clear' },
+  {
+    op: 'show', id: 'minutes', type: 'chart', role: 'primary',
+    data: { kind: 'bar', title: 'CI / 100 SERVICES', labels: Array.from({ length: 100 }, (_, index) => `service-${String(index).padStart(2, '0')}`), series: [{ name: 'THIS WEEK', values: Array.from({ length: 100 }, (_, index) => (index === 3 ? 100 : 5 + ((index * 7) % 20))) }] },
+  },
+  { op: 'show', id: 'slow-note', type: 'note', data: { tag: 'SLOWEST', segments: [{ text: 'service-71 doubled since last week.' }], anchor: { target: 'minutes', x: 71 } } },
+];
+
+test('a note on a scrolled bar chart opens on its bar and keeps to it as the rows scroll', async ({ page }) => {
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await open(page, 'idle', hundredShortBars);
+  const chart = page.locator('.chart-primitive');
+  await expect(chart).toHaveClass(/chart-primitive--scrolls/);
+  const card = page.locator('.chart-object > .chart-notes .chart-note[data-note="slow-note"]');
+  await expect(card).toBeVisible();
+  expect(await card.evaluate((element) => element.closest('.chart-object > .focusable-content') === null)).toBe(true);
+  const row = chart.locator('.chart-grid__category[data-item="71"]');
+  const offset = async () => (await card.boundingBox())!.y - (await row.boundingBox())!.y;
+  // It opened on the named bar, in view.
+  const view = (await chart.locator('.list-viewport__port').boundingBox())!;
+  const named = (await row.boundingBox())!;
+  expect(named.y).toBeGreaterThanOrEqual(view.y);
+  expect(named.y + named.height).toBeLessThanOrEqual(view.y + view.height);
+  const before = await offset();
+  await chart.locator('.list-viewport__scroll').evaluate((scroll) => scroll.scrollBy({ top: -240 }));
+  await page.waitForTimeout(300);
+  expect(Math.abs((await offset()) - before)).toBeLessThan(1);
+});
+
 for (const { name, scene, actions } of [
   { name: 'a stepped plan under a chart', scene: 'training', actions: chartOverPlan },
   { name: 'a long table beside a diagram that fits', scene: 'idle', actions: tableBeside },
@@ -322,6 +446,98 @@ test('a long calendar day takes the stage at 390x844, and gives it back once the
   await expect(page.locator('.content-rail--folded')).toBeVisible();
   await expect(page.locator('[data-testid="calendar"]')).toHaveAttribute('data-layout', 'grid');
   await page.evaluate((list) => window.SwitchboardController!.run(list), quietDay);
+  await expect(page.locator('.content-rail--folded')).toHaveCount(0);
+  await page.waitForTimeout(700);
+  const shared = await boxes(page);
+  expect(shared.foldable).toBe(false);
+  expect(Math.abs(shared.main.height - shared.stage.height * 0.59)).toBeLessThan(1.5);
+});
+
+// The same week sent again with one appointment in it is the same object:
+// it gives the stage back once it reads whole in its share. Before, the
+// week's first measure turned its grid to pages, and the hours viewport was
+// mounted afresh on the stage, with no measure from the shared layout to be
+// weighed against, so the week kept the stage until another primary came.
+const quietWeek = [
+  {
+    op: 'show', id: 'week', type: 'calendar', role: 'primary', data: {
+      view: 'week', start: '2026-10-05', today: '2026-10-07', now: '2026-10-07T09:40',
+      events: [{ id: 'dentist', title: 'Dentist', start: '2026-10-07T10:30', end: '2026-10-07T11:30' }],
+    },
+  },
+];
+
+test('a calendar week that takes the stage at 390x844 gives it back once it quiets', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'calendar');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  await expect(page.locator('[data-testid="calendar"]')).toHaveAttribute('data-layout', 'grid');
+  await page.evaluate((list) => window.SwitchboardController!.run(list), quietWeek);
+  await expect(page.locator('.content-rail--folded')).toHaveCount(0);
+  await page.waitForTimeout(700);
+  const shared = await boxes(page);
+  expect(shared.foldable).toBe(false);
+  expect(Math.abs(shared.main.height - shared.stage.height * 0.59)).toBeLessThan(1.5);
+});
+
+// A week whose busy Monday lies before the days a phone shows (it opens on
+// today, Wednesday, three days a page). Before its body is measured the
+// calendar draws all seven days as a stand-in, and the stand-in's hours,
+// Monday's among them, would not fit its share; the three days drawn do.
+const busyMonday = [
+  { op: 'clear' },
+  {
+    op: 'show', id: 'week', type: 'calendar', role: 'primary', data: {
+      view: 'week', start: '2026-10-05', today: '2026-10-07', now: '2026-10-07T09:40',
+      events: [
+        ...Array.from({ length: 19 }, (_, index) => ({ id: `mon-${index}`, title: `Call ${index}`, start: `2026-10-05T${String(4 + index).padStart(2, '0')}:00`, end: `2026-10-05T${String(4 + index).padStart(2, '0')}:50` })),
+        { id: 'dentist', title: 'Dentist', start: '2026-10-07T10:30', end: '2026-10-07T11:30' },
+        { id: 'review', title: 'Review', start: '2026-10-08T10:00', end: '2026-10-08T11:00' },
+      ],
+    },
+  },
+];
+
+test('a week whose drawn days fit its share at 390x844 never takes the stage, not even for a frame', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    const seen: string[] = [];
+    (window as unknown as { stageSeen: string[] }).stageSeen = seen;
+    // Each change's value before it: a stage taken and given back within
+    // one task is gone from the page by the time the records are read.
+    new MutationObserver((records) => {
+      for (const record of records) seen.push(String(record.oldValue), String((record.target as Element).getAttribute('data-stage')));
+    }).observe(document, { subtree: true, attributes: true, attributeOldValue: true, attributeFilter: ['data-stage'] });
+  });
+  await open(page, 'idle', busyMonday);
+  await expect(page.locator('[data-testid="calendar"]')).toHaveAttribute('data-columns', '3');
+  const laid = await boxes(page);
+  expect(laid.foldable).toBe(false);
+  expect(await page.evaluate(() => (window as unknown as { stageSeen: string[] }).stageSeen)).not.toContain('primary');
+});
+
+// A forecast laid down the box fills its view, so its scroll content
+// always measured the view: on the stage it read as needing all of it, and
+// a forecast sent again with only the next three days kept the stage. It
+// asks by the height its parts read whole in.
+const quietForecast = [
+  {
+    op: 'show', id: 'weather', type: 'weather', role: 'primary', data: {
+      location: 'San Francisco, CA', units: 'F', current: { temp: 61, condition: 'fog', high: 68, low: 54 },
+      daily: [
+        { date: '2026-10-07', high: 68, low: 54, condition: 'partly-cloudy', precip: 20 },
+        { date: '2026-10-08', high: 61, low: 55, condition: 'rain', precip: 80 },
+        { date: '2026-10-09', high: 63, low: 53, condition: 'cloudy', precip: 30 },
+      ],
+    },
+  },
+];
+
+test('a forecast that takes the stage at 390x844 gives it back once it is short', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'weather');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  await page.evaluate((list) => window.SwitchboardController!.run(list), quietForecast);
   await expect(page.locator('.content-rail--folded')).toHaveCount(0);
   await page.waitForTimeout(700);
   const shared = await boxes(page);

@@ -6,7 +6,7 @@
 // stage takes the stage's height for it (stageFold.ts).
 import { describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
-import { CHART_PAD, CHART_READABLE_SCALE, CHART_TICK_ROW_HEIGHT, chartCategoryLayout, chartFrame, chartLeastHeight } from '../../src/primitives/chartGeometry';
+import { CHART_PAD, CHART_READABLE_SCALE, CHART_TICK_ROW_HEIGHT, chartCategoryLayout, chartFrame, chartLeastHeight, chartScrollHeight } from '../../src/primitives/chartGeometry';
 
 const services = (count: number): ChartData => ({
   kind: 'bar',
@@ -42,5 +42,35 @@ describe('the height a bar chart asks for a row per category', () => {
     // The diagram slot on a 390x844 phone is about 470 px tall inside its frame.
     expect(chartLeastHeight(services(30), 358)!).toBeLessThan(470);
     expect(chartLeastHeight(services(45), 358)!).toBeGreaterThan(470);
+  });
+});
+
+// Past the stage, the rows did not fit even the stage's height, and on a
+// phone the bars stood upright again, a few of sixty names under bars a few
+// pixels wide. In a slot taller than it is wide such a chart is drawn on
+// its side at its least height, and scrolls in the slot.
+describe('a bar chart too long for its slot', () => {
+  it('is drawn at its least height, to scroll, in a slot taller than it is wide', () => {
+    // A phone's stage: 358 px across, some 560 tall.
+    const data = services(60);
+    expect(chartScrollHeight(data, { width: 358, height: 560 })).toBe(Math.ceil(chartLeastHeight(data, 358)!));
+    // On its canvas the chart lies on its side, every category a row.
+    const canvas = chartFrame({ width: 358, height: chartScrollHeight(data, { width: 358, height: 560 })! });
+    const layout = chartCategoryLayout(data, canvas);
+    expect(layout.horizontal).toBe(true);
+    expect(layout.ticks).toHaveLength(60);
+  });
+
+  it('is drawn in its slot where its rows fit, where the slot is wide, or where every label shows upright', () => {
+    // The rows fit: on its side in the slot, no scroll.
+    expect(chartScrollHeight(services(45), { width: 358, height: 600 })).toBeNull();
+    // A wide slot stands the bars upright, thinned, the whole chart in view.
+    expect(chartScrollHeight(services(60), { width: 1300, height: 560 })).toBeNull();
+    // Labels short enough to stand under their bars.
+    const short: ChartData = { kind: 'bar', labels: Array.from({ length: 60 }, (_, index) => String(index)), series: [{ name: 'S', values: Array.from({ length: 60 }, () => 1) }] };
+    expect(chartScrollHeight(short, { width: 1300, height: 560 })).toBeNull();
+    // Not bars, or not measured.
+    expect(chartScrollHeight({ ...services(60), kind: 'line' }, { width: 358, height: 560 })).toBeNull();
+    expect(chartScrollHeight(services(60), { width: 0, height: 0 })).toBeNull();
   });
 });

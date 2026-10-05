@@ -1,11 +1,14 @@
-import { useRef, type CSSProperties } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { WeatherData, WeatherDay, WeatherHour } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
+import { MeasuredStageDemand, watchElement } from '../hooks/useStageDemand';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
 import { conditionText, WeatherGlyph } from './WeatherGlyph';
 import {
+  COMPACT_FIGURE_GAP,
+  CONDITION_GAP,
   dayLabel,
   dayLong,
   dayRange,
@@ -25,6 +28,7 @@ import {
   outlookOffer,
   placeBesideTitle,
   rangeOnScale,
+  STRIP_LEAST,
   STRIP_PAD,
   tempScale,
   weatherLayout,
@@ -68,22 +72,47 @@ function AlertLine({ text }: { text: string }) {
   );
 }
 
-function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: WeatherData; compact: boolean; temp: number; framed: boolean; spot?: string; outlook: WeatherDay[] | null; inline: boolean }) {
+// The alert, where its line has given way to the item a note names (a slot
+// too short for both): its tag in the head, its words for a screen reader;
+// focus shows it whole.
+function AlertTag({ text }: { text: string }) {
+  return (
+    <span className="weather-now__alert-tag">
+      <svg className="weather-alert__glyph" viewBox="0 0 12 12" aria-hidden="true">
+        <path d="M6 0.8 L11.4 11 H0.6 Z M6 4.2 V7.6 M6 8.8 V10" />
+      </svg>
+      ALERT
+      <span className="weather-now__alert-words">: {text}</span>
+    </span>
+  );
+}
+
+function Now({ data, compact, temp, framed, spot, outlook, figure, inline, alertLine }: {
+  data: WeatherData;
+  compact: boolean;
+  temp: number;
+  framed: boolean;
+  spot?: string;
+  outlook: WeatherDay[] | null;
+  /** Beside an outlook, the figure's width (weatherLayout). */
+  figure: number;
+  inline: boolean;
+  alertLine: boolean;
+}) {
   const { current, units } = data;
   // The temperature is as large as the layout gives it, and no larger than
   // its row (glyph, digits, unit) fits the column the figure stands in:
   // `-12.5°C` needs more room than `61°F`.
   const mainRef = useRef<HTMLDivElement>(null);
   const { width } = useElementSize(mainRef);
-  // Beside the outlook the figure's column is as wide as the figure, so it
-  // is fitted to the body less the room of one day's column, never to its
-  // own width; the days then take the room the figure leaves, as many as
-  // whole columns fit there.
+  // Beside the outlook the figure stands as wide as the layout counted it
+  // (fitted to the body less one day's column), and the days take the room
+  // it leaves, as many as whole columns fit there.
   const bodyRef = useRef<HTMLDivElement>(null);
   const body = useElementSize(bodyRef).width;
   const tempText = formatTemp(current.temp);
-  const fitted = heroTempFit(outlook ? body - OUTLOOK_SPACE - OUTLOOK_COLUMN : width, tempText, temp);
-  const shown = outlook ? outlookDays(outlook, outlookCount(body - width - OUTLOOK_SPACE, outlook.length), spot) : [];
+  const fitted = outlook ? temp : heroTempFit(width, tempText, temp);
+  const shown = outlook ? outlookDays(outlook, outlookCount(body - figure - OUTLOOK_SPACE, outlook.length), spot) : [];
   const degree = (value: number) => `${formatTemp(value)}°`;
   const highLow = current.high !== undefined || current.low !== undefined
     ? [current.high !== undefined ? `H ${degree(current.high)}` : null, current.low !== undefined ? `L ${degree(current.low)}` : null].filter(Boolean).join(' ')
@@ -101,17 +130,18 @@ function Now({ data, compact, temp, framed, spot, outlook, inline }: { data: Wea
           place of NOW: what of the place the title does not name already. */}
       <div className="weather-now__head tech micro">
         <MetaTitle title={data.title ?? 'WEATHER'} framed={framed} className="weather-now__title" />
+        {data.alert && !alertLine ? <AlertTag text={data.alert} /> : null}
         {place ? <span className="weather-now__location">{place}</span> : null}
         {framed ? <span>NOW</span> : null}
       </div>
-      {data.alert ? <AlertLine text={data.alert} /> : null}
+      {data.alert && alertLine ? <AlertLine text={data.alert} /> : null}
       {/* The figure and the words beside it where the box is wide enough
           for both, under it where it is not (an intrinsic wrap, no
           breakpoint). */}
       <div
         ref={bodyRef}
         className={`weather-now__body${outlook ? ' weather-now__body--outlook' : ''}`}
-        style={outlook ? ({ '--outlook-column': `${OUTLOOK_COLUMN}px`, '--outlook-gap': `${OUTLOOK_GAP}px`, '--outlook-space': `${OUTLOOK_SPACE}px` } as CSSProperties) : undefined}
+        style={outlook ? ({ '--outlook-figure': `${figure}px`, '--outlook-column': `${OUTLOOK_COLUMN}px`, '--outlook-gap': `${OUTLOOK_GAP}px`, '--outlook-space': `${OUTLOOK_SPACE}px` } as CSSProperties) : undefined}
       >
         <div ref={mainRef} className="weather-now__main" style={{ '--weather-temp': `${fitted}px` } as CSSProperties}>
           <WeatherGlyph condition={current.condition} className="weather-now__glyph" />
@@ -160,23 +190,48 @@ function OutlookDay({ day, marked }: { day: WeatherDay; marked: boolean }) {
   );
 }
 
+/**
+ * Whether a spot line's parts, at their own widths, need more room across
+ * than the line has: its children's widths (a text's whole width, even
+ * where it ends in an ellipsis now or is set aside), the gaps between them
+ * and the line's padding.
+ */
+function lineOverflows(line: HTMLElement): boolean {
+  const style = getComputedStyle(line);
+  const parts = Array.from(line.children) as HTMLElement[];
+  const widths = parts.reduce((sum, part) => sum + Math.max(part.scrollWidth, part.getBoundingClientRect().width), 0);
+  const need = widths + (parseFloat(style.columnGap) || 0) * Math.max(0, parts.length - 1) + (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+  return need > line.clientWidth + 0.5;
+}
+
 // The hour or day a note names, where the slot has no room for the list
 // that holds it (a small slot shows the conditions and, at most, one
 // list): one line under the conditions, so the item the card names is on
-// screen with its badge.
+// screen with its badge. Where the line is narrow its readings give way in
+// an order: the chance of rain goes whole first, then the temperatures
+// lose their end to an ellipsis; the badge, the item's name and its glyph
+// stay. No reading is left cut in two while another could make room.
 function Spot({ data, marked }: { data: WeatherData; marked: string }) {
+  const lineRef = useRef<HTMLDivElement>(null);
+  const [dropped, setDropped] = useState(false);
   const hour = (data.hourly ?? []).find((candidate) => candidate.time === marked);
   const day = hour ? undefined : (data.daily ?? []).find((candidate) => candidate.date === marked);
+  const precip = (hour ?? day)?.precip;
+  useLayoutEffect(() => {
+    const line = lineRef.current;
+    if (!line || !precip) return undefined;
+    return watchElement(line, () => setDropped(lineOverflows(line)), { children: true, changes: true });
+  }, [precip]);
   if (!hour && !day) return null;
   const condition = (hour ?? day)!.condition;
-  const precip = (hour ?? day)!.precip;
   return (
-    <div className="weather-spot" data-item={marked}>
+    <div ref={lineRef} className="weather-spot" data-item={marked}>
       <NoteBadge />
       <span className="weather-spot__when tech micro">{hour ? hourLong(hour.time) : dayLong(day!.date)}</span>
       <WeatherGlyph condition={condition} className="weather-spot__glyph" />
       <span className="weather-spot__temp">{hour ? `${formatTemp(hour.temp)}°` : `${formatTemp(day!.low)}° / ${formatTemp(day!.high)}°`}</span>
-      {precip ? <span className="weather-spot__precip">{formatTemp(precip)}%</span> : null}
+      {/* Set aside, not taken out, so the line can tell when it fits again. */}
+      {precip ? <span className={`weather-spot__precip${dropped && precip ? ' weather-spot__precip--dropped' : ''}`}>{formatTemp(precip)}%</span> : null}
     </div>
   );
 }
@@ -304,6 +359,21 @@ function Days({ days, marked, scroll }: { days: WeatherDay[]; marked?: string; s
 }
 
 /**
+ * The height a forecast laid down the box reads whole in, as its scroll
+ * measures it: each part at its own height, the hourly strip at its least
+ * (it grows into a tall box's room), the gaps between them, and the field's
+ * and the scroll's padding round them.
+ */
+function fieldLeast(field: HTMLElement): number {
+  const pad = (style: CSSStyleDeclaration) => (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+  const style = getComputedStyle(field);
+  const parts = Array.from(field.children) as HTMLElement[];
+  const heights = parts.reduce((sum, part) => sum + (part.classList.contains('weather-hourly') ? STRIP_LEAST : part.offsetHeight), 0);
+  const gaps = (parseFloat(style.rowGap) || 0) * Math.max(0, parts.length - 1);
+  return Math.ceil(heights + gaps + pad(style) + (field.parentElement ? pad(getComputedStyle(field.parentElement)) : 0));
+}
+
+/**
  * `framed`: the scene's frame names the forecast (the main slot); elsewhere
  * (an aux cell, focus) the forecast leads with its title (MetaTitle), so it
  * shows once wherever it is drawn.
@@ -315,6 +385,10 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   const days = data.daily ?? [];
   // The days an outlook would stand beside the conditions: the days to come.
   const offered = outlookOffer(days, data, marked);
+  // The condition line's own width (its face follows the stage, so it is
+  // read, not counted): beside an outlook the figure stands as wide as it
+  // or its temperature row, whichever is wider (outlookFigure).
+  const [condition, setCondition] = useState(0);
   const layout = weatherLayout(size.width, size.height, {
     hourly: hours.length > 0,
     daily: days.length > 0,
@@ -322,8 +396,21 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
     markedHour: hours.some((hour) => hour.time === marked),
     markedDay: days.some((day) => day.date === marked),
     alert: Boolean(data.alert),
+    temp: formatTemp(data.current.temp),
+    condition,
   });
   const arrangement: WeatherArrangement = layout.arrangement;
+  useLayoutEffect(() => {
+    const line = arrangement === 'compact' ? boxRef.current?.querySelector<HTMLElement>('.weather-now__condition') : null;
+    if (!line) return undefined;
+    // Its parts at their own widths, with the gap it stands at under the
+    // temperature, whether or not it is set beside it now.
+    const measure = () => {
+      const parts = Array.from(line.children) as HTMLElement[];
+      setCondition(Math.ceil(parts.reduce((sum, part) => sum + part.scrollWidth, 0) + CONDITION_GAP * Math.max(0, parts.length - 1)));
+    };
+    return watchElement(line, measure, { children: true, changes: true });
+  }, [arrangement]);
   // Down the box, the forecast is one column read top to bottom, and it
   // scrolls as one when it is longer than the box, counting the days past
   // the edge; beside one another, each part keeps its place and the days
@@ -333,25 +420,44 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   // The item a note names that no list here draws (a small slot).
   const unshown =
     (hours.some((hour) => hour.time === marked) && !layout.hourly) || (days.some((day) => day.date === marked) && !layout.daily) ? marked : undefined;
+  // Down the box the field fills its view, so its scroll content always
+  // measures the view: the stage is asked for the height its parts read
+  // whole in instead (fieldLeast), or a forecast given the stage would keep
+  // it once it is short.
+  const fieldRef = useRef<HTMLDivElement>(null);
+  const [least, setLeast] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const element = fieldRef.current;
+    // Measured for this arrangement only: a forecast laid down the box
+    // again first says nothing, rather than what it said last time.
+    if (!tall || !element) {
+      setLeast(null);
+      return undefined;
+    }
+    return watchElement(element, () => setLeast(fieldLeast(element)), { children: true });
+  }, [tall]);
   const field = (
-    <div className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px` } as CSSProperties}>
-      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook ? offered : null} inline={layout.inline} />
+    <div ref={fieldRef} className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px`, '--weather-strip-least': `${STRIP_LEAST}px` } as CSSProperties}>
+      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook ? offered : null} figure={layout.figure} inline={layout.inline} alertLine={layout.alertLine} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>
   );
   const named = [...hours.map((hour) => hour.time), ...days.map((day) => day.date)].includes(marked ?? '') ? marked : undefined;
   return (
-    <div className={`weather weather--${arrangement}`} data-testid="weather" data-layout={arrangement}>
+    <div className={`weather weather--${arrangement}`} data-testid="weather" data-layout={arrangement} style={{ '--condition-gap': `${CONDITION_GAP}px`, '--figure-gap': `${COMPACT_FIGURE_GAP}px` } as CSSProperties}>
       {/* The box the forecast is laid out for, inside any padding its slot gives it. */}
       <div ref={boxRef} className="weather__box">
-        {tall ? (
-          <ListViewport noun={['DAY', 'DAYS']} countSelector=".weather-day" lead={named} scrollClassName="weather__scroll" label="Forecast">
-            {field}
-          </ListViewport>
-        ) : (
-          field
-        )}
+        {/* Before the box is measured the forecast is a stand-in: it says nothing to the stage. */}
+        <MeasuredStageDemand measured={size.width > 0 && size.height > 0 && (!tall || least !== null)}>
+          {tall ? (
+            <ListViewport noun={['DAY', 'DAYS']} countSelector=".weather-day" lead={named} scrollClassName="weather__scroll" label="Forecast" least={least}>
+              {field}
+            </ListViewport>
+          ) : (
+            field
+          )}
+        </MeasuredStageDemand>
       </div>
     </div>
   );

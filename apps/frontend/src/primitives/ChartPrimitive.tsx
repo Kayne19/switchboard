@@ -21,11 +21,13 @@ import {
   chartPointCallouts,
   chartScaleStep,
   chartScales,
+  chartScrollHeight,
   type ChartAnchor,
   type ChartScales,
 } from './chartGeometry';
 import { useElementSize } from '../hooks/useElementSize';
 import { useLeastHeight } from '../hooks/useStageDemand';
+import { ListViewport } from './ListViewport';
 
 const semanticColor: Record<Semantic,string> = {
   red:'var(--red)',orange:'var(--orange)',green:'var(--green)',cyan:'var(--cyan)',amber:'var(--amber)',paper:'var(--paper)',muted:'var(--muted)'
@@ -114,7 +116,7 @@ function Grid({ scales }: { scales: ChartScales }) {
       {categories.ticks.map((tick) => {
         // A wrapped label's lines are centred on its row.
         const top = xAt(tick.index) + 4 - ((tick.lines.length - 1) * CHART_TICK_ROW_HEIGHT) / 2;
-        return <text key={tick.index} className="chart-grid__category" x={plot.left - 14} y={top} textAnchor="end">
+        return <text key={tick.index} className="chart-grid__category" data-item={tick.index} x={plot.left - 14} y={top} textAnchor="end">
           {tick.lines.length > 1 ? tick.lines.map((line, index) => <tspan key={index} x={plot.left - 14} y={top + index * CHART_TICK_ROW_HEIGHT}>{line}</tspan>) : tick.text}
           {tick.truncated || tick.lines.length > 1 ? <title>{categories.categories![tick.index]}</title> : null}
         </text>;
@@ -167,7 +169,12 @@ export function ChartPrimitive({
   const slot = useElementSize(hostRef);
   // A bar chart whose categories want a row each asks for the height.
   useLeastHeight(hostRef, useCallback((box: { width: number }) => chartLeastHeight(data, box.width), [data]));
-  const fit = chartFrame(slot);
+  // A bar chart too long for its slot on its side, in a slot taller than
+  // it is wide, is drawn at its least height in a canvas that scrolls in
+  // the slot (`chartScrollHeight`); its frame is the canvas's, as the notes
+  // laid over it read it.
+  const scroll = useMemo(() => chartScrollHeight(data, slot), [data, slot]);
+  const fit = chartFrame(scroll === null ? slot : { width: slot.width, height: scroll });
   const width = fit.width, height = fit.height;
   // At the scale the slot draws it, which the room past a marked point's
   // value is measured at (a note's leader keeps its clearance in pixels):
@@ -204,7 +211,7 @@ export function ChartPrimitive({
   const base=valueAt(baseline);
   const clip=chartClip(scales);
 
-  return <div ref={hostRef} className={`chart-primitive${focused?' chart-primitive--focused':''}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
+  const svg = (
     <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label={data.title ?? 'Chart'}>
       <defs>
         {/* A scatter chart's points at the ends of its domain sit on the
@@ -266,5 +273,39 @@ export function ChartPrimitive({
           own top padding to keep the last row clear of it. */}
       <g className="chart-legend" transform={`translate(${plot.left+8} ${CHART_PAD.top+12})`}>{legend.items.map((item,index)=><g transform={`translate(${item.x} ${item.row*CHART_LEGEND_ROW_HEIGHT})`} key={item.name}><LegendKey kind={kind} color={chartSeriesColor(data.series[index], index)}/><text x={CHART_LEGEND_TEXT_X} y="4">{item.text}</text>{item.truncated?<title>{item.name}</title>:null}</g>)}</g>
     </svg>
+  );
+  // The category a note names, or the marker's, is the row it opens on.
+  const lead = [...(named ?? []), ...(data.marker ? [data.marker] : [])][0];
+  const drawnScale = slot.width / width;
+  return <div ref={hostRef} className={`chart-primitive${focused?' chart-primitive--focused':''}${scroll===null?'':' chart-primitive--scrolls'}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
+    {scroll===null ? svg : (
+      // Scrolled, it reads as a list does: the rows past each edge counted
+      // there, a tap turning a page; its value axis pinned over the rows.
+      <ListViewport
+        noun={data.series.length > 1 ? ['GROUP', 'GROUPS'] : ['BAR', 'BARS']}
+        countSelector=".chart-grid__category"
+        lead={lead ? String(Math.round(lead.x)) : undefined}
+        head={<ValueAxisHead scales={scales} width={width} scale={drawnScale}/>}
+        least={null}
+        className="chart-primitive__viewport"
+        scrollClassName="chart-primitive__scroll"
+        label={`${data.title ?? 'Chart'}: rows`}
+      >
+        <div className="chart-primitive__canvas" style={{ height: `${scroll}px` }}>{svg}</div>
+      </ListViewport>
+    )}
   </div>;
+}
+
+// The value axis's labels over a scrolled chart's rows, where its own run
+// along the foot of its last: the same values at the same places, the
+// strip drawn at the chart's scale across the same width, as deep as the
+// band a chart keeps over its legend (clear of the panel's corner).
+const AXIS_HEAD_UNITS = CHART_PAD.top;
+function ValueAxisHead({ scales, width, scale }: { scales: ChartScales; width: number; scale: number }) {
+  return <svg className="chart-primitive__axis" viewBox={`0 0 ${width} ${AXIS_HEAD_UNITS}`} style={{ height: `${AXIS_HEAD_UNITS * scale}px` }} aria-hidden="true">
+    <g className="chart-grid">
+      {scales.valueTicks.map((value) => <text key={value} x={scales.valueAt(value)} y={AXIS_HEAD_UNITS - 8} textAnchor="middle">{formatValueTick(value, scales.valueDecimals)}</text>)}
+    </g>
+  </svg>;
 }

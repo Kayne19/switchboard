@@ -67,7 +67,8 @@ beforeAll(() => {
     }
   } as unknown as typeof ResizeObserver;
   Element.prototype.getBoundingClientRect = function (this: Element) {
-    if (this instanceof HTMLElement && this.classList.contains('chart-notes')) return rect(0, 0, size.width, 600);
+    // The layer's frame, the box the cards are placed in.
+    if (this instanceof HTMLElement && this.classList.contains('chart-notes__frame')) return rect(0, 0, size.width, 600);
     if (this instanceof HTMLElement && this.classList.contains('chart-note')) return rect(0, 0, card.width, card.height);
     if (this instanceof SVGSVGElement && this.closest('.chart-primitive')) return rect(0, SVG_TOP, size.width, size.width * size.tall);
     return originalRect.call(this);

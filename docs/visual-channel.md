@@ -250,7 +250,14 @@ else -- a phone, a portrait tablet, a chart in an aux cell, a portrait focus
 -- the chart is recomposed: its frame takes the slot's own shape, so the plot
 fills the slot rather than shrinking inside bands of black, at the scale that
 fits but never under the readable one. A bar chart whose labels then no longer
-fit a row under its bars turns on its side. A slot too small for the chart's
+fit a row under its bars turns on its side. One too long for a row per
+category even there (sixty bars on a phone, whose stage it has been given)
+stays on its side in a slot taller than it is wide, drawn at its least
+height, and scrolls in its frame as a list does: the rows past each edge
+counted there, a tap turning a page, the value axis pinned over the rows,
+its notes lying on the chart and scrolling with the bars they name; it opens
+on the bar a note names. A wide slot stands such a chart upright, its labels
+thinned, the whole of it in view. A slot too small for the chart's
 least frame (320x240 units) at that scale draws it smaller; an aux cell keeps
 a chart's cell at least that tall, so the aux row scrolls instead.
 
@@ -280,21 +287,33 @@ layout. One whose content asks for more gets the stage's height:
   the height of what it scrolls through; a figure its height drawn across
   its field's width, never past its own size; a bar chart whose labels do
   not fit under its bars the height in which it lies on its side with a
-  labelled row per category. Only the primary speaks: a plan under a chart
-  or a table in the aux row never folds the rail.
+  labelled row per category; a calendar's hour grid and a forecast laid
+  down the box, which grow to fill whatever view they get, the height
+  their parts read whole in. A primitive laid out for its box (a
+  calendar, a forecast, timers) says nothing until it has measured the
+  box: the stand-in it draws before then is not what will stand. Only the
+  primary speaks: a plan under a chart or a table in the aux row never
+  folds the rail.
 - **The shell decides** (`app/stageFold.ts`): where the rail stands under
   the column (measured, not a media query), a primary whose content is
   more than a line of text past its viewport in the layout it shares with
   the rail takes the stage. On the stage a content is weighed against the
   viewport it had in that shared layout, never against a model of the
   frame round it (a table's head, a document's heading, an aux row are
-  fixed; a diagram's rails grow with it). Folded, it gives the stage back
+  fixed; a diagram's rails grow with it, up to a cap on the stage). Folded, it gives the stage back
   only once it would be within a few pixels of reading whole there, so a
-  need on the line does not fold and unfold as it redraws. A graph laid
-  out again for the stage's taller viewport says nothing of the shared
-  layout unless it overflows even the stage, and a primitive that cannot
-  tell yet (a drawing whose fit has not followed its box) leaves the
-  layout as it is. A new primary is measured first in the shared layout.
+  need on the line does not fold and unfold as it redraws. So a primary
+  sent again with less in it (a week with one appointment left) gives the
+  stage back: a viewport that stays the same drawing stays mounted across
+  the fold, and keeps what it measured in the shared layout. A graph laid
+  out again for the stage's taller viewport, or a drawing the stage's
+  height turns into another (a calendar too short for its grid in its
+  share draws its agenda there, and the grid on the stage), says nothing
+  of the shared layout unless it overflows even the stage, and a
+  primitive that cannot tell yet (a drawing whose fit has not followed
+  its box) leaves the layout as it is: such a primary keeps the stage
+  until another takes its place. A new primary is measured first in the
+  shared layout.
   Opening the rail changes nothing of this. A landscape stage, the rail
   beside the primary, never folds.
 - **The rail folds to a strip under the primary, down to the footer's
@@ -310,9 +329,17 @@ layout. One whose content asks for more gets the stage's height:
   Its accessible name holds the words it shows. What it folds is set
   aside by the stylesheet, not taken out of the page, so folding draws
   nothing afresh. The caller's choice holds for that primary.
+- **What earns nothing while the primary has the stage gives its room
+  back.** The frame's subtitle runs after its title on one line (each cut
+  at the stage's edge, the title last), and the primary starts a line
+  higher. A diagram's rails keep their lower steps at most 40px in from
+  the slot's edges, as in a slot of some 400px, rather than a tenth of the
+  stage's height (on a stage over some 870px a little more, so each rail
+  stays wholly inside the slot), the drawing taking the rest. Opened, the
+  rail and the frame are as they were.
 
-At 390x844 a diagram's viewport grows from 374 px to 460 px, a 40-row
-table's from 436 to 544, and a bar chart of 45 categories names every one
+At 390x844 a diagram's viewport grows from 374 px to some 518 px, a 40-row
+table's from 436 to 556, and a bar chart of 45 categories names every one
 instead of every eighth. Why fold the rail rather than scroll the page or
 shrink the primary: the page never scrolls as a whole (its frame and
 Damocles stay put), and a primary drawn smaller is the squeeze this
@@ -447,10 +474,25 @@ with the days to come beside them as a row of columns (the days after
 the forecast's `today`; without one, a first day whose high and low the
 figure shows is taken for today and left out), each its name, glyph, high
 and low, as many as whole columns fit beside the figure, a day the note
-names taking the last column when it lies past them; one too short even
-for those columns holds the conditions alone, the condition beside the
+names taking the last column when it lies past them. The layout counts
+the figure's width itself -- its glyph and temperature row (in ems of
+the temperature), or its glyph and condition line (read from the page,
+whose face follows the stage), whichever is wider -- and stands the
+columns only where a whole one fits beside it, the figure drawn at that
+width. A slot too short for those columns, or too narrow for one beside
+the figure, holds the conditions alone, the condition beside the
 temperature where stacked they would run past its foot (on one line, the
-high and low giving way first). The hours are a strip, a column each:
+high and low giving way first). The hour or day a note names that no
+list or column there draws stands on a line under the conditions, its
+badge, its name, its glyph and its readings, and the layout keeps room
+for that line. Where the line is narrow its readings give way in an
+order: the chance of rain goes whole first, then the temperatures end in
+an ellipsis. Where a slot is too short for the head, the alert's line,
+the figure and that item's line (the today scene's cell at 844x390), the
+alert's line gives way to the item, which the card on screen names (its
+line, or its column in an outlook the freed room lets stand): the
+alert's tag stays in the head, and focus draws its line whole. The hours
+are a strip, a column each:
 the temperature traced over the chance of rain, labelled every 1, 2, 3,
 4, 6, 8, 12 or 24 hours so the labels stand at least 34px apart, which
 keeps 48 hours readable on a phone without scrolling sideways; the hour
