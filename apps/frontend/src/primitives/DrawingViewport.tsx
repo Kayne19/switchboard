@@ -215,7 +215,8 @@ export function DrawingViewport({
     }),
     [fit.scrollX, fit.scrollY, fit.width, fit.height, pinnedDepth],
   );
-  const stops = useMemo(() => (reading ? stopsFor(reading, parts, marks) : null), [reading, parts, marks, stopsFor]);
+  // They follow the box and the drawing, not where the reader stands.
+  const stops = useMemo(() => (place ? stopsFor({ width: boxWidth, height: boxHeight }, parts, marks) : null), [place, boxWidth, boxHeight, parts, marks, stopsFor]);
 
   // The drawing opens on its lead region when it is first drawn and
   // whenever what is drawn changes shape (its size, its scale, or the
