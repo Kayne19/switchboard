@@ -214,9 +214,11 @@ const MAX_STRETCH = 72;
 interface Packing {
   dummy: number;
   padCross: number;
+  padMain: number;
+  minGap: number;
 }
-const APPROVED_PACKING: Packing = { dummy: DUMMY_SPACING, padCross: PAD_CROSS };
-const FRAME_PACKING: Packing = { dummy: 12, padCross: 16 };
+const APPROVED_PACKING: Packing = { dummy: DUMMY_SPACING, padCross: PAD_CROSS, padMain: PAD_MAIN, minGap: MIN_GAP };
+const FRAME_PACKING: Packing = { dummy: 12, padCross: 16, padMain: 12, minGap: 40 };
 // A layer too crowded for the canvas is staggered into two rows along the
 // main axis, its boxes interleaved so each back-row box sits behind the
 // gap between two front-row boxes and its edges pass through that gap.
@@ -1015,7 +1017,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     const own = segments.filter((segment) => segment.from.layer === gap);
     // A gap is measured from its centre, where its tracks are centred, out
     // to each of its ends: each side holds what reaches that way.
-    return { tracks: assignTracks(own), before: MIN_GAP / 2, after: MIN_GAP / 2, centre: 0 };
+    return { tracks: assignTracks(own), before: packing.minGap / 2, after: packing.minGap / 2, centre: 0 };
   });
   const trackOffset = (segment: Segment) => ((segment.track ?? 0) - (gaps[segment.from.layer].tracks - 1) / 2) * TRACK_PITCH;
 
@@ -1252,9 +1254,9 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const bands = layers.map((layer) =>
     layer[0]?.staggered ? rowExtent(layer, 0) + ROW_GAP + rowExtent(layer, 1) : Math.max(0, ...layer.map((item) => item.mainExtent)),
   );
-  const natural = bands.reduce((sum, band) => sum + band, 0) + gaps.reduce((sum, gap) => sum + gap.before + gap.after, 0) + 2 * PAD_MAIN;
+  const natural = bands.reduce((sum, band) => sum + band, 0) + gaps.reduce((sum, gap) => sum + gap.before + gap.after, 0) + 2 * packing.padMain;
   const stretch = gaps.length ? Math.max(0, (canvas.main - natural) / gaps.length) : 0;
-  let cursor = PAD_MAIN;
+  let cursor = packing.padMain;
   layers.forEach((layer, index) => {
     const front = rowExtent(layer, 0);
     for (const item of layer) {
@@ -1269,7 +1271,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
       cursor += gap.before + gap.after;
     }
   });
-  const mainSize = Math.max(canvas.main, layerCount ? cursor + PAD_MAIN : canvas.main);
+  const mainSize = Math.max(canvas.main, layerCount ? cursor + packing.padMain : canvas.main);
   const trackMain = (segment: Segment) => gaps[segment.from.layer].centre + trackOffset(segment);
 
   // --- Routes ----------------------------------------------------------------

@@ -34,6 +34,11 @@ export interface Viewport extends Size {
 // A drawing that scrolls fills its viewport across, but no larger than its
 // own size: past that it would only scroll longer.
 const MAX_SCROLLING_SCALE = 1;
+// A drawing that would overflow by a sliver at the readable minimum is
+// contained instead, its text at most this much under the floor (0.3px on
+// a 7px line): scrolling a few pixels for the last of a drawing costs the
+// reader more than that.
+export const SLIVER = 0.04;
 
 export interface DrawingFit {
   /** CSS pixels per user unit. */
@@ -48,7 +53,7 @@ export interface DrawingFit {
 
 /**
  * The scale a drawing is shown at in a viewport. One that fits at
- * `minScale` or more is contained, as large as fits. One that does not
+ * `minScale` or more (less a sliver) is contained, as large as fits. One that does not
  * scrolls along the axis it overflows most, filling the other axis (up to
  * its own size) and never drawn smaller than `minScale`; it scrolls along
  * the other axis too only when even `minScale` overflows that.
@@ -57,7 +62,7 @@ export function fitDrawing(drawing: Size, viewport: Viewport, minScale: number):
   const fitWidth = viewport.width / drawing.width;
   const fitHeight = viewport.height / drawing.height;
   const contain = Math.min(fitWidth, fitHeight);
-  if (contain >= minScale) {
+  if (contain >= minScale * (1 - SLIVER)) {
     return { scale: contain, width: drawing.width * contain, height: drawing.height * contain, scrollX: false, scrollY: false };
   }
   const scrollsDown = fitHeight <= fitWidth;

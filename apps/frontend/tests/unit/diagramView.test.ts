@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
 import { fixtures, pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import { GRAPH_MIN_SCALE, layoutDiagram, viewDiagram } from '../../src/primitives/diagramLayout';
+import { SLIVER } from '../../src/primitives/drawingFit';
 
 const architecture = { mode: 'graph', ...(fixtures.architecture[0] as { data: Omit<DiagramData, 'mode'> }).data } as DiagramData;
 
@@ -24,7 +25,9 @@ describe('a graph read in its viewport', () => {
       for (const scrollbar of scrollbars) {
         it(`${name} / ${geometry} / ${scrollbar}px bars: never drawn below the readable minimum`, () => {
           const view = viewDiagram(data, { ...size, scrollbar });
-          expect(view.fit.scale).toBeGreaterThanOrEqual(GRAPH_MIN_SCALE - 1e-9);
+          expect(view.fit.scale).toBeGreaterThanOrEqual(GRAPH_MIN_SCALE * (1 - SLIVER) - 1e-9);
+          // Scrolling, it is at the minimum or above.
+          if (view.fit.scrollX || view.fit.scrollY) expect(view.fit.scale).toBeGreaterThanOrEqual(GRAPH_MIN_SCALE - 1e-9);
           expect(view.fit.width).toBeCloseTo(view.layout.width * view.fit.scale);
           // It scrolls only where it overflows.
           if (!view.fit.scrollX) expect(view.fit.width).toBeLessThanOrEqual(size.width + 0.5);

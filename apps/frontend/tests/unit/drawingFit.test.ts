@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { TYPE_FLOOR_PX } from '../../src/design/tokens';
-import { fitDrawing, readableScale, scrollCost } from '../../src/primitives/drawingFit';
+import { SLIVER, fitDrawing, readableScale, scrollCost } from '../../src/primitives/drawingFit';
 
 describe('the type floors', () => {
   it('are the floors the stylesheet sets its two small faces at', () => {
@@ -50,6 +50,15 @@ describe('fitting a drawing to its viewport', () => {
     const slim = fitDrawing({ width: 300, height: 5000 }, viewport, 0.75);
     expect(slim.scale).toBe(1);
     expect([slim.scrollX, slim.scrollY]).toEqual([false, true]);
+  });
+
+  it('contains a drawing that would overflow by a sliver, a hair under the minimum, rather than scroll it', () => {
+    const sliver = fitDrawing({ width: 900 / 0.74, height: 600 }, viewport, 0.75);
+    expect([sliver.scrollX, sliver.scrollY]).toEqual([false, false]);
+    expect(sliver.scale).toBeGreaterThanOrEqual(0.75 * (1 - SLIVER));
+    const more = fitDrawing({ width: 900 / (0.75 * (1 - SLIVER)) + 10, height: 600 }, viewport, 0.75);
+    expect(more.scrollX).toBe(true);
+    expect(more.scale).toBeGreaterThanOrEqual(0.75);
   });
 
   it('scrolls both ways only when the readable minimum overflows both', () => {

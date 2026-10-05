@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SequenceDiagramData, SequenceMessage } from '../../src/controller/types';
 import { fixtures, traceDiagram } from '../../src/fixtures/scenes';
+import { SLIVER } from '../../src/primitives/drawingFit';
 import { layoutSequence, sequenceMinScale, viewSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
 
 const handoffDiagram = (fixtures.handoff[0] as { data: SequenceDiagramData }).data;
@@ -312,7 +313,7 @@ describe('a sequence read in its viewport', () => {
       for (const size of viewports) {
         for (const scrollbar of [0, 11]) {
           const { layout, fit } = viewSequence(data, { ...size, scrollbar });
-          expect(fit.scale, `${size.width}x${size.height}`).toBeGreaterThanOrEqual(sequenceMinScale(layout) - 1e-9);
+          expect(fit.scale, `${size.width}x${size.height}`).toBeGreaterThanOrEqual(sequenceMinScale(layout) * (1 - SLIVER) - 1e-9);
           expect(fit.scrollX, `${size.width}x${size.height}`).toBe(false);
         }
       }
