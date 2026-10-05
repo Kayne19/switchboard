@@ -158,14 +158,16 @@ describe('a timer', () => {
   it('shows its title where no frame does, and only there', () => {
     const titled: TimerData = { ...kitchen, title: 'KITCHEN / TIMERS' };
     const loose = render(titled);
-    expect(loose.querySelector('.timer__title')?.textContent).toBe('KITCHEN / TIMERS');
+    expect(loose.querySelector('[data-object-title]')?.textContent).toBe('KITCHEN / TIMERS');
+    // With no title of its own it still names what it is.
+    expect(render(kitchen).querySelector('[data-object-title]')?.textContent).toBe('TIMERS');
     const host = document.createElement('div');
     document.body.append(host);
     const root = createRoot(host);
     act(() => root.render(<TimerPrimitive data={titled} framed />));
     roots.push(root);
     hosts.push(host);
-    expect(host.querySelector('.timer__title')).toBeNull();
+    expect(host.querySelector('[data-object-title]')).toBeNull();
   });
 
   it('marks the timer a note names, and only it', () => {

@@ -2,6 +2,7 @@ import { useRef, type CSSProperties } from 'react';
 import type { WeatherData, WeatherDay, WeatherHour } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
 import { ListViewport } from './ListViewport';
+import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
 import { conditionText, WeatherGlyph } from './WeatherGlyph';
 import {
@@ -60,7 +61,7 @@ function AlertLine({ text }: { text: string }) {
   );
 }
 
-function Now({ data, compact, temp, title, spot }: { data: WeatherData; compact: boolean; temp: number; title?: string; spot?: string }) {
+function Now({ data, compact, temp, framed, spot }: { data: WeatherData; compact: boolean; temp: number; framed: boolean; spot?: string }) {
   const { current, units } = data;
   // The temperature is as large as the layout gives it, and no larger than
   // its row (glyph, digits, unit) fits the column the figure stands in:
@@ -80,19 +81,12 @@ function Now({ data, compact, temp, title, spot }: { data: WeatherData; compact:
   return (
     <section className="weather-now" aria-label={`Weather now in ${data.location}`}>
       {/* Where no frame names the forecast (an aux cell, focus), its title
-          leads the head, and the place it is for takes the place of NOW. */}
+          leads the head (MetaTitle), and the place it is for takes the
+          place of NOW. */}
       <div className="weather-now__head tech micro">
-        {title ? (
-          <>
-            <span className="weather-now__title" data-object-title>{title}</span>
-            <span className="weather-now__location">{data.location}</span>
-          </>
-        ) : (
-          <>
-            <span className="weather-now__location">{data.location}</span>
-            <span>NOW</span>
-          </>
-        )}
+        <MetaTitle title={data.title ?? 'WEATHER'} framed={framed} className="weather-now__title" />
+        <span className="weather-now__location">{data.location}</span>
+        {framed ? <span>NOW</span> : null}
       </div>
       {data.alert ? <AlertLine text={data.alert} /> : null}
       {/* The figure and the words beside it where the box is wide enough
@@ -269,8 +263,8 @@ function Days({ days, marked, scroll }: { days: WeatherDay[]; marked?: string; s
 
 /**
  * `framed`: the scene's frame names the forecast (the main slot); elsewhere
- * (an aux cell, focus) the forecast names itself, so its title shows once
- * wherever it is drawn.
+ * (an aux cell, focus) the forecast leads with its title (MetaTitle), so it
+ * shows once wherever it is drawn.
  */
 export function WeatherPrimitive({ data, marked, framed = false }: { data: WeatherData; marked?: string; framed?: boolean }) {
   const boxRef = useRef<HTMLDivElement>(null);
@@ -294,7 +288,7 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
     (hours.some((hour) => hour.time === marked) && !layout.hourly) || (days.some((day) => day.date === marked) && !layout.daily) ? marked : undefined;
   const field = (
     <div className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px` } as CSSProperties}>
-      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} title={framed ? undefined : data.title} spot={unshown} />
+      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>

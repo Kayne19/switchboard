@@ -3,6 +3,7 @@ import type { Timer, TimerData } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
 import { usePageClock } from '../hooks/usePageClock';
 import { ListViewport } from './ListViewport';
+import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
 import { CELL_GAP, formatCountdown, instantClock, readTimer, timerLayout, type TimerReading } from './timerReading';
 
@@ -73,8 +74,8 @@ function TimerItem({ timer, reading, marked, as }: { timer: Timer; reading: Time
 
 /**
  * `framed`: the scene's frame names the timers (the main slot); elsewhere
- * (an aux cell, focus) no frame does, and the timers carry their title
- * themselves, so it shows once wherever they are drawn.
+ * (an aux cell, focus) no frame does, and the timers lead with their title
+ * (MetaTitle), so it shows once wherever they are drawn.
  */
 export function TimerPrimitive({ data, marked, framed = false }: { data: TimerData; marked?: string; framed?: boolean }) {
   const running = data.timers.some((timer) => timer.state !== 'paused');
@@ -94,7 +95,7 @@ export function TimerPrimitive({ data, marked, framed = false }: { data: TimerDa
       data-layout={layout.kind === 'grid' ? `grid-${layout.columns}x${layout.rows}` : 'list'}
       style={layout.kind === 'grid' ? { ['--timer-digits' as string]: `${layout.digits}px`, ['--timer-columns' as string]: layout.columns, ['--timer-rows' as string]: layout.rows, ['--timer-gap' as string]: `${CELL_GAP}px` } : undefined}
     >
-      {!framed && data.title ? <div className="timer__title tech micro" data-object-title>{data.title}</div> : null}
+      <MetaTitle title={data.title ?? 'TIMERS'} framed={framed} className="timer__title tech micro" />
       {/* The box the timers are laid out for: the primitive's own, inside any padding its slot gives it. */}
       <div ref={hostRef} className="timer-primitive__field">
         {layout.kind === 'grid' ? (
