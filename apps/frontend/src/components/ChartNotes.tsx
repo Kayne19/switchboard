@@ -17,7 +17,8 @@ import {
   type ViewPoint,
   type ViewRect,
 } from '../primitives/chartGeometry';
-import { layoutNotes, type NoteField, type NoteToPlace, type Point, type Rect } from '../primitives/notePlacement';
+import { layoutNotes, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
+import type { Point, Rect } from '../primitives/segments';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** One note on a chart: a note object, or the spoken explanation standing in for one. */

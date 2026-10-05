@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { TYPE_FLOOR_PX } from '../../src/design/tokens';
-import { hiddenTraceLength } from '../../src/primitives/notePlacement';
+import { hiddenTraceLength } from '../../src/primitives/segments';
 import {
   CHART_CATEGORY_PAD_MAX,
   CHART_FRAME,

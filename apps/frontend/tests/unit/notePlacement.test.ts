@@ -6,15 +6,13 @@ import {
   DATA_CLEARANCE,
   calloutLeader,
   hiddenFillArea,
-  hiddenTraceLength,
   layoutNotes,
   routeLeader,
   type NoteField,
   type NoteToPlace,
   type PlaceOptions,
-  type Point,
-  type Rect,
 } from '../../src/primitives/notePlacement';
+import { hiddenTraceLength, type Point, type Rect } from '../../src/primitives/segments';
 import { leastCpuMs } from './cpuTime';
 
 // Each card's box, as most of these cases read it.
@@ -905,13 +903,5 @@ describe('placing notes on a line chart', () => {
       return { id: `n${index}`, width: 300, height: 80, ...target };
     });
     expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(200);
-  });
-});
-
-describe('hidden trace length', () => {
-  it('measures the part of each line inside the card', () => {
-    const traces = [[{ x: 0, y: 50 }, { x: 100, y: 50 }, { x: 100, y: 150 }]];
-    expect(hiddenTraceLength(box(50, 0, 100, 100), traces)).toBeCloseTo(50 + 50, 6);
-    expect(hiddenTraceLength(box(200, 0, 100, 100), traces)).toBe(0);
   });
 });

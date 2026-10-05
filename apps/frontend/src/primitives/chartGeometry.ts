@@ -1,6 +1,6 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
 import { readableScale, type DrawingText } from './drawingFit';
-import { hiddenTraceLength } from './notePlacement';
+import { hiddenTraceLength } from './segments';
 
 // The chart draws in a viewBox -- its frame -- and the notes laid over a
 // chart map their points and the drawn marks through the same frame, so both
