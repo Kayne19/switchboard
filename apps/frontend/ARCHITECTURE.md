@@ -55,7 +55,7 @@ The renderer does not load bespoke route pages. It derives a broad composition f
 | image | figure: a raster image contained on the black field |
 | calendar | a day, a week, a month or an agenda of events (`src/primitives/CalendarPrimitive.tsx`), laid out from the box it is given |
 | tasks, inbox | the to-do list and the inbox, drawn by `TasksPrimitive` and `InboxPrimitive` in the list viewport |
-| timer, weather | the other personal-assistant views, each its own scene kind; drawn for now by one stand-in list of the fields as sent (`src/primitives/TemporaryAssistantList.tsx`) until their render slice gives each a primitive |
+| timer, weather | the timer by `TimerPrimitive` on the page's one clock (`src/hooks/usePageClock.ts`), the forecast by `WeatherPrimitive`, each laid out from the box it is given |
 
 Additional metrics, progress, notes, comparisons, and speech modify that composition incrementally. Any other visual on stage that the composition does not draw itself (`besideVisuals` in `src/app/sceneModel.ts`) goes in the aux row under the primary; see "Scene shell".
 

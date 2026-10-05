@@ -34,7 +34,8 @@ import { SceneFooter } from '../primitives/SceneFooter';
 import { TablePrimitive } from '../primitives/TablePrimitive';
 import { TasksPrimitive, taskCounts } from '../primitives/TasksPrimitive';
 import { InboxPrimitive, inboxCounts } from '../primitives/InboxPrimitive';
-import { TemporaryAssistantList, temporaryAssistantFrame, type TemporaryAssistantType } from '../primitives/TemporaryAssistantList';
+import { TimerPrimitive } from '../primitives/TimerPrimitive';
+import { WeatherPrimitive } from '../primitives/WeatherPrimitive';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
@@ -247,17 +248,16 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?
       return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
     case 'note':
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
+    case 'timer':
+      return <TimerPrimitive data={cast.timer(object).data} marked={marked} />;
+    case 'weather':
+      return <WeatherPrimitive data={cast.weather(object).data} marked={marked} />;
     case 'calendar':
       return <CalendarPrimitive data={cast.calendar(object).data} marked={marked} />;
     case 'tasks':
       return <TasksPrimitive data={cast.tasks(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
     case 'inbox':
       return <InboxPrimitive data={cast.inbox(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
-    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
-    case 'timer':
-      return <TemporaryAssistantList type="timer" data={object.data} marked={marked} />;
-    case 'weather':
-      return <TemporaryAssistantList type="weather" data={object.data} marked={marked} />;
     default:
       return null;
   }
@@ -542,21 +542,29 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('inbox-object', <InboxPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
-    // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
-    case 'timer':
-    case 'weather': {
-      const type = primary.type as TemporaryAssistantType;
-      const kind = type.toUpperCase();
+    case 'timer': {
+      const { data } = cast.timer(primary);
+      const paused = data.timers.filter((timer) => timer.state === 'paused').length;
       return {
         ...rail,
-        ...temporaryAssistantFrame(type, primary.data),
-        footer: `DISPLAY / ${kind}`,
-        caption: sceneCaption(primary, `${kind} / FIELDS AS SENT`),
-        main: slot(
-          'temporary-assistant-object',
-          <TemporaryAssistantList type={type} data={primary.data} marked={markedItem(note, primary.id)} />,
-          <TechFrame variant="panel" />,
-        ),
+        title: data.title ?? (data.timers.length === 1 ? data.timers[0].label : 'TIMERS'),
+        subtitle: data.subtitle ?? [`${data.timers.length} ${data.timers.length === 1 ? 'TIMER' : 'TIMERS'}`, paused > 0 ? `${paused} PAUSED` : null].filter(Boolean).join(' / '),
+        context: data.context ?? 'TIMERS',
+        footer: 'DISPLAY / TIMERS',
+        caption: sceneCaption(primary, 'TIMERS / PAGE CLOCK'),
+        main: slot('timer-object', <TimerPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
+      };
+    }
+    case 'weather': {
+      const { data } = cast.weather(primary);
+      return {
+        ...rail,
+        title: data.title ?? `WEATHER / ${data.location}`,
+        subtitle: data.subtitle ?? ['NOW', data.hourly?.length ? `${data.hourly.length} H` : null, data.daily?.length ? `${data.daily.length} DAYS` : null].filter(Boolean).join(' + '),
+        context: data.context ?? 'FORECAST',
+        footer: 'DISPLAY / FORECAST',
+        caption: sceneCaption(primary, `FORECAST / DEGREES ${data.units}`),
+        main: slot('weather-object', <WeatherPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
     default:

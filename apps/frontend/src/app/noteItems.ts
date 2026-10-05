@@ -1,4 +1,5 @@
 import type { CalendarData, InboxData, NoteData, SceneObject, SceneObjectType, TasksData, TimerData, WeatherData } from '../controller/types';
+import { weatherItemName } from '../primitives/weatherLayout';
 import { eventTargetText } from '../primitives/calendarLayout';
 import { cast } from './sceneModel';
 
@@ -43,7 +44,7 @@ const ITEM_NAMES: {
 
   timer: (data, item) => data.timers.find((timer) => timer.id === item)?.label,
 
-  weather: (data, item) => (data.hourly ?? []).find((hour) => hour.time === item)?.time ?? (data.daily ?? []).find((day) => day.date === item)?.date,
+  weather: weatherItemName,
 
   inbox: (data, item) => {
     const message = data.messages.find((candidate) => candidate.id === item);
