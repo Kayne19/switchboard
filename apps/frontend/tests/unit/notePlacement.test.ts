@@ -92,6 +92,16 @@ describe('leader route', () => {
     expect(routeLeader(card, { x: 300, y: 100 })).toEqual([]);
   });
 
+  // A step exactly as long as its room came out a rounding error longer, so
+  // the leader ran along by 1e-14 and drew the same vertex twice (line-notes
+  // review L9).
+  it('never repeats a vertex where its step takes all the room it has', () => {
+    const leader = routeLeader(box(106.5, 29, 352, 84), { x: 349.5, y: 128.6 }, { overlap: 1 });
+    leader.slice(1).forEach((point, index) => expect(Math.hypot(point.x - leader[index].x, point.y - leader[index].y)).toBeGreaterThan(1e-6));
+    expect(leader).toHaveLength(4);
+    expect(leader.at(-1)).toEqual({ x: 349.5, y: 128.6 });
+  });
+
   it("leaves a card below its point by the top edge, clear of the corner the card's outline cuts", () => {
     const point = { x: 495, y: 0 };
     const { path } = calloutLeader(box(100, 200, 400, 100), point, 'below', () => {});
