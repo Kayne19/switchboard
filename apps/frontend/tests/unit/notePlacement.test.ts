@@ -1,5 +1,7 @@
 // Where the notes over a chart sit, and how their leaders run (#26, #49).
 import { describe, expect, it } from 'vitest';
+import type { ChartData } from '../../src/controller/types';
+import { chartObstacles, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 import {
   DATA_CLEARANCE,
   hiddenFillArea,
@@ -353,6 +355,37 @@ describe('note placement over the data', () => {
     );
     expect(placed.has('general')).toBe(false);
     expect(clearOf(placed.get('pointed')!, field.marks)).toBe(true);
+  });
+
+  it("keeps the comparison chart's note off its bars (the bars stood under the card)", () => {
+    // The `comparison` fixture's chart as the landscape page draws it: the
+    // viewBox at 0.937 in a 937 x 596 layer, 69 down it.
+    const data: ChartData = {
+      kind: 'bar',
+      labels: ['backend', 'frontend unit', 'frontend visual', 'host agent', 'skill', 'hygiene'],
+      series: [
+        { name: 'THIS RUN', values: [41.8, 3.3, 96.4, 6.1, 0.3, 0.4] },
+        { name: 'PREVIOUS RUN', values: [44.0, 3.1, 102.9, 6.4, 0.3, 0.4] },
+      ],
+      marker: { x: 2, series: 'THIS RUN' },
+    };
+    const scale = 0.937;
+    const top = 69.3;
+    const at = (p: Point): Point => ({ x: p.x * scale, y: top + p.y * scale });
+    const rect = (r: Rect): Rect => ({ left: r.left * scale, top: top + r.top * scale, right: r.right * scale, bottom: top + r.bottom * scale });
+    const scales = chartScales(data);
+    const obstacles = chartObstacles(data, scales);
+    const marks = obstacles.marks.map(rect);
+    const point = at(chartSeriesPoint(data, 2, 'THIS RUN', scales)!);
+    const placed = placeNotes([{ id: 'note', width: 394, height: 118, point }], {
+      area: box(0, 0, 937, 596),
+      plot: rect(scales.plot),
+      marks,
+      labels: obstacles.labels.map(rect),
+    }).get('note')!;
+    // Clear of every bar but the one it names, and of that one's ring.
+    expect(clearOf(placed, marks)).toBe(true);
+    expect(leavesTopOrBottom(placed, point)).toBe(true);
   });
 });
 

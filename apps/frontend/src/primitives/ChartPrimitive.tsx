@@ -5,6 +5,8 @@ import {
   CHART_LEGEND_KEY_WIDTH,
   CHART_LEGEND_ROW_HEIGHT,
   CHART_LEGEND_TEXT_X,
+  CHART_MARKER_RADIUS,
+  CHART_MARKER_STROKE,
   CHART_PAD,
   CHART_POINT_RADIUS,
   CHART_TICK_BASELINE,
@@ -195,7 +197,7 @@ export function ChartPrimitive({
         })}
         {markerPoint ? (
           <motion.g className="chart-marker" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
-            <circle className="chart-marker__point" cx={markerPoint.x} cy={markerPoint.y} r={focused?7:5} fill="#000" stroke="var(--orange)" strokeWidth="2"/>
+            <circle className="chart-marker__point" cx={markerPoint.x} cy={markerPoint.y} r={focused?CHART_MARKER_RADIUS+2:CHART_MARKER_RADIUS} fill="#000" stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
           </motion.g>
         ) : null}
       </g>

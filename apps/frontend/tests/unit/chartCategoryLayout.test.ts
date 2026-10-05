@@ -3,18 +3,23 @@ import type { ChartData } from '../../src/controller/types';
 import {
   CHART_CATEGORY_PAD_MAX,
   CHART_LEGEND_ROW_HEIGHT,
+  CHART_MARKER_RADIUS,
+  CHART_MARKER_STROKE,
   CHART_PAD,
+  CHART_POINT_RADIUS,
   CHART_TICK_CHAR_ADVANCE,
   CHART_TICK_GAP,
   CHART_TICK_ROW_HEIGHT,
   CHART_VIEW_HEIGHT,
   CHART_VIEW_WIDTH,
+  chartAxisBoxes,
   chartBars,
   chartCategoryLayout,
+  chartLegendBox,
+  chartObstacles,
   chartPad,
   chartScales,
   chartSeriesPoint,
-  chartTraces,
 } from '../../src/primitives/chartGeometry';
 
 const plotWidth = CHART_VIEW_WIDTH - CHART_PAD.left - CHART_PAD.right;
@@ -186,13 +191,80 @@ describe('chart bars', () => {
       expect(bar.rect.top).toBeGreaterThanOrEqual(scales.plot.top + bar.index * scales.band);
     }
   });
+});
 
-  it('traces each bar as its outline, so notes keep clear of the bars themselves', () => {
-    const traces = chartTraces(chart);
-    const bars = chartBars(chart);
-    expect(traces).toHaveLength(bars.length);
-    expect(traces[0][0]).toEqual({ x: bars[0].rect.left, y: bars[0].rect.top });
-    expect(traces[0][4]).toEqual(traces[0][0]);
+// What a note over the chart keeps clear of, as the chart draws it: a bar or
+// a point is an area, so it is a mark, not the outline round it.
+describe('chart obstacles', () => {
+  const bars: ChartData = {
+    kind: 'bar',
+    labels: ['a', 'b', 'c'],
+    series: [
+      { name: 'ONE', values: [4, 2, 3] },
+      { name: 'TWO', values: [1, 3] },
+    ],
+  };
+
+  it('keeps a note off each bar as the area it fills, not its outline', () => {
+    const obstacles = chartObstacles(bars);
+    expect(obstacles.marks).toEqual(chartBars(bars).map((bar) => bar.rect));
+    expect(obstacles.lines).toEqual([]);
+    expect(obstacles.fills).toEqual([]);
+  });
+
+  it('cuts a bar that runs past the domain to the plot, as the clip draws it', () => {
+    const scales = chartScales({ ...bars, yMax: 3 });
+    const tallest = chartObstacles({ ...bars, yMax: 3 }, scales).marks[0];
+    expect(tallest.top).toBeCloseTo(scales.plot.top);
+    expect(tallest.bottom).toBeCloseTo(scales.plot.bottom);
+  });
+
+  it('marks the marker ring where it is drawn, stroke and all', () => {
+    const marked = { ...bars, marker: { x: 1, series: 'TWO' } };
+    const scales = chartScales(marked);
+    const point = chartSeriesPoint(marked, 1, 'TWO', scales)!;
+    const reach = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
+    expect(chartObstacles(marked, scales).marks.at(-1)).toEqual({ left: point.x - reach, top: point.y - reach, right: point.x + reach, bottom: point.y + reach });
+  });
+
+  it('gives each scatter point its drawn box, and a line chart its lines', () => {
+    const series = [{ name: 'A', values: [1, 3, 2] }];
+    const scatter = chartScales({ kind: 'scatter', xMax: 2, series });
+    const marks = chartObstacles({ kind: 'scatter', xMax: 2, series }, scatter).marks;
+    expect(marks).toHaveLength(3);
+    const middle = scatter.pointAt(1, 3);
+    expect(marks[1]).toEqual({
+      left: middle.x - CHART_POINT_RADIUS,
+      top: middle.y - CHART_POINT_RADIUS,
+      right: middle.x + CHART_POINT_RADIUS,
+      bottom: middle.y + CHART_POINT_RADIUS,
+    });
+    const line = chartScales({ xMax: 2, series });
+    const obstacles = chartObstacles({ xMax: 2, series }, line);
+    expect(obstacles.marks).toEqual([]);
+    expect(obstacles.lines).toEqual([[line.pointAt(0, 1), line.pointAt(1, 3), line.pointAt(2, 2)]]);
+  });
+
+  it('fills an area chart between its line and the baseline, in two triangles where the line crosses it', () => {
+    const area: ChartData = { kind: 'area', labels: ['a', 'b', 'c'], series: [{ name: 'A', values: [2, -2, -1] }] };
+    const scales = chartScales(area);
+    const { fills, lines } = chartObstacles(area, scales);
+    expect(lines).toHaveLength(1);
+    const base = scales.valueAt(0);
+    // a to b crosses the baseline halfway: two triangles; b to c stays below it: one piece.
+    expect(fills.map((piece) => piece.length)).toEqual([3, 3, 4]);
+    const shoelace = (piece: Array<{ x: number; y: number }>) =>
+      Math.abs(piece.reduce((sum, p, index) => sum + p.x * piece[(index + 1) % piece.length].y - piece[(index + 1) % piece.length].x * p.y, 0)) / 2;
+    const step = scales.xAt(1) - scales.xAt(0);
+    const unit = Math.abs(scales.valueAt(1) - base);
+    expect(shoelace(fills[0]) + shoelace(fills[1])).toBeCloseTo((step / 2) * 2 * unit, 6);
+    expect(shoelace(fills[2])).toBeCloseTo(step * 1.5 * unit, 6);
+    for (const piece of fills) expect(piece.some((p) => Math.abs(p.y - base) < 1e-9)).toBe(true);
+  });
+
+  it('keeps the legend and the axes\' labels in view', () => {
+    const scales = chartScales(bars);
+    expect(chartObstacles(bars, scales).labels).toEqual([chartLegendBox(bars), ...chartAxisBoxes(scales.plot)]);
   });
 });
 

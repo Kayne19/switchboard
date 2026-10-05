@@ -5,12 +5,9 @@ import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
   CHART_VIEW_HEIGHT,
   CHART_VIEW_WIDTH,
-  chartAxisBoxes,
-  chartLegendBox,
-  chartPlot,
+  chartObstacles,
   chartScales,
   chartSeriesPoint,
-  chartTraces,
   type ViewPoint,
   type ViewRect,
 } from '../primitives/chartGeometry';
@@ -76,8 +73,8 @@ const snap = (value: number) => Math.round(value - 0.5) + 0.5;
  * point on this chart centres over it where it can and runs a leader to it;
  * one that names none sits in a corner. The layer measures the cards, the
  * chart's drawn geometry and itself, and `placeNotes` decides where each
- * card goes, so no card covers another, its own point, or more of the
- * traces than it must.
+ * card goes, so no card covers another, its own point, or the data the
+ * chart draws where a clear place exists.
  */
 export function ChartNotes({
   chart,
@@ -139,10 +136,13 @@ export function ChartNotes({
         return { left: a.x, top: a.y, right: b.x, bottom: b.y };
       };
       if (toLayer) {
-        const plot = chartPlot(data);
-        field.plot = rectToLayer(plot);
-        field.traces = chartTraces(data, chartScales(data)).map((trace) => trace.map(toLayer!));
-        field.labels = [chartLegendBox(data), ...chartAxisBoxes(plot)].map(rectToLayer);
+        const scales = chartScales(data);
+        const obstacles = chartObstacles(data, scales);
+        field.plot = rectToLayer(scales.plot);
+        field.traces = obstacles.lines.map((line) => line.map(toLayer!));
+        field.marks = obstacles.marks.map(rectToLayer);
+        field.fills = obstacles.fills.map((piece) => piece.map(toLayer!));
+        field.labels = obstacles.labels.map(rectToLayer);
       }
 
       const toPlace: NoteToPlace[] = [];
