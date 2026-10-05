@@ -112,13 +112,14 @@ describe('a diagram in focus keeps its note', () => {
     const offsetY = Math.max(0, (scroller.clientHeight - viewHeight * scale) / 2);
     const gate = marked[0];
     const [x, y] = (/translate\(([-\d.]+) ([-\d.]+)\)/.exec(gate.getAttribute('transform') ?? '') ?? []).slice(1).map(Number);
+    const [, width, height] = /H [\d.]+ L ([\d.]+) [\d.]+ V ([\d.]+)/.exec(gate.querySelector('.diagram-node__frame')?.getAttribute('d') ?? '')?.map(Number) ?? [];
     const left = offsetX + x * scale - scroller.scrollLeft;
     const top = offsetY + y * scale - scroller.scrollTop;
     expect(scroller.scrollLeft + scroller.scrollTop).toBeGreaterThan(0);
     expect(left).toBeGreaterThanOrEqual(0);
     expect(top).toBeGreaterThanOrEqual(0);
-    expect(left).toBeLessThan(scroller.clientWidth);
-    expect(top).toBeLessThan(scroller.clientHeight);
+    expect(left + width * scale).toBeLessThanOrEqual(scroller.clientWidth);
+    expect(top + height * scale).toBeLessThanOrEqual(scroller.clientHeight);
   });
 
   it('marks the actor a sequence\'s note names, and shows the note', () => {

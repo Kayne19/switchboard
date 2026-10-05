@@ -13,7 +13,7 @@ import type {
   SceneObject,
   TableData,
 } from '../controller/types';
-import { objectsOfType } from '../app/sceneModel';
+import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { CodeViewport } from '../primitives/CodeViewport';
@@ -26,15 +26,15 @@ import { TablePrimitive } from '../primitives/TablePrimitive';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /**
- * The note focus keeps beside a diagram: the first note on stage anchored
- * to it, as the scene's rail shows it. Focus gives the diagram the stage
+ * The note focus keeps beside a diagram: the one the scene's rail shows
+ * for it (`anchoredNote`). Focus gives the diagram the stage
  * and the rail goes, so the note comes with the diagram: in a panel of its
  * own beside or under it, and the node or actor it names keeps its NOTE
  * marker, the drawing opening on it.
  */
 export function focusNote(state: ControllerState, object: SceneObject | null): NoteData | null {
   if (object?.type !== 'diagram') return null;
-  return objectsOfType<NoteData>(state, 'note').find((note) => note.data.anchor?.target === object.id)?.data ?? null;
+  return anchoredNote(objectsOfType<NoteData>(state, 'note'), object.id)?.data ?? null;
 }
 
 function FocusedObject({ object, note }: { object: SceneObject; note: NoteData | null }) {
