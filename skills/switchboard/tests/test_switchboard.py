@@ -2,6 +2,7 @@
 
 import base64
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -298,6 +299,32 @@ class CallsTest(ModuleTestCase):
         data = {"series": [{"name": "load", "values": ArrayLike()}]}
         self.run_call(switchboard.display, op="show", id="c", type="chart", data=data)
         self.assertEqual(host.calls()[-1]["args"]["action"]["data"]["series"][0]["values"], [1, 2, 3])
+
+    def test_dates_and_datetimes_are_sent_as_the_time_forms(self):
+        # docs/display-tool.md, "Time values": a date, the caller's wall clock
+        # to the minute, or an instant with its offset (a timer's only).
+        host = self.host()
+        pacific = datetime.timezone(datetime.timedelta(hours=-7))
+        week = {
+            "view": "week",
+            "start": datetime.date(2026, 10, 5),
+            "now": datetime.datetime(2026, 10, 7, 9, 40, 27),
+            "events": [{"id": "dentist", "title": "Dentist", "start": datetime.datetime(2026, 10, 7, 10, 0)}],
+        }
+        timers = {"timers": [
+            {"id": "pasta", "label": "Pasta", "endsAt": datetime.datetime(2026, 10, 5, 18, 42, tzinfo=pacific)},
+            {"id": "tea", "label": "Tea", "endsAt": datetime.datetime(2026, 10, 6, 1, 15, 0, 250000, tzinfo=datetime.timezone.utc)},
+        ]}
+        self.run_call(switchboard.display, op="show", id="week", type="calendar", data=week)
+        self.run_call(switchboard.display, op="show", id="kitchen", type="timer", data=timers)
+        sent = [call["args"]["action"]["data"] for call in host.calls()]
+        self.assertEqual(sent[0], {
+            "view": "week", "start": "2026-10-05", "now": "2026-10-07T09:40",
+            "events": [{"id": "dentist", "title": "Dentist", "start": "2026-10-07T10:00"}],
+        })
+        self.assertEqual([timer["endsAt"] for timer in sent[1]["timers"]], [
+            "2026-10-05T18:42:00-07:00", "2026-10-06T01:15:00.250000+00:00",
+        ])
 
 
 class ProgrammingErrorTest(ModuleTestCase):

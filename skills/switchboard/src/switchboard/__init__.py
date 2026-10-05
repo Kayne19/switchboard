@@ -11,6 +11,7 @@ delivery; the checks here only catch malformed arguments early.
 """
 
 import base64 as _base64
+import datetime as _datetime
 import json as _json
 import os as _os
 import socket as _socket
@@ -43,8 +44,8 @@ _SHAPES = {
     # The wire shape; `_image_data` makes it from a path or raw bytes first.
     "image": (("format", "bytes", "alt"), '{alt, path:"/tmp/fig.png"} or {alt, bytes:<raw bytes>}'),
     # Times are "YYYY-MM-DD", a wall time "YYYY-MM-DDTHH:MM", or (a timer's
-    # only) an instant "YYYY-MM-DDTHH:MM:SS-07:00" (docs/display-tool.md,
-    # "Time values").
+    # only) an instant "YYYY-MM-DDTHH:MM:SS-07:00"; `_wire_time` writes them
+    # from date and datetime values.
     "calendar": (
         ("view", "start", "events"),
         '{view:"day"|"week"|"month"|"agenda", start:"YYYY-MM-DD", events:[{id, title, start:"YYYY-MM-DD" or "YYYY-MM-DDTHH:MM"}]}',
@@ -114,13 +115,29 @@ def _identity():
     return _os.path.basename(session_dir), depth
 
 
+def _wire_time(value):
+    """A date or datetime as the display contract writes a time
+    (docs/display-tool.md, "Time values"): a date is "YYYY-MM-DD"; a naive
+    datetime is the caller's wall clock, "YYYY-MM-DDTHH:MM" (to the minute,
+    as the page draws it); an aware one is an instant with its offset, the
+    form a timer's `endsAt` takes."""
+    if not isinstance(value, _datetime.datetime):
+        return value.isoformat()
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.strftime("%Y-%m-%dT%H:%M")
+    return value.isoformat(timespec="seconds" if value.microsecond == 0 else "microseconds")
+
+
 def _encode(request):
     """One JSON line. Raises TypeError for a value JSON cannot carry (a programming error);
-    array-likes with `tolist()` (numpy values) are converted."""
+    array-likes with `tolist()` (numpy values) are converted, and so are dates and
+    datetimes (`_wire_time`)."""
 
     def plain(value):
         if hasattr(value, "tolist"):
             return value.tolist()
+        if isinstance(value, _datetime.date):
+            return _wire_time(value)
         raise TypeError(f"{type(value).__name__} cannot be sent to the switchboard")
 
     return _json.dumps(request, default=plain).encode() + b"\n"
