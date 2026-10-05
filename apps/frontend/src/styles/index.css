@@ -3097,6 +3097,14 @@ button {
 
 .inbox-row__channel {
   justify-self: end;
+  align-self: center;
+  display: flex;
+}
+
+/* A tag is set a step over the micro floor: it is read, not just seen. */
+.task-tag,
+.inbox-row__tag {
+  font-size: clamp(7.5px, 0.58cqw, 11px);
 }
 
 .inbox-row__tag {
