@@ -250,7 +250,14 @@ else -- a phone, a portrait tablet, a chart in an aux cell, a portrait focus
 -- the chart is recomposed: its frame takes the slot's own shape, so the plot
 fills the slot rather than shrinking inside bands of black, at the scale that
 fits but never under the readable one. A bar chart whose labels then no longer
-fit a row under its bars turns on its side. A slot too small for the chart's
+fit a row under its bars turns on its side. One too long for a row per
+category even there (sixty bars on a phone, whose stage it has been given)
+stays on its side in a slot taller than it is wide, drawn at its least
+height, and scrolls in its frame as a list does: the rows past each edge
+counted there, a tap turning a page, the value axis pinned over the rows,
+its notes lying on the chart and scrolling with the bars they name; it opens
+on the bar a note names. A wide slot stands such a chart upright, its labels
+thinned, the whole of it in view. A slot too small for the chart's
 least frame (320x240 units) at that scale draws it smaller; an aux cell keeps
 a chart's cell at least that tall, so the aux row scrolls instead.
 
