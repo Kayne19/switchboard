@@ -171,6 +171,10 @@ A command whose `epoch` is not the current link's epoch is not run:
 A reply is sent only on the link the command came from; if that link is gone,
 the reply is dropped.
 
+A reply the service cannot read (see "Frames the service cannot read")
+fails its command at once with the code `unreadable_reply`, rather than
+leaving it to wait out its deadline.
+
 Error codes:
 
 | Code | Meaning |
@@ -374,7 +378,42 @@ may omit them. The service checks the token against the session's current call
 and, when present, the turn authority. A self-woken call without an authority
 is refused, while an old host's ordinary caller turn keeps the existing token
 behavior. If no reply arrives in time (the speech deadline for `speak`, 30 s
-otherwise), or the link is down, the module gets `failed`.
+otherwise), or the link is down, the module gets `failed`. A call that cannot
+go out because the link's socket is already closing gets `failed` at once.
+
+### Frames the service cannot read
+
+The service reads frames with serde_json, which refuses three things a host
+agent's `JSON.stringify` can write: a string with half of a UTF-16 surrogate
+pair (`"\ud83d"`, an emoji cut in two), a number beyond a double (`1e400`),
+and arrays or objects nested deeper than 128 levels. When the whole frame
+cannot be read, the service still reads its `type`, `id`, `epoch`, `session`
+and `call` (serde skips the other fields without building them) and answers
+what it can, at once:
+
+- a `module_call` is refused, its reason naming the fault:
+
+  ```json
+  { "type": "module_reply", "id": "m5", "status": "refused", "reason": "this call cannot be read: a string holds half of a UTF-16 surrogate pair" }
+  ```
+
+- a `reply` fails its command with `unreadable_reply`;
+- any other frame (an `event`, a `snapshot`, a frame without an `id`) has
+  nothing to answer by. It is logged at warn with the reason and dropped.
+
+A frame that is read but lacks what it needs (a reply or module call without
+an `id`, an event without a `session` or `cursor`) is logged and dropped the
+same way. A module call for a session whose listener has gone is refused
+`not_on_call`, as one for a session nobody listens to.
+
+The host agent keeps its own frames readable where it builds them: a clipped
+tool `args` or `result` preview is cut between whole characters. Text it
+passes on from the daemon is sent as it came.
+
+Going the other way, the host agent logs and drops a service frame that is
+not a JSON object, a `module_reply` whose call is no longer waiting (it
+already failed at its deadline), and a frame of no known type. A
+`module_reply` with no known `status` fails its call.
 
 ## Skill socket
 
@@ -384,7 +423,8 @@ one reply line; the host agent never pushes. A connection may carry several
 requests; they are answered in order. A request line is at most 13 MiB: the
 largest display action (an image, at most 12 MiB) with room for its envelope,
 and safely under the host link's 16 MiB frame, which the relayed call is
-re-wrapped in. A longer line closes the connection.
+re-wrapped in. A longer line is answered `refused`, `too_large`, in its turn,
+and then the connection ends; lines after it are not read.
 
 ### Hello
 
@@ -426,6 +466,10 @@ Reply: `{status, reason, result?}`, `status` one of `delivered`, `accepted`,
 4. Delivery by mode (below); a relayed call returns the service's reply.
 
 A request that is not JSON gets `refused`, `bad_request`.
+
+The module checks the call before it connects: a value JSON cannot carry (a
+NaN, an infinity, or a string holding half of a surrogate pair) raises in
+the agent's code, and nothing is sent.
 
 ### Delivery
 
