@@ -992,8 +992,8 @@ button {
   padding: clamp(10px, 1cqw, 16px) clamp(12px, 1.2cqw, 18px)
     clamp(10px, 1cqw, 16px);
   border: 1px solid var(--chart-note-edge);
-  /* The layer's leader router cuts the same share (CARD_CUT) from the top
-     edge it may leave by. */
+  /* The leader router keeps off the same cut (notePlacement's
+     NOTE_CARD_CUT: 8% of the top edge, 23% of the right side). */
   clip-path: polygon(0 0, 92% 0, 100% 23%, 100% 100%, 0 100%);
 }
 /* The note a chart leaves out so the others are clear of its data is shown

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
@@ -112,10 +112,12 @@ const snap = (value: number) => Math.round(value - 0.5) + 0.5;
  *
  * Where the scene gives it `onRailNote` and some card has no place clear
  * of the data -- every bar standing to the top, say -- one note is handed
- * to the rail instead (`placeNotes`' `spill`: the one whose absence leaves
- * the others clear, sooner a note naming no point). The layer names it
- * through `onRailNote`, keeps its card out of view (still measured, so it
- * comes back the moment the chart has room), and rings the point it names.
+ * to the rail instead (`layoutNotes`' `spill`: a note naming no point
+ * wherever its absence leaves no more cards astray, else the one whose
+ * absence leaves the fewest). The layer names it through `onRailNote`,
+ * keeps its card out of view (still measured, so it comes back the moment
+ * the chart has room), and rings the point it names on a line; a bar the
+ * chart marks itself.
  */
 export function ChartNotes({
   chart,
@@ -297,6 +299,13 @@ export function ChartNotes({
     return () => observer.disconnect();
   }, [signature, chart.data, spill]);
 
+  // What each note names on the chart, worked out once a render: whether it
+  // has a point there, and whether that point is a bar's.
+  const targets = useMemo(() => {
+    const scales = chartScales(chart.data);
+    return new Map(notes.map((note) => [note.key, chartNotePoint(note.data, chart, scales)]));
+  }, [chart, notes]);
+
   // The rail shows the note this chart leaves out, for as long as it does:
   // the layer says, for its own chart, when the note leaves and when it is
   // back. A chart on its way out of the stage says no more.
@@ -318,7 +327,7 @@ export function ChartNotes({
             if (!leader) return null;
             // A leader to a bar keeps its full colour to the end: it lands
             // by the bar's printed value, over bars it must not fade into.
-            const toBar = chartNotePoint(note.data, chart)?.from !== undefined;
+            const toBar = targets.get(note.key)?.from !== undefined;
             const start = leader[0];
             const end = leader[leader.length - 1];
             // Named for its note, so a leader fading out keeps its own.
@@ -369,7 +378,7 @@ export function ChartNotes({
       <AnimatePresence initial={false}>
         {notes.map((note) => {
           const card = layout?.cards[note.key];
-          const anchored = chartNotePoint(note.data, chart) !== undefined;
+          const anchored = targets.get(note.key) !== undefined;
           // The note the rail carries keeps its card here out of view, so
           // the layer still measures it and can take it back.
           const away = layout?.away === note.key;

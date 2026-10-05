@@ -31,12 +31,22 @@
 // the card searches every place within reach of its point -- an empty
 // stretch of the plot, or the free band above it inside the frame -- for
 // one clear of all of that, then one over a fill at most, then one over
-// fills and labels at most, never over the data. A chart whose data leaves
-// a card no place near its point (every bar standing to the top, and no
-// band above it as tall as the card) has that card astray: given `spill`,
-// one note is left out for the scene to show elsewhere (the rail) -- the
-// one whose absence leaves the fewest cards astray, sooner a note naming no
-// point -- and the others are placed without it; without, each card takes
+// fills and labels at most, never over the data.
+//
+// On a bar chart (`NoteField.wholly`) a card lies wholly inside the plot or
+// wholly outside it, and a note naming a bar (`from`) is reached past the
+// bar's end (`barLeader`): from a card past that end, or from one beside
+// it, level with it -- the "never level" rule is for a line's points -- by
+// a run along over the bars between. A place with no such route clear of
+// the other bars ranks after one too far from its point and before one
+// over the data. A card with no clear place, or a long way from its bar,
+// tries the other sizes its note gives (`sizes`).
+//
+// A chart whose data leaves a card no place near its point has that card
+// astray: given `spill`, one note is left out for the scene to show
+// elsewhere (the rail) -- a note naming no point wherever its absence
+// leaves no more cards astray, else the one whose absence leaves the
+// fewest -- and the others are placed without it; without, each card takes
 // the place that hides the least.
 
 export interface Point {
@@ -329,10 +339,10 @@ export interface PlaceOptions {
   /**
    * The scene can show one note elsewhere (the rail). Where some card has
    * no place clear of the data within reach of its point, one note is then
-   * left out, its card not placed: the one whose absence leaves the fewest
-   * cards astray, sooner a note naming no point (which may itself have had
-   * a clear place), and only if that leaves fewer astray. Its point still
-   * stands in the other cards' way.
+   * left out, its card not placed: a note naming no point (which may itself
+   * have had a clear place), wherever its absence leaves no more cards
+   * astray; else a note naming one, where its absence leaves fewer, the
+   * fewest first. Its point still stands in the other cards' way.
    */
   spill?: boolean;
   /** How far inside a card's border a bar's leader begins, so it grows out of the border as drawn. */

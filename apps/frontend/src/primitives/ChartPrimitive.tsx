@@ -188,7 +188,10 @@ export function ChartPrimitive({
   // A bar is marked as a bar: outlined, its value printed past its end
   // (`chartBarCallouts`), not a ring on its edge.
   const markerPoint=data.marker && kind!=='bar' ? chartSeriesPoint(data,data.marker.x,data.marker.series,scales) : undefined;
-  const callouts=useMemo(()=>chartBarCallouts(data,named,scales),[data,named,scales]);
+  // Kept while what the notes name is the same: the scene builds a new
+  // array of it every render, so the memo reads `named` through its key.
+  const namedKey=(named??[]).map((anchor)=>`${anchor.x}\u0000${anchor.series??''}`).join('\u0001');
+  const callouts=useMemo(()=>chartBarCallouts(data,named,scales),[data,namedKey,scales]);
   const grounded=kind==='bar'||kind==='area';
   const base=valueAt(baseline);
   const clip=chartClip(scales);

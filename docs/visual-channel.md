@@ -224,15 +224,17 @@ from a card past that end, or out of its side, along over the bars between and
 a 45-degree turn onto the value, from a card beside it. It never runs alongside
 the bar it names or through any other. A card with no clear place at its own
 width, or a long way from its bar, tries narrower widths its text still fits
-at; one whose text would scroll at its width takes a wider one. Line, area and
-scatter charts keep the placement the training goldens were approved with,
-whose card may lie across the plot's top border.
+at; one whose text would scroll at its width takes a wider one (on any kind of
+chart). The rule of wholly in or out, and the leader from past a bar's end,
+are a bar chart's: on a line, area or scatter chart a card may still lie
+across the plot's top border, as the training goldens were approved with.
 
 Where the chart has no place for a card (every bar standing to the top of a
 domain the agent gave, and no band as tall as the card, say), one note is
 shown in the rail instead, still naming its target: a note naming no point
 first, wherever its absence leaves no more cards astray (it loses nothing
-there); else the one whose absence leaves the fewest astray. A bar it names
+there, while an anchored note would lose its leader), even if that clears no
+card; else the one whose absence leaves the fewest astray. A bar it names
 stays marked; a point on a line keeps a ring. A note anchored to a
 visual on a chart page that is not a chart (one in the aux row) is shown in
 the rail too. The rail holds one note, so: only the primary chart hands one
