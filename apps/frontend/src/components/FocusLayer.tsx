@@ -41,7 +41,8 @@ import { SurfaceBoundary } from './SurfaceBoundary';
  * The notes focus keeps beside an object: the ones the scene draws about
  * it, so a note never goes when its object takes the stage. On a chart,
  * every note that names it (the scene lays each one over it); on any other
- * object, the note the rail shows for it (`anchoredNote`). Focus gives the
+ * object, the first note that names it (`anchoredNote`, the one the rail
+ * shows when the object is the primary). Focus gives the
  * object the stage and the rail goes, so the notes come with it, in a panel
  * of their own beside or under it, and what they name stays marked in it:
  * a chart's point its ring or outline and printed value, a diagram's node

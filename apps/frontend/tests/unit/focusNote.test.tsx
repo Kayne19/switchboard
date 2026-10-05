@@ -200,6 +200,17 @@ describe('any object in focus keeps the notes about it', () => {
     });
   }
 
+  it("keeps the note about a plan's progress, and about a metric, beside it", () => {
+    const plan = focusOn(fixtures.plan, 'ship-plan');
+    expect(plan.querySelector('.focus-layer__note .annotation-card')?.textContent).toContain('waits on the graph layout');
+    act(() => root.unmount());
+    host.remove();
+    const metric: ControllerAction = { op: 'show', id: 'build-note', type: 'note', data: { anchor: { target: 'build-time' }, segments: [{ text: 'Two seconds faster since the cache moved.' }] } };
+    const layer = focusOn([...fixtures.plan, metric], 'build-time');
+    expect(layer.querySelector('.focus-layer__note .annotation-card')?.textContent).toContain('Two seconds faster');
+    expect(layer.querySelector('.focus-layer__content--metric.focus-layer__content--noted')).not.toBeNull();
+  });
+
   it('shows no panel for an object no note names', () => {
     const layer = focusOn(fixtures.code, 'source');
     // The code fixture's note names no object: it is about the scene.

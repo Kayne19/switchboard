@@ -5174,10 +5174,11 @@ button {
   width: 100%;
   height: 100%;
 }
-/* A focused diagram keeps the note about it (FocusLayer `focusNote`): in a
-   column beside the drawing, where the rail stood, when the box is wide;
-   in a band under it when the box is tall (the portrait rule below). The
-   card is as tall as its words up to the room; a longer note scrolls. */
+/* A focused object keeps the notes about it (FocusLayer `focusNotes`): in
+   a column beside it, where the rail stood, when the box is wide; in a band
+   under it when the box is tall (the portrait rule below). A card is as tall
+   as its words up to the room; a longer note scrolls inside it. A chart's
+   notes stand one under another, sharing the panel's height past that. */
 .focus-layer__content--noted {
   display: grid;
   grid-template-columns: minmax(0, 1fr) clamp(220px, 22%, 340px);
@@ -5191,13 +5192,8 @@ button {
   align-self: start;
   display: flex;
   flex-direction: column;
-  padding-top: clamp(12px, 2cqh, 28px);
-}
-/* A chart's notes stand one under another, each as tall as its words while
-   they fit; past that they share the panel's height and a long one scrolls
-   inside its card. */
-.focus-layer__note {
   gap: clamp(10px, 1.6cqh, 18px);
+  padding-top: clamp(12px, 2cqh, 28px);
 }
 .focus-layer__note .annotation-card {
   flex: 0 1 auto;
@@ -5217,10 +5213,13 @@ button {
   line-height: 1.45;
 }
 /* A metric or a progress with a note beside it is wider by the note's
-   column, so it keeps the width it has alone. */
+   column, so it keeps the width it has alone; it is held to the focus box's
+   height, as every other focused object is, so a long note scrolls inside
+   its card rather than push the box, and RETURN with it, off the screen. */
 .focus-layer__content--metric.focus-layer__content--noted,
 .focus-layer__content--progress.focus-layer__content--noted {
   width: min(92vw, 1240px);
+  max-height: min(88vh, 920px);
 }
 .focus-layer__content--metric .metrics {
   display: grid;
@@ -5805,7 +5804,9 @@ button {
   }
   .focus-layer__content--note,
   .focus-layer__content--metric,
-  .focus-layer__content--progress {
+  .focus-layer__content--progress,
+  .focus-layer__content--metric.focus-layer__content--noted,
+  .focus-layer__content--progress.focus-layer__content--noted {
     width: 90vw;
     min-height: 220px;
   }
@@ -5813,6 +5814,17 @@ button {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
     row-gap: clamp(10px, 1.6cqh, 18px);
+  }
+  /* A metric or a progress is as tall as what it shows: its note stands
+     right under it, not at the foot of the box. */
+  .focus-layer__content--metric.focus-layer__content--noted,
+  .focus-layer__content--progress.focus-layer__content--noted {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  /* There a long note may take the rest of the box: nothing under it needs the room. */
+  .focus-layer__content--metric.focus-layer__content--noted .focus-layer__note,
+  .focus-layer__content--progress.focus-layer__content--noted .focus-layer__note {
+    max-height: 100%;
   }
   /* A chart with its notes under it takes the focus box's height, not a
      square: the notes come out of the box, not out of the chart's room. */
