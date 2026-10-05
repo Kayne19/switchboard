@@ -376,6 +376,27 @@ export function DrawingViewport({
     return () => viewport.removeEventListener('wheel', onWheel);
   }, [axis, letGo, settle]);
 
+  // A key or a count moves the drawing to a stop, smoothly. A second press
+  // while it is on its way moves on from where the first is going, not
+  // from where the scroll has got to (which would give the same stop
+  // again): the stop it is gliding to is kept until the scroll ends.
+  const gliding = useRef<{ left: number | null; top: number | null; stop: (() => void) | null }>({ left: null, top: null, stop: null });
+  const standing = (element: HTMLElement, across: boolean) => (across ? (gliding.current.left ?? element.scrollLeft) : (gliding.current.top ?? element.scrollTop));
+  const glide = (element: HTMLElement, across: boolean, target: number) => {
+    const smooth = !reducedMotion();
+    element.scrollTo({ [across ? 'left' : 'top']: target, behavior: smooth ? 'smooth' : 'auto' });
+    if (!smooth) return;
+    gliding.current.stop?.();
+    gliding.current = {
+      ...gliding.current,
+      [across ? 'left' : 'top']: target,
+      stop: whenScrollEnds(element, () => {
+        gliding.current = { left: null, top: null, stop: null };
+      }),
+    };
+  };
+  useEffect(() => () => gliding.current.stop?.(), []);
+
   // The keys that scroll a focused viewport move it from stop to stop, so
   // it rests between its parts as it does after any other input. Each key
   // it takes is marked handled (FocusableSurface's rule): the surface
@@ -393,11 +414,11 @@ export function DrawingViewport({
       const arrow = event.key.startsWith('Arrow');
       if (!arrow && along !== main) continue;
       const target = across
-        ? keyStop(event.key, event.shiftKey, true, stops.x, element.scrollLeft, element.clientWidth)
-        : keyStop(event.key, event.shiftKey, false, stops.y, element.scrollTop, element.clientHeight - pinnedDepth);
+        ? keyStop(event.key, event.shiftKey, true, stops.x, standing(element, true), element.clientWidth)
+        : keyStop(event.key, event.shiftKey, false, stops.y, standing(element, false), element.clientHeight - pinnedDepth);
       if (target === null) continue;
       event.preventDefault();
-      element.scrollTo({ [across ? 'left' : 'top']: target, behavior: reducedMotion() ? 'auto' : 'smooth' });
+      glide(element, across, target);
       return;
     }
   };
@@ -411,9 +432,9 @@ export function DrawingViewport({
     const across = side === 'left' || side === 'right';
     const direction = side === 'left' || side === 'top' ? -1 : 1;
     const target = across
-      ? pageStop(stops.x, element.scrollLeft, element.clientWidth, direction)
-      : pageStop(stops.y, element.scrollTop, element.clientHeight - pinnedDepth, direction);
-    element.scrollTo({ [across ? 'left' : 'top']: target, behavior: reducedMotion() ? 'auto' : 'smooth' });
+      ? pageStop(stops.x, standing(element, true), element.clientWidth, direction)
+      : pageStop(stops.y, standing(element, false), element.clientHeight - pinnedDepth, direction);
+    glide(element, across, target);
   };
 
   // What the rims say, from where the reader stands.

@@ -20,7 +20,7 @@ export function FocusableSurface({ children, onActivate, ariaLabel, className }:
     onActivate();
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.defaultPrevented) return;
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
     onActivate();
