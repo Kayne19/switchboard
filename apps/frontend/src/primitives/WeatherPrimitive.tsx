@@ -59,7 +59,7 @@ function AlertLine({ text }: { text: string }) {
   );
 }
 
-function Now({ data, compact, temp }: { data: WeatherData; compact: boolean; temp: number }) {
+function Now({ data, compact, temp, title }: { data: WeatherData; compact: boolean; temp: number; title?: string }) {
   const { current, units } = data;
   // The temperature is as large as the layout gives it, and no larger than
   // its row (glyph, digits, unit) fits the column the figure stands in:
@@ -78,9 +78,20 @@ function Now({ data, compact, temp }: { data: WeatherData; compact: boolean; tem
   });
   return (
     <section className="weather-now" aria-label={`Weather now in ${data.location}`}>
+      {/* Where no frame names the forecast (an aux cell, focus), its title
+          leads the head, and the place it is for takes the place of NOW. */}
       <div className="weather-now__head tech micro">
-        <span className="weather-now__location">{data.location}</span>
-        <span>NOW</span>
+        {title ? (
+          <>
+            <span className="weather-now__title" data-object-title>{title}</span>
+            <span className="weather-now__location">{data.location}</span>
+          </>
+        ) : (
+          <>
+            <span className="weather-now__location">{data.location}</span>
+            <span>NOW</span>
+          </>
+        )}
       </div>
       {data.alert ? <AlertLine text={data.alert} /> : null}
       {/* The figure and the words beside it where the box is wide enough
@@ -233,7 +244,12 @@ function Days({ days, marked, scroll }: { days: WeatherDay[]; marked?: string; s
   );
 }
 
-export function WeatherPrimitive({ data, marked }: { data: WeatherData; marked?: string }) {
+/**
+ * `framed`: the scene's frame names the forecast (the main slot); elsewhere
+ * (an aux cell, focus) the forecast names itself, so its title shows once
+ * wherever it is drawn.
+ */
+export function WeatherPrimitive({ data, marked, framed = false }: { data: WeatherData; marked?: string; framed?: boolean }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(boxRef);
   const hours = data.hourly ?? [];
@@ -252,7 +268,7 @@ export function WeatherPrimitive({ data, marked }: { data: WeatherData; marked?:
   const parts = ['now', layout.hourly ? 'hourly' : null, layout.daily ? 'daily' : null].filter(Boolean).join(' ');
   const field = (
     <div className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px` } as CSSProperties}>
-      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} />
+      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} title={framed ? undefined : data.title} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>

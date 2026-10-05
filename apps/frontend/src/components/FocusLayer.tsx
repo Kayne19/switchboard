@@ -12,10 +12,12 @@ import type {
   ProgressData,
   SceneObject,
   TableData,
+  InboxData,
+  TasksData,
   TimerData,
   WeatherData,
 } from '../controller/types';
-import { ITEM_TYPES, itemTargetText } from '../app/noteItems';
+import { ITEM_TYPES, markedItem, noteItemTarget } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
@@ -26,6 +28,8 @@ import { ImagePrimitive } from '../primitives/ImagePrimitive';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { TablePrimitive } from '../primitives/TablePrimitive';
+import { TasksPrimitive } from '../primitives/TasksPrimitive';
+import { InboxPrimitive } from '../primitives/InboxPrimitive';
 import { TemporaryAssistantList } from '../primitives/TemporaryAssistantList';
 import { TimerPrimitive } from '../primitives/TimerPrimitive';
 import { WeatherPrimitive } from '../primitives/WeatherPrimitive';
@@ -67,14 +71,16 @@ function FocusedObject({ object, note, marked }: { object: SceneObject; note: No
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} />;
     case 'progress':
       return <ProgressPrimitive data={object.data as ProgressData} />;
+    case 'tasks':
+      return <TasksPrimitive data={object.data as TasksData} variant="focus" marked={marked} />;
+    case 'inbox':
+      return <InboxPrimitive data={object.data as InboxData} marked={marked} />;
     case 'timer':
       return <TimerPrimitive data={object.data as TimerData} marked={marked} />;
     case 'weather':
       return <WeatherPrimitive data={object.data as WeatherData} marked={marked} />;
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
-    case 'tasks':
-    case 'inbox':
       return <TemporaryAssistantList type={object.type} data={object.data} marked={marked} />;
     default:
       return null;
@@ -83,18 +89,10 @@ function FocusedObject({ object, note, marked }: { object: SceneObject; note: No
 
 // Where the note stands is the focus box's geometry, in the stylesheet
 // (`.focus-layer__content--noted`): beside a wide drawing, as the rail is,
-// and under a tall one.
-export function FocusLayer({
-  object,
-  note = null,
-  marked,
-  onClose,
-}: {
-  object: SceneObject | null;
-  note?: NoteData | null;
-  marked?: string;
-  onClose: () => void;
-}) {
+// and under a tall one. The item the note names is marked in the object,
+// and named on the card, as in the scene.
+export function FocusLayer({ object, note = null, onClose }: { object: SceneObject | null; note?: NoteData | null; onClose: () => void }) {
+  const item = noteItemTarget(object, note);
   return (
     <AnimatePresence>
       {object ? (
@@ -121,12 +119,12 @@ export function FocusLayer({
               <button type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
-              <FocusedObject object={object} note={note} marked={marked} />
+              <FocusedObject object={object} note={note} marked={markedItem(note, object.id)} />
             </SurfaceBoundary>
             {note ? (
               <aside className="focus-layer__note">
                 <SurfaceBoundary surfaceId="focus-note" resetKey={note}>
-                  <AnnotationCard data={note} target={note.anchor?.item !== undefined ? itemTargetText(object, note.anchor.item) : undefined} />
+                  <AnnotationCard data={note} target={item} itemMarked={item !== undefined} />
                 </SurfaceBoundary>
               </aside>
             ) : null}
