@@ -357,6 +357,33 @@ describe('note placement over the data', () => {
     expect(clearOf(placed.get('pointed')!, field.marks)).toBe(true);
   });
 
+  it('keeps off a dense scatter read as the area it covers, and off a long line read as its envelope', () => {
+    // 1500 points: past the count where the scatter is read as the cells it
+    // covers. A clear band is left under the cloud.
+    let seed = 7;
+    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const marks: Rect[] = [];
+    for (let index = 0; index < 1500; index += 1) {
+      const x = 80 + random() * 840;
+      const y = 60 + random() * 300;
+      marks.push(box(x - 4, y - 4, 8, 8));
+    }
+    const area = box(0, 0, 1000, 500);
+    const point = { x: 500, y: 360 };
+    const scattered = placeNotes([{ id: 'a', ...card(), point }], { area, marks }).get('a')!;
+    expect(marks.every((mark) => !overlaps(scattered, mark))).toBe(true);
+    expect(leavesTopOrBottom(scattered, point)).toBe(true);
+
+    // Two lines of 1000 samples each across the top half: past the count
+    // where a line is read as its envelope.
+    const traces = [0, 1].map((series) =>
+      Array.from({ length: 1000 }, (_, index) => ({ x: (index / 999) * 1000, y: 120 + series * 60 + Math.sin(index / 7) * 40 + random() * 20 })),
+    );
+    const lined = placeNotes([{ id: 'b', ...card(), point: traces[1][500] }], { area, plot: area, traces }).get('b')!;
+    expect(hiddenTraceLength(lined, traces)).toBe(0);
+    expect(leavesTopOrBottom(lined, traces[1][500])).toBe(true);
+  });
+
   it("keeps the comparison chart's note off its bars (the bars stood under the card)", () => {
     // The `comparison` fixture's chart as the landscape page draws it: the
     // viewBox at 0.937 in a 937 x 596 layer, 69 down it.
@@ -383,7 +410,7 @@ describe('note placement over the data', () => {
       marks,
       labels: obstacles.labels.map(rect),
     }).get('note')!;
-    // Clear of every bar but the one it names, and of that one's ring.
+    // Clear of every bar, the one it names and its ring included.
     expect(clearOf(placed, marks)).toBe(true);
     expect(leavesTopOrBottom(placed, point)).toBe(true);
   });

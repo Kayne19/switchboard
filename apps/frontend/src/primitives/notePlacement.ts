@@ -30,12 +30,14 @@
 // the middle of a bar hides the bar. Where no place tried so far is clear,
 // the card searches every place within reach of its point -- an empty
 // stretch of the plot, or the free band above it inside the frame -- for
-// one clear of all of that, then one over a fill only, then one over the
-// labels only. A chart whose data leaves no such place (every bar standing
-// to the top, and no band above it as tall as the card) has no place for
-// that note: given `spill`, the note is left out for the scene to show
-// elsewhere (the rail) and the others are placed without it; without, its
-// card takes the place that hides the least.
+// one clear of all of that, then one over a fill at most, then one over
+// fills and labels at most, never over the data. A chart whose data leaves
+// a card no place near its point (every bar standing to the top, and no
+// band above it as tall as the card) has that card astray: given `spill`,
+// one note is left out for the scene to show elsewhere (the rail) -- the
+// one whose absence leaves the fewest cards astray, sooner a note naming no
+// point -- and the others are placed without it; without, each card takes
+// the place that hides the least.
 
 export interface Point {
   x: number;
@@ -100,6 +102,7 @@ const COST = {
   plotArea: 0.01,
   shift: 2.5,
   leader: 0.25,
+  hug: 20,
   bottomRow: 60,
   rightCorner: 20,
 };
@@ -300,11 +303,12 @@ export interface PlaceOptions {
   /** Space kept between two cards, and between a card and the point it must not cover. */
   gap?: number;
   /**
-   * The scene can show one note elsewhere (the rail). A note with no place
-   * on the chart clear of the data and within reach of its point is then
-   * left out, its card not placed, where leaving it out leaves fewer cards
-   * astray. At most one note is; its point still stands in the other
-   * cards' way.
+   * The scene can show one note elsewhere (the rail). Where some card has
+   * no place clear of the data within reach of its point, one note is then
+   * left out, its card not placed: the one whose absence leaves the fewest
+   * cards astray, sooner a note naming no point (which may itself have had
+   * a clear place), and only if that leaves fewer astray. Its point still
+   * stands in the other cards' way.
    */
   spill?: boolean;
 }
@@ -327,7 +331,8 @@ interface Placement {
  */
 export function placeNotes(notes: NoteToPlace[], field: NoteField, options: PlaceOptions = {}): Map<string, Rect> {
   const gap = options.gap ?? NOTE_GAP;
-  const all = placeInOrder(notes, field, gap);
+  const prepared = prepare(field);
+  const all = placeInOrder(notes, prepared, gap);
   const over = (placements: Map<string, Placement>) => [...placements.values()].filter((placement) => placement.astray).length;
   let chosen = all;
   if (options.spill && over(all) > 0) {
@@ -340,7 +345,7 @@ export function placeNotes(notes: NoteToPlace[], field: NoteField, options: Plac
     };
     let best: { placements: Map<string, Placement>; rank: number[] } | undefined;
     for (const note of notes) {
-      const placements = placeInOrder(notes, field, gap, note.id, all);
+      const placements = placeInOrder(notes, prepared, gap, note.id, all);
       const rank = [
         over(placements),
         note.point ? 1 : 0,
@@ -390,8 +395,10 @@ function covered(marks: Rect[], area: Rect): Rect[] {
 
 // A line with more samples than the layer has room to tell apart, as the
 // envelope it draws: in each of `columns` strips across the layer, its
-// lowest sample and its highest, in order along it. What it hides and what
-// it blocks are the same to a card; reading it costs a fraction.
+// lowest sample and its highest, in order along it. A card kept off the
+// envelope is kept off the line; only the clearance it keeps from the line
+// may come out a little narrower than from the envelope. Reading it costs a
+// fraction.
 function envelope(trace: Point[], area: Rect, columns: number): Point[] {
   const width = Math.max(1, area.right - area.left) / columns;
   const out: Point[] = [];
@@ -445,31 +452,25 @@ function bucketed<T>(items: T[], boxOf: (item: T) => Rect, area: Rect): (near: R
   };
 }
 
-// Places the notes one by one, all of them but `leftOut`. Those placed
-// before `leftOut` would take the same places as in `before`, the run with
-// every note, so they are taken from it.
-function placeInOrder(
-  notes: NoteToPlace[],
-  field: NoteField,
-  gap: number,
-  leftOut?: string,
-  before?: Map<string, Placement>,
-): Map<string, Placement> {
+// The field as the placement reads it, worked out once for every run of
+// `placeInOrder`: a dense line as its envelope, a dense scatter as the area
+// it covers, the lines as segments cut to the plot, and both bucketed.
+interface Prepared {
+  area: Rect;
+  plot?: Rect;
+  marks: Rect[];
+  fills: Point[][];
+  labels: Rect[];
+  segmentsNear: (near: Rect, visit: (segment: [Point, Point]) => void) => void;
+  marksNear: (near: Rect, visit: (mark: Rect) => void) => void;
+}
+
+function prepare(field: NoteField): Prepared {
   const { area, plot } = field;
   const sampled = (field.traces ?? []).reduce((sum, trace) => sum + trace.length, 0);
   const traces = sampled > DENSE_SAMPLES ? (field.traces ?? []).map((trace) => envelope(trace, area, DENSE_COLUMNS)) : (field.traces ?? []);
   const marks = (field.marks ?? []).length > DENSE_MARKS ? covered(field.marks!, area) : (field.marks ?? []);
-  const fills = field.fills ?? [];
-  const labels = field.labels ?? [];
-  const everyNote = [...notes.filter((note) => !note.point), ...notes.filter((note) => note.point)];
-  const order = everyNote.filter((note) => note.id !== leftOut);
-  const settled = before ? everyNote.slice(0, Math.max(0, everyNote.findIndex((note) => note.id === leftOut))) : [];
-  const points = notes.flatMap((note) => (note.point ? [{ id: note.id, point: note.point }] : []));
-  const placed = new Map<string, Placement>();
-  const leaders: Point[][] = [];
-  // The chart draws its lines and fills inside the plot only.
-  const drawn = (rect: Rect) => (plot ? intersection(rect, plot) : rect);
-  // The segments of the lines, cut to the plot: what a leader may cross.
+  // The segments of the lines, cut to the plot, where the chart draws them.
   const segments: Array<[Point, Point]> = [];
   for (const trace of traces) {
     for (let index = 1; index < trace.length; index += 1) {
@@ -481,8 +482,36 @@ function placeInOrder(
       segments.push([at(share[0]), at(share[1])]);
     }
   }
-  const segmentsNear = bucketed(segments, ([a, b]) => ({ left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), right: Math.max(a.x, b.x), bottom: Math.max(a.y, b.y) }), area);
-  const marksNear = bucketed(marks, (mark) => mark, area);
+  return {
+    area,
+    plot,
+    marks,
+    fills: field.fills ?? [],
+    labels: field.labels ?? [],
+    segmentsNear: bucketed(segments, ([a, b]) => ({ left: Math.min(a.x, b.x), top: Math.min(a.y, b.y), right: Math.max(a.x, b.x), bottom: Math.max(a.y, b.y) }), area),
+    marksNear: bucketed(marks, (mark) => mark, area),
+  };
+}
+
+// Places the notes one by one, all of them but `leftOut`. Those placed
+// before `leftOut` would take the same places as in `before`, the run with
+// every note, so they are taken from it.
+function placeInOrder(
+  notes: NoteToPlace[],
+  field: Prepared,
+  gap: number,
+  leftOut?: string,
+  before?: Map<string, Placement>,
+): Map<string, Placement> {
+  const { area, plot, marks, fills, labels, segmentsNear, marksNear } = field;
+  const everyNote = [...notes.filter((note) => !note.point), ...notes.filter((note) => note.point)];
+  const order = everyNote.filter((note) => note.id !== leftOut);
+  const settled = before ? everyNote.slice(0, Math.max(0, everyNote.findIndex((note) => note.id === leftOut))) : [];
+  const points = notes.flatMap((note) => (note.point ? [{ id: note.id, point: note.point }] : []));
+  const placed = new Map<string, Placement>();
+  const leaders: Point[][] = [];
+  // The chart draws its lines and fills inside the plot only.
+  const drawn = (rect: Rect) => (plot ? intersection(rect, plot) : rect);
   const lineUnder = (rect: Rect) => {
     let length = 0;
     segmentsNear(rect, ([a, b]) => {
@@ -537,9 +566,10 @@ function placeInOrder(
         if (area > 0) cost += COST.cardOverlap + area * COST.cardOverlapArea;
       }
       if (cost > 0) falls = SHORT.more;
-      // Every cost is a sum of shares that are none of them negative, so a
-      // place already dearer than the best so far cannot win.
-      const beaten = () => best !== undefined && cost >= best.cost - 1e-6;
+      // Places rank by what they fall short by, then by cost. Neither ever
+      // falls as more is added up, so a place already behind the best so
+      // far cannot win.
+      const beaten = () => best !== undefined && (falls > best.falls || (falls === best.falls && cost >= best.cost - 1e-6));
       // Its point further along than the leader should run beside the card.
       const along = point ? Math.max(0, left + LEADER_INSET - point.x, point.x - (left + width - LEADER_INSET)) - width * SEARCH_REACH : 0;
       if (along > 0) {
@@ -598,11 +628,13 @@ function placeInOrder(
         cost += Math.abs(left + width / 2 - point.x) * COST.shift;
         const leaderLength = point.y >= rect.bottom ? point.y - rect.bottom : point.y <= rect.top ? rect.top - point.y : 0;
         cost += leaderLength * COST.leader;
+        // Nearer than a gap, a leader's first turn hugs the border it leaves.
+        if (leaderLength > 0) cost += Math.max(0, gap - leaderLength) * COST.hug;
       } else if (left - minLeft > maxLeft - left) {
         cost += COST.rightCorner;
       }
       if (!nearTop) cost += COST.bottomRow;
-      if (!best || cost < best.cost - 1e-6) best = { rect, cost, falls, astray: data || along > 0 };
+      if (!best || falls < best.falls || (falls === best.falls && cost < best.cost - 1e-6)) best = { rect, cost, falls, astray: data || along > 0 };
     };
 
     // Every place a card spanning `left` can sit clear of what stands in
@@ -631,7 +663,10 @@ function placeInOrder(
       for (const left of unique(candidates.filter((left) => left >= low && left <= high))) {
         const right = left + width;
         const blocked: Array<[number, number]> = [];
-        if (point) blocked.push([point.y - gap, point.y + gap]);
+        // Its own point's band: a place clear of the point's height by the
+        // clearance `standing` asks for, so its leader leaves by the top or
+        // bottom border.
+        if (point) blocked.push([point.y - POINT_CLEARANCE, point.y + POINT_CLEARANCE]);
         for (const other of points) {
           if (other.id !== note.id && other.point.x > left - POINT_CLEARANCE && other.point.x < right + POINT_CLEARANCE) {
             blocked.push([other.point.y - POINT_CLEARANCE, other.point.y + POINT_CLEARANCE]);
@@ -662,7 +697,8 @@ function placeInOrder(
         }
         blocked.sort((a, b) => a[0] - b[0]);
         // The free runs between what stands in the way, each tried at its
-        // ends and wherever the cost turns: by the point, and at the plot's edges.
+        // ends and wherever the cost turns: a gap from the point, where the
+        // leader stops hugging the border, and at the plot's edges.
         let from = minTop;
         const runs: Array<[number, number]> = [];
         for (const [start, end] of blocked) {
@@ -689,7 +725,7 @@ function placeInOrder(
     for (const left of lefts) {
       for (const top of tops) consider(left, top);
     }
-    if (point && best!.cost >= COST.levelWithPoint) {
+    if (point && best!.falls === SHORT.more) {
       // No row clears the point: straight above or below it, a gap away,
       // and last beside it, level with it.
       for (const top of unique([point.y - gap - height, point.y + gap].map(clampTop))) {
@@ -699,7 +735,8 @@ function placeInOrder(
       for (const left of unique([point.x - BESIDE_POINT - width, point.x + BESIDE_POINT].map(clampLeft))) consider(left, besideTop);
     }
     // None of those is clear: anywhere within reach clear of everything,
-    // then over a fill, then over the labels, never over the data. A place
+    // then over a fill at most, then over fills and labels at most, never
+    // over the data. A place
     // that falls short only as far as a search lets one still has the
     // search look for a nearer one.
     for (const through of [SHORT.clear, SHORT.fill, SHORT.label]) {
