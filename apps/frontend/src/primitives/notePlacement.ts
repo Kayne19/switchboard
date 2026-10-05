@@ -163,9 +163,10 @@ type Standing = 'clear' | 'level' | 'skirting';
 
 // What keeps a place from being clear, least first: an area chart's fill
 // under it, the labels under it, its point further along than its leader
-// should run, the data under it, and last everything that was always ruled
-// out (its point, another's, another card, level with its point).
-const SHORT = { clear: 0, fill: 1, label: 2, far: 3, data: 4, more: 5 } as const;
+// should run, no route to its bar clear of the other bars, the data under
+// it, and last everything that was always ruled out (its point, another's,
+// another card, level with its point, across a bar chart's plot border).
+const SHORT = { clear: 0, fill: 1, label: 2, far: 3, route: 3.5, data: 4, more: 5 } as const;
 
 function overlapArea(a: Rect, b: Rect): number {
   const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
@@ -659,11 +660,12 @@ function placeInOrder(
       const beaten = () => best !== undefined && (falls > best.falls || (falls === best.falls && cost >= best.cost - 1e-6));
       if (beaten()) return;
       // A bar's leader comes from past the bar's end, clear of every other
-      // bar; a place with no such route has no leader that reads.
+      // bar; a place with no such route has no leader that reads, which is
+      // still better than a place over the data.
       const route = point && from && !covers(rect, point) ? barLeader(rect, point, from, marksNear, { bar: note.bar, overlap: leaderOverlap }) : undefined;
       if (route && !route.clear) {
         cost += COST.noLeader;
-        falls = SHORT.more;
+        falls = Math.max(falls, SHORT.route);
       }
       // Its point further along than the leader should run beside the card;
       // a bar's leader, longer than it should run at all.
@@ -738,7 +740,7 @@ function placeInOrder(
       }
       if (!nearTop) cost += COST.bottomRow;
       if (!best || falls < best.falls || (falls === best.falls && cost < best.cost - 1e-6)) {
-        best = { rect, cost, falls, astray: data || along > 0 || (from !== undefined && falls === SHORT.more), leader };
+        best = { rect, cost, falls, astray: data || along > 0 || (from !== undefined && falls >= SHORT.route), leader };
       }
     };
 

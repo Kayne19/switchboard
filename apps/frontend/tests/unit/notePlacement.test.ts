@@ -541,6 +541,20 @@ describe('a note on a bar chart', () => {
     expect(b.y).toBeGreaterThan(a.y);
   });
 
+  // A card over the bars with a clean leader ranked above a card clear of
+  // the bars whose every route crossed one: the leader's trouble sent the
+  // card onto the data it must never hide (review finding).
+  it('keeps clear of the bars even where its leader must cross one', () => {
+    // Full-height bars left of the named one and a full-height bar right of
+    // it: the only places clear of the data are right of that bar, and every
+    // route from there crosses it.
+    const named = box(300, 300, 40, 300);
+    const marks = [box(0, 0, 290, 600), named, box(305, 284, 30, 13), box(350, 0, 40, 600)];
+    const field: NoteField = { area: box(0, 0, 1000, 600), plot: box(0, 0, 1000, 600), marks, wholly: true };
+    const placed = layoutNotes([{ id: 'a', width: 300, height: 80, point: { x: 320, y: 281 }, from: 'above', bar: named }], field).get('a')!;
+    expect(marks.every((mark) => !overlaps(placed.rect, mark))).toBe(true);
+  });
+
   it('has no clear route from a card under the bar it names, nor one along its side', () => {
     // The bar, its printed value over it, and the point over that.
     const bar = box(100, 200, 40, 300);
