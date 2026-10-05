@@ -71,7 +71,12 @@ function TimerItem({ timer, reading, marked, as }: { timer: Timer; reading: Time
   );
 }
 
-export function TimerPrimitive({ data, marked }: { data: TimerData; marked?: string }) {
+/**
+ * `framed`: the scene's frame names the timers (the main slot); elsewhere
+ * (an aux cell, focus) no frame does, and the timers carry their title
+ * themselves, so it shows once wherever they are drawn.
+ */
+export function TimerPrimitive({ data, marked, framed = false }: { data: TimerData; marked?: string; framed?: boolean }) {
   const running = data.timers.some((timer) => timer.state !== 'paused');
   const now = usePageClock(running);
   const readings = data.timers.map((timer) => readTimer(timer, now));
@@ -89,6 +94,7 @@ export function TimerPrimitive({ data, marked }: { data: TimerData; marked?: str
       data-layout={layout.kind === 'grid' ? `grid-${layout.columns}x${layout.rows}` : 'list'}
       style={layout.kind === 'grid' ? { ['--timer-digits' as string]: `${layout.digits}px`, ['--timer-columns' as string]: layout.columns, ['--timer-rows' as string]: layout.rows, ['--timer-gap' as string]: `${CELL_GAP}px` } : undefined}
     >
+      {!framed && data.title ? <div className="timer__title tech micro">{data.title}</div> : null}
       {/* The box the timers are laid out for: the primitive's own, inside any padding its slot gives it. */}
       <div ref={hostRef} className="timer-primitive__field">
         {layout.kind === 'grid' ? (

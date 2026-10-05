@@ -511,7 +511,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         context: data.context ?? 'TIMERS',
         footer: 'DISPLAY / TIMERS',
         caption: sceneCaption(primary, 'TIMERS / PAGE CLOCK'),
-        main: slot('timer-object', <TimerPrimitive data={data} marked={anchoredItem(state, primary.id)} />, <TechFrame variant="panel" />),
+        main: slot('timer-object', <TimerPrimitive data={data} marked={anchoredItem(state, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
     case 'weather': {

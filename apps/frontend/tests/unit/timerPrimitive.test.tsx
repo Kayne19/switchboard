@@ -155,6 +155,19 @@ describe('a timer', () => {
     expect(item(host, 'eggs').querySelector('.timer__meta')!.textContent).toBe('ENDS 18:33');
   });
 
+  it('shows its title where no frame does, and only there', () => {
+    const titled: TimerData = { ...kitchen, title: 'KITCHEN / TIMERS' };
+    const loose = render(titled);
+    expect(loose.querySelector('.timer__title')?.textContent).toBe('KITCHEN / TIMERS');
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    act(() => root.render(<TimerPrimitive data={titled} framed />));
+    roots.push(root);
+    hosts.push(host);
+    expect(host.querySelector('.timer__title')).toBeNull();
+  });
+
   it('marks the timer a note names, and only it', () => {
     const host = render(kitchen, 'bread');
     expect([...host.querySelectorAll('.note-badge')].map((badge) => badge.closest('[data-item]')!.getAttribute('data-item'))).toEqual(['bread']);
