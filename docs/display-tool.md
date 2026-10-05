@@ -86,7 +86,7 @@ Each document paragraph is read as the same small Markdown subset the conversati
 
 A composed scene is built from multiple `show` actions with distinct `id`s and roles (e.g. `diagram` as `primary`, `note` as `secondary`, `metric` as `ambient`). The page owns layout, geometry, and styling. Every visual beside the primary is drawn, whatever the primary's type: a chart beside a chart primary shares its row, and any other one takes a cell in the aux row under the primary (`docs/visual-channel.md`, "Composition & focus").
 
-Notes have their own display lifecycle. A chat or spoken response does not update an existing note; only another `show` using the note's stable id, `hide`, or `clear` changes it. An anchored note is selected for the visual object it targets and, when the target exposes the requested semantic coordinate, is placed near that location by the page. On a chart the page keeps the note clear of the chart's data; where the primary chart leaves a note no clear place near its point, one note is shown in the rail and its point stays ringed (`docs/visual-channel.md` lists the limits).
+Notes have their own display lifecycle. A chat or spoken response does not update an existing note; only another `show` using the note's stable id, `hide`, or `clear` changes it. An anchored note is selected for the visual object it targets and, when the target exposes the requested semantic coordinate, is placed near that location by the page. On a chart the page keeps the note clear of the chart's data and runs its leader to the value it prints at the point; where the primary chart has a card with no place that keeps those rules, one note is shown in the rail and its point stays marked (`docs/visual-channel.md` says which note goes, and the limits).
 
 ### Chart v1 rules
 - `kind` is how the series are drawn: `line` (the default), `bar`, `area` or `scatter`. Anything else is rejected.
@@ -94,7 +94,7 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 - `marker.x`, a note's `anchor.x` and `say at.x` name a label index on a labelled chart, and the numeric x otherwise.
 - Bars are grouped per category across the series. A bar chart without `labels` takes the value indices as its categories, so `xMax` is ignored there too. Whether bars run up or across is the page's decision (`docs/visual-channel.md`).
 - `yMin` and `yMax` are kept as given. An end left out is the page's: rounded out to a round value, a bar or area chart's with headroom past its tallest value. Give `yMax: 100` for a percentage that must stop there.
-- A bar that `marker` or a note's `anchor` names is outlined and its value printed; on a chart with `labels`, a note's tag names the category and series it points at.
+- A bar that `marker` or a note's `anchor` names is outlined and its value printed; a point on a line, area or scatter chart is ringed and its value printed by the ring. A note's tag names what it points at as the caller reads it: the category on a chart with `labels`, else the x axis's name and the value (`EPOCH 32`), then the series.
 
 ### Progress steps
 - `steps`: 1 to 30 items, each `{ label (<= 128), state?, detail? (<= 256) }`. A step without a `state` reads as `todo`.
