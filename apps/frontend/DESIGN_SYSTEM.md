@@ -67,13 +67,16 @@ The model controls semantic intent. The frontend controls composition, geometry,
 | `DiagramPrimitive` + `diagramLayout` | node layout, edge routing, portrait and landscape topology, a graph recomposed for its viewport, node corner tags inside the frame |
 | `SequencePrimitive` + `sequenceLayout` | actor columns, lifelines, message rows, arrowheads by kind, label wrapping over a span, a sequence recomposed to its viewport's width, headers in full or compact by the share of the view they would take pinned, the NOTE marker in the header of the actor a note names |
 | `DrawingViewport` + `drawingFit` + `drawingScroll` | a drawing's scale (never text below the page's type floors), scrolling one way inside its clipped viewport, pinned headers; where a scrolled drawing rests (never a part cut at the edge it is read from), the keys that move it from rest to rest, the rails on the edges it continues past (counts, fades, the names of lines leaving the view), its map in a strip of its own beside it |
+| `ListViewport` | an HTML list that outgrows its slot (tasks, messages, events, forecast days): scrolling up and down inside its frame under a pinned head, opening on the item a note names, and on each edge it continues past the drawing viewport's fade, cut line and count of the items that lie that way |
 | `CodeViewport` | syntax presentation, safe scrolling, irregular clipping |
 | `DocumentViewport` | readable document layout and bounded scrolling |
 | `MetricsPrimitive` | metric alignment and semantic values |
-| `AnnotationCard` | targeted explanation and rich text semantics |
+| `TasksPrimitive` | a to-do list: sections by group, the step glyph for a task's state, the priority arrow, the due day judged against the list's `today`, done tasks quieter and counted where a slot is short of room, the compact rows beside a primary |
+| `InboxPrimitive` | an inbox: messages in the order sent, the columns of senders, channels and times, a snippet cut on its one line, the time of day on `today`, the unread, flagged and tinted marks, one line or stacked by the list's width |
+| `AnnotationCard` | targeted explanation and rich text semantics; its TARGET line names the chart point or list item it is about, and carries the NOTE badge (`NoteBadge`, the HTML twin of the drawings' `NoteMarker`) where that part is marked |
 | `ChartNotes` + `notePlacement` | every note on a chart, laid over it clear of the others, their points and what the chart draws (`chartObstacles`: bars and scatter points as areas, lines, a marked point's ring, a callout's printed value, legend and axis labels; an area's fill only where nothing else is free); a card wholly in or out of the plot on every kind of chart, its angular leader onto the value printed at its point from past it, through no other mark or line; a card's width where its own has no clear place; where a card has no place that keeps those rules, one note handed to the rail (the one whose absence leaves the fewest cards astray, a note naming no point first among those) |
 | `FocusableSurface` | accessible activation without invalid button-wrapped scroll regions; a click or key a control inside it has handled (`preventDefault`) is left alone, and no control stops one, so the page hears every tap |
-| `FocusLayer` | shared-object expansion and return behavior; a focused diagram's note, beside or under it by the box's shape |
+| `FocusLayer` | shared-object expansion and return behavior; the note of a focused diagram or list with items, beside or under it by the box's shape |
 | Controller reducer | six-operation state semantics |
 
 A page-level patch that duplicates one of these responsibilities is usually incorrect.

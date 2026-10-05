@@ -31,12 +31,19 @@ export function aheadStepWindow(steps: ProgressStep[]): { start: number; end: nu
   return { start, end: Math.min(steps.length, start + COMPACT_STEPS) };
 }
 
-function StepGlyph({ state }: { state: ProgressStepState }) {
-  // One sharp square per step; its fill and mark say the state, its colour
-  // comes from the step's class. The names are the semantic ones so a reader
-  // of the DOM, or of a screen reader, gets the same word the agent sent.
+/**
+ * The mark of a step's state, shared by every list of states (a plan's
+ * steps, a to-do list's tasks): one sharp square, its fill and mark the
+ * state, its colour from the row's class. The names are the semantic ones
+ * so a reader of the DOM, or of a screen reader, gets the word the agent
+ * sent.
+ */
+export function StepGlyph({ state, className = 'progress-step__glyph', decorative = false }: { state: ProgressStepState; className?: string; decorative?: boolean }) {
+  // A `decorative` glyph beside words that already say its state (a count
+  // of the steps done) is hidden from a screen reader, which would read the
+  // state twice.
   return (
-    <svg className="progress-step__glyph" viewBox="0 0 12 12" role="img" aria-label={state}>
+    <svg className={className} viewBox="0 0 12 12" {...(decorative ? { 'aria-hidden': true } : { role: 'img', 'aria-label': state })}>
       {state === 'todo' ? (
         <rect x="0.75" y="0.75" width="10.5" height="10.5" fill="none" stroke="currentColor" strokeWidth="1.2" />
       ) : (

@@ -1,5 +1,6 @@
 import type { NoteData } from '../controller/types';
 import { FocusableSurface } from './FocusableSurface';
+import { NoteBadge } from './NoteMarker';
 import { RichText } from './RichText';
 
 interface AnnotationCardProps {
@@ -10,23 +11,27 @@ interface AnnotationCardProps {
   onOpenHistory?: () => void;
   /**
    * What the anchor names, in its target's own words (a chart's category
-   * and series), where the target can say: it stands in for the anchor's
-   * id, x and series on the TARGET line.
+   * and series, the item of a list), where the target can say: it stands
+   * in for the anchor's id, x, series and item on the TARGET line.
    */
   target?: string;
+  /** The item the anchor names is marked where its object is drawn: the
+   * card carries the badge that matches it, and gives what it names a line
+   * of its own rather than cut it beside the tag. */
+  itemMarked?: boolean;
 }
 
 // The card is not itself a control: its text is a scroll region, and a scroll
 // region cannot live inside a button. The body activates through
 // FocusableSurface instead, and the history control sits beside it in the
 // header rather than inside it.
-export function AnnotationCard({ data, onFocus, onOpenHistory, target }: AnnotationCardProps) {
+export function AnnotationCard({ data, onFocus, onOpenHistory, target, itemMarked = false }: AnnotationCardProps) {
   const text = <div className="annotation-card__text"><RichText segments={data.segments} /></div>;
   // A note object on stage expands; a spoken explanation has no object to
   // expand, so its body opens the conversation it came from.
   const activate = onFocus ?? onOpenHistory;
   return (
-    <div className="annotation-card" data-anchor-target={data.anchor?.target}>
+    <div className={`annotation-card${itemMarked ? ' annotation-card--item' : ''}`} data-anchor-target={data.anchor?.target}>
       <div className="annotation-card__header">
         <span className="annotation-card__tag tech micro">{data.tag ?? 'DAMOCLES / EXPLANATION'}</span>
         {data.anchor ? (
@@ -39,14 +44,16 @@ export function AnnotationCard({ data, onFocus, onOpenHistory, target }: Annotat
                 {data.anchor.node ? ` / NODE ${data.anchor.node}` : ''}
                 {data.anchor.x !== undefined ? ` / X ${data.anchor.x}` : ''}
                 {data.anchor.series ? ` / ${data.anchor.series}` : ''}
+                {data.anchor.item !== undefined ? ` / ITEM ${data.anchor.item}` : ''}
               </>
             )}
           </span>
         ) : null}
-        {/* The badge that matches the node's own marker sits beside the
+        {/* The badge that matches the marker on the part it names (a node,
+            or an item marked where its object is drawn) sits beside the
             anchor text, not inside it: the anchor text ellipsizes in a
             narrow rail and would clip the badge with it. */}
-        {data.anchor?.node ? <span className="annotation-card__node-badge tech micro">NOTE</span> : null}
+        {data.anchor?.node || itemMarked ? <NoteBadge /> : null}
         {onOpenHistory ? (
           <button type="button" className="annotation-card__history tech micro" onClick={onOpenHistory} aria-label="Open conversation history">
             HISTORY

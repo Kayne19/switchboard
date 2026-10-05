@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
+import { NoteBadge } from './NoteMarker';
 
 /*
- * TEMPORARY (pa-contract): the one stand-in renderer for the five
- * personal-assistant types -- calendar, tasks, timer, weather, inbox -- until
- * the render slice draws each with a primitive of its own. It is a plain
- * framed list of the fields the agent sent, so the page neither crashes on
- * nor drops an accepted object and the fixtures load. It draws no clock: a
+ * TEMPORARY (pa-contract): the one stand-in renderer for the
+ * personal-assistant types still without a primitive -- calendar, timer,
+ * weather (tasks and inbox have theirs) -- until their render slices draw
+ * each with a primitive of its own. It is a plain framed list of the
+ * fields the agent sent, so the page neither crashes on nor drops an
+ * accepted object and the fixtures load. It draws no clock: a
  * timer's `endsAt` is shown as sent.
  *
  * Replaced by the render slice. To retire it for a type, point that type's
@@ -14,24 +16,24 @@ import type { ReactNode } from 'react';
  * `objectContent`, FocusLayer.tsx `FocusedObject`); when no type uses it,
  * delete this file and the `.temporary-assistant` block in
  * styles/index.css. Keep the `data-testid` (the type's name) on the new
- * primitive: the scene tests count objects by it.
+ * primitive: the scene tests count objects by it; and `data-item` on each
+ * item and `data-object-title` on the title (noteItems.test.tsx,
+ * sceneComposition.test.tsx).
  */
 
-export type TemporaryAssistantType = 'calendar' | 'tasks' | 'timer' | 'weather' | 'inbox';
+export type TemporaryAssistantType = 'calendar' | 'timer' | 'weather';
 
 type Fields = Record<string, unknown>;
 
 /** The list each type is mostly made of, for the frame's count. */
 const MAIN_LIST: Record<TemporaryAssistantType, [string, string]> = {
   calendar: ['events', 'EVENTS'],
-  tasks: ['items', 'TASKS'],
   timer: ['timers', 'TIMERS'],
   weather: ['daily', 'DAYS'],
-  inbox: ['messages', 'MESSAGES'],
 };
 
 /** The field an item is named by, first found. */
-const NAME_KEYS = ['title', 'text', 'label', 'from', 'time', 'date'];
+const NAME_KEYS = ['title', 'label', 'time', 'date'];
 /** Drawn by the scene frame, not in the list. */
 const FRAME_KEYS = new Set(['title', 'subtitle', 'context', 'caption']);
 
@@ -47,11 +49,19 @@ function plain(value: unknown): string {
   return String(value);
 }
 
-function Item({ fields }: { fields: Fields }) {
-  const nameKey = NAME_KEYS.find((key) => typeof fields[key] === 'string');
-  const rest = Object.entries(fields).filter(([key]) => key !== nameKey);
+/** What a note's `anchor.item` names an item by: a forecast hour or day by
+ * its time or date, anything else by its id. */
+function itemKey(type: TemporaryAssistantType, fields: Fields): string | undefined {
+  const key = type === 'weather' ? (fields.time ?? fields.date) : fields.id;
+  return typeof key === 'string' ? key : undefined;
+}
+
+function Item({ fields, itemKey: key, marked }: { fields: Fields; itemKey?: string; marked: boolean }) {
+  const nameKey = NAME_KEYS.find((name) => typeof fields[name] === 'string');
+  const rest = Object.entries(fields).filter(([name]) => name !== nameKey);
   return (
-    <li className="temporary-assistant__item">
+    <li className="temporary-assistant__item" data-item={key}>
+      {marked ? <NoteBadge /> : null}
       {nameKey ? <span className="temporary-assistant__name">{fields[nameKey] as string}</span> : null}
       {rest.map(([key, value]) => (
         <span key={key} className="temporary-assistant__pair">
@@ -76,7 +86,7 @@ export function temporaryAssistantFrame(type: TemporaryAssistantType, data: unkn
   };
 }
 
-export function TemporaryAssistantList({ type, data }: { type: TemporaryAssistantType; data: unknown }) {
+export function TemporaryAssistantList({ type, data, marked }: { type: TemporaryAssistantType; data: unknown; marked?: string }) {
   const fields = fieldsOf(data);
   const scalars: ReactNode[] = [];
   const lists: ReactNode[] = [];
@@ -87,7 +97,11 @@ export function TemporaryAssistantList({ type, data }: { type: TemporaryAssistan
         <section key={key} className="temporary-assistant__list">
           <div className="temporary-assistant__list-head tech micro">{key.toUpperCase()} / {value.length}</div>
           <ol>
-            {value.map((item, index) => <Item key={index} fields={fieldsOf(item)} />)}
+            {value.map((item, index) => {
+              const fields = fieldsOf(item);
+              const key = itemKey(type, fields);
+              return <Item key={index} fields={fields} itemKey={key} marked={key !== undefined && key === marked} />;
+            })}
           </ol>
         </section>,
       );
@@ -103,7 +117,7 @@ export function TemporaryAssistantList({ type, data }: { type: TemporaryAssistan
   return (
     <div className="temporary-assistant" data-testid={type}>
       {/* The title here too: in an aux cell or in focus no frame shows it. */}
-      <div className="temporary-assistant__head tech micro">
+      <div className="temporary-assistant__head tech micro" data-object-title>
         {typeof fields.title === 'string' ? fields.title : `${type.toUpperCase()} / FIELDS AS SENT`}
       </div>
       {scalars.length > 0 ? <dl className="temporary-assistant__fields">{scalars}</dl> : null}

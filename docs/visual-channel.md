@@ -301,12 +301,53 @@ wire rules are in `docs/display-tool.md` ("Time values" and
   the list.
 
 Each is a visual like a table: shown alone it takes the main slot, and
-beside another primary it takes a cell in the aux row. Until the render
-slice draws them, the page shows all five with one stand-in, a framed list
-of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`),
-so an accepted object is never dropped and the fixtures (`calendar`,
-`tasks`, `timer`, `weather`, `inbox`, and `today`, an agenda with the
-forecast, the to-do list and the inbox beside it) load.
+beside another primary it takes a cell in the aux row. The fixtures
+(`calendar`, `tasks`, `timer`, `weather`, `inbox`, and `today`, an agenda
+with the forecast, the to-do list and the inbox beside it) show them.
+Until their render slices land, `calendar`, `timer` and `weather` are drawn
+by one stand-in, a framed list of the fields as sent
+(`apps/frontend/src/primitives/TemporaryAssistantList.tsx`), so an accepted
+object is never dropped.
+
+**The to-do list and the inbox are read as the table and the rail's plan
+module are read**: rows between thin rules under a meta line that names
+the list and counts what it holds, the prose face for what a person wrote,
+the tech face for states, days and counts, no cards.
+
+- A to-do list stands in sections, in the order their groups are first met
+  (a section is its heading over its rows). A task's state is the plan's
+  own step glyph, its priority the metric's arrow (up for high, down for
+  low), its text wraps whole, its detail and tags follow, and its due day
+  stands at the row's end, judged against the list's `today`: `OVERDUE` in
+  red over the day, `TODAY` in orange over the time, `TOMORROW`, or the
+  day. Done tasks step back. A list longer than fourteen counts each
+  section's done tasks on one row (`3 DONE`) in the main slot; focus lists
+  them all. Where the column has room for two sections at 24em they stand
+  side by side, by its width alone.
+- An inbox lists its messages in the order sent: the sender, the subject
+  and a snippet cut at the end of its one line, the channel as a tag, and
+  the time (the time of day for a wall time on `today`, else the day; a
+  day in another year than `today`'s gives its year). Unread is strong and
+  carries the orange square, flagged the amber flag, a semantic tint runs
+  down the row's edge. Senders, channels and times stand in columns. A
+  list 50em wide puts a message on one line; narrower, the sender and time
+  stand over the subject and the snippet.
+- Beside the primary, either reads as the rail's plan module: one line a
+  task (its day on one line, done tasks counted, no detail or tags), a
+  message as its sender and subject.
+- A list that outgrows its slot scrolls inside its frame in the list
+  viewport (`ListViewport`): the drawing viewport's fade, cut line and
+  count of the items past each edge, and it opens on the item a note
+  names. Focus gives it the stage, and keeps that note beside it.
+
+**A note on one item** (`anchor.item`) marks that item wherever its object
+is drawn, as a diagram marks the node a note names, while that note is the
+one the page draws (the rail's, or the one focus keeps): the item carries
+the NOTE badge, the card's twin, and the card's `TARGET` line names it in
+its object's words, on a line of its own. A note the rail does not show
+marks nothing, so a badge always has its card on screen. Every item
+element carries `data-item`, the name a note uses for it, which is also
+what the list viewport counts.
 
 ### Composition & focus
 
