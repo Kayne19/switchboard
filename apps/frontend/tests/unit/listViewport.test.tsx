@@ -6,7 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
-import { countPast, drawnScale, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
+import { continuesPast, countPast, drawnScale, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 
 let host: HTMLDivElement | undefined;
 let root: Root | undefined;
@@ -99,6 +99,15 @@ describe('countPast', () => {
   });
 });
 
+describe('continuesPast', () => {
+  it('is an edge more than a sliver of the list lies past', () => {
+    expect(continuesPast(0, 100, 400)).toEqual({ top: false, bottom: true });
+    expect(continuesPast(150, 100, 400)).toEqual({ top: true, bottom: true });
+    expect(continuesPast(290, 100, 400)).toEqual({ top: true, bottom: false });
+    expect(continuesPast(10, 100, 115)).toEqual({ top: false, bottom: false });
+  });
+});
+
 describe('drawnScale', () => {
   it('is the drawn height over the laid-out one, and 1 before there is a box', () => {
     expect(drawnScale(50, 100)).toBe(0.5);
@@ -179,6 +188,27 @@ describe('ListViewport', () => {
     await measured(scroll);
     // Rows 3-9 lie below (10px of row 3 shows); the days among them are 3, 5, 7, 9.
     expect(element.querySelector('.list-viewport__rim')!.textContent).toBe('4 DAYS');
+  });
+
+  it('marks an edge it continues past where no item lies that way, as MORE', async () => {
+    // A header taller than the view above the rows, as a forecast's
+    // conditions stand above its days: scrolled to the rows, the top edge
+    // has no row past it, and still says the list goes on.
+    const element = document.createElement('div');
+    document.body.append(element);
+    host = element;
+    root = createRoot(element);
+    act(() => root!.render(
+      <ListViewport noun={['DAY', 'DAYS']} countSelector=".day">
+        {[<h3 key="h">NOW</h3>, <h3 key="h2">HOURS</h3>, <h3 key="h3">MORE</h3>, ...[0, 1, 2, 3].map((index) => <div key={index} data-item={`d${index}`} className="day">day</div>)]}
+      </ListViewport>,
+    ));
+    const scroll = element.querySelector<HTMLElement>('.list-viewport__scroll')!;
+    layOut(scroll, 90);
+    await measured(scroll);
+    const rims = Array.from(element.querySelectorAll('.list-viewport__rim')).map((rim) => [rim.className.includes('--top') ? 'top' : 'bottom', rim.textContent]);
+    // 210 tall: the view 90-190 shows the days at 90-180 and a sliver of the last.
+    expect(rims).toEqual([['top', 'MORE'], ['bottom', '1 DAY']]);
   });
 
   it('names one item in the singular', async () => {
