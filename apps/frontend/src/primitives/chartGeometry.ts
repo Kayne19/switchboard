@@ -703,52 +703,59 @@ export function chartBarCallout(data: ChartData, anchor: ChartAnchor, scales: Ch
   const last = (data.series[which]?.values.length ?? 0) - 1;
   if (last < 0) return undefined;
   const index = Math.round(Math.min(last, Math.max(0, anchor.x)));
-  const bar = chartBars(data, scales).find((candidate) => candidate.series === which && candidate.index === index);
+  const bars = chartBars(data, scales);
+  const bar = bars.find((candidate) => candidate.series === which && candidate.index === index);
   if (!bar) return undefined;
-  const { plot } = scales;
+  const { plot, horizontal } = scales;
   const text = calloutText(bar.value);
   const width = text.length * CHART_TICK_CHAR_ADVANCE;
   const positive = bar.value >= scales.baseline;
-  if (!scales.horizontal) {
-    const mid = bar.end.x;
-    const end = bar.end.y;
-    const sign = positive ? -1 : 1;
-    // The value past the bar's end, unless that runs off the plot.
-    let baselineY = positive ? end - CALLOUT_GAP : end + CALLOUT_GAP + CALLOUT_ASCENT;
-    let inside = positive ? baselineY - CALLOUT_ASCENT - CALLOUT_LANDING < plot.top : baselineY + CALLOUT_DESCENT + CALLOUT_LANDING > plot.bottom;
-    if (inside) baselineY = positive ? end + CALLOUT_GAP + CALLOUT_ASCENT : end - CALLOUT_GAP;
-    // A bar too short to hold it keeps it past its end after all.
-    if (inside && Math.abs(bar.rect.bottom - bar.rect.top) < CALLOUT_ASCENT + 2 * CALLOUT_GAP) {
-      inside = false;
-      baselineY = positive ? end - CALLOUT_GAP : end + CALLOUT_GAP + CALLOUT_ASCENT;
-    }
-    const label = { left: mid - width / 2, right: mid + width / 2, top: baselineY - CALLOUT_ASCENT, bottom: baselineY + CALLOUT_DESCENT };
-    const reach = inside ? end : positive ? label.top : label.bottom;
+  // Along the value axis (y upright, x across) the way the bar grows, and
+  // across it the category axis.
+  const grows = horizontal ? (positive ? 1 : -1) : positive ? -1 : 1;
+  const valueOf = (point: ViewPoint) => (horizontal ? point.x : point.y);
+  const mid = horizontal ? bar.end.y : bar.end.x;
+  const span: [number, number] = horizontal ? [mid - 6, mid + 5] : [mid - width / 2, mid + width / 2];
+  const size = horizontal ? width : CALLOUT_ASCENT + CALLOUT_DESCENT;
+  const [low, high] = horizontal ? [plot.left, plot.right] : [plot.top, plot.bottom];
+  const end = valueOf(bar.end);
+  // Past the end of every bar on the same side that the value's text would
+  // otherwise lie over: a grouped neighbour taller than the bar it names.
+  let far = end;
+  for (const other of bars) {
+    const [from, to] = horizontal ? [other.rect.top, other.rect.bottom] : [other.rect.left, other.rect.right];
+    if (other === bar || to <= span[0] || from >= span[1] || other.value >= scales.baseline !== positive) continue;
+    far = grows > 0 ? Math.max(far, valueOf(other.end)) : Math.min(far, valueOf(other.end));
+  }
+  const outsideNear = far + grows * CALLOUT_GAP;
+  const outsideFar = outsideNear + grows * size;
+  const fitsOutside = grows > 0 ? outsideFar + CALLOUT_LANDING <= high : outsideFar - CALLOUT_LANDING >= low;
+  // Inside the bar's end where the plot has no room past it, if the bar
+  // holds the text.
+  const length = horizontal ? bar.rect.right - bar.rect.left : bar.rect.bottom - bar.rect.top;
+  const thickness = horizontal ? bar.rect.bottom - bar.rect.top : bar.rect.right - bar.rect.left;
+  const holds = length >= size + 2 * CALLOUT_GAP && (horizontal || thickness + 4 >= width);
+  const inside = !fitsOutside && holds;
+  const near = inside ? end - grows * CALLOUT_GAP : outsideNear;
+  const away = inside ? -grows : grows;
+  const [from, to] = [Math.min(near, near + away * size), Math.max(near, near + away * size)];
+  const label: ViewRect = horizontal ? { left: from, right: to, top: span[0], bottom: span[1] } : { left: span[0], right: span[1], top: from, bottom: to };
+  const tip = (inside ? end : near + away * size) + grows * CALLOUT_LANDING;
+  if (horizontal) {
     return {
       bar,
-      value: { text, x: mid, y: baselineY, anchor: 'middle', inside },
+      value: { text, x: near, y: mid + 4.5, anchor: away > 0 ? 'start' : 'end', inside },
       label,
-      point: { x: mid, y: reach + sign * CALLOUT_LANDING },
-      from: positive ? 'above' : 'below',
+      point: { x: tip, y: mid },
+      from: positive ? 'right' : 'left',
     };
   }
-  const mid = bar.end.y;
-  const end = bar.end.x;
-  const sign = positive ? 1 : -1;
-  let inside = positive ? end + CALLOUT_GAP + width + CALLOUT_LANDING > plot.right : end - CALLOUT_GAP - width - CALLOUT_LANDING < plot.left;
-  if (inside && Math.abs(bar.rect.right - bar.rect.left) < width + 2 * CALLOUT_GAP) inside = false;
-  const x = inside ? end - sign * CALLOUT_GAP : end + sign * CALLOUT_GAP;
-  const textAnchor = (positive !== inside ? 'start' : 'end') as 'start' | 'end';
-  const label = textAnchor === 'start'
-    ? { left: x, right: x + width, top: mid - 6, bottom: mid + 5 }
-    : { left: x - width, right: x, top: mid - 6, bottom: mid + 5 };
-  const reach = inside ? end : positive ? label.right : label.left;
   return {
     bar,
-    value: { text, x, y: mid + 4.5, anchor: textAnchor, inside },
+    value: { text, x: mid, y: label.bottom - CALLOUT_DESCENT, anchor: 'middle', inside },
     label,
-    point: { x: reach + sign * CALLOUT_LANDING, y: mid },
-    from: positive ? 'right' : 'left',
+    point: { x: mid, y: tip },
+    from: positive ? 'above' : 'below',
   };
 }
 

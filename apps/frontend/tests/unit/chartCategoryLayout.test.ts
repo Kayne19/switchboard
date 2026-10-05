@@ -615,6 +615,31 @@ describe('a marked bar', () => {
     expect(right.point.y).toBeCloseTo(right.bar.end.y);
   });
 
+  // In a grouped chart the value printed over a short bar lay across the
+  // taller bars beside it (review finding).
+  it("prints its value past the taller bars its text would lie over", () => {
+    const grouped: ChartData = {
+      kind: 'bar',
+      labels: Array.from({ length: 10 }, (_, index) => `c${index}`),
+      series: [
+        { name: 'A', values: Array.from({ length: 10 }, () => 80) },
+        { name: 'B', values: Array.from({ length: 10 }, () => 12.5) },
+        { name: 'C', values: Array.from({ length: 10 }, () => 80) },
+      ],
+    };
+    const scales = chartScales(grouped);
+    const callout = chartBarCallout(grouped, { x: 4, series: 'B' }, scales)!;
+    const bars = chartBars(grouped, scales).filter((bar) => bar !== callout.bar);
+    expect(bars.every((bar) => !(bar.rect.left < callout.label.right && bar.rect.right > callout.label.left && bar.rect.top < callout.label.bottom))).toBe(true);
+    expect(callout.point.y).toBeLessThan(callout.label.top);
+    // Across, past a longer neighbour too.
+    const across = chartScales(grouped, { width: 400, height: 900 });
+    expect(across.horizontal).toBe(true);
+    const right = chartBarCallout(grouped, { x: 4, series: 'B' }, across)!;
+    const others = chartBars(grouped, across).filter((bar) => bar.series !== 1 && bar.index === 4);
+    expect(others.every((bar) => bar.rect.bottom <= right.label.top || bar.rect.top >= right.label.bottom || bar.rect.right <= right.label.left)).toBe(true);
+  });
+
   it('is marked once for its marker and every note that names it', () => {
     const marked: ChartData = { ...suite, marker: { x: 1, series: 'THIS RUN' } };
     const callouts = chartBarCallouts(marked, [{ x: 1, series: 'THIS RUN' }, { x: 0, series: 'PREVIOUS RUN' }]);
