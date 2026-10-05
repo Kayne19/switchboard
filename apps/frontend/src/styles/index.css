@@ -3085,6 +3085,12 @@ button {
   color: rgba(232, 230, 223, 0.42);
 }
 
+/* A message with no subject is read by its snippet: an unread one keeps
+   it strong. */
+.inbox-row--unread .inbox-row__snippet:first-child {
+  color: rgba(232, 230, 223, 0.78);
+}
+
 .inbox-primitive__rows--line .inbox-row__subject + .inbox-row__snippet::before {
   content: "\2003";
 }
