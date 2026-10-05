@@ -243,14 +243,17 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
 // One object drawn inside a composed workspace, as the primary or in the aux
 // row beneath it. A metric and a progress change with the slot: the aux row
 // has no room for a whole step list. `objects` are the objects on stage, by
-// id, which a note names its object among; `marked` is the item the drawn
-// note names in the object (`markedItem`), which the object marks.
-function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', objects: ControllerState['agentObjects'], marked?: string) {
+// id, which a note names its object among; `drawn` is the note the page
+// draws for the scene (the rail's), and the object marks what it names in
+// it: a list's item (`markedItem`), a diagram's node or actor (its NOTE
+// marker; the note stays in the rail, never a callout in a cell).
+function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', objects: ControllerState['agentObjects'], drawn: NoteData | null) {
+  const marked = markedItem(drawn, object.id);
   switch (object.type) {
     case 'chart':
       return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
     case 'diagram':
-      return <DiagramObject data={(object as SceneObject<DiagramObjectData>).data} id={object.id} />;
+      return <DiagramObject data={(object as SceneObject<DiagramObjectData>).data} id={object.id} note={drawn} callout={false} />;
     case 'document':
       return <DocumentViewport data={(object as SceneObject<DocumentData>).data} />;
     case 'code':
@@ -635,18 +638,19 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
 // never lost to the layout. A visual keeps a readable floor in its cell; a
 // row with no room for every cell scrolls inside itself rather than squeezing
 // one to nothing (`.composed-aux` in styles/index.css). Each object marks
-// the item the rail's note names in it (`marked`).
+// what the rail's note names in it (`drawn`): an item, a node, an actor.
 function AuxRow({
   objects,
   onStage,
   onFocus,
-  marked,
+  drawn,
 }: {
   objects: SceneObject[];
   /** Every object on stage, by id. */
   onStage: ControllerState['agentObjects'];
   onFocus: (id: string | null) => void;
-  marked: (objectId: string) => string | undefined;
+  /** The note the rail draws: each cell marks what it names in its object. */
+  drawn: NoteData | null;
 }) {
   return (
     <div className="composed-aux">
@@ -659,7 +663,7 @@ function AuxRow({
           <TechFrame variant="panel" />
           <ObjectSurface object={object}>
             <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-              {composedPrimitive(object, 'aux', onStage, marked(object.id))}
+              {composedPrimitive(object, 'aux', onStage, drawn)}
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -679,7 +683,7 @@ function MainWithAux({
   aux,
   onStage,
   onFocus,
-  marked,
+  drawn,
   ref,
   children,
 }: {
@@ -687,14 +691,14 @@ function MainWithAux({
   aux: SceneObject[];
   onStage: ControllerState['agentObjects'];
   onFocus: (id: string | null) => void;
-  marked: (objectId: string) => string | undefined;
+  drawn: NoteData | null;
   ref?: RefObject<HTMLDivElement | null>;
   children: ReactNode;
 }) {
   return (
     <motion.div ref={ref} className={`content-main composed-main${variant ? ` ${variant}` : ''}`} layout>
       {children}
-      {aux.length > 0 ? <AuxRow objects={aux} onStage={onStage} onFocus={onFocus} marked={marked} /> : null}
+      {aux.length > 0 ? <AuxRow objects={aux} onStage={onStage} onFocus={onFocus} drawn={drawn} /> : null}
     </motion.div>
   );
 }
@@ -926,7 +930,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
                   onFocus={onFocus}
                 />
               ) : (
-                <StageDemandContext.Provider value={onDemand}>{composedPrimitive(primary, 'primary', state.agentObjects, markedItem(note, primary.id))}</StageDemandContext.Provider>
+                <StageDemandContext.Provider value={onDemand}>{composedPrimitive(primary, 'primary', state.agentObjects, note)}</StageDemandContext.Provider>
               )}
             </FocusableSurface>
           </ObjectSurface>
@@ -1084,7 +1088,7 @@ export function SceneShell(props: SceneProps) {
           </div>
           <div className={`content-grid${staged ? ' content-grid--staged' : ''}`} data-stage={foldable ? (staged ? 'primary' : 'shared') : undefined}>
             <div ref={probeRef} className="content-grid__probe" aria-hidden="true" />
-            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} marked={(id) => markedItem(calloutPlaced ? null : content.note, id)}>
+            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} drawn={calloutPlaced ? null : content.note}>
               {content.main}
             </MainWithAux>
             <motion.aside

@@ -348,3 +348,28 @@ describe('every card names its object in its own words', () => {
     expect(card?.querySelector('.annotation-card__anchor')).toBeNull();
   });
 });
+
+// A note about a node of a diagram in the aux row carried the badge on its
+// rail card while the cell drew the node unmarked: the cell drew the
+// diagram with no note. A badge has its mark on screen, as a list's item
+// has in its cell.
+describe('a diagram beside the primary marks the node the rail note names', () => {
+  const flow: ControllerAction = { op: 'show', id: 'flow', type: 'diagram', role: 'secondary', data: {
+    mode: 'graph', title: 'CALL / FLOW', nodes: [{ id: 'gate', label: 'Display gate' }, { id: 'page', label: 'Page' }], edges: [{ from: 'gate', to: 'page' }],
+  } };
+  const onGate: ControllerAction = { op: 'show', id: 'gate-note', type: 'note', data: { tag: 'GATE', anchor: { target: 'flow', node: 'gate' }, segments: [{ text: 'The gate stamps each action.' }] } };
+
+  it('marks the node in its cell while the rail shows that note, and no node while it shows another', () => {
+    render([table, flow, onGate]);
+    const card = scene().querySelector('.content-rail .annotation-card');
+    expect(card?.querySelector('.annotation-card__anchor')?.textContent).toBe('TARGET / Display gate');
+    expect(card?.querySelectorAll('.annotation-card__header .note-badge')).toHaveLength(1);
+    const cell = scene().querySelector('.composed-aux');
+    expect(cell?.querySelectorAll('.diagram-node__body--anchored')).toHaveLength(1);
+    expect(cell?.querySelector('.diagram-node__body--anchored')?.textContent).toContain('Display gate');
+    const onGrid: ControllerAction = { op: 'show', id: 'grid-note', type: 'note', data: { tag: 'GRID', anchor: { target: 'grid' }, segments: [{ text: 'About the table.' }] } };
+    act(() => runActions([onGrid]));
+    expect(scene().querySelector('.content-rail .annotation-card__tag')?.textContent).toBe('GRID');
+    expect(scene().querySelectorAll('.composed-aux .diagram-node__body--anchored')).toHaveLength(0);
+  });
+});
