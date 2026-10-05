@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
-import { useElementSize } from '../hooks/useElementSize';
-import { ARROW_LENGTH, cornerTagBoxes, layoutDiagram, nodeFramePath, type Point } from './diagramLayout';
+import { ARROW_LENGTH, cornerTagBoxes, nodeFramePath, viewDiagram, type Point } from './diagramLayout';
+import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 
 const colors: Record<Semantic, string> = {
   red: 'var(--red)',
@@ -60,25 +60,31 @@ export function DiagramPrimitive({
   note?: NoteData | null;
   onCalloutChange?: (placed: boolean) => void;
 }) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const size = useElementSize(hostRef);
-  // Until the host has been measured, the first frame must already pick the
-  // right orientation: it falls back to the screen's own aspect ratio, so a
-  // portrait phone never flashes a landscape callout before the observer
-  // reports the real size.
-  const sizeMeasured = size.width > 0 && size.height > 0;
-  const portrait = sizeMeasured
-    ? size.height > size.width * 1.05
-    : window.innerHeight > window.innerWidth * 1.05;
+  const { hostRef, width, height, scrollbar } = useDrawingViewport();
   // The anchor's target is part of the protocol: a note aimed at another
   // object that happens to name one of this diagram's nodes is not ours.
   const anchoredNodeId =
     note?.anchor && note.anchor.target === id ? note.anchor.node : undefined;
   const hasAnchoredNode = Boolean(anchoredNodeId && data.nodes.some((n) => n.id === anchoredNodeId));
-  const layout = useMemo(
-    () => layoutDiagram(data, portrait ? 'portrait' : 'landscape', hasAnchoredNode ? anchoredNodeId : undefined),
-    [data, portrait, hasAnchoredNode, anchoredNodeId],
+  const anchor = hasAnchoredNode ? anchoredNodeId : undefined;
+  // The layout is chosen for the viewport: as drawn for the approved canvas
+  // when that reads, otherwise recomposed for this viewport and scrolled.
+  const { layout, fit, orientation } = useMemo(
+    () => viewDiagram(data, { width, height, scrollbar }, anchor),
+    [data, width, height, scrollbar, anchor],
   );
+  const portrait = orientation === 'portrait';
+  // A drawing that scrolls opens on the node its note names, or else on
+  // where it begins: its first layer.
+  const lead = useMemo(() => {
+    const anchored = layout.nodes.find((node) => node.node.id === anchor);
+    if (anchored) return anchored.box;
+    const first = layout.nodes.filter((node) => node.layer === 0).map((node) => node.box);
+    if (!first.length) return null;
+    const x = Math.min(...first.map((box) => box.x));
+    const y = Math.min(...first.map((box) => box.y));
+    return { x, y, width: Math.max(...first.map((box) => box.x + box.width)) - x, height: Math.max(...first.map((box) => box.y + box.height)) - y };
+  }, [layout, anchor]);
   // The callout box fits three wrapped lines and a one-line tag. A longer
   // note — or a word or tag too wide for the box — is not truncated or
   // spilled over the diagram: it is treated as not fitting, so the note
@@ -92,7 +98,9 @@ export function DiagramPrimitive({
     calloutLines.length <= 3 &&
     calloutLines.every((line) => line.length <= CALLOUT_LINE_CHARS) &&
     (note?.tag?.length ?? 0) <= CALLOUT_TAG_CHARS;
-  const calloutPlaced = Boolean(!portrait && layout.callout && calloutFits);
+  // A callout rides on the drawing; on one that scrolls it could sit out of
+  // view, so there the note stays in the rail and the node carries the marker.
+  const calloutPlaced = Boolean(!portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutFits);
 
   // The scene drops the note from the rail while the callout carries it. A
   // diagram that goes away (a new scene, or a render error that leaves its
@@ -114,12 +122,7 @@ export function DiagramPrimitive({
 
   return (
     <div ref={hostRef} className={`diagram-primitive${focused ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
-      <svg
-        viewBox={`0 0 ${layout.width} ${layout.height}`}
-        preserveAspectRatio="xMidYMid meet"
-        role="img"
-        aria-label={data.title ?? 'System diagram'}
-      >
+      <DrawingViewport drawing={layout} fit={fit} lead={lead} ariaLabel={data.title ?? 'System diagram'}>
         <defs>
           {/* The region is the whole drawing, not each edge's bounding box: a
               straight edge has a zero-height box, and a filter region derived
@@ -309,7 +312,7 @@ export function DiagramPrimitive({
             ) : null,
           )}
         </g>
-      </svg>
+      </DrawingViewport>
     </div>
   );
 }

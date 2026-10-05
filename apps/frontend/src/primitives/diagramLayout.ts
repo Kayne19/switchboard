@@ -28,6 +28,7 @@
 // scales it to fit, rather than letting anything overlap.
 
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
+import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
 
 export type DiagramOrientation = 'landscape' | 'portrait';
 
@@ -187,6 +188,9 @@ const LABEL_MAX_LINES = 2;
 // a line passing a label keeps a little room from its backing too.
 const CLEARANCE = 6;
 const LINE_CLEARANCE = 2;
+// A label moved off the middle of its line keeps the line this far inside
+// its backing's edge.
+const LABEL_HOLD = 10;
 // How many spots a label tries on each run before settling.
 const LABEL_STOPS = 24;
 // An edge's arrowhead, in user units: the renderer draws it this long, and a
@@ -203,6 +207,16 @@ const TRACK_PITCH = 12;
 const NODE_SPACING = 28;
 const DUMMY_SPACING = 22;
 const MAX_STRETCH = 72;
+// How closely a drawing is packed across: on the approved canvas, and when
+// it is laid out for the frame it will be read in at its readable minimum,
+// where room across is what keeps it from scrolling both ways. There the
+// lines of long edges run as a bundle, a few pixels apart on screen.
+interface Packing {
+  dummy: number;
+  padCross: number;
+}
+const APPROVED_PACKING: Packing = { dummy: DUMMY_SPACING, padCross: PAD_CROSS };
+const FRAME_PACKING: Packing = { dummy: 12, padCross: 16 };
 // A layer too crowded for the canvas is staggered into two rows along the
 // main axis, its boxes interleaved so each back-row box sits behind the
 // gap between two front-row boxes and its edges pass through that gap.
@@ -268,10 +282,27 @@ interface NodeText {
   ruleY: number;
 }
 
-export function measureNode(node: DiagramNode, cornerTags: CornerTags): NodeText {
-  const labelLines = wrapLine(node.label, NODE_TEXT.label.wrapAt, NODE_TEXT.label.maxLines);
-  const subLines = node.sub ? wrapLine(node.sub, NODE_TEXT.sub.wrapAt, NODE_TEXT.sub.maxLines) : [];
-  const detailLines = node.detail ? wrapLine(node.detail, NODE_TEXT.detail.wrapAt, NODE_TEXT.detail.maxLines) : [];
+// Where each face of a node's text wraps, and the narrowest box. A drawing
+// read top down in a narrow frame runs out of room across first, and its
+// boxes are its width there: their text wraps narrower and to more lines.
+interface NodeWrap {
+  label: { wrapAt: number; maxLines: number };
+  sub: { wrapAt: number; maxLines: number };
+  detail: { wrapAt: number; maxLines: number };
+  minWidth: number;
+}
+const APPROVED_WRAP: NodeWrap = { label: NODE_TEXT.label, sub: NODE_TEXT.sub, detail: NODE_TEXT.detail, minWidth: NODE_MIN_WIDTH };
+const NARROW_WRAP: NodeWrap = {
+  label: { wrapAt: 12, maxLines: 3 },
+  sub: { wrapAt: 18, maxLines: 3 },
+  detail: { wrapAt: 26, maxLines: 2 },
+  minWidth: 116,
+};
+
+export function measureNode(node: DiagramNode, cornerTags: CornerTags, wrap: NodeWrap = APPROVED_WRAP): NodeText {
+  const labelLines = wrapLine(node.label, wrap.label.wrapAt, wrap.label.maxLines);
+  const subLines = node.sub ? wrapLine(node.sub, wrap.sub.wrapAt, wrap.sub.maxLines) : [];
+  const detailLines = node.detail ? wrapLine(node.detail, wrap.detail.wrapAt, wrap.detail.maxLines) : [];
 
   const lines: NodeLine[] = [];
   let y = NODE_LABEL_BASELINE;
@@ -304,7 +335,7 @@ export function measureNode(node: DiagramNode, cornerTags: CornerTags): NodeText
     ...detailLines.map((line) => line.length * NODE_TEXT.detail.advance),
   );
   return {
-    width: Math.max(NODE_MIN_WIDTH, Math.ceil(textWidth + 2 * NODE_PAD_SIDE)),
+    width: Math.max(wrap.minWidth, Math.ceil(textWidth + 2 * NODE_PAD_SIDE)),
     height: last + NODE_PAD_BOTTOM,
     lines,
     ruleY,
@@ -418,6 +449,84 @@ export function createLayers(nodes: DiagramNode[], edges: DiagramEdge[]): Diagra
   const layers = Array.from({ length: count }, () => [] as DiagramNode[]);
   for (const node of nodes) layers[layer.get(node.id) ?? 0].push(node);
   return layers;
+}
+
+// --- Wrapping a layer too wide for its frame --------------------------------
+
+/**
+ * Splits each layer too wide for the frame's cross axis into consecutive
+ * layers that fit it, and renumbers the layers after it. A node's edges
+ * then pass the other parts of its old layer as long edges do, through the
+ * gaps between their boxes, so they are counted against each part's room.
+ * Nodes with more edges in than out go first, so the fewest edges have far
+ * to run. A layer that fits, and a lone node too wide for any part, stay
+ * as they are.
+ */
+function wrapLayers(
+  nodes: DiagramNode[],
+  edges: DirectedEdge[],
+  layerOf: Map<string, number>,
+  extentOf: (id: string) => number,
+  usable: number,
+  packing: Packing,
+) {
+  const count = nodes.length ? Math.max(...layerOf.values()) + 1 : 0;
+  const members: string[][] = Array.from({ length: count }, () => []);
+  for (const node of nodes) members[layerOf.get(node.id) ?? 0].push(node.id);
+  const inward = new Map<string, number>();
+  const outward = new Map<string, number>();
+  const passing = new Array<number>(count).fill(0);
+  for (const edge of edges) {
+    outward.set(edge.from, (outward.get(edge.from) ?? 0) + 1);
+    inward.set(edge.to, (inward.get(edge.to) ?? 0) + 1);
+    for (let layer = (layerOf.get(edge.from) ?? 0) + 1; layer < (layerOf.get(edge.to) ?? 0); layer += 1) passing[layer] += 1;
+  }
+  // The room a part of a layer takes: its boxes and the spacing between
+  // them, and a dummy's spacing for each edge passing through it. A layer
+  // crowded enough to stagger into two rows takes about half.
+  const lanes = (through: number) => (through > 0 ? (through + 1) * packing.dummy : 0);
+  const room = (ids: string[], through: number) =>
+    ids.reduce((sum, id) => sum + extentOf(id), 0) + NODE_SPACING * Math.max(0, ids.length - 1) + lanes(through);
+  const staggered = (ids: string[], through: number) => {
+    const widest = Math.max(...ids.map(extentOf));
+    return ids.length >= STAGGER_FROM ? (ids.length - 1) * (widest / 2 + STAGGER_CLEARANCE) + widest + lanes(through) : Infinity;
+  };
+  let shift = 0;
+  members.forEach((ids, layer) => {
+    if (room(ids, passing[layer]) <= usable || staggered(ids, passing[layer]) <= usable || ids.length < 2) {
+      for (const id of ids) layerOf.set(id, layer + shift);
+      return;
+    }
+    const order = ids
+      .map((id, index) => ({ id, index, lean: (outward.get(id) ?? 0) - (inward.get(id) ?? 0) }))
+      .sort((a, b) => a.lean - b.lean || a.index - b.index)
+      .map((entry) => entry.id);
+    // Edges into the nodes still to place pass this part; so do the edges
+    // out of the nodes placed in parts before it.
+    let waitingIn = order.reduce((sum, id) => sum + (inward.get(id) ?? 0), 0);
+    let doneOut = 0;
+    let part = 0;
+    let cursor = 0;
+    while (cursor < order.length) {
+      const taken = [order[cursor]];
+      waitingIn -= inward.get(order[cursor]) ?? 0;
+      cursor += 1;
+      while (cursor < order.length) {
+        const next = order[cursor];
+        const through = passing[layer] + waitingIn - (inward.get(next) ?? 0) + doneOut;
+        if (room([...taken, next], through) > usable) break;
+        taken.push(next);
+        waitingIn -= inward.get(next) ?? 0;
+        cursor += 1;
+      }
+      for (const id of taken) {
+        layerOf.set(id, layer + shift + part);
+        doneOut += outward.get(id) ?? 0;
+      }
+      part += 1;
+    }
+    shift += part - 1;
+  });
 }
 
 // --- The layered graph -----------------------------------------------------
@@ -549,14 +658,14 @@ function orderLayers(layers: Item[][]) {
 
 // --- Cross coordinates -----------------------------------------------------
 
-function separation(a: Item, b: Item, stretch: number) {
+function separation(a: Item, b: Item, stretch: number, packing: Packing) {
   if (a.node && b.node && a.staggered && a.row !== b.row) {
     // Boxes in different rows may overlap along the cross axis; what must
     // stay clear is each box's centre line, where its edges run through
     // the other row.
     return Math.max(a.crossExtent, b.crossExtent) / 2 + STAGGER_CLEARANCE;
   }
-  const spacing = a.node && b.node ? NODE_SPACING + stretch : DUMMY_SPACING;
+  const spacing = a.node && b.node ? NODE_SPACING + stretch : packing.dummy;
   return a.crossExtent / 2 + spacing + b.crossExtent / 2;
 }
 
@@ -566,8 +675,17 @@ function separation(a: Item, b: Item, stretch: number) {
  * placed is pushed aside. Dummies go first so long edges stay straight,
  * then the nodes with most edges.
  */
-function settleLayer(layer: Item[], wantedOf: (item: Item) => number | null, stretch: number) {
-  const sep = (index: number) => separation(layer[index], layer[index + 1], stretch);
+function settleLayer(layer: Item[], wantedOf: (item: Item) => number | null, stretch: number, packing: Packing, band?: number) {
+  const sep = (index: number) => separation(layer[index], layer[index + 1], stretch, packing);
+  // Laid out for a frame, a layer that fits the band across keeps inside
+  // it: the band's edges are walls, as a placed neighbour is.
+  const offsets = [0];
+  for (let k = 0; k + 1 < layer.length; k += 1) offsets.push(offsets[k] + sep(k));
+  const stack = layer.length ? layer[0].crossExtent / 2 + offsets[offsets.length - 1] + layer[layer.length - 1].crossExtent / 2 : 0;
+  const walled = band !== undefined && layer.length > 0 && stack <= band;
+  const wallLow = (index: number) => (walled ? -band / 2 + layer[0].crossExtent / 2 + offsets[index] : -Infinity);
+  const wallHigh = (index: number) =>
+    walled ? band / 2 - layer[layer.length - 1].crossExtent / 2 - (offsets[offsets.length - 1] - offsets[index]) : Infinity;
   // Neighbours that want the same spot (siblings of one parent) are centred
   // on it as a block rather than queueing behind the first of them.
   const targets = layer.map(wantedOf);
@@ -597,7 +715,7 @@ function settleLayer(layer: Item[], wantedOf: (item: Item) => number | null, str
     const i = item.index;
     const target = wanted(item);
     if (target !== null) {
-      let low = -Infinity;
+      let low = wallLow(i);
       let span = 0;
       for (let k = i - 1; k >= 0; k -= 1) {
         span += sep(k);
@@ -606,7 +724,7 @@ function settleLayer(layer: Item[], wantedOf: (item: Item) => number | null, str
           break;
         }
       }
-      let high = Infinity;
+      let high = wallHigh(i);
       span = 0;
       for (let k = i + 1; k < layer.length; k += 1) {
         span += sep(k - 1);
@@ -623,11 +741,15 @@ function settleLayer(layer: Item[], wantedOf: (item: Item) => number | null, str
   }
 }
 
-function assignCross(layers: Item[][], usableCross: number) {
+function assignCross(layers: Item[][], usableCross: number, packing: Packing, band?: number) {
   const stretches = layers.map((layer) => {
     const real = layer.filter((item) => item.node);
     if (real.length < 2) return 0;
     const natural = real.reduce((sum, item) => sum + item.crossExtent, 0) + NODE_SPACING * (real.length - 1);
+    // A sparse layer spreads to use the room across, less what the edges
+    // passing through it take.
+    const passing = layer.length - real.length;
+    const room = usableCross - (passing > 0 ? (passing + 1) * packing.dummy : 0);
     if (real.length >= STAGGER_FROM && natural > usableCross) {
       real.forEach((item, index) => {
         item.row = index % 2 === 0 ? 0 : 1;
@@ -635,14 +757,14 @@ function assignCross(layers: Item[][], usableCross: number) {
       for (const item of layer) item.staggered = true;
       return 0;
     }
-    return Math.max(0, Math.min(MAX_STRETCH, (usableCross - natural) / (real.length - 1)));
+    return Math.max(0, Math.min(MAX_STRETCH, (room - natural) / (real.length - 1)));
   });
   layers.forEach((layer, index) => {
     const stretch = stretches[index];
     // Stack the layer from zero, then centre the stack on zero.
     let cursor = 0;
     layer.forEach((item, k) => {
-      if (k > 0) cursor += separation(layer[k - 1], item, stretch);
+      if (k > 0) cursor += separation(layer[k - 1], item, stretch, packing);
       item.cross = cursor;
     });
     if (layer.length) {
@@ -664,8 +786,8 @@ function assignCross(layers: Item[][], usableCross: number) {
   const towardPreds = (item: Item) => toward(item.preds, item);
   const towardSuccs = (item: Item) => toward(item.succs, item);
   for (let round = 0; round < 2; round += 1) {
-    for (let index = 1; index < layers.length; index += 1) settleLayer(layers[index], towardPreds, stretches[index]);
-    for (let index = layers.length - 2; index >= 0; index -= 1) settleLayer(layers[index], towardSuccs, stretches[index]);
+    for (let index = 1; index < layers.length; index += 1) settleLayer(layers[index], towardPreds, stretches[index], packing, band);
+    for (let index = layers.length - 2; index >= 0; index -= 1) settleLayer(layers[index], towardSuccs, stretches[index], packing, band);
   }
 }
 
@@ -783,8 +905,18 @@ function simplify(points: MainCross[]): MainCross[] {
   return out;
 }
 
-export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation, anchorNodeId?: string): DiagramLayout {
-  const canvas = CANVAS[orientation];
+/**
+ * The room a drawing is laid out for, in user units along its main and
+ * cross axes: the frame it will be read in, at the scale it will be read
+ * at. Without one, the drawing is laid out for the approved canvas.
+ */
+export interface DiagramFrame {
+  main: number;
+  cross: number;
+}
+
+export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation, anchorNodeId?: string, frame?: DiagramFrame): DiagramLayout {
+  const canvas = frame ?? CANVAS[orientation];
   const landscape = orientation === 'landscape';
   const point = (main: number, cross: number): Point => (landscape ? { x: main, y: cross } : { x: cross, y: main });
   // A label's extent along each axis. Text is always horizontal, so which
@@ -795,19 +927,28 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   };
 
   // --- Nodes, layers, dummies ---------------------------------------------
+  // A done or blocked node carries its state glyph in its corner, and the
+  // anchored node may carry the NOTE marker there too.
+  const packing = frame ? FRAME_PACKING : APPROVED_PACKING;
+  const wrap = frame && !landscape && frame.cross < CANVAS.portrait.cross ? NARROW_WRAP : APPROVED_WRAP;
+  const textOf = new Map(
+    data.nodes.map((node) => [node.id, measureNode(node, { glyph: node.state === 'done' || node.state === 'blocked', marker: node.id === anchorNodeId }, wrap)]),
+  );
   const directed = breakCycles(data.nodes, data.edges);
   const layerOf = assignLayers(data.nodes, directed);
+  // Laid out for a frame, a layer too wide for it wraps into several.
+  if (frame) {
+    const crossOf = (id: string) => {
+      const text = textOf.get(id);
+      return text ? (landscape ? text.height : text.width) : 0;
+    };
+    wrapLayers(data.nodes, directed, layerOf, crossOf, canvas.cross - 2 * packing.padCross, packing);
+  }
   const layerCount = data.nodes.length ? Math.max(...layerOf.values()) + 1 : 0;
   const layers: Item[][] = Array.from({ length: layerCount }, () => []);
   const itemOf = new Map<string, Item>();
-  // A done or blocked node carries its state glyph in its corner, and the
-  // anchored node may carry the NOTE marker there too.
-  const cornerTagsOf = (node: DiagramNode): CornerTags => ({
-    glyph: node.state === 'done' || node.state === 'blocked',
-    marker: node.id === anchorNodeId,
-  });
   const makeItem = (layer: number, node: DiagramNode | null): Item => {
-    const text = node ? measureNode(node, cornerTagsOf(node)) : null;
+    const text = node ? (textOf.get(node.id) ?? null) : null;
     const item: Item = {
       layer,
       index: layers[layer].length,
@@ -853,7 +994,8 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
 
   // --- Order and settle each layer -----------------------------------------
   orderLayers(layers);
-  assignCross(layers, canvas.cross - 2 * PAD_CROSS);
+  const band = frame ? canvas.cross - 2 * packing.padCross : null;
+  assignCross(layers, canvas.cross - 2 * packing.padCross, packing, band ?? undefined);
   // A dummy that settled a hair off the line of its segment snaps onto it:
   // a route is straight or it bends, never a sliver of diagonal.
   for (const segment of segments) {
@@ -941,7 +1083,16 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     const gap = gapIndexOf(route);
     const mid = route.segments[gap - route.segments[0].from.layer];
     const extent = labelExtent(text);
-    const place = (mainOffset: number, cross: number): PlacedLabel => ({ text, gap, mainOffset, cross, extent });
+    // Laid out for a frame, a label at the band's edge slides inward, as
+    // far as keeps its line passing under it, rather than taking the
+    // drawing past the frame across.
+    const reach = Math.max(0, extent.cross / 2 - LABEL_HOLD);
+    const inBand = (cross: number) => {
+      if (band === null) return cross;
+      const banded = Math.min(Math.max(cross, -band / 2 + extent.cross / 2), band / 2 - extent.cross / 2);
+      return Math.min(Math.max(banded, cross - reach), cross + reach);
+    };
+    const place = (mainOffset: number, cross: number): PlacedLabel => ({ text, gap, mainOffset, cross: inBand(cross), extent });
     const index = gapIndex[gap];
     const neighbours = index.labels;
     const clashes = (candidate: PlacedLabel) => {
@@ -1171,7 +1322,7 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
     crossMin = 0;
     crossMax = 0;
   }
-  const crossSize = Math.max(canvas.cross, crossMax - crossMin + 2 * PAD_CROSS);
+  const crossSize = Math.max(canvas.cross, crossMax - crossMin + 2 * packing.padCross);
   const crossShift = (crossSize - (crossMax - crossMin)) / 2 - crossMin;
   const place = (main: number, cross: number) => point(main, cross + crossShift);
 
@@ -1223,6 +1374,81 @@ export function layoutDiagram(data: DiagramData, orientation: DiagramOrientation
   const callout = anchorNodeId ? placeCallout(nodes, edges, anchorNodeId, width, height, orientation) : null;
 
   return { width, height, nodes, edges, callout };
+}
+
+// --- Reading the drawing in its viewport ------------------------------------
+
+// The faces a graph sets its text in (.diagram-node-label 15, -sub 9 and
+// .diagram-edge-label 11 units): the drawing is never shown so small that
+// one of them drops below the page's type floors. A node's detail line
+// (7 units, at a quarter of the paper's strength) is a tertiary note under
+// the sub; it is let fall below the floor rather than hold every graph to
+// its own size.
+export const GRAPH_MIN_SCALE = readableScale([
+  { size: 15, floor: 'tech' },
+  { size: 9, floor: 'micro' },
+  { size: 11, floor: 'tech' },
+]);
+// The stage's own direction (left to right on a wide viewport, top down on
+// a tall one) is kept unless the other asks for this much less scrolling.
+const FLOW_SWITCH = 1.25;
+
+export interface DiagramView {
+  orientation: DiagramOrientation;
+  layout: DiagramLayout;
+  fit: DrawingFit;
+}
+
+/** The frame, in user units, a viewport offers a drawing read at the readable minimum. */
+export function frameFor(orientation: DiagramOrientation, viewport: Viewport): DiagramFrame {
+  const width = viewport.width / GRAPH_MIN_SCALE;
+  const height = viewport.height / GRAPH_MIN_SCALE;
+  const allowance = viewport.scrollbar / GRAPH_MIN_SCALE;
+  return orientation === 'landscape' ? { main: width, cross: height - allowance } : { main: height, cross: width - allowance };
+}
+
+/**
+ * Lays a graph out for a frame. Edge labels may reach past the band its
+ * boxes and lines keep to; when they take the drawing past the frame
+ * across, the band narrows by that much and the layout runs again, a few
+ * times at most.
+ */
+function layoutForFrame(data: DiagramData, orientation: DiagramOrientation, anchorNodeId: string | undefined, frame: DiagramFrame): DiagramLayout {
+  let band = frame;
+  let layout = layoutDiagram(data, orientation, anchorNodeId, band);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const across = orientation === 'landscape' ? layout.height : layout.width;
+    const excess = across - frame.cross;
+    if (excess <= 0.5 || band.cross - excess < frame.cross / 2) break;
+    band = { main: frame.main, cross: band.cross - excess - CLEARANCE };
+    layout = layoutDiagram(data, orientation, anchorNodeId, band);
+  }
+  return layout;
+}
+
+/**
+ * How a graph is shown in a viewport (CSS pixels). A drawing laid out for
+ * the approved canvas that fits at the readable minimum is shown so. One
+ * that does not is laid out again for the viewport itself, once in each
+ * direction, its wide layers wrapped to the frame across; of those and the
+ * approved drawing, the one asking for the least scrolling at the readable
+ * minimum is kept, the stage's own direction preferred.
+ */
+export function viewDiagram(data: DiagramData, viewport: Viewport, anchorNodeId?: string): DiagramView {
+  const preferred: DiagramOrientation = viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
+  const approved = layoutDiagram(data, preferred, anchorNodeId);
+  const fit = fitDrawing(approved, viewport, GRAPH_MIN_SCALE);
+  if (!fit.scrollX && !fit.scrollY) return { orientation: preferred, layout: approved, fit };
+  const views = [
+    { orientation: preferred, layout: approved, fit, cost: scrollCost(fit, viewport) },
+    ...(['landscape', 'portrait'] as const).map((orientation) => {
+      const layout = layoutForFrame(data, orientation, anchorNodeId, frameFor(orientation, viewport));
+      const fitted = fitDrawing(layout, viewport, GRAPH_MIN_SCALE);
+      return { orientation, layout, fit: fitted, cost: scrollCost(fitted, viewport) * (orientation === preferred ? 1 : FLOW_SWITCH) };
+    }),
+  ];
+  const [best] = views.sort((a, b) => a.cost - b.cost);
+  return { orientation: best.orientation, layout: best.layout, fit: best.fit };
 }
 
 function boxesOverlap(a: Box, b: Box, clearance = 10): boolean {

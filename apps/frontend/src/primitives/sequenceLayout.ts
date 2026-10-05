@@ -15,6 +15,7 @@
 //   rows, so a long exchange scales down as a whole and stays in order.
 
 import type { SequenceActor, SequenceDiagramData, SequenceMessage } from '../controller/types';
+import { fitDrawing, readableScale, type DrawingFit, type Viewport } from './drawingFit';
 
 export type SequenceOrientation = 'landscape' | 'portrait';
 
@@ -119,6 +120,7 @@ export const SUB_LINE_HEIGHT = 11;
 // Message labels are set in the monospace face at 11 user units with 0.06em
 // tracking (.sequence-message-label), so a label's width is known before it
 // is drawn: 0.6em advance plus the tracking, rounded up.
+const MESSAGE_LABEL_SIZE = 11;
 const LABEL_ADVANCE = 7.3;
 export const LABEL_HEIGHT = 14;
 const LABEL_BACKING = 4;
@@ -338,4 +340,27 @@ export function layoutSequence(data: SequenceDiagramData, orientation: SequenceO
     actors: laidOutActors,
     messages,
   };
+}
+
+// --- Reading the drawing in its viewport ------------------------------------
+
+/** The least scale at which a sequence's text keeps the page's type floors: its actor labels and message labels as .tech, its subs as .micro. */
+export function sequenceMinScale(layout: SequenceLayout): number {
+  return readableScale([
+    { size: layout.actorLabelSize, floor: 'tech' },
+    { size: layout.actorSubSize, floor: 'micro' },
+    { size: MESSAGE_LABEL_SIZE, floor: 'tech' },
+  ]);
+}
+
+export interface SequenceView {
+  layout: SequenceLayout;
+  fit: DrawingFit;
+}
+
+/** How a sequence is shown in a viewport (CSS pixels): the geometry for its shape, fitted (drawingFit.ts). */
+export function viewSequence(data: SequenceDiagramData, viewport: Viewport): SequenceView {
+  const orientation: SequenceOrientation = viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
+  const layout = layoutSequence(data, orientation);
+  return { layout, fit: fitDrawing(layout, viewport, sequenceMinScale(layout)) };
 }

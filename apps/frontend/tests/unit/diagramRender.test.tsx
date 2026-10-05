@@ -5,6 +5,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
 import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
+import { topologyDiagram } from '../../src/fixtures/scenes';
+import { GRAPH_MIN_SCALE } from '../../src/primitives/diagramLayout';
 
 const data: DiagramData = {
   mode: 'graph',
@@ -482,4 +484,53 @@ describe('corner tags inside the node frame', () => {
       });
     }
   }
+});
+
+
+describe('a graph too large to read whole', () => {
+  // Scaled to fit a 1024 x 768 screen, the switchboard topology's text was
+  // drawn at a third of its size: node subs at 3 px, edge labels at 4 px.
+  it('is drawn no smaller than the readable minimum, and scrolls in its viewport instead', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<DiagramPrimitive data={topologyDiagram} id="topology" />));
+    const svg = host.querySelector('svg')!;
+    const [, , width, height] = (svg.getAttribute('viewBox') ?? '').split(' ').map(Number);
+    // Unmeasured, the host stands in for the screen (jsdom: 1024 x 768).
+    const drawnWidth = svg.style.width ? parseFloat(svg.style.width) : Math.min(window.innerWidth, (width * window.innerHeight) / height);
+    expect(drawnWidth / width).toBeGreaterThanOrEqual(GRAPH_MIN_SCALE - 1e-9);
+    const viewport = host.querySelector('.drawing-viewport');
+    expect(viewport?.classList.contains('drawing-viewport--scrolling')).toBe(true);
+    // One way only: across, it fits.
+    expect(['x', 'y']).toContain(viewport?.getAttribute('data-scroll'));
+    expect(host.querySelector('.drawing-viewport__scroll')?.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('keeps a note that names one of its nodes in the rail, the node carrying the marker', () => {
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    const placed: boolean[] = [];
+    act(() =>
+      root.render(
+        <DiagramPrimitive
+          data={topologyDiagram}
+          id="topology"
+          note={{ tag: 'NOTE', anchor: { target: 'topology', node: 'gate' }, segments: [{ text: 'Short enough for a callout.' }] }}
+          onCalloutChange={(value) => placed.push(value)}
+        />,
+      ),
+    );
+    // A callout rides on the drawing and could sit out of view in a scroll.
+    expect(host.querySelector('.diagram-callout')).toBeNull();
+    expect(placed.at(-1)).toBe(false);
+    expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
+  });
+
+  it('is contained, as before, when it reads whole', () => {
+    render();
+    expect(host.querySelector('.drawing-viewport--scrolling')).toBeNull();
+    expect(host.querySelector('svg')?.style.width).toBe('');
+  });
 });

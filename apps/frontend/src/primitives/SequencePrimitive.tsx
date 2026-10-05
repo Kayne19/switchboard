@@ -1,7 +1,7 @@
-import { useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import type { NoteData, Semantic, SequenceDiagramData } from '../controller/types';
-import { useElementSize } from '../hooks/useElementSize';
-import { LABEL_HEIGHT, SUB_LINE_HEIGHT, layoutSequence, type LaidOutMessage, type Point } from './sequenceLayout';
+import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import { LABEL_HEIGHT, SUB_LINE_HEIGHT, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
 
 const colors: Record<Semantic, string> = {
   red: 'var(--red)',
@@ -58,17 +58,10 @@ export function SequencePrimitive({
   id: string;
   note?: NoteData | null;
 }) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const size = useElementSize(hostRef);
-  // Until the host has been measured, the first frame must already pick the
-  // right geometry: it falls back to the screen's own aspect ratio, so a
-  // portrait phone never flashes the wide columns before the observer
-  // reports the real size.
-  const sizeMeasured = size.width > 0 && size.height > 0;
-  const portrait = sizeMeasured
-    ? size.height > size.width * 1.05
-    : window.innerHeight > window.innerWidth * 1.05;
-  const layout = useMemo(() => layoutSequence(data, portrait ? 'portrait' : 'landscape'), [data, portrait]);
+  const { hostRef, width, height, scrollbar } = useDrawingViewport();
+  // The geometry follows the viewport's shape, and the drawing is fitted to
+  // it, or scrolled in it once fitting would make it too small to read.
+  const { layout, fit } = useMemo(() => viewSequence(data, { width, height, scrollbar }), [data, width, height, scrollbar]);
   // The anchor's target is part of the protocol: a note aimed at another
   // object that happens to name one of these actors is not ours. The note
   // itself stays in the rail; the actor it names is marked.
@@ -79,12 +72,7 @@ export function SequencePrimitive({
 
   return (
     <div ref={hostRef} className={`sequence-primitive${focused ? ' sequence-primitive--focused' : ''}`} data-testid="sequence">
-      <svg
-        viewBox={`0 0 ${layout.width} ${layout.height}`}
-        preserveAspectRatio="xMidYMid meet"
-        role="img"
-        aria-label={data.title ?? 'Sequence diagram'}
-      >
+      <DrawingViewport drawing={layout} fit={fit} ariaLabel={data.title ?? 'Sequence diagram'}>
         <defs>
           {/* The region is the whole drawing, not each message's bounding box:
               a straight message has a zero-height box, and a filter region
@@ -220,7 +208,7 @@ export function SequencePrimitive({
             </g>
           ))}
         </g>
-      </svg>
+      </DrawingViewport>
     </div>
   );
 }

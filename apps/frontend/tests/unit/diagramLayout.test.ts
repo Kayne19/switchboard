@@ -1,7 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
 import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
-import { ARROW_LENGTH, breakCycles, cornerTagBoxes, layoutDiagram, measureNode, nodeFramePath, wrapEdgeLabel, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
+import {
+  ARROW_LENGTH,
+  breakCycles,
+  cornerTagBoxes,
+  frameFor,
+  layoutDiagram,
+  measureNode,
+  nodeFramePath,
+  wrapEdgeLabel,
+  type Box,
+  type DiagramLayout,
+  type DiagramOrientation,
+  type Point,
+} from '../../src/primitives/diagramLayout';
 
 const NO_TAGS = { glyph: false, marker: false };
 
@@ -150,6 +163,11 @@ const onRoute = (point: Point, points: Point[]) =>
     return point.x >= box.x - 1e-6 && point.x <= box.x + box.width + 1e-6 && point.y >= box.y - 1e-6 && point.y <= box.y + box.height + 1e-6;
   });
 
+// A line of the route passes under the label, at least 9 units inside
+// each edge of its backing.
+const underLabel = (box: Box, points: Point[]) =>
+  points.slice(1).some((end, index) => overlaps(segmentBox(points[index], end), inset(box, 9)));
+
 // The arrowhead at a route's end: the last ARROW_LENGTH of its final
 // segment, as wide as it is long.
 const arrowhead = (points: Point[]): Box => {
@@ -169,10 +187,33 @@ const onOutline = (point: Point, box: Box) => {
   return onVertical || onHorizontal;
 };
 
+// The frames a drawing is laid out for once it is too large to read whole:
+// a phone-width slot (330 x 374 CSS pixels), the landscape slot at
+// 1440 x 900 (914 x 526), and the focus layer on a phone (366 x 700), read
+// at the readable minimum, with and without room for a scroll bar.
+const frames = (orientation: DiagramOrientation) =>
+  [
+    { width: 330, height: 374, scrollbar: 0 },
+    { width: 914, height: 526, scrollbar: 11 },
+    { width: 366, height: 700, scrollbar: 0 },
+  ].map((viewport) => ({ label: `${viewport.width}x${viewport.height}`, frame: frameFor(orientation, viewport) }));
+
 for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
+  // Every graph on the approved canvas, and the hard ones, plus the crowded
+  // fan-out and the lifecycle, laid out again for each frame.
+  const cases: Array<[string, DiagramData, DiagramLayout, boolean]> = [
+    ...Object.entries(graphs).map(([name, data]): [string, DiagramData, DiagramLayout, boolean] => [name, data, layoutDiagram(data, orientation), false]),
+    ...(['topology', 'ciPipeline', 'wide', 'states', 'deps'] as const).flatMap((name) =>
+      frames(orientation).map(({ label, frame }): [string, DiagramData, DiagramLayout, boolean] => [
+        `${name} in ${label}`,
+        graphs[name],
+        layoutDiagram(graphs[name], orientation, undefined, frame),
+        true,
+      ]),
+    ),
+  ];
   describe(`diagram layout / ${orientation}`, () => {
-    for (const [name, data] of Object.entries(graphs)) {
-      const layout = layoutDiagram(data, orientation);
+    for (const [name, data, layout, framed] of cases) {
       const labels = layout.edges.flatMap((edge) => (edge.label ? [edge.label] : []));
       const nodeBox = (id: string) => layout.nodes.find((node) => node.node.id === id)?.box;
 
@@ -215,7 +256,12 @@ for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
 
       it(`${name}: every label sits on its own route and clears every arrowhead`, () => {
         for (const edge of layout.edges) {
-          if (edge.label) expect(onRoute(edge.label, edge.points), `${edge.label.text} on ${edge.edge.from}->${edge.edge.to}`).toBe(true);
+          if (!edge.label) continue;
+          // Laid out for a frame, a label at the band's edge may slide off
+          // the middle of its line, as long as the line still passes under
+          // it, well inside its backing.
+          const sits = framed ? underLabel(edge.label.box, edge.points) : onRoute(edge.label, edge.points);
+          expect(sits, `${edge.label.text} on ${edge.edge.from}->${edge.edge.to}`).toBe(true);
         }
         for (const edge of layout.edges) {
           const head = arrowhead(edge.points);
