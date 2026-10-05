@@ -5,6 +5,7 @@ import fixture from '../fixtures/debug-events.json';
 import { fixtureFrames, scriptedCall } from '../../src/debug/demo';
 import type { DebugEvent, DebugFrame } from '../../src/debug/protocol';
 import { initialDebugState, LIMITS, reduceFrame, reduceFrames, routePath, type DebugState } from '../../src/debug/reducer';
+import { leastCpuMs } from './cpuTime';
 
 const config = fixture.snapshot.config;
 const snapshot = (events: DebugFrame[] = [], extra: Record<string, unknown> = {}): DebugFrame =>
@@ -210,19 +211,18 @@ describe('debug reducer', () => {
       }
     }
     expect(frames.length).toBeGreaterThan(6000);
-    const started = performance.now();
+    // Budgets in CPU time (cpuTime.ts says why).
     let state = initialDebugState();
-    for (let index = 0; index < frames.length; index += 25) state = reduceFrames(state, frames.slice(index, index + 25));
-    const elapsed = performance.now() - started;
-    expect(elapsed).toBeLessThan(3000);
+    const spent = leastCpuMs(() => {
+      for (let index = 0; index < frames.length; index += 25) state = reduceFrames(state, frames.slice(index, index + 25));
+    }, 1);
+    expect(spent).toBeLessThan(3000);
     expect(state.events.length).toBeLessThanOrEqual(4400);
     expect(state.traceOrder.length).toBeLessThanOrEqual(660);
     expect(Object.keys(state.traces)).toHaveLength(state.traceOrder.length);
     // A snapshot of the same thousands folds in one pass.
     const records = frames.slice(1).filter((frame) => frame.type === 'event');
-    const snapStarted = performance.now();
-    fold([snapshot(records.slice(-4000))]);
-    expect(performance.now() - snapStarted).toBeLessThan(1500);
+    expect(leastCpuMs(() => fold([snapshot(records.slice(-4000))]), 1)).toBeLessThan(1500);
   });
 
   it('ends a dropped or failed trace instead of leaving it routing', () => {

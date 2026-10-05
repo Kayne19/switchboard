@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createLayers } from '../../src/primitives/diagramLayout';
 import type { DiagramEdge, DiagramNode } from '../../src/controller/types';
+import { leastCpuMs } from './cpuTime';
 
+// Layering a graph of a few nodes is quick whatever its cycles: a cycle
+// that sent the layering round until some cap would show here as time.
 function layerIds(nodes: DiagramNode[], edges: DiagramEdge[]) {
-  const started = performance.now();
-  const layers = createLayers(nodes, edges);
-  expect(performance.now() - started).toBeLessThan(10);
+  let layers: DiagramNode[][] = [];
+  expect(leastCpuMs(() => (layers = createLayers(nodes, edges)), 1)).toBeLessThan(10);
   return layers.map((layer) => layer.map((node) => node.id));
 }
 

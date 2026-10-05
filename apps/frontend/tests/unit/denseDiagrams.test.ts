@@ -12,6 +12,7 @@ import {
   type LaidOutEdge,
   type Point,
 } from '../../src/primitives/diagramLayout';
+import { leastCpuMs } from './cpuTime';
 
 // Dense graphs (fixtures `topology` and `pipeline`) as a reader meets them:
 // laid out for the diagram slot at each canonical geometry
@@ -191,23 +192,22 @@ describe('a dense graph read in its viewport', () => {
 
   it('lays the forty-step pipeline out for each viewport within a budget', () => {
     // A fresh cache: the approved drawing and both recomposed frames, each
-    // ordered from several starts and laid out again while it bundles
-    // (some 10-70 ms on a laptop). The best of three runs is held to the
-    // budget, so a busy runner's pause is not read as a slow layout.
+    // ordered from several starts and laid out again while it bundles: some
+    // 10-30 ms of CPU time, up to 56 ms at load 50. The budget is CPU time,
+    // the least of three runs (cpuTime.ts says why).
     for (const [geometry, size] of Object.entries(viewports)) {
-      const times = [0, 1, 2].map(() => {
-        const started = performance.now();
-        viewDiagram(pipelineDiagram, { ...size, scrollbar: 0 }, 'visual', new Map());
-        return performance.now() - started;
-      });
-      expect(Math.min(...times), geometry).toBeLessThan(150);
+      expect(leastCpuMs(() => viewDiagram(pipelineDiagram, { ...size, scrollbar: 0 }, 'visual', new Map())), geometry).toBeLessThan(150);
     }
-    // A resize within a frame step lays nothing out again.
-    const layouts = new Map();
-    viewDiagram(pipelineDiagram, { ...viewports['landscape 1440x900'], scrollbar: 0 }, 'visual', layouts);
-    const started = performance.now();
-    viewDiagram(pipelineDiagram, { width: 913, height: 526, scrollbar: 0 }, 'visual', layouts);
-    expect(performance.now() - started).toBeLessThan(5);
+  });
+
+  it('lays nothing out again for a resize within a frame step', () => {
+    // Counted, not timed: every layout made goes into the cache.
+    const layouts = new Map<string, DiagramLayout>();
+    const first = viewDiagram(pipelineDiagram, { ...viewports['landscape 1440x900'], scrollbar: 0 }, 'visual', layouts);
+    const made = layouts.size;
+    const next = viewDiagram(pipelineDiagram, { width: 913, height: 526, scrollbar: 0 }, 'visual', layouts);
+    expect(layouts.size).toBe(made);
+    expect(next.layout).toBe(first.layout);
   });
 
   it('lays a graph out the same way every time', () => {

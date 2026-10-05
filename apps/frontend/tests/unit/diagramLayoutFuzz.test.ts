@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
-import { ARROW_LENGTH, layoutDiagram, type Box, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
+import { ARROW_LENGTH, layoutDiagram, type Box, type DiagramLayout, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
+import { leastCpuMs } from './cpuTime';
 
 // A small deterministic generator, so a failing seed can be replayed.
 function random(seed: number) {
@@ -65,15 +66,16 @@ const arrowhead = (points: Point[]): Box => {
 };
 const within = (box: Box, width: number, height: number) => box.x >= 0 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= height;
 
+// Budgets are CPU time, the least of a few runs (cpuTime.ts says why).
 describe('diagram layout stays quick at the largest allowed graph', () => {
   it('lays out 100 nodes and 200 edges within a frame budget', () => {
     for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
       const data = randomGraph(7, { nodes: 100, edges: 200 });
       expect(data.nodes).toHaveLength(100);
       expect(data.edges).toHaveLength(200);
-      const started = performance.now();
-      const layout = layoutDiagram(data, orientation);
-      expect(performance.now() - started).toBeLessThan(400);
+      let layout!: DiagramLayout;
+      // About 30-50 ms; up to 100 ms at load 50.
+      expect(leastCpuMs(() => (layout = layoutDiagram(data, orientation)), 2), orientation).toBeLessThan(400);
       expect(layout.nodes).toHaveLength(100);
     }
   });
@@ -100,10 +102,10 @@ describe('diagram layout stays quick when one gap holds every label', () => {
   it('lays out 200 labelled edges in one gap within a frame budget', () => {
     for (const orientation of ['landscape', 'portrait'] as DiagramOrientation[]) {
       const data = crowdedGap(3);
-      layoutDiagram(data, orientation);
-      const started = performance.now();
-      const layout = layoutDiagram(data, orientation);
-      expect(performance.now() - started).toBeLessThan(150);
+      let layout!: DiagramLayout;
+      // About 15-25 ms; up to 35 ms at load 50. Before labels were searched
+      // in a bounded, indexed way it took 250-580 ms.
+      expect(leastCpuMs(() => (layout = layoutDiagram(data, orientation))), orientation).toBeLessThan(150);
       expect(layout.edges.filter((edge) => edge.label)).toHaveLength(200);
     }
   });
@@ -114,9 +116,8 @@ describe('diagram layout holds its invariants on random graphs', () => {
     it(`${orientation}: sixty seeds`, () => {
       for (let seed = 1; seed <= 60; seed += 1) {
         const data = randomGraph(seed);
-        const started = performance.now();
-        const layout = layoutDiagram(data, orientation);
-        expect(performance.now() - started, `seed ${seed} time`).toBeLessThan(250);
+        let layout!: DiagramLayout;
+        expect(leastCpuMs(() => (layout = layoutDiagram(data, orientation)), 1), `seed ${seed} time`).toBeLessThan(250);
         expect(layout.nodes, `seed ${seed}`).toHaveLength(data.nodes.length);
         expect(layout.edges, `seed ${seed}`).toHaveLength(data.edges.length);
         for (const node of layout.nodes) expect(within(node.box, layout.width, layout.height), `seed ${seed} ${node.node.id} in bounds`).toBe(true);
