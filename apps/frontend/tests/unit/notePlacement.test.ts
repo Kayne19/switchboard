@@ -615,6 +615,34 @@ describe('the note left out for the rail', () => {
   });
 });
 
+// Placement ran barLeader for every place it tried, before it knew the
+// place could not win, and tried every other size again in each run for
+// the rail: a 40-category chart of four series with five notes took over a
+// second, at mount and on every resize frame (review finding).
+describe('placing notes on a dense bar chart', () => {
+  it('stays within a frame budget or two', () => {
+    let seed = 7;
+    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const data: ChartData = {
+      kind: 'bar',
+      labels: Array.from({ length: 40 }, (_, index) => `c${index}`),
+      series: Array.from({ length: 4 }, (_, index) => ({ name: `S${index}`, values: Array.from({ length: 40 }, () => Math.round(random() * 2000 - 1000) / 10) })),
+    };
+    const scales = chartScales(data);
+    const anchors = [{ x: 1, series: 'S0' }, { x: 10, series: 'S1' }, { x: 20, series: 'S2' }, { x: 30, series: 'S3' }, { x: 39, series: 'S0' }];
+    const obstacles = chartObstacles(data, scales, anchors);
+    const field: NoteField = { area: box(0, 0, 1000, 540), plot: scales.plot, marks: obstacles.marks, labels: obstacles.labels, wholly: true };
+    const notes: NoteToPlace[] = anchors.map((anchor, index) => {
+      const target = chartNoteTarget(data, anchor, scales)!;
+      return { id: `n${index}`, width: 420, height: 110, point: target.point, from: target.from, bar: target.bar, sizes: [{ width: 336, height: 130 }, { width: 269, height: 150 }, { width: 180, height: 210 }] };
+    });
+    layoutNotes(notes, field, { spill: true });
+    const start = performance.now();
+    layoutNotes(notes, field, { spill: true });
+    expect(performance.now() - start).toBeLessThan(600);
+  });
+});
+
 describe('hidden trace length', () => {
   it('measures the part of each line inside the card', () => {
     const traces = [[{ x: 0, y: 50 }, { x: 100, y: 50 }, { x: 100, y: 150 }]];

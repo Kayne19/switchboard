@@ -589,8 +589,11 @@ function placeInOrder(
     // long leader to its bar, each narrower size it may take, kept only
     // where it falls short by less -- or, as clear, runs a leader much
     // shorter.
-    let chosen = placeSized(note, note.width, note.height);
-    for (const size of note.sizes ?? []) {
+    // Placed again without the note the rail takes, each card keeps the
+    // size it took with every note on the chart.
+    const sized = before?.get(note.id)?.rect;
+    let chosen = sized ? placeSized(note, sized.right - sized.left, sized.bottom - sized.top) : placeSized(note, note.width, note.height);
+    for (const size of sized ? [] : (note.sizes ?? [])) {
       if (isSettled(note, chosen)) break;
       const trial = placeSized(note, size.width, size.height);
       // Shorter by enough to be worth the lines it costs, and never for a
@@ -649,15 +652,19 @@ function placeInOrder(
         if (area > 0) cost += COST.cardOverlap + area * COST.cardOverlapArea;
       }
       if (wholly && plot && straddles(rect, plot, gap)) cost += COST.straddle;
-      // A bar's leader comes from past the bar's end, clear of every other
-      // bar; a place with no such route has no leader that reads.
-      const route = point && from && !covers(rect, point) ? barLeader(rect, point, from, marksNear, { bar: note.bar, overlap: leaderOverlap }) : undefined;
-      if (route && !route.clear) cost += COST.noLeader;
       if (cost > 0) falls = SHORT.more;
       // Places rank by what they fall short by, then by cost. Neither ever
       // falls as more is added up, so a place already behind the best so
-      // far cannot win.
+      // far cannot win -- and need not be routed.
       const beaten = () => best !== undefined && (falls > best.falls || (falls === best.falls && cost >= best.cost - 1e-6));
+      if (beaten()) return;
+      // A bar's leader comes from past the bar's end, clear of every other
+      // bar; a place with no such route has no leader that reads.
+      const route = point && from && !covers(rect, point) ? barLeader(rect, point, from, marksNear, { bar: note.bar, overlap: leaderOverlap }) : undefined;
+      if (route && !route.clear) {
+        cost += COST.noLeader;
+        falls = SHORT.more;
+      }
       // Its point further along than the leader should run beside the card;
       // a bar's leader, longer than it should run at all.
       const along = route
@@ -899,6 +906,8 @@ const BAR_DROP = 14;
 const BAR_NEAR = BAR_DROP + 4;
 const BAR_RUN = 12;
 const BAR_JOG = 10;
+// How many heights a run beside the card tries: the nearest to the point first.
+const BAR_RUN_HEIGHTS = 4;
 // How far a bar's leader keeps from the bars it passes.
 const LEADER_CLEARANCE = 4;
 // What coming onto a bar's point across its end, rather than from past
@@ -1044,14 +1053,14 @@ function barRoutes(card: Rect, point: Point, from: Side, marksNear: MarksNear, i
     const highest = Math.min(hi, q.y - BAR_DROP);
     if (highest < lo) continue;
     // The run as near the point as it can be, and just over each mark it
-    // would cross there.
+    // would cross there: the nearest few.
     const heights = [highest];
     const reach = { left: Math.min(sideX, q.x), right: Math.max(sideX, q.x), top: lo, bottom: highest };
     marksNear(turnBackRect(reach, turn.back), (mark) => {
       const y = turn.rect(mark).top - LEADER_CLEARANCE - 1;
       if (y >= lo && y < highest) heights.push(y);
     });
-    for (const y of [...new Set(heights)].sort((a, b) => b - a)) {
+    for (const y of [...new Set(heights)].sort((a, b) => b - a).slice(0, BAR_RUN_HEIGHTS)) {
       const jog = Math.max(0, Math.min(BAR_JOG, (q.y - y) / 2, Math.abs(q.x - sideX) / 2));
       const start = { x: sideX - direction * overlap, y };
       const path = jog >= 1 ? [start, { x: q.x - direction * jog, y }, { x: q.x, y: y + jog }, q] : [start, { x: q.x, y }, q];

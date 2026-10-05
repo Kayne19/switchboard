@@ -39,7 +39,7 @@ interface NotesLayout {
 
 // The narrower widths a card with no clear place tries, as shares of its
 // own, down to the least: a card narrower reads as a column of words.
-const NARROWER = [0.8, 0.64, 0.5];
+const NARROWER = [0.8, 0.64];
 const MIN_CARD_WIDTH = 180;
 // The wider widths a card whose text would scroll tries, and the most of
 // the layer it may take.
@@ -240,6 +240,7 @@ export function ChartNotes({
       let placed = layoutNotes(toPlace, field, options);
       if (toPlace.some((note) => !placed.get(note.id)?.settled)) {
         for (const note of toPlace) {
+          if (placed.get(note.id)?.settled) continue;
           const element = cardRefs.current.get(note.id)!;
           const widths = [...NARROWER.map((share) => note.width * share), MIN_CARD_WIDTH];
           note.sizes = [...new Set(widths.filter((width) => width >= MIN_CARD_WIDTH && width < note.width - 0.5).map(Math.round))]
