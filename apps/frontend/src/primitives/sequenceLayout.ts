@@ -18,6 +18,7 @@
 
 import type { SequenceActor, SequenceDiagramData, SequenceMessage } from '../controller/types';
 import { fitDrawing, readableScale, type DrawingFit, type Viewport } from './drawingFit';
+import { NOTE_MARKER } from './NoteMarker';
 
 export type SequenceOrientation = 'landscape' | 'portrait';
 
@@ -170,13 +171,13 @@ const STAGGER_GAP = 8;
 // A label between two lifelines needs room for this many characters a
 // line; with less it goes over its arrow.
 const MIN_SPAN_CHARS = 8;
-// The NOTE marker on the header of the actor a rail note names: the size
-// of a graph node's (diagramLayout TAG_SIZE.marker), centred under the
-// header's text, this far below it and this far above the frame's bottom
-// edge; the header is at least as wide as the marker with this much
-// either side, clear of the frame's stepped corner. The headers grow
-// together to make room for it.
-export const MARKER = { width: 30, height: 15 } as const;
+// The NOTE marker on the header of the actor a rail note names (its size
+// is NoteMarker's own, as on a graph's node), centred under the header's
+// text, this far below it and this far above the frame's bottom edge; the
+// header is at least as wide as the marker with this much either side,
+// clear of the frame's stepped corner. The headers grow together to make
+// room for it.
+const MARKER = NOTE_MARKER;
 const MARKER_GAP = 5;
 const MARKER_FOOT = 8;
 const MARKER_SIDE = 8;

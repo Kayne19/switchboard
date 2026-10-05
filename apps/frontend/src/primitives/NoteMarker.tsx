@@ -2,8 +2,11 @@
 // a drawing (AnnotationCard's `.annotation-card__node-badge`), drawn on
 // that part, so the reader can match the two: a graph's node, in its
 // corner (diagramLayout `cornerTagBoxes`); a sequence's actor, in its
-// header (sequenceLayout `MARKER`). Its text is 9 user units, the size a
+// header (sequenceLayout `markerIn`). Its text is 9 user units, the size a
 // drawing's readable minimum holds at the page's micro floor.
+
+/** The marker's size in user units: the one both layouts make room for. */
+export const NOTE_MARKER = { width: 30, height: 15 } as const;
 
 export interface MarkerBox {
   x: number;

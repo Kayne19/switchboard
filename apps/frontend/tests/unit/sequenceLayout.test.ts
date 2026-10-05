@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { SequenceDiagramData, SequenceMessage } from '../../src/controller/types';
 import { fixtures, traceDiagram } from '../../src/fixtures/scenes';
+import { cornerTagBoxes } from '../../src/primitives/diagramLayout';
 import { SLIVER } from '../../src/primitives/drawingFit';
+import { NOTE_MARKER } from '../../src/primitives/NoteMarker';
 import { layoutSequence, sequenceMinScale, viewSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
 
 const handoffDiagram = (fixtures.handoff[0] as { data: SequenceDiagramData }).data;
@@ -402,5 +404,13 @@ describe('the NOTE marker on the actor a rail note names', () => {
   it('is carried through a view of the drawing in its viewport', () => {
     const { layout } = viewSequence(traceDiagram, { width: 330, height: 374, scrollbar: 0 }, 'pbx');
     expect(anchored(layout, 'pbx').marker).not.toBeNull();
+  });
+
+  it('has one size, the marker\'s own, on an actor\'s header and on a graph\'s node alike', () => {
+    // Before, the graph's layout kept a size of its own beside the one
+    // NoteMarker draws (diagramLayout TAG_SIZE.marker).
+    const onNode = cornerTagBoxes(220, { glyph: true, marker: true }).marker!;
+    const onActor = anchored(layoutSequence(traceDiagram, 'landscape', undefined, 'pbx'), 'pbx').marker!;
+    for (const box of [onNode, onActor]) expect({ width: box.width, height: box.height }).toEqual(NOTE_MARKER);
   });
 });
