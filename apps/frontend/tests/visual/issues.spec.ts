@@ -815,10 +815,11 @@ test('a primary progress keeps its text under the bar on a portrait phone, with 
     expect(geometry.text.top).toBeGreaterThanOrEqual(geometry.track.bottom - 1);
     expect(geometry.text.top - geometry.track.bottom).toBeLessThan(40);
     if (geometry.list) {
-      // The list follows the text and scrolls inside the cell.
+      // The list follows the text and stays inside the cell, scrolling
+      // there unless the plan, taking the stage's height, reads whole.
       expect(geometry.list.top).toBeGreaterThanOrEqual(geometry.text.bottom - 1);
       expect(geometry.list.bottom).toBeLessThanOrEqual(geometry.cell.bottom + 1);
-      expect(geometry.list.scrolls).toBe(true);
+      if (!geometry.list.scrolls) await expect(page.locator('.content-grid--staged')).toHaveCount(1);
     }
   }
 });

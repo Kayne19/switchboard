@@ -45,14 +45,19 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     expect(listScrolls).toBe(false);
   });
 
-  test(`a long plan as the primary fills the column and scrolls its list inside / ${size}`, async ({ page }) => {
+  test(`a long plan as the primary fills the column and scrolls its list inside, or reads whole on the stage / ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await show(page, [{ op: 'show', id: 'plan', type: 'progress', role: 'primary', data: { label: 'MIGRATION', steps: steps(30, 12) } }]);
     const { column, panel, listScrolls } = await primaryGeometry(page);
     expect(panel.top).toBeGreaterThanOrEqual(column.top - 1);
     expect(panel.bottom).toBeLessThanOrEqual(column.bottom + 1);
-    expect(panel.height).toBeGreaterThan(column.height - 2);
-    expect(listScrolls).toBe(true);
+    // Where the rail stands under it, the plan takes the stage's height
+    // first (stageFold.ts), and there thirty steps may read whole; a plan
+    // that still does not fills the column and scrolls its list.
+    const staged = await page.locator('.content-grid--staged').count();
+    if (listScrolls) expect(panel.height).toBeGreaterThan(column.height - 2);
+    else expect(staged).toBe(1);
+    if (viewport.width > viewport.height) expect(listScrolls).toBe(true);
   });
 }
 
