@@ -2243,11 +2243,32 @@ button {
   max-height: 52vh;
   font-size: clamp(11px, 0.85cqw, 15px);
 }
-/* A progress with steps holding the primary slot fills it: the bar at the
-   top, the list taking the rest and scrolling inside it. Only the list's
-   row stretches; a bar without steps keeps its own height. */
+/* A progress holding the primary slot is framed to its own height and
+   centred in the column, as a metric card is, so a short plan does not
+   leave most of a full-height frame empty. A plan taller than the column
+   fills it and its list scrolls inside: the panel is held to the column
+   (max-height), and the column flexboxes down to the list shrink to fit
+   it, where a percentage height would have nothing definite to resolve. */
+.composed-primary-object--progress {
+  align-self: center;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.composed-primary-object--progress > .focusable-content {
+  flex: 0 1 auto;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.composed-primary-object--progress .progress-primitive {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+/* With steps: the bar on top, the list taking the rest and scrolling
+   inside it once the panel is held to the column. */
 .composed-primary-object--progress .progress-primitive--stepped {
-  height: 100%;
   grid-template-rows: auto minmax(0, 1fr);
   align-content: start;
 }

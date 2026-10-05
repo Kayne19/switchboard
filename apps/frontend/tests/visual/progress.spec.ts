@@ -1,7 +1,60 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 // A stepped progress where the unit tests cannot see it: jsdom draws no
-// boxes. In the rail it reads as the metrics above it do.
+// boxes. As the primary it is framed to its own height; in the rail it reads
+// as the metrics above it do.
+
+const steps = (count: number, firstOpen: number) => Array.from({ length: count }, (_, i) => ({
+  label: `STEP ${i + 1}`,
+  state: i < firstOpen ? 'done' : i === firstOpen ? 'active' : 'todo',
+  detail: 'DETAIL',
+}));
+
+async function show(page: Page, actions: unknown[]) {
+  await page.goto('/?scene=architecture&chrome=0');
+  await expect(page.locator('.stage')).toBeVisible();
+  await page.evaluate((list) => {
+    const controller = window.SwitchboardController;
+    if (!controller) throw new Error('controller unavailable');
+    controller.run([{ op: 'clear' }, ...list]);
+  }, actions);
+  await page.waitForTimeout(600);
+}
+
+async function primaryGeometry(page: Page) {
+  return page.evaluate(() => {
+    const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+    const list = document.querySelector<HTMLElement>('.composed-primary-object--progress .progress-primitive__steps')!;
+    return {
+      column: box('.content-grid > .content-main'),
+      panel: box('.composed-primary-object--progress'),
+      listScrolls: list.scrollHeight > list.clientHeight + 1,
+    };
+  });
+}
+
+for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }, { width: 844, height: 390 }]) {
+  const size = `${viewport.width}x${viewport.height}`;
+
+  test(`a short plan as the primary is framed to its height and centred / ${size}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await show(page, [{ op: 'show', id: 'plan', type: 'progress', role: 'primary', data: { label: 'SHIP', steps: steps(4, 2) } }]);
+    const { column, panel, listScrolls } = await primaryGeometry(page);
+    expect(panel.height).toBeLessThan(column.height * 0.8);
+    expect(Math.abs((panel.top + panel.bottom) / 2 - (column.top + column.bottom) / 2)).toBeLessThanOrEqual(2);
+    expect(listScrolls).toBe(false);
+  });
+
+  test(`a long plan as the primary fills the column and scrolls its list inside / ${size}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await show(page, [{ op: 'show', id: 'plan', type: 'progress', role: 'primary', data: { label: 'MIGRATION', steps: steps(30, 12) } }]);
+    const { column, panel, listScrolls } = await primaryGeometry(page);
+    expect(panel.top).toBeGreaterThanOrEqual(column.top - 1);
+    expect(panel.bottom).toBeLessThanOrEqual(column.bottom + 1);
+    expect(panel.height).toBeGreaterThan(column.height - 2);
+    expect(listScrolls).toBe(true);
+  });
+}
 
 const railSteps = Array.from({ length: 7 }, (_, i) => ({ label: `STEP ${i + 1}`, state: i < 4 ? 'done' : i === 4 ? 'active' : 'todo' }));
 
