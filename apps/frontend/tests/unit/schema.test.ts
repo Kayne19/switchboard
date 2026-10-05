@@ -94,17 +94,15 @@ const KNOWN_SCHEMA_GAPS: Record<string, string> = {
   // hour's time or day's date unique in theirs, are cross-item invariants.
   // An event's end not before its start, `now` falling on `today` and a
   // timer started before it ends compare two sibling time values as times
-  // (an instant with its offset applied), which a pattern cannot do. And a
-  // date's pattern bounds the month and the day, but cannot tell 2026-02-30
-  // or 2026-02-29 from a real day: the calendar is the validators' to read.
-  // What the schema can say it does: the time patterns, an end written like
-  // its start, `days` per view, and `remaining` on a paused timer only.
+  // (an instant with its offset applied), which a pattern cannot do. What
+  // the schema can say it does: the time patterns (a date's knows each
+  // month's days and the leap years of 1970-2199), an end written like its
+  // start, `days` per view, and `remaining` on a paused timer only.
   calendar_duplicate_event_id: 'event id uniqueness is a cross-item invariant',
   weather_duplicate_hour: 'a forecast hour unique by its time is a cross-item invariant',
   calendar_event_end_before_start: 'end not before start compares two sibling times as times',
   calendar_now_not_on_today: 'now falling on today compares two sibling times',
   timer_started_after_it_ends: 'startedAt before endsAt compares two instants, offsets applied',
-  time_not_a_real_day: 'a pattern bounds month and day but not the days in a month',
 };
 
 describe('display-action-v1.schema.json', () => {
@@ -243,6 +241,17 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
 // (KNOWN_SCHEMA_GAPS above), or for a blank id and the text of an error, it
 // is the weaker one, and the corpus pins the rule instead.
 describe('display-action-v1.schema.json and the validator corpus', () => {
+  // The time patterns state the whole of the time rules, real days and
+  // leap years included, so every corpus case refused only for how a time
+  // is written is refused by the schema too.
+  it('refuses every time the validators refuse for how it is written', () => {
+    const accepted = corpusCases
+      .filter((testCase) => testCase.name.startsWith('time_') && testCase.error !== undefined)
+      .filter((testCase) => validate(expandCorpusValue(testCase.action)))
+      .map((testCase) => testCase.name);
+    expect(accepted).toEqual([]);
+  });
+
   it('accepts every action both validators accept', () => {
     const refused = corpusCases
       .filter((testCase) => testCase.accepted)
