@@ -94,6 +94,10 @@ export function weatherLayout(
     const hourly = has.hourly && (!has.daily || has.markedHour === true);
     return { arrangement: 'compact', temp, hourly, daily: has.daily && !hourly };
   }
+  // Conditions alone stand larger: nothing else shares the box.
+  if (!has.hourly && !has.daily) {
+    return { arrangement: width >= 1.3 * height && width >= 620 ? 'wide' : 'tall', temp: Math.round(clamp(Math.min(width * 0.12, height * 0.26), 56, 160)), hourly: false, daily: false };
+  }
   if (width >= 1.3 * height && width >= 620) {
     return { arrangement: 'wide', temp: Math.round(clamp(Math.min(width * 0.075, height * 0.16), 48, 132)), hourly: has.hourly, daily: has.daily };
   }

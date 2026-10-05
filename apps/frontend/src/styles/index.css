@@ -2548,14 +2548,15 @@ button {
 .weather-now__reading dt {
   color: rgba(232, 230, 223, 0.4);
 }
+/* A reading's value wraps at its words rather than losing them (a wind
+   of "W 12 mph, gusts 25" in a narrow cell). */
 .weather-now__reading dd {
   margin: 3px 0 0;
-  overflow: hidden;
   color: var(--paper);
   font-family: var(--font-mono);
   font-size: clamp(14px, 1.15cqw, 20px);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  overflow-wrap: break-word;
 }
 /* The alert: an amber rule, its sign and its words, the warning colour. */
 .weather-alert {
@@ -2749,22 +2750,28 @@ button {
   flex: 1 1 auto;
   height: auto;
 }
+/* The rows share one set of columns (a subgrid), so a day's name and the
+   NOTE badge beside it widen the first column for every row, and the
+   glyphs, chances and ranges stand in line down the list. */
 .weather-daily__days {
+  display: grid;
+  grid-template-columns: max-content 1.3em 3.2em 2.6em minmax(36px, 1fr) 2.6em;
+  column-gap: clamp(8px, 0.9cqw, 14px);
   margin: 0;
   padding: 0;
   list-style: none;
+  font-family: var(--font-mono);
+  font-size: clamp(13px, 1.02cqw, 17px);
 }
 .weather-day {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(4.6em, auto) 1.3em 3.2em 2.6em minmax(36px, 1fr) 2.6em;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
   align-items: center;
-  column-gap: clamp(8px, 0.9cqw, 14px);
   padding: clamp(5px, 0.75cqh, 9px) 4px clamp(5px, 0.75cqh, 9px) 0;
   border-bottom: 1px solid rgba(232, 230, 223, 0.1);
   color: #d9d7d1;
-  font-family: var(--font-mono);
-  font-size: clamp(13px, 1.02cqw, 17px);
   font-variant-numeric: tabular-nums;
 }
 .weather-day__name {
@@ -2834,11 +2841,13 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.weather--compact .weather-day {
-  grid-template-columns: minmax(4.2em, auto) 1.2em 2.9em 2.3em minmax(18px, 1fr) 2.3em;
+.weather--compact .weather-daily__days {
+  grid-template-columns: max-content 1.2em 2.9em 2.3em minmax(18px, 1fr) 2.3em;
   column-gap: 7px;
-  padding: 4px 2px 4px 0;
   font-size: 12px;
+}
+.weather--compact .weather-day {
+  padding: 4px 2px 4px 0;
 }
 .focus-layer__content > .weather {
   padding: 5cqh 4cqw 4cqh;

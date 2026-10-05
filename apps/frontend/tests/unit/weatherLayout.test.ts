@@ -81,6 +81,13 @@ describe('weatherLayout', () => {
     expect(weatherLayout(340, COMPACT_LIST_HEIGHT - 1, all)).toMatchObject({ arrangement: 'compact', hourly: false, daily: false });
   });
 
+  it('sets the conditions larger when they stand alone', () => {
+    const alone = weatherLayout(1000, 620, { hourly: false, daily: false });
+    expect(alone).toMatchObject({ arrangement: 'wide', hourly: false, daily: false });
+    expect(alone.temp).toBeGreaterThan(weatherLayout(1000, 620, all).temp);
+    expect(weatherLayout(3000, 1400, { hourly: false, daily: false }).temp).toBe(160);
+  });
+
   it('draws everything before the box is measured', () => {
     expect(weatherLayout(0, 0, all)).toMatchObject({ hourly: false, daily: true });
   });
