@@ -127,33 +127,63 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
   });
 
   // A refused name lists every name its field takes (docs/display-tool.md,
-  // "How the two validators agree"). Each list is one the schema states, in
-  // its order, so the error and the contract name the same set.
-  it('lists, in every refusal of a name, a set the schema states, in its order', () => {
+  // "How the two validators agree"). Each field's list is the one the schema
+  // states for that field, in its order, so the error and the contract name
+  // the same set; two sets with the same names in another order (a task's
+  // state and a progress step's) cannot stand in for each other.
+  it('lists, in every refusal of a name, the set the schema states for that field, in its order', () => {
     const definitions = schema.definitions as Record<string, any>;
-    const stated: string[][] = [];
-    const walk = (node: unknown): void => {
-      if (Array.isArray(node)) node.forEach(walk);
-      else if (typeof node === 'object' && node !== null) {
-        const record = node as Record<string, unknown>;
-        if (Array.isArray(record.enum) && record.enum.length > 1) stated.push(record.enum as string[]);
-        Object.values(record).forEach(walk);
-      }
+    const resolve = (node: any) => (node.$ref ? definitions[node.$ref.split('/').pop()!] : node);
+    const property = (definition: string, key: string): string[] => {
+      const shape = resolve(definitions[definition]);
+      // A table cell is a string, a number or an object; the object has the semantic.
+      const object = shape.oneOf ? shape.oneOf.find((branch: any) => branch.properties) : shape;
+      return resolve(object.properties[key]).enum;
     };
-    walk(schema);
-    // The op, the show type and the diagram mode are stated one per action
-    // or shape, across the schema's `oneOf`s.
     const actions = (schema.oneOf as Array<{ $ref: string }>).map((variant) => definitions[variant.$ref.split('/').pop()!].properties);
-    stated.push([...new Set(actions.map((properties) => properties.op.enum[0] as string))]);
-    stated.push(actions.filter((properties) => properties.type).map((properties) => properties.type.enum[0] as string));
-    stated.push(
-      (definitions.DiagramData.oneOf as Array<{ $ref: string }>).map((shape) => definitions[shape.$ref.split('/').pop()!].properties.mode.enum[0] as string),
-    );
-    const listed = corpusCases
-      .map((testCase) => /^invalid [^:]+: expected one of (.+?)(?: \(.*\))?$/.exec(testCase.error ?? '')?.[1])
-      .filter((list): list is string => list !== undefined);
-    expect(listed.length).toBeGreaterThan(100);
-    for (const list of new Set(listed)) expect(stated, list).toContainEqual(list.split(', '));
+    const stated: Record<string, string[]> = {
+      // The op, the show type and the diagram mode are stated one per action
+      // or shape, across the schema's `oneOf`s.
+      op: [...new Set(actions.map((properties) => properties.op.enum[0] as string))],
+      'show.type': actions.filter((properties) => properties.type).map((properties) => properties.type.enum[0] as string),
+      'diagram.mode': (definitions.DiagramData.oneOf as Array<{ $ref: string }>).map((shape) => resolve(shape).properties.mode.enum[0] as string),
+      'show.role': property('ShowChartAction', 'role'),
+      'chart.kind': property('ChartData', 'kind'),
+      'series.semantic': property('ChartSeries', 'semantic'),
+      'metric.semantic': property('MetricData', 'semantic'),
+      'metric.trend': property('MetricData', 'trend'),
+      'progress step.state': property('ProgressStep', 'state'),
+      'diagram node.semantic': property('DiagramNode', 'semantic'),
+      'diagram node.state': property('DiagramNode', 'state'),
+      'diagram edge.semantic': property('DiagramEdge', 'semantic'),
+      'diagram actor.semantic': property('SequenceActor', 'semantic'),
+      'diagram message.kind': property('SequenceMessage', 'kind'),
+      'document.kind': property('DocumentData', 'kind'),
+      'table column.semantic': property('TableColumn', 'semantic'),
+      'table cell.semantic': property('TableCell', 'semantic'),
+      'image.format': property('ImageData', 'format'),
+      'note segment.semantic': property('RichSegment', 'semantic'),
+      'calendar.view': property('CalendarData', 'view'),
+      'calendar event.semantic': property('CalendarEvent', 'semantic'),
+      'calendar event.status': property('CalendarEvent', 'status'),
+      'task.state': property('TaskItem', 'state'),
+      'task.priority': property('TaskItem', 'priority'),
+      'timer.state': property('Timer', 'state'),
+      'weather.units': property('WeatherData', 'units'),
+      'weather current.condition': property('WeatherCurrent', 'condition'),
+      'weather hour.condition': property('WeatherHour', 'condition'),
+      'weather day.condition': property('WeatherDay', 'condition'),
+      'inbox message.semantic': property('InboxMessage', 'semantic'),
+    };
+    const listed: Array<[string, string]> = [];
+    for (const testCase of corpusCases) {
+      const match = /^invalid ([^:]+): expected one of (.+?)(?: \(.*\))?$/.exec(testCase.error ?? '');
+      if (match) listed.push([match[1], match[2]]);
+    }
+    // Every field the corpus refuses a name for is mapped above, and each
+    // mapped field has a refusal in the corpus.
+    expect([...new Set(listed.map(([field]) => field))].sort()).toEqual(Object.keys(stated).sort());
+    for (const [field, names] of listed) expect(names.split(', '), field).toEqual(stated[field]);
   });
 
   // JSON cannot hold a NaN or an infinity, so these are not corpus cases.

@@ -443,6 +443,8 @@ class ProgrammingErrorTest(ModuleTestCase):
             ([-(2**53) - 1], "action.data.series[0].values[0]"),
             ([10**400], "action.data.series[0].values[0]"),
             (ArrayLike(), "action.data.series[0].values[1]"),
+            # JSON writes a key as text: the field is `.3`, not `[3]`.
+            ([{3: 2**60}], "action.data.series[0].values[0].3"),
         ):
             with self.subTest(field=field):
                 with self.assertRaises(ValueError) as caught, contextlib.redirect_stdout(io.StringIO()):
@@ -453,6 +455,19 @@ class ProgrammingErrorTest(ModuleTestCase):
                     "exactly; send it as a float or as text",
                 )
         self.assertEqual(host.connections, 0)
+        # An array-like whose tolist() is itself is followed once and left to
+        # the encoder, which finds the loop; a call that is no dict is a
+        # TypeError before anything walks it.
+        class Itself:
+            def tolist(self):
+                return self
+
+        with self.assertRaisesRegex(ValueError, "Circular reference"), contextlib.redirect_stdout(io.StringIO()):
+            switchboard.display(chart([Itself()]))
+        with self.assertRaises(TypeError) as caught, contextlib.redirect_stdout(io.StringIO()):
+            switchboard.display([[2**60]])
+        self.assertEqual(str(caught.exception), "a display action must be a dict, not list")
+        self.assertEqual(host.connections, 0)
         # Every integer a double holds exactly goes out as it is, and a float
         # (already a double) whatever its size.
         values = [2**53, -(2**53), True, 1e300]
@@ -462,7 +477,7 @@ class ProgrammingErrorTest(ModuleTestCase):
 
     def test_nesting_deeper_than_the_service_reads_raises_before_anything_is_sent(self):
         # The service refused such a call as unreadable, without the action's
-        # own error; a call that holds itself made json.dumps recurse.
+        # own error; a call that holds itself made _wire_times recurse.
         host = self.host()
 
         def depth(value):

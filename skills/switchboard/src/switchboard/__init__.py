@@ -6,7 +6,8 @@ call's token. The socket contract is in docs/host-link.md ("Skill socket").
 
 Every function returns a small result object and prints one line. A refusal
 or a failure never raises; only a programming error (a bad argument type, an
-unknown display type or op) does. The host agent and the service decide
+unknown display type or op, a value JSON cannot carry or the service would
+read as another; SKILL.md, "Results") does. The host agent and the service decide
 delivery; the checks here only catch malformed arguments early.
 """
 
@@ -161,8 +162,9 @@ def _encode(request):
 
 
 def _field(path):
-    """`path` as a field is written: `action.data.series[0].values[1]`."""
-    return "".join(f"[{part}]" if isinstance(part, int) else f".{part}" for part in path).lstrip(".")
+    """`path`, its steps written `.key` for an object's key and `[n]` for an
+    array's index, as a field is written: `action.data.series[0].values[1]`."""
+    return "".join(path).lstrip(".")
 
 
 def _check_values(value, depth, path):
@@ -177,8 +179,13 @@ def _check_values(value, depth, path):
                 f"{shown} nests arrays and objects deeper than the switchboard reads "
                 f"({_MAX_FRAME_DEPTH} levels, the call around it included); send it flatter"
             )
-        for key, item in value.items() if isinstance(value, dict) else enumerate(value):
-            _check_values(item, depth + 1, (*path, key))
+        # JSON writes every key as text, so a key is `.3`, never an index.
+        if isinstance(value, dict):
+            steps = ((f".{key}", item) for key, item in value.items())
+        else:
+            steps = ((f"[{n}]", item) for n, item in enumerate(value))
+        for step, item in steps:
+            _check_values(item, depth + 1, (*path, step))
     elif isinstance(value, (bool, str, float, bytes, bytearray, memoryview)) or value is None:
         # Raw image bytes become base64 text before they are sent.
         return
@@ -189,7 +196,10 @@ def _check_values(value, depth, path):
                 "and cannot hold exactly; send it as a float or as text"
             )
     elif hasattr(value, "tolist"):
-        _check_values(value.tolist(), depth, path)
+        # Followed once; what is still array-like after that is `_encode`'s to judge.
+        plain = value.tolist()
+        if not hasattr(plain, "tolist"):
+            _check_values(plain, depth, path)
 
 
 def _check_call_args(args):
@@ -490,6 +500,8 @@ def display(action=None, **fields):
         action = fields
     elif fields:
         raise TypeError("pass the display action as a dict or as keywords, not both")
+    if not isinstance(action, dict):
+        raise TypeError(f"a display action must be a dict, not {type(action).__name__}")
     # Before anything else walks the action: one that holds itself is caught
     # here, at the depth cap, rather than recursing.
     _check_call_args({"action": action})
