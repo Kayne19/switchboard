@@ -36,6 +36,11 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 | `table` | rows of named columns: results, comparisons, inventories; cells carry semantic colour and rows can be highlighted |
 | `note` | a persistent annotation, independent from the live transcript |
 | `image` | a raster figure (PNG, JPEG or WebP bytes, inline) the agent already has: a plot, a screenshot, a photo |
+| `calendar` | a person's time: a day, a week, a month or an agenda of events, all-day or timed, with today and now marked |
+| `tasks` | a to-do list in groups, each task with a state, a due date or time, a priority and tags; overdue measured against the list's `today` |
+| `timer` | kitchen timers and reminders, counted down on the caller's screen |
+| `weather` | conditions now, by the hour and by the day, in the agent's units |
+| `inbox` | messages from any channel in the order the agent lists them, unread and flagged ones marked |
 
 Diagram node styling stays restricted to semantic classes and states, enforced server-side.
 
@@ -220,6 +225,48 @@ it are (its label and share done on one row, the steps still to do under
 the bar). Shown as the primary, its frame fits the plan and sits in the
 middle of the column, and only a plan longer than the column fills it.
 
+### Personal-assistant views: time is data
+
+The `calendar`, `tasks`, `timer`, `weather` and `inbox` types let an agent on
+a call act as the caller's assistant: the week ahead, what is left to do,
+the pasta timer, whether to take an umbrella, what came in overnight. The
+wire rules are in `docs/display-tool.md` ("Time values" and
+"Personal-assistant types"); the reasons are these.
+
+- **Times are text in three forms.** A date (`2026-10-05`), a wall time on
+  the caller's clock (`2026-10-05T14:30`) and an instant with its offset
+  (`2026-10-05T14:30:00-07:00`). One parser on each side reads all three,
+  and every type uses it, so a calendar and a to-do list cannot disagree on
+  what a date is. Each time has one spelling (upper-case `T` and `Z`), so a
+  note can name a forecast hour by its text.
+- **No page clock and no time zones, except for a timer.** The page draws a
+  calendar, a to-do list, a forecast and an inbox from what the agent sent
+  and nothing else. "Today" and "now" are fields the agent fills in, so
+  the now line on a calendar, an overdue task and a message from this
+  morning come from the data, not from the browser. The agent knows the
+  caller's day; a browser may be in another zone, or its clock may be
+  wrong. A frame is then the same on every screen, and testable without
+  faking a clock. A timer is the exception, because a countdown has to
+  move: it takes instants, and the page counts it down against its own
+  clock, shows it done at zero, and plays no sound (the agent says so).
+  With reduced motion the numbers still change; nothing sweeps.
+- **The agent sends the day; the page draws it.** The agent sends no grid
+  of hours, no widths and no glyphs. The page decides: a wall time with no
+  end is a half-hour block; sections stand in the order their groups are
+  first met; a weather condition is one of thirteen names that the page
+  draws in its own sharp geometry (never an emoji or an image); a message
+  from `today` shows its time of day, and an older one its date.
+- **One message in full stays a `document`** of kind `email`; an inbox is
+  the list.
+
+Each is a visual like a table: shown alone it takes the main slot, and
+beside another primary it takes a cell in the aux row. Until the render
+slice draws them, the page shows all five with one stand-in, a framed list
+of the fields as sent (`apps/frontend/src/primitives/TemporaryAssistantList.tsx`),
+so an accepted object is never dropped and the fixtures (`calendar`,
+`tasks`, `timer`, `weather`, `inbox`, and `today`, an agenda with the
+forecast, the to-do list and the inbox beside it) load.
+
 ### Composition & focus
 
 Objects carry a **role** (`primary`, `compare`, `secondary`, `ambient`) and a
@@ -233,7 +280,7 @@ Any primary can have visuals beside it, so the agent can show a diagram with
 the table it summarises, a chart with the image it came from, or code with a
 review document. The primary takes the main slot, drawn the way its type is
 drawn alone. Every other visual on stage (`chart`, `diagram`, `document`,
-`code`, `table`, `image`) is drawn once:
+`code`, `table`, `image`, `calendar`, `tasks`, `timer`, `weather`, `inbox`) is drawn once:
 
 - A chart beside a chart primary shares the chart row with it; a `compare`
   chart is labelled as the comparison. This is the one scene that has a place
@@ -265,7 +312,8 @@ it.
 Notes are durable objects rather than a mirror of the latest chat response.
 They change only through an explicit `show` update to their stable id, `hide`,
 or `clear`. A note may carry a semantic `anchor` naming another object's id and
-an optional chart `x`/`series` or diagram `node`; the browser owns the resulting
+an optional chart `x`/`series`, diagram `node`, or `item` inside a calendar, a
+to-do list, a timer, a forecast or an inbox; the browser owns the resulting
 placement. On a chart page a note lies over the chart it names, clear of what
 the chart draws: a bar or a scatter point is an area, not the line round it,
 and a card keeps a few pixels from it; lines, the marker ring, a bar's printed
