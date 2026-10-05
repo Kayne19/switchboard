@@ -1,7 +1,7 @@
-import { useRef, type CSSProperties } from 'react';
+import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import type { WeatherData, WeatherDay, WeatherHour } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
-import { MeasuredStageDemand } from '../hooks/useStageDemand';
+import { MeasuredStageDemand, watchElement } from '../hooks/useStageDemand';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
@@ -26,6 +26,7 @@ import {
   outlookOffer,
   placeBesideTitle,
   rangeOnScale,
+  STRIP_LEAST,
   STRIP_PAD,
   tempScale,
   weatherLayout,
@@ -305,6 +306,21 @@ function Days({ days, marked, scroll }: { days: WeatherDay[]; marked?: string; s
 }
 
 /**
+ * The height a forecast laid down the box reads whole in, as its scroll
+ * measures it: each part at its own height, the hourly strip at its least
+ * (it grows into a tall box's room), the gaps between them, and the field's
+ * and the scroll's padding round them.
+ */
+function fieldLeast(field: HTMLElement): number {
+  const pad = (style: CSSStyleDeclaration) => (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+  const style = getComputedStyle(field);
+  const parts = Array.from(field.children) as HTMLElement[];
+  const heights = parts.reduce((sum, part) => sum + (part.classList.contains('weather-hourly') ? STRIP_LEAST : part.offsetHeight), 0);
+  const gaps = (parseFloat(style.rowGap) || 0) * Math.max(0, parts.length - 1);
+  return Math.ceil(heights + gaps + pad(style) + (field.parentElement ? pad(getComputedStyle(field.parentElement)) : 0));
+}
+
+/**
  * `framed`: the scene's frame names the forecast (the main slot); elsewhere
  * (an aux cell, focus) the forecast leads with its title (MetaTitle), so it
  * shows once wherever it is drawn.
@@ -334,8 +350,19 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   // The item a note names that no list here draws (a small slot).
   const unshown =
     (hours.some((hour) => hour.time === marked) && !layout.hourly) || (days.some((day) => day.date === marked) && !layout.daily) ? marked : undefined;
+  // Down the box the field fills its view, so its scroll content always
+  // measures the view: the stage is asked for the height its parts read
+  // whole in instead (fieldLeast), or a forecast given the stage would keep
+  // it once it is short.
+  const fieldRef = useRef<HTMLDivElement>(null);
+  const [least, setLeast] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const element = fieldRef.current;
+    if (!tall || !element) return undefined;
+    return watchElement(element, () => setLeast(fieldLeast(element)), { children: true });
+  }, [tall]);
   const field = (
-    <div className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px` } as CSSProperties}>
+    <div ref={fieldRef} className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px`, '--weather-strip-least': `${STRIP_LEAST}px` } as CSSProperties}>
       <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook ? offered : null} inline={layout.inline} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
@@ -347,9 +374,9 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
       {/* The box the forecast is laid out for, inside any padding its slot gives it. */}
       <div ref={boxRef} className="weather__box">
         {/* Before the box is measured the forecast is a stand-in: it says nothing to the stage. */}
-        <MeasuredStageDemand measured={size.width > 0 && size.height > 0}>
+        <MeasuredStageDemand measured={size.width > 0 && size.height > 0 && (!tall || least !== null)}>
           {tall ? (
-            <ListViewport noun={['DAY', 'DAYS']} countSelector=".weather-day" lead={named} scrollClassName="weather__scroll" label="Forecast">
+            <ListViewport noun={['DAY', 'DAYS']} countSelector=".weather-day" lead={named} scrollClassName="weather__scroll" label="Forecast" least={least}>
               {field}
             </ListViewport>
           ) : (

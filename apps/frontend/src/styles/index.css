@@ -2466,7 +2466,7 @@ button {
   height: auto;
   min-height: 100%;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto 172px auto;
+  grid-template-rows: auto var(--weather-strip-least) auto;
   grid-template-areas:
     "now"
     "hourly"
@@ -2480,7 +2480,7 @@ button {
     "daily";
 }
 .weather--tall .weather__field[data-parts="now hourly"] {
-  grid-template-rows: auto minmax(172px, 1fr);
+  grid-template-rows: auto minmax(var(--weather-strip-least), 1fr);
   grid-template-areas:
     "now"
     "hourly";

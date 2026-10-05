@@ -392,6 +392,35 @@ test('a week whose drawn days fit its share at 390x844 never takes the stage, no
   expect(await page.evaluate(() => (window as unknown as { stageSeen: string[] }).stageSeen)).not.toContain('primary');
 });
 
+// A forecast laid down the box fills its view, so its scroll content
+// always measured the view: on the stage it read as needing all of it, and
+// a forecast sent again with only the next three days kept the stage. It
+// asks by the height its parts read whole in.
+const quietForecast = [
+  {
+    op: 'show', id: 'weather', type: 'weather', role: 'primary', data: {
+      location: 'San Francisco, CA', units: 'F', current: { temp: 61, condition: 'fog', high: 68, low: 54 },
+      daily: [
+        { date: '2026-10-07', high: 68, low: 54, condition: 'partly-cloudy', precip: 20 },
+        { date: '2026-10-08', high: 61, low: 55, condition: 'rain', precip: 80 },
+        { date: '2026-10-09', high: 63, low: 53, condition: 'cloudy', precip: 30 },
+      ],
+    },
+  },
+];
+
+test('a forecast that takes the stage at 390x844 gives it back once it is short', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page, 'weather');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  await page.evaluate((list) => window.SwitchboardController!.run(list), quietForecast);
+  await expect(page.locator('.content-rail--folded')).toHaveCount(0);
+  await page.waitForTimeout(700);
+  const shared = await boxes(page);
+  expect(shared.foldable).toBe(false);
+  expect(Math.abs(shared.main.height - shared.stage.height * 0.59)).toBeLessThan(1.5);
+});
+
 for (const scene of ['tasks', 'inbox']) {
   test(`a ${scene} list longer than its share takes the stage at 390x844`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });

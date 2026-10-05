@@ -118,6 +118,10 @@ export const STACKED_HERO_HEIGHT = 72;
 /** A small slot shorter than this has no room for the hourly strip under
  * the conditions (the strip's rows need 120px); it shows the days. */
 export const COMPACT_STRIP_HEIGHT = 260;
+/** The hourly strip's height down the box (`tall`), and its least where it
+ * grows into the box's room (no days under it). The stylesheet takes it
+ * from the field's style. */
+export const STRIP_LEAST = 172;
 
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
 
