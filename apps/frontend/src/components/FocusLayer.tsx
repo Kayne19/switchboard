@@ -11,6 +11,7 @@ import type {
   ProgressData,
   SceneObject,
   TableData,
+  TimerData,
 } from '../controller/types';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
@@ -22,6 +23,7 @@ import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { TablePrimitive } from '../primitives/TablePrimitive';
 import { TemporaryAssistantList } from '../primitives/TemporaryAssistantList';
+import { TimerPrimitive } from '../primitives/TimerPrimitive';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 // `marked` is the item a note names in the object (`anchoredItem`), which
@@ -46,10 +48,11 @@ function FocusedObject({ object, marked }: { object: SceneObject; marked?: strin
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} />;
     case 'progress':
       return <ProgressPrimitive data={object.data as ProgressData} />;
+    case 'timer':
+      return <TimerPrimitive data={object.data as TimerData} marked={marked} focused />;
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
     case 'tasks':
-    case 'timer':
     case 'weather':
     case 'inbox':
       return <TemporaryAssistantList type={object.type} data={object.data} marked={marked} />;

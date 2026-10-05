@@ -6,8 +6,8 @@ import { NoteBadge } from './NoteMarker';
  * personal-assistant types -- calendar, tasks, timer, weather, inbox -- until
  * the render slice draws each with a primitive of its own. It is a plain
  * framed list of the fields the agent sent, so the page neither crashes on
- * nor drops an accepted object and the fixtures load. It draws no clock: a
- * timer's `endsAt` is shown as sent.
+ * nor drops an accepted object and the fixtures load. The timer has its
+ * own primitive (TimerPrimitive).
  *
  * Replaced by the render slice. To retire it for a type, point that type's
  * cases at its own primitive (grep `TemporaryAssistantList` and
@@ -18,7 +18,7 @@ import { NoteBadge } from './NoteMarker';
  * primitive: the scene tests count objects by it.
  */
 
-export type TemporaryAssistantType = 'calendar' | 'tasks' | 'timer' | 'weather' | 'inbox';
+export type TemporaryAssistantType = 'calendar' | 'tasks' | 'weather' | 'inbox';
 
 type Fields = Record<string, unknown>;
 
@@ -26,7 +26,6 @@ type Fields = Record<string, unknown>;
 const MAIN_LIST: Record<TemporaryAssistantType, [string, string]> = {
   calendar: ['events', 'EVENTS'],
   tasks: ['items', 'TASKS'],
-  timer: ['timers', 'TIMERS'],
   weather: ['daily', 'DAYS'],
   inbox: ['messages', 'MESSAGES'],
 };

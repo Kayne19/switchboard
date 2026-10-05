@@ -2074,6 +2074,213 @@ button {
   outline: 1px solid rgba(var(--orange-rgb), 0.6);
   outline-offset: -1px;
 }
+
+/* Timer (primitives/TimerPrimitive.tsx): countdowns read against the page
+   clock. A countdown is its figure, mono with tabular digits so it does not
+   shimmer as it counts, as large as its cell allows (timerReading.ts
+   `timerLayout` sets --timer-digits; CELL_GAP is the grid's gap). Each sits
+   on a rule with a tab in its phase's colour, as a metric sits on its rule:
+   orange while it runs, muted when paused, amber (the warning colour) once
+   it is done. Several too many for readable cells are listed as rows, and
+   the list scrolls inside the frame like any list. */
+.timer-object {
+  background: #000;
+}
+.timer-object .focusable-content {
+  position: relative;
+  z-index: 1;
+  padding: clamp(26px, 4.2cqh, 48px) clamp(22px, 2.6cqw, 42px) clamp(18px, 3cqh, 34px);
+}
+.timer-primitive {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: var(--paper);
+}
+.timer-primitive__field {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.timer-primitive ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.timer-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--timer-columns, 1), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--timer-rows, 1), minmax(0, 1fr));
+  gap: 20px;
+  width: 100%;
+  height: 100%;
+}
+.timer-cell,
+.timer-row {
+  --phase: var(--orange);
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border-top: 1px solid rgba(232, 230, 223, 0.16);
+}
+.timer-cell--paused,
+.timer-row--paused {
+  --phase: rgba(232, 230, 223, 0.45);
+}
+.timer-cell--done,
+.timer-row--done {
+  --phase: var(--amber);
+}
+/* The tab on the rule, in the phase's colour; a marked timer's whole rule
+   is orange, as the note that names it. */
+.timer-cell::before,
+.timer-row::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 0;
+  width: 34px;
+  height: 3px;
+  background: var(--phase);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 3px) 100%, 0 100%);
+}
+.timer-cell--marked,
+.timer-row--marked {
+  border-top-color: rgba(var(--orange-rgb), 0.7);
+}
+.timer-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding-top: 12px;
+}
+.timer__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.timer__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--paper);
+  font-family: var(--font-prose);
+  font-size: clamp(14px, 1.1cqw, 19px);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timer__head .note-badge {
+  align-self: center;
+}
+.timer__phase {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 1px 0;
+  color: var(--phase);
+}
+.timer__phase--done {
+  padding: 1px 6px;
+  background: var(--amber);
+  color: #000;
+  font-weight: 700;
+}
+.timer__phase-glyph {
+  width: 8px;
+  height: 8px;
+  fill: currentColor;
+}
+.timer__digits {
+  margin: 4px 0 8px;
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: var(--timer-digits, 30px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+.timer-cell--paused .timer__digits,
+.timer-row--paused .timer__digits {
+  color: rgba(232, 230, 223, 0.5);
+}
+.timer-cell--done .timer__digits,
+.timer-row--done .timer__digits {
+  color: var(--amber);
+}
+.timer__track {
+  height: 3px;
+  background: rgba(232, 230, 223, 0.11);
+  overflow: hidden;
+}
+/* The share gone sweeps with the clock, one tick to the next; with reduced
+   motion the transition goes (the block at the end of this sheet), and it
+   steps with the digits. */
+.timer__fill {
+  height: 100%;
+  background: var(--phase);
+  transition: width 1s linear;
+}
+.timer__meta {
+  margin-top: 8px;
+  color: rgba(232, 230, 223, 0.42);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A row of the list: the label and its phase, the countdown at the end of
+   the line, the bar and the meta line under them. */
+.timer-list {
+  padding-right: 4px;
+}
+.timer-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "head digits"
+    "track track"
+    "meta meta";
+  align-items: baseline;
+  column-gap: 14px;
+  padding: 9px 0 10px;
+}
+.timer-row:first-child {
+  margin-top: 2px;
+}
+.timer-row .timer__head {
+  grid-area: head;
+}
+.timer-row .timer__phase {
+  margin-left: 0;
+}
+.timer-row .timer__digits {
+  grid-area: digits;
+  margin: 0;
+  font-size: clamp(18px, 1.5cqw, 26px);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.timer-row .timer__track {
+  grid-area: track;
+  margin-top: 7px;
+  height: 2px;
+}
+.timer-row .timer__meta {
+  grid-area: meta;
+  margin-top: 5px;
+}
+.focus-layer__content > .timer-primitive {
+  padding: 5cqh 4cqw 4cqh;
+}
 /* Entry motion stays in CSS on elements that carry no SVG positioning
    transform: a CSS transform on a translated node group replaces its
    transform attribute and stacks every node in one corner. */

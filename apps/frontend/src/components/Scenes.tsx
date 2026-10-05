@@ -32,6 +32,7 @@ import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
 import { TablePrimitive } from '../primitives/TablePrimitive';
 import { TemporaryAssistantList, temporaryAssistantFrame, type TemporaryAssistantType } from '../primitives/TemporaryAssistantList';
+import { TimerPrimitive } from '../primitives/TimerPrimitive';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
@@ -241,13 +242,13 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?
       return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
     case 'note':
       return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
+    case 'timer':
+      return <TimerPrimitive data={cast.timer(object).data} marked={marked} />;
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
       return <TemporaryAssistantList type="calendar" data={object.data} marked={marked} />;
     case 'tasks':
       return <TemporaryAssistantList type="tasks" data={object.data} marked={marked} />;
-    case 'timer':
-      return <TemporaryAssistantList type="timer" data={object.data} marked={marked} />;
     case 'weather':
       return <TemporaryAssistantList type="weather" data={object.data} marked={marked} />;
     case 'inbox':
@@ -499,10 +500,22 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         main: slot('image-object', <ImagePrimitive data={data} />, <TechFrame variant="panel" />),
       };
     }
+    case 'timer': {
+      const { data } = cast.timer(primary);
+      const paused = data.timers.filter((timer) => timer.state === 'paused').length;
+      return {
+        ...rail,
+        title: data.title ?? (data.timers.length === 1 ? data.timers[0].label : 'TIMERS'),
+        subtitle: data.subtitle ?? [`${data.timers.length} ${data.timers.length === 1 ? 'TIMER' : 'TIMERS'}`, paused > 0 ? `${paused} PAUSED` : null].filter(Boolean).join(' / '),
+        context: data.context ?? 'TIMERS',
+        footer: 'DISPLAY / TIMERS',
+        caption: sceneCaption(primary, 'TIMERS / PAGE CLOCK'),
+        main: slot('timer-object', <TimerPrimitive data={data} marked={anchoredItem(state, primary.id)} />, <TechFrame variant="panel" />),
+      };
+    }
     // TEMPORARY (pa-contract): replaced by the render slice, a primitive per type.
     case 'calendar':
     case 'tasks':
-    case 'timer':
     case 'weather':
     case 'inbox': {
       const type = primary.type as TemporaryAssistantType;
