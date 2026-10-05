@@ -116,7 +116,7 @@ function view(shown: ChartNote[] = notes) {
   return (
     <div className="chart-object">
       <ChartPrimitive data={data} named={named} />
-      <ChartNotes chart={chart} notes={shown} onFocus={() => {}} named={named} />
+      <ChartNotes chart={chart} objects={{ [chart.id]: chart }} notes={shown} onFocus={() => {}} named={named} />
     </div>
   );
 }

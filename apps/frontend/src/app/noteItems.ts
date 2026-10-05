@@ -1,4 +1,5 @@
-import type { CalendarData, InboxData, NoteData, SceneObject, TasksData, TimerData, WeatherData } from '../controller/types';
+import type { CalendarData, DiagramObjectData, InboxData, NoteData, SceneObject, TasksData, TimerData, WeatherData } from '../controller/types';
+import type { NoteTarget } from '../primitives/AnnotationCard';
 import { weatherItemName } from '../primitives/weatherLayout';
 import { eventTargetText } from '../primitives/calendarLayout';
 import { chartTargetText } from '../primitives/chartGeometry';
@@ -26,9 +27,9 @@ export function markedItem(note: NoteData | null | undefined, objectId: string):
 
 type ItemName<T> = (data: T, item: string) => string | undefined;
 
-// How each type names one of its items on the rail card's TARGET line, or
-// undefined when it holds no item of that name (the card then shows the
-// anchor as sent, and no badge). One entry per type, kept apart.
+// How each type names one of its items on a card's TARGET line, or
+// undefined when it holds no item of that name (the card then names the
+// object, and carries no badge). One entry per type, kept apart.
 const ITEM_NAMES: {
   calendar: ItemName<CalendarData>;
   tasks: ItemName<TasksData>;
@@ -50,9 +51,9 @@ const ITEM_NAMES: {
   },
 };
 
-/** The item `item` of `object` in the object's own words, for the rail
- * card's TARGET line; undefined when the object is not a type with items or
- * holds no item of that name. */
+/** The item `item` of `object` in the object's own words, for a card's
+ * TARGET line; undefined when the object is not a type with items or holds
+ * no item of that name. */
 export function itemTargetText(object: SceneObject, item: string): string | undefined {
   switch (object.type) {
     case 'calendar':
@@ -70,27 +71,70 @@ export function itemTargetText(object: SceneObject, item: string): string | unde
   }
 }
 
-/** The item a note's card names on its TARGET line, in its object's words:
- * set only when the note is about `object` and the object holds the item it
- * names, which is when the item is marked and the card carries the badge. */
-function noteItemTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): string | undefined {
-  const item = markedItem(note, object?.id ?? '');
-  return object && item !== undefined ? itemTargetText(object, item) : undefined;
+/** A diagram's node or a sequence's actor by its label; undefined when it holds none of that id. */
+function nodeLabel(data: DiagramObjectData, id: string): string | undefined {
+  return data.mode === 'sequence' ? data.actors.find((actor) => actor.id === id)?.label : data.nodes.find((node) => node.id === id)?.label;
+}
+
+// The fields an object is named by, in the order the scene frame and the
+// agent's view take them (`summary` in apps/backend/src/display.rs): a
+// title, a document's subject, a metric's or a progress's label, an
+// image's alt text, a forecast's place.
+const NAME_FIELDS = ['title', 'subject', 'label', 'alt', 'location'] as const;
+
+/**
+ * An object in its own words, where a card's TARGET line names the object
+ * itself: the first of its title, subject, label, alt text or place it
+ * carries that is not blank, or, where it carries none, its type's name
+ * (`TABLE`, `CHART`). Never its id: an id is the agent's handle, and a
+ * caller does not read it.
+ */
+export function objectName(object: SceneObject): string {
+  const data = object.data as Partial<Record<(typeof NAME_FIELDS)[number], unknown>> | null;
+  for (const field of NAME_FIELDS) {
+    const value = data?.[field];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return object.type.toUpperCase();
 }
 
 /**
- * What a drawn note's card says it is about on its TARGET line, in its
- * object's words, and whether the object marks that with the NOTE badge:
- * the point it names on a chart (`chartTargetText`; the chart rings or
- * outlines the point and prints its value, no badge), or the item it names
- * in a list (marked with the badge, as `noteItemTarget` says). Nothing for
- * a note about another object, or about one with neither, whose card shows
- * the anchor as sent. The rail card and the cards focus keeps read this.
+ * What a drawn note's card names on its TARGET line, in the words of the
+ * object its anchor names (`objects` are the objects on stage, by id), and
+ * whether that object marks it with the NOTE badge:
+ * - the part the anchor names, where the object holds it: on a chart the
+ *   point (`chartTargetText`: its category or x, then its series; the chart
+ *   rings or outlines it and prints its value, no badge); on a diagram the
+ *   node's or actor's label; in a list the item (`itemTargetText`: an
+ *   event's title and start, a task's text, a message's sender and
+ *   subject, a timer's label, a forecast's day or hour). A node, an actor
+ *   and an item are marked with the badge;
+ * - otherwise the object itself (`objectName`), with no badge.
+ * Nothing for a note about no object on stage, or with no anchor: an id
+ * names nothing a caller can see, so no card ever shows one. Every card
+ * reads this: the rail's, the band's, those on a chart, those focus keeps,
+ * and a note drawn as an object of its own (`standingNoteTarget`).
  */
-export function noteTarget(object: SceneObject | null | undefined, note: NoteData | null | undefined): { target?: string; itemMarked: boolean } {
+export function noteTarget(objects: Readonly<Record<string, SceneObject | undefined>>, note: NoteData | null | undefined): NoteTarget {
   const anchor = note?.anchor;
-  if (!object || !anchor || anchor.target !== object.id) return { itemMarked: false };
-  if (object.type === 'chart') return { target: chartTargetText(anchor, cast.chart(object).data), itemMarked: false };
-  const item = noteItemTarget(object, note);
-  return { target: item, itemMarked: item !== undefined };
+  const object = anchor ? objects[anchor.target] : undefined;
+  if (!anchor || !object) return { marked: false };
+  const named = (text: string | undefined, marked: boolean): NoteTarget | undefined => (text === undefined ? undefined : { target: text, marked });
+  const part =
+    object.type === 'chart'
+      ? named(chartTargetText(anchor, cast.chart(object).data), false)
+      : object.type === 'diagram'
+        ? named(anchor.node === undefined ? undefined : nodeLabel(cast.diagram(object).data, anchor.node), true)
+        : named(anchor.item === undefined ? undefined : itemTargetText(object, anchor.item), true);
+  return part ?? { target: objectName(object), marked: false };
+}
+
+/**
+ * The card of a note drawn as an object of its own (in a composed slot, or
+ * focused): its TARGET line reads as any card's (`noteTarget`), but it is
+ * not the note drawn for what it names, which therefore marks nothing, so
+ * it carries no badge.
+ */
+export function standingNoteTarget(objects: Readonly<Record<string, SceneObject | undefined>>, note: NoteData): NoteTarget {
+  return { target: noteTarget(objects, note).target, marked: false };
 }

@@ -584,8 +584,24 @@ chart with labels (`TARGET / FRONTEND VISUAL / THIS RUN`), the x axis's name
 and the value on any other (`TARGET / EPOCH 32 / VAL LOSS`), and the series
 wherever the anchor names one or the chart draws more than one. An anchor
 with no `x` names its series; one that names no series the chart carries
-and no `x`, or no point the chart draws, names the chart: its `title`, or
-`CHART`.
+and no `x`, or no point the chart draws, names the chart, as a card names
+any object (below).
+
+**What a card names.** Every card's `TARGET` line, wherever it stands (on a
+chart, in the band, in the rail, beside a focused object, or a note drawn as
+an object of its own), names what its note is about in the words of the object
+its anchor names, never an id (`noteTarget`,
+`apps/frontend/src/app/noteItems.ts`): the point on a chart, as above; a
+diagram's node or a sequence's actor by its label; a list's item in the list's
+words (below); and otherwise the object itself, by the first of its `title`,
+`subject`, `label`, `alt` and `location` that is not blank (the field the
+agent's view names it by: a table's title, a document's subject, a metric's or
+a progress's label, an image's alt text where it has no title, a forecast's
+place), or its type's name (`TABLE`, `CHART`) where it has none. A node, an
+actor or an item the object holds is marked where the object is drawn, and the
+card carries the NOTE badge that matches the mark; a node or an item it does
+not hold marks nothing, and the card names the object. A note about no object
+on stage has no `TARGET` line.
 
 On every kind of chart a card lies wholly inside the plot, a few pixels in
 from its border, in clear space, or wholly outside it, never across it. Its

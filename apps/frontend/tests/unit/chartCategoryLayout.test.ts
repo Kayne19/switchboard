@@ -621,16 +621,14 @@ describe('what a note names on a chart', () => {
 
   // An anchor with no x and a series the chart does not carry named
   // nothing, so the card printed the anchor as sent: the chart's object id
-  // (line-notes review L5).
-  it('names the series alone for an anchor with no x, and the chart itself where it names no point the chart draws', () => {
+  // (line-notes review L5). It names no part of the chart, and the card
+  // names the chart as it names any object (noteItems.test.tsx, `noteTarget`).
+  it('names the series alone for an anchor with no x, and no part where it names no point the chart draws', () => {
     const titled = { title: 'RUN / GRAPE-AMODAL-04', labels: ['a'], series: [{ name: 'S', values: [1] }] };
     expect(chartTargetText({ series: 'S' }, titled)).toBe('S');
-    expect(chartTargetText({ series: 'NOPE' }, titled)).toBe('RUN / GRAPE-AMODAL-04');
-    expect(chartTargetText({}, titled)).toBe('RUN / GRAPE-AMODAL-04');
-    expect(chartTargetText({ x: 2 }, { ...titled, labels: undefined, xMax: 0, series: [{ name: 'S', values: [1, 2] }] })).toBe('RUN / GRAPE-AMODAL-04');
-    // A chart with no title, or a blank one, is the chart.
-    expect(chartTargetText({ series: 'NOPE' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBe('CHART');
-    expect(chartTargetText({ series: 'NOPE' }, { ...titled, title: ' ' })).toBe('CHART');
+    expect(chartTargetText({ series: 'NOPE' }, titled)).toBeUndefined();
+    expect(chartTargetText({}, titled)).toBeUndefined();
+    expect(chartTargetText({ x: 2 }, { ...titled, labels: undefined, xMax: 0, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
   });
 
   it('names the series a labelled chart marks wherever it draws more than one', () => {

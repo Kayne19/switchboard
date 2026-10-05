@@ -18,7 +18,7 @@ import type {
   TimerData,
   WeatherData,
 } from '../controller/types';
-import { markedItem, noteTarget } from '../app/noteItems';
+import { markedItem, noteTarget, standingNoteTarget } from '../app/noteItems';
 import { anchoredNote, cast, objectsOfType } from '../app/sceneModel';
 import { chartNoteAnchors } from './ChartNotes';
 import { AnnotationCard } from '../primitives/AnnotationCard';
@@ -60,7 +60,7 @@ export function focusNotes(state: ControllerState, object: SceneObject | null): 
 // What the notes kept beside the object name in it, marked in focus as in
 // the scene: a chart's points (`chartNoteAnchors`), a diagram's node or
 // actor (the first note's), a list's item (`marked`, `markedItem`).
-function FocusedObject({ object, notes, marked }: { object: SceneObject; notes: Array<SceneObject<NoteData>>; marked?: string }) {
+function FocusedObject({ object, objects, notes, marked }: { object: SceneObject; objects: Readonly<Record<string, SceneObject>>; notes: Array<SceneObject<NoteData>>; marked?: string }) {
   const note = notes[0]?.data ?? null;
   switch (object.type) {
     case 'chart':
@@ -77,7 +77,7 @@ function FocusedObject({ object, notes, marked }: { object: SceneObject; notes: 
     case 'image':
       return <ImagePrimitive data={object.data as ImageData} focused />;
     case 'note':
-      return <AnnotationCard data={object.data as NoteData} />;
+      return <AnnotationCard data={object.data as NoteData} named={standingNoteTarget(objects, object.data as NoteData)} />;
     case 'metric':
       return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} />;
     case 'progress':
@@ -101,7 +101,18 @@ function FocusedObject({ object, notes, marked }: { object: SceneObject; notes: 
 // (`.focus-layer__content--noted`): beside a wide object, as the rail is,
 // and under a tall one. Each card names what its note is about in the
 // object's words, as the rail card does (`noteTarget`).
-export function FocusLayer({ object, notes = [], onClose }: { object: SceneObject | null; notes?: Array<SceneObject<NoteData>>; onClose: () => void }) {
+export function FocusLayer({
+  object,
+  objects,
+  notes = [],
+  onClose,
+}: {
+  object: SceneObject | null;
+  /** Every object on stage, by id: a card names the one its note is about (`noteTarget`). */
+  objects: Readonly<Record<string, SceneObject>>;
+  notes?: Array<SceneObject<NoteData>>;
+  onClose: () => void;
+}) {
   const noted = notes.length > 0;
   return (
     <AnimatePresence>
@@ -129,13 +140,13 @@ export function FocusLayer({ object, notes = [], onClose }: { object: SceneObjec
               <button type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
-              <FocusedObject object={object} notes={notes} marked={markedItem(notes[0]?.data, object.id)} />
+              <FocusedObject object={object} objects={objects} notes={notes} marked={markedItem(notes[0]?.data, object.id)} />
             </SurfaceBoundary>
             {noted ? (
               <aside className="focus-layer__note" data-notes={notes.length}>
                 {notes.map((note) => (
                   <SurfaceBoundary key={note.id} surfaceId={note.id} resetKey={note}>
-                    <AnnotationCard data={note.data} {...noteTarget(object, note.data)} />
+                    <AnnotationCard data={note.data} named={noteTarget(objects, note.data)} />
                   </SurfaceBoundary>
                 ))}
               </aside>

@@ -15,11 +15,11 @@ import type {
   TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
-import { markedItem, noteTarget } from '../app/noteItems';
+import { markedItem, noteTarget, standingNoteTarget } from '../app/noteItems';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { stageReport, wantsStage, type StageReport } from '../app/stageFold';
 import { StageDemandContext, watchElement, type StageDemandListener } from '../hooks/useStageDemand';
-import { AnnotationCard } from '../primitives/AnnotationCard';
+import { AnnotationCard, type NoteTarget } from '../primitives/AnnotationCard';
 import { CalendarPrimitive, calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
@@ -141,7 +141,7 @@ interface ExplanationProps {
 // it resolves in and out only when an explanation appears or goes away. Its
 // layout animates position only: animating its size on a text change scales
 // the text while it reflows, which reads as a twitch.
-function RailNote({ note, noteObject, onFocus, onOpenHistory, target, itemMarked, leads = false }: ExplanationProps & { target?: string; itemMarked?: boolean; leads?: boolean }) {
+function RailNote({ note, noteObject, onFocus, onOpenHistory, named, leads = false }: ExplanationProps & { named: NoteTarget; leads?: boolean }) {
   return (
     <AnimatePresence initial={false}>
       {note ? (
@@ -151,8 +151,7 @@ function RailNote({ note, noteObject, onFocus, onOpenHistory, target, itemMarked
               data={note}
               onFocus={noteObject ? () => onFocus(noteObject.id) : undefined}
               onOpenHistory={noteObject ? undefined : onOpenHistory}
-              target={target}
-              itemMarked={itemMarked}
+              named={named}
             />
           </SurfaceBoundary>
         </ObjectMotion>
@@ -210,15 +209,6 @@ function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): b
   return watching && crowded;
 }
 
-// A rail note about a chart on stage names the category it points at, as
-// the same note on the chart does; one about an item of a list (a task, a
-// message, an event, a timer, a forecast hour or day) names the item, which
-// is then marked where its object is drawn.
-function railNoteTarget(state: ControllerState, note: NoteData | null): { target?: string; itemMarked: boolean } {
-  const anchor = note?.anchor;
-  return noteTarget(anchor ? state.agentObjects[anchor.target] : undefined, note);
-}
-
 // The details column beside every content visual: the metrics and any
 // progress the main column has no slot for, one stack of instruments read
 // the same way, then the live response, the note, and tool activity. It is
@@ -243,7 +233,7 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} {...railNoteTarget(state, note)} leads={leads} />
+      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={noteTarget(state.agentObjects, note)} leads={leads} />
       <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
@@ -252,9 +242,10 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
 
 // One object drawn inside a composed workspace, as the primary or in the aux
 // row beneath it. A metric and a progress change with the slot: the aux row
-// has no room for a whole step list. `marked` is the item the drawn note
-// names in the object (`markedItem`), which the object marks.
-function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?: string) {
+// has no room for a whole step list. `objects` are the objects on stage, by
+// id, which a note names its object among; `marked` is the item the drawn
+// note names in the object (`markedItem`), which the object marks.
+function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', objects: ControllerState['agentObjects'], marked?: string) {
   switch (object.type) {
     case 'chart':
       return <ChartPrimitive data={(object as SceneObject<ChartData>).data} />;
@@ -273,7 +264,7 @@ function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', marked?
     case 'progress':
       return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
     case 'note':
-      return <AnnotationCard data={(object as SceneObject<NoteData>).data} />;
+      return <AnnotationCard data={cast.note(object).data} named={standingNoteTarget(objects, cast.note(object).data)} />;
     case 'timer':
       return <TimerPrimitive data={cast.timer(object).data} marked={marked} />;
     case 'weather':
@@ -433,6 +424,7 @@ function trainingContent(
                   {onChart.length > 0 ? (
                     <ChartNotes
                       chart={chart}
+                      objects={state.agentObjects}
                       notes={onChart}
                       named={chartNoteAnchors(chart, notes)}
                       onFocus={onFocus}
@@ -454,7 +446,7 @@ function trainingContent(
                   data={banded.data}
                   onFocus={banded.object ? () => onFocus(banded.object!.id) : undefined}
                   onOpenHistory={banded.object ? undefined : onOpenHistory}
-                  target={noteTarget(primary, banded.data).target}
+                  named={noteTarget(state.agentObjects, banded.data)}
                 />
               </SurfaceBoundary>
             </ObjectMotion>
@@ -646,10 +638,13 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
 // the item the rail's note names in it (`marked`).
 function AuxRow({
   objects,
+  onStage,
   onFocus,
   marked,
 }: {
   objects: SceneObject[];
+  /** Every object on stage, by id. */
+  onStage: ControllerState['agentObjects'];
   onFocus: (id: string | null) => void;
   marked: (objectId: string) => string | undefined;
 }) {
@@ -664,7 +659,7 @@ function AuxRow({
           <TechFrame variant="panel" />
           <ObjectSurface object={object}>
             <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-              {composedPrimitive(object, 'aux', marked(object.id))}
+              {composedPrimitive(object, 'aux', onStage, marked(object.id))}
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -682,6 +677,7 @@ function AuxRow({
 function MainWithAux({
   variant,
   aux,
+  onStage,
   onFocus,
   marked,
   ref,
@@ -689,6 +685,7 @@ function MainWithAux({
 }: {
   variant?: string;
   aux: SceneObject[];
+  onStage: ControllerState['agentObjects'];
   onFocus: (id: string | null) => void;
   marked: (objectId: string) => string | undefined;
   ref?: RefObject<HTMLDivElement | null>;
@@ -697,7 +694,7 @@ function MainWithAux({
   return (
     <motion.div ref={ref} className={`content-main composed-main${variant ? ` ${variant}` : ''}`} layout>
       {children}
-      {aux.length > 0 ? <AuxRow objects={aux} onFocus={onFocus} marked={marked} /> : null}
+      {aux.length > 0 ? <AuxRow objects={aux} onStage={onStage} onFocus={onFocus} marked={marked} /> : null}
     </motion.div>
   );
 }
@@ -929,7 +926,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
                   onFocus={onFocus}
                 />
               ) : (
-                <StageDemandContext.Provider value={onDemand}>{composedPrimitive(primary, 'primary', markedItem(note, primary.id))}</StageDemandContext.Provider>
+                <StageDemandContext.Provider value={onDemand}>{composedPrimitive(primary, 'primary', state.agentObjects, markedItem(note, primary.id))}</StageDemandContext.Provider>
               )}
             </FocusableSurface>
           </ObjectSurface>
@@ -1087,7 +1084,7 @@ export function SceneShell(props: SceneProps) {
           </div>
           <div className={`content-grid${staged ? ' content-grid--staged' : ''}`} data-stage={foldable ? (staged ? 'primary' : 'shared') : undefined}>
             <div ref={probeRef} className="content-grid__probe" aria-hidden="true" />
-            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onFocus={onFocus} marked={(id) => markedItem(calloutPlaced ? null : content.note, id)}>
+            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} marked={(id) => markedItem(calloutPlaced ? null : content.note, id)}>
               {content.main}
             </MainWithAux>
             <motion.aside
