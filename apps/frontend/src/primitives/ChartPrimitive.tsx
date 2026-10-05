@@ -11,6 +11,7 @@ import {
   CHART_POINT_RADIUS,
   CHART_TICK_BASELINE,
   CHART_TICK_ROW_HEIGHT,
+  chartBarCallouts,
   chartBars,
   chartCategoryLabelX,
   chartClip,
@@ -18,6 +19,7 @@ import {
   chartLegendLayout,
   chartScales,
   chartSeriesPoint,
+  type ChartAnchor,
   type ChartScales,
 } from './chartGeometry';
 import { useElementSize } from '../hooks/useElementSize';
@@ -147,9 +149,12 @@ function Grid({ scales }: { scales: ChartScales }) {
 export function ChartPrimitive({
   data,
   focused = false,
+  named,
 }: {
   data: ChartData;
   focused?: boolean;
+  /** The points the notes on this chart name: a bar chart marks each one's bar as it marks its marker's. */
+  named?: ChartAnchor[];
 }) {
   const reduced = useReducedMotion();
   const clipId = useId().replace(/:/g,'');
@@ -180,7 +185,10 @@ export function ChartPrimitive({
   // of its own -- a full-height dashed rule read as a stray line through
   // the plot, and ran on past the point beneath any leader that met it
   // there.
-  const markerPoint=data.marker ? chartSeriesPoint(data,data.marker.x,data.marker.series,scales) : undefined;
+  // A bar is marked as a bar: outlined, its value printed past its end
+  // (`chartBarCallouts`), not a ring on its edge.
+  const markerPoint=data.marker && kind!=='bar' ? chartSeriesPoint(data,data.marker.x,data.marker.series,scales) : undefined;
+  const callouts=useMemo(()=>chartBarCallouts(data,named,scales),[data,named,scales]);
   const grounded=kind==='bar'||kind==='area';
   const base=valueAt(baseline);
   const clip=chartClip(scales);
@@ -214,6 +222,13 @@ export function ChartPrimitive({
             {kind==='line'||kind==='area' ? <path className="chart-series" d={series.path} fill="none" stroke={color} strokeWidth={focused?3:2.3} vectorEffect="non-scaling-stroke"/> : null}
             {kind==='scatter' ? series.points.map((p,sample)=><circle key={sample} className="chart-point" cx={p.x} cy={p.y} r={focused?CHART_POINT_RADIUS+1:CHART_POINT_RADIUS} fill={color}/>) : null}
             {kind==='bar' ? series.bars.map((bar)=><rect key={bar.index} className="chart-bar" x={bar.rect.left} y={bar.rect.top} width={Math.max(0.5,bar.rect.right-bar.rect.left)} height={Math.max(0.5,bar.rect.bottom-bar.rect.top)} fill={color}/>) : null}
+          </motion.g>;
+        })}
+        {callouts.map((callout)=>{
+          const {rect}=callout.bar;
+          return <motion.g key={`${callout.bar.series}-${callout.bar.index}`} className="chart-callout" data-series={data.series[callout.bar.series]?.name} data-index={callout.bar.index} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
+            <rect className="chart-callout__outline" x={rect.left} y={rect.top} width={Math.max(0.5,rect.right-rect.left)} height={Math.max(0.5,rect.bottom-rect.top)}/>
+            <text className={`chart-callout__value${callout.value.inside?' chart-callout__value--inside':''}`} x={callout.value.x} y={callout.value.y} textAnchor={callout.value.anchor}>{callout.value.text}</text>
           </motion.g>;
         })}
         {markerPoint ? (

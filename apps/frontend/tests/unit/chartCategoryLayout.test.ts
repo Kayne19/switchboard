@@ -19,6 +19,8 @@ import {
   CHART_VIEW_HEIGHT,
   CHART_VIEW_WIDTH,
   chartAxisBoxes,
+  chartBarCallout,
+  chartBarCallouts,
   chartBars,
   chartCategoryLayout,
   chartClip,
@@ -272,11 +274,20 @@ describe('chart obstacles', () => {
   });
 
   it('marks the marker ring where it is drawn, stroke and all', () => {
+    const line: ChartData = { xMax: 2, series: [{ name: 'A', values: [1, 2, 3] }], marker: { x: 1 } };
+    const scales = chartScales(line);
+    const point = chartSeriesPoint(line, 1, undefined, scales)!;
+    const reach = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
+    expect(chartObstacles(line, scales).marks.at(-1)).toEqual({ left: point.x - reach, top: point.y - reach, right: point.x + reach, bottom: point.y + reach });
+  });
+
+  it("keeps a note off a marked bar's printed value, and off each bar a note names", () => {
     const marked = { ...bars, marker: { x: 1, series: 'TWO' } };
     const scales = chartScales(marked);
-    const point = chartSeriesPoint(marked, 1, 'TWO', scales)!;
-    const reach = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
-    expect(chartObstacles(marked, scales).marks.at(-1)).toEqual({ left: point.x - reach, top: point.y - reach, right: point.x + reach, bottom: point.y + reach });
+    const callout = chartBarCallout(marked, { x: 1, series: 'TWO' }, scales)!;
+    expect(chartObstacles(marked, scales).marks.at(-1)).toEqual(callout.label);
+    const named = chartObstacles(bars, chartScales(bars), [{ x: 0, series: 'ONE' }]).marks;
+    expect(named.at(-1)).toEqual(chartBarCallout(bars, { x: 0, series: 'ONE' })!.label);
   });
 
   it("cuts the marker ring with the clip the chart draws it in, a scatter's wider one included", () => {
@@ -526,5 +537,64 @@ describe('what a note names on a chart', () => {
     expect(chartTargetText({ x: 2 }, { xMax: 10, series: [{ name: 'S', values: [1, 2] }] })).toBeUndefined();
     expect(chartTargetText({ x: 2 }, { kind: 'bar', series: [{ name: 'S', values: [1, 2, 3] }] })).toBeUndefined();
     expect(chartTargetText({ series: 'S' }, { labels: ['a'], series: [{ name: 'S', values: [1] }] })).toBeUndefined();
+  });
+});
+
+// The noted bar was shown only by a small ring on its top edge, and a
+// leader that ended by the grey bar beside it read as naming the wrong one.
+describe('a marked bar', () => {
+  const suite: ChartData = {
+    kind: 'bar',
+    labels: ['backend', 'frontend visual'],
+    series: [
+      { name: 'THIS RUN', values: [41.8, 96.4] },
+      { name: 'PREVIOUS RUN', values: [44, 102.9] },
+    ],
+  };
+
+  it('prints its value past its end, and is reached from past that value, from above', () => {
+    const scales = chartScales(suite);
+    const callout = chartBarCallout(suite, { x: 1, series: 'THIS RUN' }, scales)!;
+    expect(callout.bar.series).toBe(0);
+    expect(callout.bar.index).toBe(1);
+    expect(callout.value.text).toBe('96.4');
+    expect(callout.value.inside).toBe(false);
+    expect(callout.value.x).toBeCloseTo(callout.bar.end.x);
+    // Above the bar, the point above the value: the leader lands on neither.
+    expect(callout.label.bottom).toBeLessThan(callout.bar.rect.top);
+    expect(callout.point.y).toBeLessThan(callout.label.top);
+    expect(callout.point.x).toBeCloseTo(callout.bar.end.x);
+    expect(callout.from).toBe('above');
+  });
+
+  it("prints it inside the bar's end where the plot has no room past it", () => {
+    const full: ChartData = { ...suite, yMax: 102.9 };
+    const callout = chartBarCallout(full, { x: 1, series: 'PREVIOUS RUN' })!;
+    expect(callout.value.inside).toBe(true);
+    expect(callout.label.top).toBeGreaterThan(callout.bar.rect.top);
+    expect(callout.point.y).toBeLessThan(callout.bar.rect.top);
+  });
+
+  it('is reached from past its end whichever way it runs', () => {
+    const negative: ChartData = { kind: 'bar', labels: ['a', 'b'], series: [{ name: 'S', values: [20, -30] }] };
+    const below = chartBarCallout(negative, { x: 1 })!;
+    expect(below.from).toBe('below');
+    expect(below.label.top).toBeGreaterThan(below.bar.rect.bottom);
+    expect(below.point.y).toBeGreaterThan(below.label.bottom);
+    const across = { ...labelled(5, 40, 'bar') };
+    const scales = chartScales(across);
+    expect(scales.horizontal).toBe(true);
+    const right = chartBarCallout(across, { x: 2 }, scales)!;
+    expect(right.from).toBe('right');
+    expect(right.label.left).toBeGreaterThan(right.bar.rect.right);
+    expect(right.point.x).toBeGreaterThan(right.label.right);
+    expect(right.point.y).toBeCloseTo(right.bar.end.y);
+  });
+
+  it('is marked once for its marker and every note that names it', () => {
+    const marked: ChartData = { ...suite, marker: { x: 1, series: 'THIS RUN' } };
+    const callouts = chartBarCallouts(marked, [{ x: 1, series: 'THIS RUN' }, { x: 0, series: 'PREVIOUS RUN' }]);
+    expect(callouts.map((callout) => [callout.bar.series, callout.bar.index])).toEqual([[0, 1], [1, 0]]);
+    expect(chartBarCallouts({ ...suite, kind: 'line' }, [{ x: 1 }])).toEqual([]);
   });
 });

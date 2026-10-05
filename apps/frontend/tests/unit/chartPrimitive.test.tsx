@@ -431,13 +431,31 @@ describe('chart kinds', () => {
     expect(valueTicks.map((tick) => tick.textContent)).toEqual(['0', '200', '400', '600']);
     const axisLabels = [...host.querySelectorAll<SVGTextElement>('.chart-axis-label')].map((label) => label.textContent);
     expect(axisLabels).toEqual(['MS', 'TEST FILE']);
-    // The bars run from the left, and the marker rings the named bar's end.
+    // The bars run from the left, and the marker marks the named bar as a
+    // bar: outlined, its value printed past its end.
     const bar = host.querySelector<SVGRectElement>('.chart-bar')!;
     expect(Number(bar.getAttribute('x'))).toBeCloseTo(scales.plot.left, 1);
-    const marker = host.querySelector<SVGCircleElement>('.chart-marker__point')!;
-    const end = chartSeriesPoint(chart, 1, undefined, scales)!;
-    expect(Number(marker.getAttribute('cx'))).toBeCloseTo(end.x, 1);
-    expect(Number(marker.getAttribute('cy'))).toBeCloseTo(end.y, 1);
+    expect(host.querySelector('.chart-marker')).toBeNull();
+    const callout = host.querySelector('.chart-callout')!;
+    expect(callout.getAttribute('data-index')).toBe('1');
+    const named = chartBars(chart, scales)[1];
+    const outline = callout.querySelector('.chart-callout__outline')!;
+    expect(Number(outline.getAttribute('x'))).toBeCloseTo(named.rect.left, 1);
+    expect(Number(outline.getAttribute('width'))).toBeCloseTo(named.rect.right - named.rect.left, 1);
+    const value = callout.querySelector('.chart-callout__value')!;
+    expect(value.textContent).toBe('390');
+    expect(Number(value.getAttribute('x'))).toBeGreaterThan(named.rect.right);
+  });
+
+  it('marks each bar a note names, as it marks its marker', () => {
+    const chart: ChartData = { kind: 'bar', labels: ['a', 'b', 'c'], series: [{ name: 'S', values: [3, 1, 2] }] };
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root.render(<ChartPrimitive data={chart} named={[{ x: 2 }]} />));
+    const callouts = [...host.querySelectorAll('.chart-callout')];
+    expect(callouts.map((callout) => callout.getAttribute('data-index'))).toEqual(['2']);
+    expect(callouts[0].querySelector('.chart-callout__value')!.textContent).toBe('2');
   });
 
   it('never prints a value tick as negative zero', () => {

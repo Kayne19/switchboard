@@ -8,9 +8,11 @@ import {
   chartFrame,
   chartObstacles,
   chartScales,
-  chartSeriesPoint,
+  chartNoteTarget,
   chartTargetText,
+  type ChartAnchor,
   type ChartScales,
+  type ChartSide,
   type ViewPoint,
   type ViewRect,
 } from '../primitives/chartGeometry';
@@ -37,10 +39,26 @@ interface NotesLayout {
 // the clip-path in the stylesheet cuts the same.
 const CARD_CUT = 0.08;
 
-/** Where on the chart a note names a point, if it names one there. */
-export function chartNotePoint(note: NoteData, chart: SceneObject<ChartData>, scales?: ChartScales): ViewPoint | undefined {
+/**
+ * Where on the chart a note names a point, if it names one there, and the
+ * side its leader must come from: on a bar chart the bar's callout, past
+ * its end.
+ */
+export function chartNotePoint(
+  note: NoteData,
+  chart: SceneObject<ChartData>,
+  scales?: ChartScales,
+): { point: ViewPoint; from?: ChartSide; bar?: ViewRect } | undefined {
   if (note.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
-  return chartSeriesPoint(chart.data, note.anchor.x, note.anchor.series, scales);
+  return chartNoteTarget(chart.data, { x: note.anchor.x, series: note.anchor.series }, scales);
+}
+
+/** The points the notes on a chart name on it, for the chart to mark. */
+export function chartNoteAnchors(chart: SceneObject<ChartData>, notes: ChartNote[]): ChartAnchor[] {
+  return notes.flatMap((note) => {
+    const anchor = note.data.anchor;
+    return anchor?.target === chart.id && anchor.x !== undefined ? [{ x: anchor.x, series: anchor.series }] : [];
+  });
 }
 
 // How much a transform in flight (a panel moving into place) scales an
@@ -162,7 +180,7 @@ export function ChartNotes({
       };
       const scales = chartScales(data, frame);
       if (toLayer) {
-        const obstacles = chartObstacles(data, scales);
+        const obstacles = chartObstacles(data, scales, chartNoteAnchors(chartRef.current, current));
         field.plot = rectToLayer(scales.plot);
         field.traces = obstacles.lines.map((line) => line.map(toLayer!));
         field.marks = obstacles.marks.map(rectToLayer);
@@ -176,8 +194,15 @@ export function ChartNotes({
         if (!element) continue;
         const rect = element.getBoundingClientRect();
         const size = { width: rect.width / kx, height: rect.height / ky };
-        const viewPoint = toLayer ? chartNotePoint(note.data, chartRef.current, scales) : undefined;
-        toPlace.push({ id: note.key, width: size.width, height: size.height, point: viewPoint && toLayer!(viewPoint) });
+        const target = toLayer ? chartNotePoint(note.data, chartRef.current, scales) : undefined;
+        toPlace.push({
+          id: note.key,
+          width: size.width,
+          height: size.height,
+          point: target && toLayer!(target.point),
+          from: target?.from,
+          bar: target?.bar && rectToLayer(target.bar),
+        });
       }
       const placed = placeNotes(toPlace, field, { spill });
       const next: NotesLayout = { cards: {}, leaders: {}, away: null, ring: null };
@@ -187,7 +212,8 @@ export function ChartNotes({
           // Left out so the others have clear places: the rail carries it,
           // and the point it names stays ringed as the chart rings a marker.
           next.away = note.id;
-          if (note.point) {
+          // A bar is marked by the chart itself, its callout drawn for every note.
+          if (note.point && !note.from) {
             next.ring = { x: note.point.x, y: note.point.y, r: CHART_MARKER_RADIUS * viewScale, stroke: CHART_MARKER_STROKE * viewScale };
           }
           continue;

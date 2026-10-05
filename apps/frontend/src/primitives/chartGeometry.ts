@@ -615,6 +615,137 @@ export function chartBars(data: ChartData, scales: ChartScales = chartScales(dat
   return bars;
 }
 
+/** The side of a point a leader arrives from. */
+export type ChartSide = 'above' | 'below' | 'left' | 'right';
+
+/** A point on the chart something names: a marker, or a note's anchor. */
+export interface ChartAnchor {
+  x: number;
+  series?: string;
+}
+
+/**
+ * A bar marked as the one a marker or a note names: the bar itself is
+ * outlined, its value printed past its end, and a leader to it lands just
+ * past that value, from the bar's open end -- never along or through the
+ * bar it means.
+ */
+export interface ChartBarCallout {
+  bar: ChartBar;
+  /** The value printed past the bar's end; inside its end where the plot has no room past it. */
+  value: { text: string; x: number; y: number; anchor: 'start' | 'middle' | 'end'; inside: boolean };
+  /** The printed value's box. */
+  label: ViewRect;
+  /** Where a leader to the bar lands. */
+  point: ViewPoint;
+  /** The side of `point` a leader comes from: past the bar's end. */
+  from: ChartSide;
+}
+
+// The space between a bar's end and the value printed past it, and between
+// that value and the end of a leader that names the bar.
+const CALLOUT_GAP = 6;
+const CALLOUT_LANDING = 3;
+// The value is the tick text's face (13 units): about 10 units above its
+// baseline, 3 below.
+const CALLOUT_ASCENT = 10;
+const CALLOUT_DESCENT = 3;
+
+function calloutText(value: number): string {
+  return String(Number(value.toPrecision(6)));
+}
+
+/**
+ * The callout for the bar at `x` in the named series (the first series for
+ * a name the chart does not carry), or undefined on a chart that is not a
+ * bar chart or has no bar there.
+ */
+export function chartBarCallout(data: ChartData, anchor: ChartAnchor, scales: ChartScales = chartScales(data)): ChartBarCallout | undefined {
+  if (scales.kind !== 'bar' || !Number.isFinite(anchor.x)) return undefined;
+  const named = anchor.series ? data.series.findIndex((candidate) => candidate.name === anchor.series) : -1;
+  const which = named >= 0 ? named : 0;
+  const last = (data.series[which]?.values.length ?? 0) - 1;
+  if (last < 0) return undefined;
+  const index = Math.round(Math.min(last, Math.max(0, anchor.x)));
+  const bar = chartBars(data, scales).find((candidate) => candidate.series === which && candidate.index === index);
+  if (!bar) return undefined;
+  const { plot } = scales;
+  const text = calloutText(bar.value);
+  const width = text.length * CHART_TICK_CHAR_ADVANCE;
+  const positive = bar.value >= scales.baseline;
+  if (!scales.horizontal) {
+    const mid = bar.end.x;
+    const end = bar.end.y;
+    const sign = positive ? -1 : 1;
+    // The value past the bar's end, unless that runs off the plot.
+    let baselineY = positive ? end - CALLOUT_GAP : end + CALLOUT_GAP + CALLOUT_ASCENT;
+    let inside = positive ? baselineY - CALLOUT_ASCENT - CALLOUT_LANDING < plot.top : baselineY + CALLOUT_DESCENT + CALLOUT_LANDING > plot.bottom;
+    if (inside) baselineY = positive ? end + CALLOUT_GAP + CALLOUT_ASCENT : end - CALLOUT_GAP;
+    // A bar too short to hold it keeps it past its end after all.
+    if (inside && Math.abs(bar.rect.bottom - bar.rect.top) < CALLOUT_ASCENT + 2 * CALLOUT_GAP) {
+      inside = false;
+      baselineY = positive ? end - CALLOUT_GAP : end + CALLOUT_GAP + CALLOUT_ASCENT;
+    }
+    const label = { left: mid - width / 2, right: mid + width / 2, top: baselineY - CALLOUT_ASCENT, bottom: baselineY + CALLOUT_DESCENT };
+    const reach = inside ? end : positive ? label.top : label.bottom;
+    return {
+      bar,
+      value: { text, x: mid, y: baselineY, anchor: 'middle', inside },
+      label,
+      point: { x: mid, y: reach + sign * CALLOUT_LANDING },
+      from: positive ? 'above' : 'below',
+    };
+  }
+  const mid = bar.end.y;
+  const end = bar.end.x;
+  const sign = positive ? 1 : -1;
+  let inside = positive ? end + CALLOUT_GAP + width + CALLOUT_LANDING > plot.right : end - CALLOUT_GAP - width - CALLOUT_LANDING < plot.left;
+  if (inside && Math.abs(bar.rect.right - bar.rect.left) < width + 2 * CALLOUT_GAP) inside = false;
+  const x = inside ? end - sign * CALLOUT_GAP : end + sign * CALLOUT_GAP;
+  const textAnchor = (positive !== inside ? 'start' : 'end') as 'start' | 'end';
+  const label = textAnchor === 'start'
+    ? { left: x, right: x + width, top: mid - 6, bottom: mid + 5 }
+    : { left: x - width, right: x, top: mid - 6, bottom: mid + 5 };
+  const reach = inside ? end : positive ? label.right : label.left;
+  return {
+    bar,
+    value: { text, x, y: mid + 4.5, anchor: textAnchor, inside },
+    label,
+    point: { x: reach + sign * CALLOUT_LANDING, y: mid },
+    from: positive ? 'right' : 'left',
+  };
+}
+
+/** The callouts a bar chart draws: its marker's bar and each bar a note names, once each. */
+export function chartBarCallouts(data: ChartData, named: ChartAnchor[] = [], scales: ChartScales = chartScales(data)): ChartBarCallout[] {
+  const callouts: ChartBarCallout[] = [];
+  for (const anchor of [...(data.marker ? [data.marker] : []), ...named]) {
+    const callout = chartBarCallout(data, anchor, scales);
+    if (callout && !callouts.some((other) => other.bar === callout.bar || (other.bar.series === callout.bar.series && other.bar.index === callout.bar.index))) {
+      callouts.push(callout);
+    }
+  }
+  return callouts;
+}
+
+/**
+ * Where a note's leader lands on the chart, and from which side: on a bar
+ * chart the bar's callout point, from past its end, and the bar itself;
+ * elsewhere the point on the drawn series, from any side.
+ */
+export function chartNoteTarget(
+  data: ChartData,
+  anchor: ChartAnchor,
+  scales: ChartScales = chartScales(data),
+): { point: ViewPoint; from?: ChartSide; bar?: ViewRect } | undefined {
+  if (scales.kind === 'bar') {
+    const callout = chartBarCallout(data, anchor, scales);
+    return callout ? { point: callout.point, from: callout.from, bar: callout.bar.rect } : undefined;
+  }
+  const point = chartSeriesPoint(data, anchor.x, anchor.series, scales);
+  return point ? { point } : undefined;
+}
+
 /** The radius of a scatter chart's point markers, in viewBox units. */
 export const CHART_POINT_RADIUS = 4;
 /** The radius of the marker ring, and the width of its stroke, in viewBox units. */
@@ -682,7 +813,7 @@ export function chartClip(scales: ChartScales): ViewRect {
   return { left: plot.left - reach, top: plot.top - reach, right: plot.right + reach, bottom: plot.bottom + reach };
 }
 
-export function chartObstacles(data: ChartData, scales: ChartScales = chartScales(data)): ChartObstacles {
+export function chartObstacles(data: ChartData, scales: ChartScales = chartScales(data), named: ChartAnchor[] = []): ChartObstacles {
   const { plot, kind } = scales;
   // What the chart's clip lets through: the bars, the points and the ring
   // are drawn inside it.
@@ -711,11 +842,16 @@ export function chartObstacles(data: ChartData, scales: ChartScales = chartScale
       }
     }
   }
-  const marker = data.marker ? chartSeriesPoint(data, data.marker.x, data.marker.series, scales) : undefined;
-  if (marker) {
-    const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
-    const ring = cut({ left: marker.x - r, top: marker.y - r, right: marker.x + r, bottom: marker.y + r }, clip);
-    if (ring) marks.push(ring);
+  if (kind === 'bar') {
+    // A marked bar's printed value is read as part of it.
+    for (const callout of chartBarCallouts(data, named, scales)) marks.push(callout.label);
+  } else {
+    const marker = data.marker ? chartSeriesPoint(data, data.marker.x, data.marker.series, scales) : undefined;
+    if (marker) {
+      const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
+      const ring = cut({ left: marker.x - r, top: marker.y - r, right: marker.x + r, bottom: marker.y + r }, clip);
+      if (ring) marks.push(ring);
+    }
   }
   return { marks, lines, fills, labels: [chartLegendBox(data, scales.frame), ...chartAxisBoxes(plot, scales.frame)] };
 }

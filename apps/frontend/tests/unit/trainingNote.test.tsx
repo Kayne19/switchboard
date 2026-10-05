@@ -255,11 +255,22 @@ describe('chart notes', () => {
     // The rail card still names what it is about, in the chart's own words.
     expect(rail?.querySelector('.annotation-card')?.getAttribute('data-anchor-target')).toBe('uptime');
     expect(rail?.querySelector('.annotation-card__anchor')?.textContent).toBe('TARGET / eu-west / UPTIME');
-    // On the chart its card is out of view, with no leader, and its point ringed.
+    // On the chart its card is out of view, with no leader, and the bar it
+    // names still marked as a bar.
     expect(card('uptime-note')!.element.classList.contains('chart-note--away')).toBe(true);
     expect(leader('uptime-note')).toBeNull();
-    const ring = host.querySelector('.chart-note-ring[data-note="uptime-note"]');
-    const point = chartSeriesPoint(bars, 2, 'UPTIME')!;
+    expect(host.querySelector('.chart-note-ring')).toBeNull();
+    const callout = host.querySelector('.chart-object[data-chart-id="uptime"] .chart-callout');
+    expect(callout?.getAttribute('data-index')).toBe('2');
+    expect(callout?.getAttribute('data-series')).toBe('UPTIME');
+  });
+
+  it('rings the point a note it hands the rail names on a line chart', () => {
+    CARD.height = 560;
+    mount([chart, note('loss-note', { target: 'loss', x: 20 })]);
+    expect(card('loss-note')!.element.classList.contains('chart-note--away')).toBe(true);
+    const ring = host.querySelector('.chart-note-ring[data-note="loss-note"]');
+    const point = chartSeriesPoint(chartData, 20)!;
     expect(Number(ring?.getAttribute('cx'))).toBeCloseTo(point.x, 3);
     expect(Number(ring?.getAttribute('cy'))).toBeCloseTo(SVG_TOP + point.y, 3);
   });

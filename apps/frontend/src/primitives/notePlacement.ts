@@ -57,7 +57,14 @@ export interface NoteToPlace {
   height: number;
   /** The point the note names, when it names one. */
   point?: Point;
+  /** The side of the point its leader must come from (past a bar's end), when it matters. */
+  from?: Side;
+  /** The bar the point is past the end of: a leader never runs along its side. */
+  bar?: Rect;
 }
+
+/** The side of a point a leader comes from. */
+export type Side = 'above' | 'below' | 'left' | 'right';
 
 export interface NoteField {
   /** Where cards may sit: inside the panel's frame. */

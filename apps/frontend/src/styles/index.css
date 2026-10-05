@@ -887,6 +887,27 @@ button {
   fill: rgba(232, 230, 223, 0.62);
   font-size: 11px;
 }
+
+/* A bar a marker or a note names is marked as a bar: outlined in the
+   annotation colour, its value printed past its end in the tick text's
+   face, where a note's leader lands. */
+.chart-callout__outline {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-callout__value {
+  fill: var(--orange);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.chart-callout__value--inside {
+  fill: var(--black);
+}
 .compare-label {
   position: absolute;
   z-index: 3;

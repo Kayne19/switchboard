@@ -34,7 +34,7 @@ import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
 import { TranscriptToggle } from '../primitives/TranscriptToggle';
-import { ChartNotes, type ChartNote } from './ChartNotes';
+import { ChartNotes, chartNoteAnchors, type ChartNote } from './ChartNotes';
 import { DiagramObject } from './DiagramObject';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
@@ -354,7 +354,7 @@ function trainingContent(
                   <TechFrame variant="panel" />
                   <ObjectSurface object={chart}>
                     <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
-                      <ChartPrimitive data={chart.data} />
+                      <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} />
                     </FocusableSurface>
                   </ObjectSurface>
                   {notes.length > 0 ? (

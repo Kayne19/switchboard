@@ -334,8 +334,8 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 720
 // Where every bar stands to the top of the domain the chart gives and the
 // band above the plot is shorter than the card, no place on the chart is
 // clear of the data: the note goes to the rail, still naming its target,
-// and the point it names stays ringed.
-test('a note with no clear place on its bar chart is shown in the rail, its point ringed', async ({ page }) => {
+// and the bar it names stays marked.
+test('a note with no clear place on its bar chart is shown in the rail, its bar marked', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto('/?scene=comparison&chrome=0');
   await page.evaluate(() => {
@@ -367,16 +367,19 @@ test('a note with no clear place on its bar chart is shown in the rail, its poin
   await expect(page.locator('.chart-note[data-note="uptime-note"]')).toHaveClass(/chart-note--away/);
   await expect(page.locator('.chart-note[data-note="uptime-note"]')).toBeHidden();
   await expect(page.locator('.chart-note-leader')).toHaveCount(0);
-  const ring = page.locator('.chart-note-ring[data-note="uptime-note"]');
-  await expect(ring).toHaveCount(1);
-  // The ring sits on the bar it names: the top of eu-west's first bar.
+  // The bar it names stays marked, as a bar: outlined, its value printed.
+  await expect(page.locator('.chart-note-ring')).toHaveCount(0);
+  const callout = page.locator('.chart-callout[data-index="2"][data-series="THIS MONTH"]');
+  await expect(callout).toHaveCount(1);
+  await expect(callout.locator('.chart-callout__value')).toHaveText('100');
   const geometry = await page.evaluate(() => {
-    const ring = document.querySelector('.chart-note-ring')!.getBoundingClientRect();
+    const outline = document.querySelector('.chart-callout__outline')!.getBoundingClientRect();
     const bar = document.querySelectorAll('.chart-series-group')[0].querySelectorAll('.chart-bar')[2].getBoundingClientRect();
-    return { x: ring.left + ring.width / 2, y: ring.top + ring.height / 2, barX: bar.left + bar.width / 2, barTop: bar.top };
+    return { outline: { left: outline.left, right: outline.right, top: outline.top }, bar: { left: bar.left, right: bar.right, top: bar.top } };
   });
-  expect(Math.abs(geometry.x - geometry.barX)).toBeLessThanOrEqual(1);
-  expect(Math.abs(geometry.y - geometry.barTop)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.outline.left - geometry.bar.left)).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(geometry.outline.right - geometry.bar.right)).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(geometry.outline.top - geometry.bar.top)).toBeLessThanOrEqual(1.5);
 });
 
 test('long current response scrolls above the lower-right caption', async ({ page }) => {
