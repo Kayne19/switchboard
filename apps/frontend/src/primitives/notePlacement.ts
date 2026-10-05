@@ -332,6 +332,8 @@ export interface PlaceOptions {
    * stands in the other cards' way.
    */
   spill?: boolean;
+  /** How far inside a card's border a bar's leader begins, so it grows out of the border as drawn. */
+  leaderOverlap?: number;
 }
 
 interface Placement {
@@ -371,17 +373,13 @@ function isSettled(note: NoteToPlace, placement: Placement): boolean {
  * Places each note's card in the field, in the order given except that the
  * notes naming no point go first: they settle into the corners, and the
  * notes naming a point then sit as near their points as the corners leave,
- * with leaders no card covers. Returns each card's box by note id; with
+ * with leaders no card covers. Returns each card's place by note id -- its
+ * box, the leader it runs to its point, and whether it is settled; with
  * `spill`, the one note it leaves out has none.
  */
-export function placeNotes(notes: NoteToPlace[], field: NoteField, options: PlaceOptions = {}): Map<string, Rect> {
-  return new Map([...layoutNotes(notes, field, options)].map(([id, place]) => [id, place.rect]));
-}
-
-/** `placeNotes`, with the leader each card runs and whether its place is clear. */
 export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: PlaceOptions = {}): Map<string, NotePlace> {
   const gap = options.gap ?? NOTE_GAP;
-  const prepared = prepare(field);
+  const prepared = prepare(field, options.leaderOverlap);
   const all = placeInOrder(notes, prepared, gap);
   const over = (placements: Map<string, Placement>) => [...placements.values()].filter((placement) => placement.astray).length;
   let chosen = all;
@@ -514,6 +512,7 @@ interface Prepared {
   area: Rect;
   plot?: Rect;
   wholly: boolean;
+  leaderOverlap: number;
   marks: Rect[];
   fills: Point[][];
   labels: Rect[];
@@ -521,7 +520,7 @@ interface Prepared {
   marksNear: (near: Rect, visit: (mark: Rect) => void) => void;
 }
 
-function prepare(field: NoteField): Prepared {
+function prepare(field: NoteField, leaderOverlap = 0): Prepared {
   const { area, plot } = field;
   const sampled = (field.traces ?? []).reduce((sum, trace) => sum + trace.length, 0);
   const traces = sampled > DENSE_SAMPLES ? (field.traces ?? []).map((trace) => envelope(trace, area, DENSE_COLUMNS)) : (field.traces ?? []);
@@ -542,6 +541,7 @@ function prepare(field: NoteField): Prepared {
     area,
     plot,
     wholly: field.wholly === true,
+    leaderOverlap,
     marks,
     fills: field.fills ?? [],
     labels: field.labels ?? [],
@@ -560,7 +560,7 @@ function placeInOrder(
   leftOut?: string,
   before?: Map<string, Placement>,
 ): Map<string, Placement> {
-  const { area, plot, marks, fills, labels, segmentsNear, marksNear, wholly } = field;
+  const { area, plot, marks, fills, labels, segmentsNear, marksNear, wholly, leaderOverlap } = field;
   const everyNote = [...notes.filter((note) => !note.point), ...notes.filter((note) => note.point)];
   const order = everyNote.filter((note) => note.id !== leftOut);
   const settled = before ? everyNote.slice(0, Math.max(0, everyNote.findIndex((note) => note.id === leftOut))) : [];
@@ -627,7 +627,11 @@ function placeInOrder(
     );
 
     let best: Placement | undefined;
-    const consider = (left: number, top: number) => {
+    const consider = (atLeft: number, atTop: number) => {
+      // A card with a bar's leader is scored where it will be drawn, on
+      // whole pixels, so the leader it is scored by is the one drawn.
+      const left = from ? Math.round(atLeft) : atLeft;
+      const top = from ? Math.round(atTop) : atTop;
       const rect = { left, top, right: left + width, bottom: top + height };
       let cost = 0;
       let falls: number = SHORT.clear;
@@ -647,7 +651,7 @@ function placeInOrder(
       if (wholly && plot && straddles(rect, plot, gap)) cost += COST.straddle;
       // A bar's leader comes from past the bar's end, clear of every other
       // bar; a place with no such route has no leader that reads.
-      const route = point && from && !covers(rect, point) ? barLeader(rect, point, from, marksNear, { bar: note.bar }) : undefined;
+      const route = point && from && !covers(rect, point) ? barLeader(rect, point, from, marksNear, { bar: note.bar, overlap: leaderOverlap }) : undefined;
       if (route && !route.clear) cost += COST.noLeader;
       if (cost > 0) falls = SHORT.more;
       // Places rank by what they fall short by, then by cost. Neither ever
@@ -1064,20 +1068,6 @@ function turnBackRect(rect: Rect, back: (p: Point) => Point): Rect {
   return { left: Math.min(a.x, b.x), right: Math.max(a.x, b.x), top: Math.min(a.y, b.y), bottom: Math.max(a.y, b.y) };
 }
 
-/**
- * The leader a placed card runs to the point its note names, as
- * `layoutNotes` routes it: to a bar from past its end (`barLeader`), to
- * any other point out of the facing edge (`routeLeader`). Empty for a note
- * that names no point.
- */
-export function noteLeader(card: Rect, note: NoteToPlace, field: NoteField, options: LeaderOptions = {}): Point[] {
-  if (!note.point) return [];
-  if (note.from) {
-    const marks = field.marks ?? [];
-    return barLeader(card, note.point, note.from, (_near, visit) => marks.forEach((mark) => visit(mark)), { overlap: options.overlap, inset: options.inset, bar: note.bar }).path;
-  }
-  return routeLeader(card, note.point, options);
-}
 
 export interface LeaderOptions {
   /** The straight run out of the card before the leader turns. */

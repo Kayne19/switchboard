@@ -16,7 +16,7 @@ import {
   type ViewPoint,
   type ViewRect,
 } from '../primitives/chartGeometry';
-import { layoutNotes, NOTE_CARD_CUT, noteLeader, type NoteField, type NoteToPlace, type Point, type Rect } from '../primitives/notePlacement';
+import { layoutNotes, NOTE_CARD_CUT, routeLeader, type NoteField, type NoteToPlace, type Point, type Rect } from '../primitives/notePlacement';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** One note on a chart: a note object, or the spoken explanation standing in for one. */
@@ -236,7 +236,8 @@ export function ChartNotes({
           bar: target?.bar && rectToLayer(target.bar),
         });
       }
-      let placed = layoutNotes(toPlace, field, { spill });
+      const options = { spill, leaderOverlap: 1 };
+      let placed = layoutNotes(toPlace, field, options);
       if (toPlace.some((note) => !placed.get(note.id)?.settled)) {
         for (const note of toPlace) {
           const element = cardRefs.current.get(note.id)!;
@@ -247,11 +248,12 @@ export function ChartNotes({
             .filter((size) => size.fits)
             .map(({ width, height }) => ({ width, height }));
         }
-        placed = layoutNotes(toPlace, field, { spill });
+        placed = layoutNotes(toPlace, field, options);
       }
       const next: NotesLayout = { cards: {}, widths: {}, leaders: {}, away: null, ring: null };
       for (const note of toPlace) {
-        const card = placed.get(note.id)?.rect;
+        const place = placed.get(note.id);
+        const card = place?.rect;
         if (!card) {
           // Left out so the others have clear places: the rail carries it,
           // and the point it names stays ringed as the chart rings a marker.
@@ -274,8 +276,9 @@ export function ChartNotes({
         if (Math.abs(width - (cssWidths.get(note.id) ?? width)) > 0.5) next.widths[note.id] = width;
         if (note.point) {
           // The leader begins on the card's one-pixel border, so the two
-          // read as one line.
-          const leader = noteLeader(rounded, note, field, { cutTop: NOTE_CARD_CUT.top, overlap: 1 });
+          // read as one line. A bar's is the route the placement scored on
+          // the card's whole pixels; any other runs out of the facing edge.
+          const leader = note.from ? place!.leader : routeLeader(rounded, note.point, { cutTop: NOTE_CARD_CUT.top, overlap: 1 });
           if (leader.length > 1) next.leaders[note.id] = leader.map((point) => ({ x: snap(point.x), y: snap(point.y) }));
         }
       }

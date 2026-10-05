@@ -11,7 +11,7 @@ import { SceneShell } from '../../src/components/Scenes';
 import { ControllerProvider } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
 import type { ControllerAction, ControllerState } from '../../src/controller/types';
-import { chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { chartBarCallout, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 
 const chart: ControllerAction = {
   op: 'show',
@@ -296,6 +296,19 @@ describe('chart notes', () => {
     };
     mount([suite, note('suite-note', { target: 'durations', x: 2, series: 'THIS RUN' })]);
     expect(card('suite-note')!.element.querySelector('.annotation-card__anchor')!.textContent).toBe('TARGET / frontend visual / THIS RUN');
+  });
+
+  it("draws a bar note's leader onto the bar's printed value, from above it", () => {
+    const data = { kind: 'bar' as const, labels: ['backend', 'frontend unit', 'frontend visual'], series: [{ name: 'THIS RUN', values: [41.8, 3.3, 96.4] }] };
+    mount([{ op: 'show', id: 'durations', type: 'chart', role: 'primary', data }, note('suite-note', { target: 'durations', x: 2, series: 'THIS RUN' })]);
+    const callout = chartBarCallout(data, { x: 2, series: 'THIS RUN' })!;
+    const points = leader('suite-note')!;
+    const [a, b] = points.slice(-2);
+    expect(Math.abs(b.x - callout.point.x)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(b.y - (SVG_TOP + callout.point.y))).toBeLessThanOrEqual(0.5);
+    expect(b.x - a.x).toBeCloseTo(0, 6);
+    expect(b.y).toBeGreaterThan(a.y);
+    expect(host.querySelector('.chart-note-leader[data-note="suite-note"]')!.classList.contains('chart-note-leader--bar')).toBe(true);
   });
 
   it('names the anchor as sent on a chart with a numeric x', () => {

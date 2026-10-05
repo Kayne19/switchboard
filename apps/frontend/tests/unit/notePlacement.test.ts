@@ -8,14 +8,18 @@ import {
   hiddenFillArea,
   hiddenTraceLength,
   layoutNotes,
-  noteLeader,
-  placeNotes,
   routeLeader,
   type NoteField,
   type NoteToPlace,
+  type PlaceOptions,
   type Point,
   type Rect,
 } from '../../src/primitives/notePlacement';
+
+// Each card's box, as most of these cases read it.
+function placeNotes(notes: NoteToPlace[], field: NoteField, options?: PlaceOptions): Map<string, Rect> {
+  return new Map([...layoutNotes(notes, field, options)].map(([id, place]) => [id, place.rect]));
+}
 
 const area: Rect = { left: 0, top: 0, right: 1000, bottom: 600 };
 const box = (left: number, top: number, width: number, height: number): Rect => ({ left, top, right: left + width, bottom: top + height });
@@ -485,15 +489,29 @@ describe('a note on a bar chart', () => {
       const place = layoutNotes([note], field).get('note')!;
       expect(straddles(place.rect, field.plot!)).toBe(false);
       expect(field.marks!.every((mark) => !overlaps(inflate(place.rect, 4), mark))).toBe(true);
-      const leader = noteLeader(place.rect, note, field);
-      expect(leader).toEqual(place.leader);
+      const leader = place.leader;
       expect(leader.at(-1)).toEqual(point);
       expect(runsThrough(leader, field.marks!, value)).toBe(false);
       // Short: the card is near the bar it names.
-      const length = leader.slice(1).reduce((sum, p, index) => sum + Math.hypot(p.x - leader[index].x, p.y - leader[index].y), 0);
+      const length = leader.slice(1).reduce((sum: number, p: Point, index: number) => sum + Math.hypot(p.x - leader[index].x, p.y - leader[index].y), 0);
       expect(length).toBeLessThan(160);
     });
   }
+
+  // The page drew a leader routed again on the card rounded to whole
+  // pixels; a tie in that route flipped its jog, or its whole route, from
+  // the one the placement had scored clear (review finding).
+  it('scores a bar note on whole pixels, with the leader grown out of the border as drawn', () => {
+    const { field, point, from } = drawn(suite, { width: 1000, height: 500 }, 0.937, 47.3, { width: 937.4, height: 562 });
+    const place = layoutNotes([{ id: 'note', width: 394.6, height: 118.2, point, from }], field, { leaderOverlap: 1 }).get('note')!;
+    expect(Number.isInteger(place.rect.left)).toBe(true);
+    expect(Number.isInteger(place.rect.top)).toBe(true);
+    const start = place.leader[0];
+    const inside = start.x > place.rect.left && start.x < place.rect.right && start.y > place.rect.top && start.y < place.rect.bottom;
+    const fromBorder = Math.min(start.x - place.rect.left, place.rect.right - start.x, start.y - place.rect.top, place.rect.bottom - start.y);
+    expect(inside).toBe(true);
+    expect(fromBorder).toBeCloseTo(1, 6);
+  });
 
   it('comes down onto an upright bar, over the taller bar beside it', () => {
     const { field, point, from } = drawn(suite, { width: 1000, height: 500 }, 0.937, 47, { width: 937, height: 562 });
