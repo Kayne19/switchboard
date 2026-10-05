@@ -202,6 +202,18 @@ test('folded, a diagram\'s rails keep the depth they have in a slot of some 400p
   expect(Math.abs(sharedView.y - shared.y - (shared.height * 0.1 + 10))).toBeLessThan(1.5);
 });
 
+test('folded on a tall stage, a diagram\'s rails stay wholly inside its slot', async ({ page }) => {
+  // On a portrait tablet's stage (891px) the rails' outer line, at 42 of
+  // the frame's 700 units, sat a pixel above the slot, over the grid's gap.
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await open(page, 'trace');
+  await expect(page.locator('.content-rail--folded')).toBeVisible();
+  const object = await box(page, '.content-grid > .content-main .diagram-object');
+  const frame = await box(page, '.content-grid > .content-main .diagram-object > .tech-frame');
+  expect(frame.y + (frame.height * 42) / 700).toBeGreaterThanOrEqual(object.y + 8);
+  expect(frame.y + (frame.height * 652) / 700).toBeLessThanOrEqual(object.y + object.height - 8);
+});
+
 test('a note on a folded rail stays matched to the node it names', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, 'pipeline');

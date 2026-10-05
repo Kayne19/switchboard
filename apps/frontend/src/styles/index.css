@@ -5663,15 +5663,17 @@ button {
   .scene--staged .content-grid {
     top: 7.6cqh;
   }
-  /* A diagram's rails keep the steps they have in a slot of some 400px, in
-     from its edges, however tall the stage makes it: the band between a
-     rail and the slot's edge is the rail's, and grows nothing a reader
-     sees. The rails are the frame's own (TechFrame "rails", their steps at
-     70 and 624 of its 700 units), drawn over a box stretched so the steps
-     land at the bands' depth. */
+  /* A diagram's rails keep their lower steps at most 40px in from the
+     slot's edges, as in a slot of some 400px, however tall the stage makes
+     it: the band between a rail and the slot's edge is the rail's, and
+     grows nothing a reader sees. The rails are the frame's own (TechFrame
+     "rails", their steps at 70 and 624 of its 700 units), drawn over a box
+     stretched so the steps land at the bands' depth; the step itself
+     deepens with the box, so on a stage over some 870px the band grows by
+     4.6% of the slot, keeping each rail's outer line 12px inside it. */
   .content-grid--staged .diagram-object {
-    --rail-top: min(10%, 40px);
-    --rail-bottom: min(10.86%, 40px);
+    --rail-top: min(10%, max(40px, calc(11px + 4.6%)));
+    --rail-bottom: min(10.86%, max(40px, calc(11px + 4.6%)));
   }
   .content-grid--staged .diagram-object > .tech-frame {
     top: calc(var(--rail-top) - (100% - var(--rail-top) - var(--rail-bottom)) * 0.126354);
