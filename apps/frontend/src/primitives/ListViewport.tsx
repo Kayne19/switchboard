@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
-import { useLeastHeight, useScrollDemand } from '../hooks/useStageDemand';
+import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
 // list, an inbox, an agenda, a forecast's days): the list scrolls inside
@@ -86,16 +86,6 @@ export function leadScrollTop(lead: Extent, scrollTop: number, viewHeight: numbe
 /** The depth of the fade at an edge a list continues past, for a view `viewHeight` tall. */
 export function fadeDepth(viewHeight: number): number {
   return Math.round(Math.max(FADE_MIN, Math.min(FADE_MAX, viewHeight * FADE_SHARE)));
-}
-
-/**
- * How much a box is drawn scaled on screen: a shared-layout animation (focus
- * opening) scales the box it moves, and its rects with it, while its layout
- * sizes (clientHeight, offsetHeight) stay as laid out. Measures from the two
- * are brought to one scale by it.
- */
-export function drawnScale(rectHeight: number, offsetHeight: number): number {
-  return offsetHeight > 0 && rectHeight > 0 ? rectHeight / offsetHeight : 1;
 }
 
 /** How a count names its items: a singular and a plural, or a function of the count. */
@@ -212,21 +202,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
 
   useEffect(() => {
     const element = scrollRef.current;
-    if (!element) return undefined;
-    const resized = new ResizeObserver(() => measure());
-    const watch = () => {
-      resized.disconnect();
-      resized.observe(element);
-      for (const child of Array.from(element.children)) resized.observe(child);
-      measure();
-    };
-    const changed = new MutationObserver(watch);
-    changed.observe(element, { childList: true, subtree: true, characterData: true });
-    watch();
-    return () => {
-      resized.disconnect();
-      changed.disconnect();
-    };
+    return element ? watchElement(element, measure, { children: true, changes: true }) : undefined;
   }, [scrollRef, measure]);
 
   // Opens on the lead, once per shape.

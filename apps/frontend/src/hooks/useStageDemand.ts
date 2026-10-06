@@ -109,6 +109,16 @@ export function useLeastHeight(
 }
 
 /**
+ * How much a box is drawn scaled on screen: a shared-layout animation (focus
+ * opening) scales the box it moves, and its rects with it, while its layout
+ * sizes (clientHeight, offsetHeight) stay as laid out. Measures from the two
+ * are brought to one scale by it.
+ */
+export function drawnScale(rectHeight: number, offsetHeight: number): number {
+  return offsetHeight > 0 && rectHeight > 0 ? rectHeight / offsetHeight : 1;
+}
+
+/**
  * How tall a scroll region's content is, in its own layout pixels: what it
  * scrolls through when it overflows, and otherwise down to the end of its
  * last child and its padding, so a region with room to spare says how much.
@@ -118,7 +128,7 @@ export function useLeastHeight(
 export function scrollContentHeight(element: HTMLElement): number {
   if (element.scrollHeight > element.clientHeight + 1) return element.scrollHeight;
   const box = element.getBoundingClientRect();
-  const k = element.offsetHeight > 0 && box.height > 0 ? box.height / element.offsetHeight : 1;
+  const k = drawnScale(box.height, element.offsetHeight);
   const style = getComputedStyle(element);
   const top = box.top + (parseFloat(style.borderTopWidth) || 0) * k;
   let bottom = (parseFloat(style.paddingTop) || 0) * k;

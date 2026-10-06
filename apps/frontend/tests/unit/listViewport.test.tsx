@@ -6,7 +6,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
-import { continuesPast, countPast, drawnScale, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
+import { drawnScale } from '../../src/hooks/useStageDemand';
+import { continuesPast, countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 
 let host: HTMLDivElement | undefined;
 let root: Root | undefined;
