@@ -39,7 +39,7 @@ Open the URL printed by Vite. The configured development and preview port is `41
 npm run dev              # development server on the local network
 npm run build            # typecheck and fully bundled production build
 npm run preview          # serve the production build
-npm run typecheck        # TypeScript only
+npm run typecheck        # TypeScript only: the app and its unit tests, the Playwright specs, the configs, the host agent
 npm test                 # reducer tests and design-lock checks
 npm run test:visual      # canonical scene screenshots
 npm run build:cdn        # dependency-light browser preview using pinned CDN modules

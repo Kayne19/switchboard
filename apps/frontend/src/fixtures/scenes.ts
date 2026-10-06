@@ -497,7 +497,7 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
   ],
   architecture: [
     { op: 'show', id: 'system-map', type: 'diagram', role: 'primary', data: {
-      title: 'SYSTEM / CONTROL TRANSFER', subtitle: 'SWITCHBOARD -> PROJECT SESSION / ROUTING TRACE', context: 'SYSTEM MAP',
+      mode: 'graph', title: 'SYSTEM / CONTROL TRANSFER', subtitle: 'SWITCHBOARD -> PROJECT SESSION / ROUTING TRACE', context: 'SYSTEM MAP',
       nodes: [
         { id: 'damocles', label: 'DAMOCLES', sub: 'FRONT DESK / OPERATOR', detail: 'CONTEXT / GENERAL', semantic: 'orange' },
         { id: 'session', label: 'PROJECT SESSION', sub: 'HEADLESS PI / SSH', detail: 'CONTEXT / SWITCHBOARD', semantic: 'paper' },

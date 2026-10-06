@@ -11,6 +11,7 @@ import { act } from 'react';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { CalendarData } from '../../src/controller/types';
 import { CalendarPrimitive, chooseLayout } from '../../src/primitives/CalendarPrimitive';
+import type { Slot } from '../../src/primitives/slot';
 import { assistantAgenda, assistantAgendaWeek, assistantDay, assistantMonth, assistantWeek } from '../../src/fixtures/scenes';
 import { mount, stubResizeObserver, unmountAll } from './sceneHarness';
 
@@ -35,9 +36,10 @@ afterEach(() => {
   bodySize = { width: 0, height: 0 };
 });
 
-function render(data: CalendarData, marked?: string, size = { width: 0, height: 0 }, framed = false): HTMLElement {
+// In an aux cell unless a test says otherwise: no frame names the calendar there.
+function render(data: CalendarData, marked?: string, size = { width: 0, height: 0 }, slot: Slot = 'aux'): HTMLElement {
   bodySize = size;
-  return mount(<CalendarPrimitive data={data} marked={marked} framed={framed} />).querySelector('[data-testid="calendar"]') as HTMLElement;
+  return mount(<CalendarPrimitive data={data} marked={marked} slot={slot} />).querySelector('[data-testid="calendar"]') as HTMLElement;
 }
 
 const boxes = (scope: Element, id: string) => [...scope.querySelectorAll(`[data-item="${id}"]`)];
@@ -266,7 +268,7 @@ describe('a month too small for titles', () => {
 describe('the meta line', () => {
   it('names the calendar where no frame does, and only says what it shows under a scene frame that names it', () => {
     expect(render(assistantWeek).querySelector('.calendar__meta')?.textContent).toBe('WEEK / OCT 5-11OCT 5 - 11 / 23 EVENTS');
-    expect(render(assistantWeek, undefined, { width: 0, height: 0 }, true).querySelector('.calendar__meta')?.textContent).toBe('OCT 5 - 11 / 23 EVENTS');
+    expect(render(assistantWeek, undefined, { width: 0, height: 0 }, 'primary').querySelector('.calendar__meta')?.textContent).toBe('OCT 5 - 11 / 23 EVENTS');
   });
 });
 

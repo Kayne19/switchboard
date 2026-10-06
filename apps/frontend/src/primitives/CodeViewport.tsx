@@ -1,4 +1,5 @@
 import type { CodeData } from '../controller/types';
+import type { Slot } from './slot';
 import { TechFrame } from './TechFrame';
 import { useRef, type ReactNode } from 'react';
 import { useScrollDemand } from '../hooks/useStageDemand';
@@ -23,9 +24,9 @@ function highlightLine(line:string,lineIndex:number):ReactNode[]{
   if(cursor<codePart.length)nodes.push(...highlightPlainSegment(codePart.slice(cursor),`${lineIndex}-${cursor}`));if(comment)nodes.push(<span className="tok-comment" key={`${lineIndex}-comment`}>{comment}</span>);return nodes;
 }
 
-export function CodeViewport({data,focused=false}:{data:CodeData;focused?:boolean}){
+export function CodeViewport({data,slot='primary'}:{data:CodeData;slot?:Slot}){
   const lines=data.source.text.split('\n'),highlighted=new Set(data.source.highlight??[]);
   const scrollRef=useRef<HTMLDivElement>(null);
   useScrollDemand(scrollRef);
-  return <div className={`code-viewport${focused?' code-viewport--focused':''}`} data-testid="code"><TechFrame variant="code"/><div className="code-viewport__mask"><div ref={scrollRef} className="code-viewport__scroll" tabIndex={0}><pre>{lines.map((line,index)=>{const lineNumber=index+1;return <span className={`code-line${highlighted.has(lineNumber)?' code-line--hot':''}`} key={lineNumber}><span className="code-line__number">{lineNumber}</span><span className="code-line__source">{highlightLine(line,index)}</span></span>;})}</pre></div></div></div>;
+  return <div className={`code-viewport${slot==='focus'?' code-viewport--focused':''}`} data-testid="code"><TechFrame variant="code"/><div className="code-viewport__mask"><div ref={scrollRef} className="code-viewport__scroll" tabIndex={0}><pre>{lines.map((line,index)=>{const lineNumber=index+1;return <span className={`code-line${highlighted.has(lineNumber)?' code-line--hot':''}`} key={lineNumber}><span className="code-line__number">{lineNumber}</span><span className="code-line__source">{highlightLine(line,index)}</span></span>;})}</pre></div></div></div>;
 }

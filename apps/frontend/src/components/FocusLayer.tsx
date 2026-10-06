@@ -1,40 +1,10 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { MouseEvent } from 'react';
-import type {
-  CalendarData,
-  ChartData,
-  CodeData,
-  ControllerState,
-  DiagramObjectData,
-  DocumentData,
-  ImageData,
-  MetricData,
-  NoteData,
-  ProgressData,
-  SceneObject,
-  TableData,
-  InboxData,
-  TasksData,
-  TimerData,
-  WeatherData,
-} from '../controller/types';
-import { markedItem, noteTarget, standingNoteTarget } from '../app/noteItems';
-import { anchoredNote, cast, objectsOfType } from '../app/sceneModel';
-import { chartNoteAnchors } from './ChartNotes';
+import type { ControllerState, NoteData, SceneObject } from '../controller/types';
+import { noteTarget } from '../app/noteItems';
+import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
-import { CalendarPrimitive } from '../primitives/CalendarPrimitive';
-import { ChartPrimitive } from '../primitives/ChartPrimitive';
-import { CodeViewport } from '../primitives/CodeViewport';
-import { DiagramObject } from './DiagramObject';
-import { DocumentViewport } from '../primitives/DocumentViewport';
-import { ImagePrimitive } from '../primitives/ImagePrimitive';
-import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
-import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
-import { TablePrimitive } from '../primitives/TablePrimitive';
-import { TasksPrimitive } from '../primitives/TasksPrimitive';
-import { InboxPrimitive } from '../primitives/InboxPrimitive';
-import { TimerPrimitive } from '../primitives/TimerPrimitive';
-import { WeatherPrimitive } from '../primitives/WeatherPrimitive';
+import { ObjectView } from './renderObject';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /**
@@ -55,46 +25,6 @@ export function focusNotes(state: ControllerState, object: SceneObject | null): 
   if (object.type === 'chart') return notes.filter((note) => note.data.anchor?.target === object.id);
   const note = anchoredNote(notes, object.id);
   return note ? [note] : [];
-}
-
-// What the notes kept beside the object name in it, marked in focus as in
-// the scene: a chart's points (`chartNoteAnchors`), a diagram's node or
-// actor (the first note's), a list's item (`marked`, `markedItem`).
-function FocusedObject({ object, objects, notes, marked }: { object: SceneObject; objects: Readonly<Record<string, SceneObject>>; notes: Array<SceneObject<NoteData>>; marked?: string }) {
-  const note = notes[0]?.data ?? null;
-  switch (object.type) {
-    case 'chart':
-      return <ChartPrimitive data={object.data as ChartData} focused named={chartNoteAnchors(cast.chart(object), notes.map((each) => ({ key: each.id, data: each.data, object: each })))} />;
-    case 'diagram':
-      // The note stands in its own panel here, never as a callout on the drawing.
-      return <DiagramObject data={object.data as DiagramObjectData} id={object.id} focused note={note} callout={false} />;
-    case 'document':
-      return <DocumentViewport data={object.data as DocumentData} focused />;
-    case 'code':
-      return <CodeViewport data={object.data as CodeData} focused />;
-    case 'table':
-      return <TablePrimitive data={object.data as TableData} focused />;
-    case 'image':
-      return <ImagePrimitive data={object.data as ImageData} focused />;
-    case 'note':
-      return <AnnotationCard data={object.data as NoteData} named={standingNoteTarget(objects, object.data as NoteData)} />;
-    case 'metric':
-      return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} />;
-    case 'progress':
-      return <ProgressPrimitive data={object.data as ProgressData} />;
-    case 'calendar':
-      return <CalendarPrimitive data={object.data as CalendarData} marked={marked} focused />;
-    case 'tasks':
-      return <TasksPrimitive data={object.data as TasksData} variant="focus" marked={marked} />;
-    case 'inbox':
-      return <InboxPrimitive data={object.data as InboxData} marked={marked} />;
-    case 'timer':
-      return <TimerPrimitive data={object.data as TimerData} marked={marked} />;
-    case 'weather':
-      return <WeatherPrimitive data={object.data as WeatherData} marked={marked} />;
-    default:
-      return null;
-  }
 }
 
 // Where the notes stand is the focus box's geometry, in the stylesheet
@@ -140,7 +70,7 @@ export function FocusLayer({
               <button type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
-              <FocusedObject object={object} objects={objects} notes={notes} marked={markedItem(notes[0]?.data, object.id)} />
+              <ObjectView object={object} slot="focus" onStage={objects} notes={notes.map((note) => note.data)} />
             </SurfaceBoundary>
             {noted ? (
               <aside className="focus-layer__note" data-notes={notes.length}>

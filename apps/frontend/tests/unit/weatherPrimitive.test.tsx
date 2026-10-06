@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { WeatherData } from '../../src/controller/types';
 import { WeatherPrimitive } from '../../src/primitives/WeatherPrimitive';
+import type { Slot } from '../../src/primitives/slot';
 import { heroEms, STRIP_LEAST } from '../../src/primitives/weatherLayout';
 import type { StageNeed } from '../../src/app/stageFold';
 import { StageDemandContext } from '../../src/hooks/useStageDemand';
@@ -42,7 +43,8 @@ function render(data: WeatherData, marked?: string, size: Box = { width: 0, heig
   box.spot = undefined;
   box.parts = undefined;
   Object.assign(box, size);
-  host = mount(<WeatherPrimitive data={data} marked={marked} />);
+  // In an aux cell, where no frame names the forecast and it leads with its title.
+  host = mount(<WeatherPrimitive data={data} slot="aux" marked={marked} />);
   return host;
 }
 
@@ -141,25 +143,25 @@ describe('flat days', () => {
 });
 
 describe('the head', () => {
-  const placed = (data: WeatherData, framed: boolean) => {
+  const placed = (data: WeatherData, slot: Slot) => {
     Object.assign(box, { width: 340, height: 400, main: undefined });
-    host = mount(<WeatherPrimitive data={data} framed={framed} />);
+    host = mount(<WeatherPrimitive data={data} slot={slot} />);
     return host.querySelector('.weather-now__head')!;
   };
 
   it('names the place once: beside a title that names it, only what the title leaves out', () => {
     // The today scene's aux cell read `WEATHER / SAN FRANCISCO ... SAN FRANCISCO, CA`.
-    const named = placed({ ...forecast, title: 'WEATHER / SAN FRANCISCO' }, false);
+    const named = placed({ ...forecast, title: 'WEATHER / SAN FRANCISCO' }, 'aux');
     expect(named.querySelector('[data-object-title]')!.textContent).toBe('WEATHER / SAN FRANCISCO');
     expect(named.querySelector('.weather-now__location')!.textContent).toBe('CA');
     unmount(host!);
-    expect(placed({ ...forecast, location: 'San Francisco', title: 'WEATHER / SAN FRANCISCO' }, false).querySelector('.weather-now__location')).toBeNull();
+    expect(placed({ ...forecast, location: 'San Francisco', title: 'WEATHER / SAN FRANCISCO' }, 'aux').querySelector('.weather-now__location')).toBeNull();
   });
 
   it('names the place beside a title that does not, and under a frame that shows the title', () => {
-    expect(placed({ ...forecast, title: 'FORECAST / WEEKEND' }, false).querySelector('.weather-now__location')!.textContent).toBe('San Francisco, CA');
+    expect(placed({ ...forecast, title: 'FORECAST / WEEKEND' }, 'aux').querySelector('.weather-now__location')!.textContent).toBe('San Francisco, CA');
     unmount(host!);
-    expect(placed({ ...forecast, title: 'WEATHER / SAN FRANCISCO' }, true).querySelector('.weather-now__location')!.textContent).toBe('San Francisco, CA');
+    expect(placed({ ...forecast, title: 'WEATHER / SAN FRANCISCO' }, 'primary').querySelector('.weather-now__location')!.textContent).toBe('San Francisco, CA');
   });
 });
 
@@ -339,7 +341,7 @@ describe('down the box', () => {
     box.parts = { 'weather-now': 150, 'weather-daily': 300 };
     const element = mount(
       <StageDemandContext.Provider value={(_key: string, need: StageNeed | null) => heard.push(need?.excess ?? null)}>
-        <WeatherPrimitive data={forecast} framed />
+        <WeatherPrimitive data={forecast} slot="primary" />
       </StageDemandContext.Provider>,
     );
     expect(element.querySelector('[data-testid="weather"]')!.getAttribute('data-layout')).toBe('tall');
