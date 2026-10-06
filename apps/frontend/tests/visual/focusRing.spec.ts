@@ -122,9 +122,6 @@ for (const geometry of FRAME_GEOMETRIES) {
         await expect(button).toBeVisible();
         await expect(button).toHaveAttribute('aria-label', 'Open conversation history');
         await page.waitForTimeout(600);
-        // A rail folded under a tall primary opens first: the HISTORY is in it.
-        const handle = page.locator('.rail-handle--folded');
-        if (await handle.count()) await handle.click();
         await page.keyboard.press('Shift');
         await button.focus();
         expect(await button.evaluate((element) => element.matches(':focus-visible'))).toBe(true);

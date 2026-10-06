@@ -1,8 +1,8 @@
 import type { CSSProperties, MouseEvent } from 'react';
 import type { Side } from './drawingScroll';
 
-/** The chevron a rim's count points with, and the rail handle's. */
-export function Chevron({ className }: { className: string }) {
+/** The chevron a rim's count points with. */
+function Chevron({ className }: { className: string }) {
   return (
     <svg className={className} viewBox="0 0 8 6" aria-hidden="true">
       <path d="M 4 0 L 8 6 L 0 6 Z" />
@@ -21,7 +21,8 @@ export function Chevron({ className }: { className: string }) {
  *   tap on it turns a page that way (`onPage`), and is marked handled
  *   (FocusableSurface's rule), so the surface around does not expand.
  * A side with no fade draws none; a side with no text draws no rail and no
- * tag. `inset` starts the edge below a band pinned at the scroller's top
+ * tag, and so has nothing to page (the content rail's column: a fade
+ * alone). `inset` starts the edge below a band pinned at the scroller's top
  * (and the side rails under it); `at` stands the tag along its rail, in px
  * from the rail's start, where it is not centred by the stylesheet.
  */
@@ -38,7 +39,7 @@ export function ScrollRim({
   side: Side;
   fade?: number | null;
   text?: string | null;
-  onPage: () => void;
+  onPage?: () => void;
   inset?: number;
   at?: number;
   /** The tag's own class, beside the rim's. */
@@ -50,7 +51,7 @@ export function ScrollRim({
   const tagAt: CSSProperties | null = at === undefined ? topBelow : along ? { top: `${at}px` } : { left: `${at}px`, ...topBelow };
   const page = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
-    onPage();
+    onPage?.();
   };
   return (
     <>

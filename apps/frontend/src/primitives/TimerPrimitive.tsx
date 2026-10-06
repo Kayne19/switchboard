@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Timer, TimerData } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
-import { MeasuredStageDemand } from '../hooks/useStageDemand';
 import { usePageClock } from '../hooks/usePageClock';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
@@ -119,12 +118,9 @@ export function TimerPrimitive({ data, marked, slot = 'primary' }: { data: Timer
         {layout.kind === 'grid' ? (
           <ol className="timer-grid">{items}</ol>
         ) : (
-          // Before the field is measured the timers are listed as a stand-in: it says nothing to the stage.
-          <MeasuredStageDemand measured={size.width > 0 && size.height > 0}>
-            <ListViewport noun={['TIMER', 'TIMERS']} lead={marked} scrollClassName="timer-list" label={data.title ?? 'Timers'}>
-              <ol className="timer-list__rows">{items}</ol>
-            </ListViewport>
-          </MeasuredStageDemand>
+          <ListViewport noun={['TIMER', 'TIMERS']} lead={marked} scrollClassName="timer-list" label={data.title ?? 'Timers'}>
+            <ol className="timer-list__rows">{items}</ol>
+          </ListViewport>
         )}
         {/* The rows as the list draws them, unseen, in either layout: their height is the field's ask.
             Unmarked: a note's badge changes no row's height, and a note finds its timer once. */}

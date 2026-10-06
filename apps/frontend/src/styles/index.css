@@ -200,7 +200,6 @@ button {
 .annotation-card__history:focus-visible,
 .live-chat-card__history:focus-visible,
 .transcript-toggle:focus-visible,
-.rail-handle:focus-visible,
 .focus-layer__return:focus-visible,
 .transcript__return:focus-visible,
 .transcript__send:focus-visible {
@@ -801,65 +800,6 @@ button {
   align-self: center;
   justify-self: center;
 }
-/* The column the main slot has in the layout it shares with the rail: the
-   shell measures it to know when a primary has outgrown it (stageFold.ts).
-   It follows the same rule as that row, so the two cannot drift. */
-.content-grid__probe {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 0;
-  height: var(--main-share, 100%);
-  visibility: hidden;
-  pointer-events: none;
-}
-/* The handle of a rail that folds under a primary taking the stage's
-   height: a rule the width of the rail, what is folded named at its end. */
-.rail-handle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  /* A finger's reach round a thin rule: the button is 24 px tall or more,
-     its rule and label drawn as before, its row no taller. */
-  min-height: 24px;
-  margin-block: -6px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: rgba(var(--orange-rgb), 0.78);
-  cursor: pointer;
-  appearance: none;
-}
-.rail-handle__rule {
-  flex: 1 1 auto;
-  min-width: 12px;
-  height: 1px;
-  background: rgba(var(--orange-rgb), 0.48);
-}
-.rail-handle__label {
-  flex: none;
-  white-space: nowrap;
-}
-.rail-handle--bare {
-  min-height: 0;
-  margin-block: 0;
-  cursor: default;
-}
-.rail-handle--open .rail-handle__chevron {
-  transform: rotate(180deg);
-}
-.rail-handle:hover,
-.rail-handle:focus-visible {
-  color: var(--orange);
-}
-/* The handle reaches over the rows beside it (its margins); focused, it
-   stands over them, so the card under it does not cover its ring. */
-.rail-handle:focus-visible {
-  position: relative;
-  z-index: 1;
-}
 .rail-note {
   min-width: 0;
   min-height: 0;
@@ -900,7 +840,7 @@ button {
 /* A card puts what it names on a line of its own where it does not fit
    beside the tag, rather than cut it to an ellipsis there: the TARGET
    line's words are the object's own (a title, a node's label, a list's
-   item), and they are its point: cut beside the tag in a folded strip,
+   item), and they are its point: cut beside the tag in a phone's rail,
    they read `TARG…`. */
 .annotation-card__header {
   display: flex;
@@ -2193,10 +2133,8 @@ button {
 .scroll-rim__count--bottom {
   bottom: 0;
 }
-/* The one chevron (ScrollRim `Chevron`), on a rim's count and on the rail
-   handle. */
-.scroll-rim__chevron,
-.rail-handle__chevron {
+/* The one chevron (ScrollRim `Chevron`), on a rim's count. */
+.scroll-rim__chevron {
   flex: none;
   width: 8px;
   height: 6px;
@@ -5598,21 +5536,16 @@ button {
     top: 4.8cqh;
     left: var(--edge);
   }
+  /* The rail under the column is at least as tall as its note reads whole
+     in (--rail-floor, measured by RailDetails), up to half the grid: the
+     main column keeps its 59% where the note fits in the rest, and gives up
+     what the note needs, keeping the larger share. */
   .content-grid {
-    --main-share: 59cqh;
     top: 9.2cqh;
     bottom: 9.2cqh;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, var(--main-share)) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 59cqh) minmax(min(var(--rail-floor, 0px), (100% - var(--scene-gap)) / 2), 1fr);
     gap: var(--scene-gap);
-  }
-  /* A primary that outgrows its share takes the stage's height; the rail
-     under it folds to a strip of its own height (stageFold.ts), which
-     stands down to the footer's band. */
-  .content-grid--staged {
-    bottom: 6.4cqh;
-    grid-template-rows: minmax(0, 1fr) auto;
-    gap: clamp(10px, 1.4cqh, 16px);
   }
   .content-rail {
     display: grid;
@@ -5634,109 +5567,35 @@ button {
     grid-row: 1;
     min-height: 0;
   }
-  /* A rail that folds keeps its handle on a row of its own over it. */
-  .content-rail--foldable {
-    grid-template-rows: auto minmax(0, 1fr);
-    row-gap: clamp(6px, 1cqh, 10px);
-  }
-  .content-rail--foldable > .rail-handle {
-    grid-column: 1 / -1;
-    grid-row: 1;
-  }
-  .content-rail--foldable > .damocles-presence,
-  .content-rail--foldable > .content-rail__details {
-    grid-row: 2;
-  }
-  /* On the stage the frame's words keep one line, the subtitle after the
-     title, cut at the stage's edge before the title is, and the primary
-     starts a line higher: the line the subtitle had earns nothing while
-     the primary has the stage. */
-  .scene--staged .scene-heading {
-    right: var(--edge);
-    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
-    align-items: baseline;
-    column-gap: 1.6em;
-  }
-  .scene--staged :is(.scene-heading__title, .scene-heading__sub) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .scene--staged .content-grid {
-    top: 7.6cqh;
-  }
-  /* A diagram's rails keep their lower steps at most 40px in from the
-     slot's edges, as in a slot of some 400px, however tall the stage makes
-     it: the band between a rail and the slot's edge is the rail's, and
-     grows nothing a reader sees. The rails are the frame's own (TechFrame
-     "rails", their steps at 70 and 624 of its 700 units), drawn over a box
-     stretched so the steps land at the bands' depth; the step itself
-     deepens with the box, so on a stage over some 870px the band grows by
-     4.6% of the slot, keeping each rail's outer line 12px inside it. */
-  .content-grid--staged .diagram-object {
-    --rail-top: min(10%, max(40px, calc(11px + 4.6%)));
-    --rail-bottom: min(10.86%, max(40px, calc(11px + 4.6%)));
-  }
-  .content-grid--staged .diagram-object > .tech-frame {
-    top: calc(var(--rail-top) - (100% - var(--rail-top) - var(--rail-bottom)) * 0.126354);
-    bottom: auto;
-    height: calc((100% - var(--rail-top) - var(--rail-bottom)) * 1.263538);
-  }
-  .content-grid--staged .diagram-object :is(.diagram-primitive, .sequence-primitive) {
-    top: calc(var(--rail-top) + 10px);
-    bottom: calc(var(--rail-bottom) + 10px);
-  }
-  /* Folded: the note (or the live response) beside a smaller Damocles, the
-     note held to three lines; a tap on it expands it, the handle opens the
-     rest. The strip's handle is its top rule. */
-  .content-rail--folded {
-    grid-template-rows: auto auto;
-    row-gap: clamp(6px, 0.9cqh, 10px);
-  }
-  .content-rail--folded > .damocles-presence {
-    --presence-width: min(11cqw, 5.4cqh, 56px);
-    --signal-height: clamp(24px, 3cqh, 30px);
-  }
-  .content-rail--folded > .content-rail__details {
-    align-self: start;
-    overflow: hidden;
-  }
-  .content-rail--folded .rail-note,
-  .content-rail--folded .live-chat-card {
+  /* Under the column the note keeps its own height, read whole; the rail
+     grows to hold it (above). */
+  .content-rail__details > .rail-note {
     flex: none;
     min-height: 0;
   }
-  /* The strip keeps the note, or the live response where there is no note;
-     the rest stays in the page, set aside until the rail opens. */
-  .content-rail--folded .content-rail__details > :is(.metrics, .rail-progress, .tool-activity-slot),
-  .content-rail--folded .content-rail__details--noted > .live-chat-card {
-    display: none;
-  }
-  .content-rail--folded .rail-note--leads {
-    order: 0;
-  }
-  /* A live response streams at its newest lines, held to three. */
-  .content-rail--folded .live-chat-card__text {
+  .content-rail__details > .rail-note .annotation-card {
     height: auto;
-    max-height: calc(3 * 1.38em);
-    overflow: hidden;
-    line-height: 1.38;
   }
-  .content-rail--folded .annotation-card {
-    height: auto;
-    padding-top: 0;
-    border-top: 0;
+  /* The column holds what it sets aside (the activity panel's slot, out
+     of its flow), and an edge it continues past fades over it (ScrollRim's
+     fade, placed on the column's grid area). */
+  .content-rail__details {
+    position: relative;
   }
-  .content-rail--folded .annotation-card__header {
-    margin-bottom: 6px;
+  .content-rail > .scroll-rim__fade {
+    grid-column: 1;
+    grid-row: 1;
   }
-  .content-rail--folded .annotation-card__text {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    line-clamp: 3;
-    overflow: hidden;
-    line-height: 1.38;
+  /* Set aside where the column has no room for the panel whole
+     (RailDetails): out of its flow at the column's width, unseen but still
+     read by assistive technology, still measured. Damocles's caption names
+     the tool at work. */
+  .tool-activity-slot--away {
+    position: absolute;
+    top: 0;
+    inset-inline: 0;
+    opacity: 0;
+    pointer-events: none;
   }
   .scene-footer {
     left: var(--edge);

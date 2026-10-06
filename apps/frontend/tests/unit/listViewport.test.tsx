@@ -5,7 +5,7 @@
 import { act } from 'react';
 import { describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
-import { drawnScale } from '../../src/hooks/useStageDemand';
+import { drawnScale } from '../../src/hooks/watchElement';
 import { keyStop } from '../../src/primitives/drawingScroll';
 import { continuesPast, countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';

@@ -175,8 +175,6 @@ for (const geometry of FRAME_GEOMETRIES) {
     for (const scene of scenes) {
       test(`${scene}: no calendar part crosses its frame's inner box, as the primary, in focus, or beside another primary`, async ({ page }) => {
         await open(page, scene);
-        // On a phone the week, the day and the month take the stage (the rail folds): that stage is measured here.
-        if (geometry.name === 'portrait-phone' && scene === 'calendar') await expect(page.locator('[data-stage="primary"]')).toHaveCount(1);
         expect(await page.evaluate(frameCrossings, CALENDAR), 'primary').toEqual([]);
         expect(await page.evaluate(partsCut, '.content-main [data-testid="calendar"] .note-badge'), 'primary badge').toEqual([]);
         await runActions(page, [{ op: 'focus', id: 'week' }]);
