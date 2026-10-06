@@ -8,8 +8,9 @@ import { mount, stubResizeObserver } from './sceneHarness';
 // The rows scroll in a list viewport, which watches its box.
 stubResizeObserver();
 
+// In an aux cell, where no frame names the table and its meta line leads with its title.
 function render(data: TableData) {
-  return mount(<TablePrimitive data={data} />).querySelector('[data-testid="table"]') as HTMLElement;
+  return mount(<TablePrimitive data={data} slot="aux" />).querySelector('[data-testid="table"]') as HTMLElement;
 }
 
 const results = fixtures.results[0] as { data: TableData };

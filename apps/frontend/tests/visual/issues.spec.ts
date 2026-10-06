@@ -797,7 +797,6 @@ test('the caption stays one line clear of a long response at minimum box height'
     });
 
     const response = page.locator('.conversation-answer__text');
-    const caption = page.locator('.conversation-answer__index');
     await expect(response).toBeVisible();
     const geometry = await response.evaluate((element) => {
       const responseBox = element.getBoundingClientRect();

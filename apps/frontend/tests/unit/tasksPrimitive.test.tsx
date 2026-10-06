@@ -15,14 +15,14 @@ import {
   taskCounts,
   taskDue,
   taskSections,
-  type TasksVariant,
 } from '../../src/primitives/TasksPrimitive';
+import type { Slot } from '../../src/primitives/slot';
 import { mount, stubResizeObserver } from './sceneHarness';
 
 stubResizeObserver();
 
-function render(data: TasksData, variant: TasksVariant = 'full', marked?: string): HTMLElement {
-  return mount(<TasksPrimitive data={data} variant={variant} marked={marked} />).querySelector('[data-testid="tasks"]') as HTMLElement;
+function render(data: TasksData, slot: Slot = 'primary', marked?: string): HTMLElement {
+  return mount(<TasksPrimitive data={data} slot={slot} marked={marked} />).querySelector('[data-testid="tasks"]') as HTMLElement;
 }
 
 const today = parseTimeValue('2026-10-07');
@@ -73,16 +73,17 @@ describe('taskSections and taskCounts', () => {
   });
 
   it('counts done tasks in a compact slot always, in the main slot past a long list, in focus never', () => {
-    expect(countsDone('compact', 2)).toBe(true);
-    expect(countsDone('full', LONG_TASK_LIST)).toBe(false);
-    expect(countsDone('full', LONG_TASK_LIST + 1)).toBe(true);
+    expect(countsDone('aux', 2)).toBe(true);
+    expect(countsDone('primary', LONG_TASK_LIST)).toBe(false);
+    expect(countsDone('primary', LONG_TASK_LIST + 1)).toBe(true);
     expect(countsDone('focus', 100)).toBe(false);
   });
 });
 
 describe('TasksPrimitive', () => {
   it('draws each section with its name and what it holds, every task with its state glyph and id', () => {
-    const list = render(week);
+    // In focus, where its meta line leads with its title.
+    const list = render(week, 'focus');
     expect([...list.querySelectorAll('.task-section__name')].map((name) => name.textContent)).toEqual(['Work', 'Errands', 'Home', 'Trip']);
     expect(list.querySelector('.task-section__count')?.textContent).toBe('2 OPEN / 1 DONE');
     // Rows by section, then as sent.
@@ -98,10 +99,10 @@ describe('TasksPrimitive', () => {
 
   it('says its total on the meta line only where it has no sections, and under a scene frame has no meta line where that leaves none', () => {
     const plain: TasksData = { ...week, items: week.items.map((item) => ({ ...item, group: undefined })) };
-    expect(render(plain).querySelector('.tasks-primitive__meta')?.textContent).toBe('TO DO / THIS WEEK10 OPEN / 3 DONE / 2 OVERDUE');
-    const framed = (data: TasksData) => mount(<TasksPrimitive data={data} framed />).querySelector('.tasks-primitive__meta');
-    expect(framed(week)).toBeNull();
-    expect(framed(plain)?.textContent).toBe('10 OPEN / 3 DONE / 2 OVERDUE');
+    expect(render(plain, 'focus').querySelector('.tasks-primitive__meta')?.textContent).toBe('TO DO / THIS WEEK10 OPEN / 3 DONE / 2 OVERDUE');
+    // In the main slot, under the scene frame that names it.
+    expect(render(week).querySelector('.tasks-primitive__meta')).toBeNull();
+    expect(render(plain).querySelector('.tasks-primitive__meta')?.textContent).toBe('10 OPEN / 3 DONE / 2 OVERDUE');
   });
 
   it('marks an overdue task red and one due today in the time of day', () => {
@@ -124,7 +125,7 @@ describe('TasksPrimitive', () => {
   it('counts the done tasks of a long list in each section, keeping the one a note names', () => {
     const items = Array.from({ length: LONG_TASK_LIST + 2 }, (_, index) =>
       task({ id: `t${index}`, text: `Task ${index}`, group: index % 2 ? 'Odd' : 'Even', state: index < 8 ? 'done' : 'todo' }));
-    const list = render({ items }, 'full', 't2');
+    const list = render({ items }, 'primary', 't2');
     expect([...list.querySelectorAll('.task-row--counted')].map((row) => row.textContent)).toEqual(['3 DONE', '4 DONE']);
     expect(rows(list).map((row) => row.getAttribute('data-item'))).toEqual(['t2', 't8', 't10', 't12', 't14', 't9', 't11', 't13', 't15']);
     // The section heads count done tasks only while they are listed.
@@ -149,7 +150,7 @@ describe('TasksPrimitive', () => {
   });
 
   it('in a compact slot keeps a row a task: no detail, no tags, the due day on one line', () => {
-    const list = render(week, 'compact');
+    const list = render(week, 'aux');
     expect(list.classList.contains('tasks-primitive--compact')).toBe(true);
     expect(list.querySelector('.task-row__detail')).toBeNull();
     expect(list.querySelector('.task-tag')).toBeNull();
@@ -161,13 +162,13 @@ describe('TasksPrimitive', () => {
 
   it('says a section is all done in its head, with no row to count it', () => {
     const items = [task({ id: 'a', group: 'Home', state: 'done' }), task({ id: 'b', group: 'Home', state: 'done' }), task({ id: 'c', group: 'Work' })];
-    const list = render({ items }, 'compact');
+    const list = render({ items }, 'aux');
     expect([...list.querySelectorAll('.task-section__count')].map((count) => count.textContent)).toEqual(['2 DONE', '1 OPEN']);
     expect(list.querySelector('.task-row--counted')).toBeNull();
   });
 
   it('keeps the row that counts done tasks in a list with no heads', () => {
-    const list = render({ items: [task({ id: 'x', state: 'done' })] }, 'compact');
+    const list = render({ items: [task({ id: 'x', state: 'done' })] }, 'aux');
     expect(list.querySelector('.task-row--counted')?.textContent).toBe('1 DONE');
   });
 

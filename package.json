@@ -5,7 +5,7 @@
   "scripts": {
     "check": "npm run check:worklet && npm run typecheck",
     "check:worklet": "tsc --noEmit --project tsconfig.worklet.json",
-    "typecheck": "tsc --noEmit --project apps/frontend/tsconfig.app.json --pretty false && tsc --noEmit --project apps/frontend/tsconfig.node.json --pretty false && tsc --noEmit --project apps/host-agent/tsconfig.json --pretty false",
+    "typecheck": "tsc --noEmit --project apps/frontend/tsconfig.app.json --pretty false && tsc --noEmit --project apps/frontend/tsconfig.node.json --pretty false && tsc --noEmit --project apps/frontend/tsconfig.playwright.json --pretty false && tsc --noEmit --project apps/host-agent/tsconfig.json --pretty false",
     "build": "npm run build:static && npm run build:v17 && npm run build:debug",
     "build:static": "node scripts/clean_v17_assets.mjs && tsc --project tsconfig.worklet.json && node scripts/copy_wake_assets.mjs",
     "build:v17": "npm run typecheck && node scripts/clean_v17_assets.mjs && vite build --config apps/frontend/vite.config.ts",

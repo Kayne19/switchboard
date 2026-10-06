@@ -2,6 +2,7 @@ import type { TableCell, TableData } from '../controller/types';
 import type { Noun } from './countText';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
+import type { Slot } from './slot';
 import { TechFrame } from './TechFrame';
 
 export type ColumnAlignment = 'start' | 'end';
@@ -67,19 +68,19 @@ const ROW: Noun = ['ROW', 'ROWS'];
 // above the scroll, so the sticky header is the scroll's top edge and a row
 // scrolling up passes under it rather than showing above it. A table that
 // scrolls does so in the list viewport, which counts its rows past each edge
-// below the header and pages it by the keys every scroller takes. `framed`:
-// the scene frame above shows the title (MetaTitle).
-export function TablePrimitive({ data, focused = false, framed = false }: { data: TableData; focused?: boolean; framed?: boolean }) {
+// below the header and pages it by the keys every scroller takes. In the
+// main slot the scene frame above shows the title (MetaTitle).
+export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; slot?: Slot }) {
   const alignment = inferColumnAlignment(data);
   const highlighted = new Set(data.highlight ?? []);
   const meta = (
     <div className="table-viewport__meta tech micro">
-      <MetaTitle title={data.title ?? 'TABLE'} framed={framed} />
+      <MetaTitle title={data.title ?? 'TABLE'} slot={slot} />
       <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
     </div>
   );
   return (
-    <div className={`table-viewport${focused ? ' table-viewport--focused' : ''}`} data-testid="table">
+    <div className={`table-viewport${slot === 'focus' ? ' table-viewport--focused' : ''}`} data-testid="table">
       <TechFrame variant="code" />
       <div className="table-viewport__mask">
         <ListViewport noun={ROW} countSelector="tr[data-row]" pinned="thead" head={meta} scrollClassName="table-viewport__scroll" label={data.title ?? 'Table'}>

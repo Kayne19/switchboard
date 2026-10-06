@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { act } from 'react';
 import { MetricsPrimitive } from '../../src/primitives/MetricsPrimitive';
 import type { MetricData, SceneObject } from '../../src/controller/types';
+import type { Slot } from '../../src/primitives/slot';
 import { mount } from './sceneHarness';
 
-function renderMetrics(metrics: Array<SceneObject<MetricData>>, variant?: 'list' | 'primary' | 'rail') {
-  return mount(<MetricsPrimitive metrics={metrics} variant={variant} />);
+function renderMetrics(metrics: Array<SceneObject<MetricData>>, slot: Slot | 'rail' = 'aux') {
+  return mount(<MetricsPrimitive metrics={metrics} slot={slot} />);
 }
 
 describe('MetricsPrimitive', () => {
@@ -28,8 +29,9 @@ describe('MetricsPrimitive', () => {
     updatedAt: 100,
   };
 
-  it('renders list variant rows', () => {
-    const host = renderMetrics([metric1, metric2], 'list');
+  it('renders an aux cell\'s and focus\'s metrics as a list of rows', () => {
+    expect(renderMetrics([metric1, metric2], 'focus').querySelector('.metrics--list')).not.toBeNull();
+    const host = renderMetrics([metric1, metric2], 'aux');
     expect(host.querySelector('.metrics--list')).not.toBeNull();
     const rows = host.querySelectorAll('.metric-row');
     expect(rows).toHaveLength(2);
@@ -37,7 +39,7 @@ describe('MetricsPrimitive', () => {
     expect(rows[0].textContent).toContain('94%');
   });
 
-  it('renders rail variant as its rows alone, with no header line (#32)', () => {
+  it('renders the rail\'s metrics as their rows alone, with no header line (#32)', () => {
     const host = renderMetrics([metric1, metric2], 'rail');
     const metrics = host.querySelector('.metrics--rail');
     expect(metrics).not.toBeNull();
@@ -99,7 +101,7 @@ describe('MetricsPrimitive', () => {
     const listen = () => heard.push('click');
     document.addEventListener('click', listen);
     try {
-      const host = mount(<MetricsPrimitive metrics={[metric1, metric2]} variant="primary" onFocus={(id) => focused.push(id)} />);
+      const host = mount(<MetricsPrimitive metrics={[metric1, metric2]} slot="primary" onFocus={(id) => focused.push(id)} />);
       act(() => host.querySelectorAll<HTMLElement>('.metric-row')[1].click());
       expect(focused).toEqual(['eta']);
       // Before: the row stopped its click, so the document-level listener
@@ -110,7 +112,7 @@ describe('MetricsPrimitive', () => {
     }
   });
 
-  it('returns null when variant is rail and metrics list is empty', () => {
+  it('returns null in the rail when the metrics list is empty', () => {
     const host = renderMetrics([], 'rail');
     expect(host.querySelector('.metrics')).toBeNull();
   });

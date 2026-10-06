@@ -1,12 +1,17 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { KeyboardEvent } from 'react';
 import type { MetricData, SceneObject } from '../controller/types';
+import type { Slot } from './slot';
 
 interface MetricsPrimitiveProps {
   metrics: Array<SceneObject<MetricData>>;
-  variant?: 'list' | 'primary' | 'rail';
+  /** Where the metrics are drawn: as the composed workspace's primary, large, more than one a cluster; in the rail, their rows alone; in an aux cell or focus, a list of rows. */
+  slot?: Slot | 'rail';
   onFocus?: (id: string) => void;
 }
+
+/** The reading each slot takes, which names the list's class. */
+const READING = { primary: 'primary', rail: 'rail', aux: 'list', focus: 'list' } as const;
 
 const ARROWS = {
   up: 'M6 10.5 V2.2 M2.4 5.8 L6 2.2 L9.6 5.8',
@@ -35,11 +40,11 @@ function MetricTrend({ data }: { data: MetricData }) {
   );
 }
 
-export function MetricsPrimitive({ metrics, variant = 'list', onFocus }: MetricsPrimitiveProps) {
-  if (variant === 'rail' && metrics.length === 0) {
+export function MetricsPrimitive({ metrics, slot = 'primary', onFocus }: MetricsPrimitiveProps) {
+  if (slot === 'rail' && metrics.length === 0) {
     return null;
   }
-  const isCluster = variant === 'primary' && metrics.length > 1;
+  const isCluster = slot === 'primary' && metrics.length > 1;
 
   // A metric in a cluster expands itself: it marks the click or key handled
   // and lets it bubble (FocusableSurface's rule), so the page still hears
@@ -52,7 +57,7 @@ export function MetricsPrimitive({ metrics, variant = 'list', onFocus }: Metrics
 
   return (
     <motion.div
-      className={`metrics metrics--${variant}${isCluster ? ' metrics--cluster' : ''}`}
+      className={`metrics metrics--${READING[slot]}${isCluster ? ' metrics--cluster' : ''}`}
       data-count={metrics.length}
       layout
       data-testid="metrics"
