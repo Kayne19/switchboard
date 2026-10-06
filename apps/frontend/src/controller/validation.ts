@@ -376,10 +376,9 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
   const unknownKey = checkUnknownKeys(data, allowed, 'chart data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
-  if (data.kind !== undefined && !isName(data.kind, CHART_KINDS)) {
-    return { ok: false, error: invalidName('chart.kind', CHART_KINDS) };
-  }
-  let labels: string[] | undefined;
+  const result: ChartData = { series: [] };
+  const kindErr = copyOptionalName(data, result, 'kind', CHART_KINDS, 'chart.kind');
+  if (kindErr) return { ok: false, error: kindErr };
   if (data.labels !== undefined) {
     if (!Array.isArray(data.labels) || data.labels.length < 1 || data.labels.length > MAX_CHART_LABELS) {
       return { ok: false, error: `chart.labels must be an array of 1 to ${MAX_CHART_LABELS} strings` };
@@ -388,13 +387,12 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
       const err = checkString(label, MAX_CHART_LABEL_UTF16, 'chart label');
       if (err) return { ok: false, error: err };
     }
-    labels = data.labels as string[];
+    result.labels = data.labels as string[];
   }
 
   if (!Array.isArray(data.series)) {
     return { ok: false, error: 'chart.series must be an array' };
   }
-  const seriesList: ChartSeries[] = [];
   const seriesAllowed = new Set(['name', 'semantic', 'values']);
   for (const s of data.series) {
     if (!isRecord(s)) return { ok: false, error: 'chart series item must be an object' };
@@ -406,59 +404,35 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     for (const v of s.values) {
       if (typeof v !== 'number' || !Number.isFinite(v)) return { ok: false, error: 'series.values must contain finite numbers' };
     }
-    if (labels && s.values.length > labels.length) {
+    if (result.labels && s.values.length > result.labels.length) {
       return { ok: false, error: 'series.values is longer than chart.labels' };
     }
-    if (s.semantic !== undefined && !isName(s.semantic, SEMANTICS)) {
-      return { ok: false, error: invalidName('series.semantic', SEMANTICS) };
-    }
-    seriesList.push({
-      name: s.name as string,
-      values: s.values as number[],
-      ...(s.semantic !== undefined ? { semantic: s.semantic as Semantic } : {}),
-    });
+    const series: ChartSeries = { name: s.name as string, values: s.values as number[] };
+    const semanticErr = copyOptionalName(s, series, 'semantic', SEMANTICS, 'series.semantic');
+    if (semanticErr) return { ok: false, error: semanticErr };
+    result.series.push(series);
   }
 
-  const result: ChartData = { series: seriesList };
-  if (data.kind !== undefined) result.kind = data.kind as ChartKind;
-  if (labels) result.labels = labels;
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `chart.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  for (const k of ['caption', 'xLabel', 'yLabel', 'compareLabel'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 128, `chart.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  for (const k of ['xMax', 'yMin', 'yMax'] as const) {
-    if (data[k] !== undefined) {
-      if (typeof data[k] !== 'number' || !Number.isFinite(data[k])) {
-        return { ok: false, error: `chart.${k} must be a finite number` };
-      }
-      result[k] = data[k] as number;
-    }
-  }
+  const err =
+    copyFrameText(data, result, 'chart') ??
+    copyOptionalString(data, result, 'xLabel', 128, 'chart.xLabel') ??
+    copyOptionalString(data, result, 'yLabel', 128, 'chart.yLabel') ??
+    copyOptionalString(data, result, 'compareLabel', 128, 'chart.compareLabel') ??
+    copyNumber(data, result, 'xMax', 'chart.xMax', false) ??
+    copyNumber(data, result, 'yMin', 'chart.yMin', false) ??
+    copyNumber(data, result, 'yMax', 'chart.yMax', false);
+  if (err) return { ok: false, error: err };
   if (data.marker !== undefined) {
     if (!isRecord(data.marker)) return { ok: false, error: 'chart.marker must be an object' };
     const markerAllowed = new Set(['x', 'series']);
     const mUnknown = checkUnknownKeys(data.marker, markerAllowed, 'chart marker');
     if (mUnknown) return { ok: false, error: mUnknown };
-    if (typeof data.marker.x !== 'number' || !Number.isFinite(data.marker.x)) {
-      return { ok: false, error: 'chart.marker.x must be a finite number' };
-    }
-    const markerObj: { x: number; series?: string } = { x: data.marker.x };
-    if (data.marker.series !== undefined) {
-      const err = checkString(data.marker.series, 128, 'chart.marker.series');
-      if (err) return { ok: false, error: err };
-      markerObj.series = data.marker.series as string;
-    }
-    result.marker = markerObj;
+    const marker = {} as NonNullable<ChartData['marker']>;
+    const markerErr =
+      copyNumber(data.marker, marker, 'x', 'chart.marker.x', true) ??
+      copyOptionalString(data.marker, marker, 'series', 128, 'chart.marker.series');
+    if (markerErr) return { ok: false, error: markerErr };
+    result.marker = marker;
   }
 
   return { ok: true, data: result };
@@ -474,35 +448,14 @@ function validateMetricData(data: Record<string, unknown>): { ok: true; data: Me
   const valErr = checkString(data.value, 128, 'metric.value');
   if (valErr) return { ok: false, error: valErr };
 
-  if (data.semantic !== undefined && !isName(data.semantic, SEMANTICS)) {
-    return { ok: false, error: invalidName('metric.semantic', SEMANTICS) };
-  }
-
-  const result: MetricData = {
-    label: data.label as string,
-    value: data.value as string,
-    ...(data.semantic !== undefined ? { semantic: data.semantic as Semantic } : {}),
-  };
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'metric.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-  if (data.trend !== undefined) {
-    if (!isName(data.trend, METRIC_TRENDS)) {
-      return { ok: false, error: invalidName('metric.trend', METRIC_TRENDS) };
-    }
-    result.trend = data.trend as MetricTrend;
-  }
-  if (data.delta !== undefined) {
-    const err = checkString(data.delta, MAX_METRIC_DELTA_UTF16, 'metric.delta');
-    if (err) return { ok: false, error: err };
-    result.delta = data.delta as string;
-  }
-  return {
-    ok: true,
-    data: result,
-  };
+  const result: MetricData = { label: data.label as string, value: data.value as string };
+  const err =
+    copyOptionalName(data, result, 'semantic', SEMANTICS, 'metric.semantic') ??
+    copyOptionalString(data, result, 'caption', 128, 'metric.caption') ??
+    copyOptionalName(data, result, 'trend', METRIC_TRENDS, 'metric.trend') ??
+    copyOptionalString(data, result, 'delta', MAX_METRIC_DELTA_UTF16, 'metric.delta');
+  if (err) return { ok: false, error: err };
+  return { ok: true, data: result };
 }
 
 /**
@@ -528,17 +481,10 @@ function validateProgressSteps(value: unknown): { ok: true; steps: ProgressStep[
     const labelErr = checkString(s.label, 128, 'progress step.label');
     if (labelErr) return { ok: false, error: labelErr };
     const step: ProgressStep = { label: s.label as string };
-    if (s.state !== undefined) {
-      if (!isName(s.state, STEP_STATES)) {
-        return { ok: false, error: invalidName('progress step.state', STEP_STATES) };
-      }
-      step.state = s.state as ProgressStepState;
-    }
-    if (s.detail !== undefined) {
-      const err = checkString(s.detail, 256, 'progress step.detail');
-      if (err) return { ok: false, error: err };
-      step.detail = s.detail as string;
-    }
+    const err =
+      copyOptionalName(s, step, 'state', STEP_STATES, 'progress step.state') ??
+      copyOptionalString(s, step, 'detail', 256, 'progress step.detail');
+    if (err) return { ok: false, error: err };
     steps.push(step);
   }
   return { ok: true, steps };
@@ -577,23 +523,11 @@ function validateProgressData(data: Record<string, unknown>): { ok: true; data: 
     value,
     ...(steps ? { steps } : {}),
   };
-
-  if (data.detail !== undefined) {
-    const err = checkString(data.detail, 256, 'progress.detail');
-    if (err) return { ok: false, error: err };
-    result.detail = data.detail as string;
-  }
-  if (data.text !== undefined) {
-    const err = checkString(data.text, 128, 'progress.text');
-    if (err) return { ok: false, error: err };
-    result.text = data.text as string;
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'progress.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err =
+    copyOptionalString(data, result, 'detail', 256, 'progress.detail') ??
+    copyOptionalString(data, result, 'text', 128, 'progress.text') ??
+    copyOptionalString(data, result, 'caption', 128, 'progress.caption');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
