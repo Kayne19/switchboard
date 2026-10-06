@@ -572,36 +572,19 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     const nUnknown = checkUnknownKeys(n, nodeAllowed, 'diagram node');
     if (nUnknown) return { ok: false, error: nUnknown };
 
-    if (typeof n.id !== 'string' || isBlank(n.id) || n.id.length > 128) {
-      return { ok: false, error: 'diagram node id must be non-empty and <= 128 UTF-16 code units' };
-    }
-    if (nodeIds.has(n.id)) {
-      return { ok: false, error: `duplicate diagram node id: ${n.id}` };
-    }
-    nodeIds.add(n.id);
+    const id = checkItemId(n.id, nodeIds, 'diagram node');
+    if (!id.ok) return id;
 
     const labelErr = checkString(n.label, 256, 'diagram node.label');
     if (labelErr) return { ok: false, error: labelErr };
 
-    const nodeItem: DiagramNode = { id: n.id, label: n.label as string };
-    if (n.sub !== undefined) {
-      const err = checkString(n.sub, 256, 'diagram node.sub');
-      if (err) return { ok: false, error: err };
-      nodeItem.sub = n.sub as string;
-    }
-    if (n.detail !== undefined) {
-      const err = checkString(n.detail, 256, 'diagram node.detail');
-      if (err) return { ok: false, error: err };
-      nodeItem.detail = n.detail as string;
-    }
-    if (n.semantic !== undefined) {
-      if (!isName(n.semantic, SEMANTICS)) return { ok: false, error: invalidName('diagram node.semantic', SEMANTICS) };
-      nodeItem.semantic = n.semantic as Semantic;
-    }
-    if (n.state !== undefined) {
-      if (!isName(n.state, STEP_STATES)) return { ok: false, error: invalidName('diagram node.state', STEP_STATES) };
-      nodeItem.state = n.state as DiagramNode['state'];
-    }
+    const nodeItem: DiagramNode = { id: id.id, label: n.label as string };
+    const err =
+      copyOptionalString(n, nodeItem, 'sub', 256, 'diagram node.sub') ??
+      copyOptionalString(n, nodeItem, 'detail', 256, 'diagram node.detail') ??
+      copyOptionalName(n, nodeItem, 'semantic', SEMANTICS, 'diagram node.semantic') ??
+      copyOptionalName(n, nodeItem, 'state', STEP_STATES, 'diagram node.state');
+    if (err) return { ok: false, error: err };
     nodes.push(nodeItem);
   }
 
@@ -635,19 +618,11 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     edgePairs.add(pairKey);
 
     const edgeItem: DiagramEdge = { from: e.from, to: e.to };
-    if (e.label !== undefined) {
-      const err = checkString(e.label, 256, 'diagram edge.label');
-      if (err) return { ok: false, error: err };
-      edgeItem.label = e.label as string;
-    }
-    if (e.semantic !== undefined) {
-      if (!isName(e.semantic, SEMANTICS)) return { ok: false, error: invalidName('diagram edge.semantic', SEMANTICS) };
-      edgeItem.semantic = e.semantic as Semantic;
-    }
-    if (e.active !== undefined) {
-      if (typeof e.active !== 'boolean') return { ok: false, error: 'diagram edge.active must be boolean' };
-      edgeItem.active = e.active;
-    }
+    const err =
+      copyOptionalString(e, edgeItem, 'label', 256, 'diagram edge.label') ??
+      copyOptionalName(e, edgeItem, 'semantic', SEMANTICS, 'diagram edge.semantic') ??
+      copyOptionalBoolean(e, edgeItem, 'active', 'diagram edge.active');
+    if (err) return { ok: false, error: err };
     edges.push(edgeItem);
   }
 
@@ -656,19 +631,8 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     nodes,
     edges,
   };
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `diagram.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'diagram.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err = copyFrameText(data, result, 'diagram');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -696,27 +660,17 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
     const aUnknown = checkUnknownKeys(a, actorAllowed, 'diagram actor');
     if (aUnknown) return { ok: false, error: aUnknown };
 
-    if (typeof a.id !== 'string' || isBlank(a.id) || a.id.length > 128) {
-      return { ok: false, error: 'diagram actor id must be non-empty and <= 128 UTF-16 code units' };
-    }
-    if (actorIds.has(a.id)) {
-      return { ok: false, error: `duplicate diagram actor id: ${a.id}` };
-    }
-    actorIds.add(a.id);
+    const id = checkItemId(a.id, actorIds, 'diagram actor');
+    if (!id.ok) return id;
 
     const labelErr = checkString(a.label, 256, 'diagram actor.label');
     if (labelErr) return { ok: false, error: labelErr };
 
-    const actorItem: SequenceActor = { id: a.id, label: a.label as string };
-    if (a.sub !== undefined) {
-      const err = checkString(a.sub, 256, 'diagram actor.sub');
-      if (err) return { ok: false, error: err };
-      actorItem.sub = a.sub as string;
-    }
-    if (a.semantic !== undefined) {
-      if (!isName(a.semantic, SEMANTICS)) return { ok: false, error: invalidName('diagram actor.semantic', SEMANTICS) };
-      actorItem.semantic = a.semantic as Semantic;
-    }
+    const actorItem: SequenceActor = { id: id.id, label: a.label as string };
+    const err =
+      copyOptionalString(a, actorItem, 'sub', 256, 'diagram actor.sub') ??
+      copyOptionalName(a, actorItem, 'semantic', SEMANTICS, 'diagram actor.semantic');
+    if (err) return { ok: false, error: err };
     actors.push(actorItem);
   }
 
@@ -743,14 +697,10 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
     if (labelErr) return { ok: false, error: labelErr };
 
     const messageItem: SequenceMessage = { from: m.from, to: m.to, label: m.label as string };
-    if (m.kind !== undefined) {
-      if (!isName(m.kind, MESSAGE_KINDS)) return { ok: false, error: invalidName('diagram message.kind', MESSAGE_KINDS) };
-      messageItem.kind = m.kind as SequenceMessage['kind'];
-    }
-    if (m.active !== undefined) {
-      if (typeof m.active !== 'boolean') return { ok: false, error: 'diagram message.active must be boolean' };
-      messageItem.active = m.active;
-    }
+    const err =
+      copyOptionalName(m, messageItem, 'kind', MESSAGE_KINDS, 'diagram message.kind') ??
+      copyOptionalBoolean(m, messageItem, 'active', 'diagram message.active');
+    if (err) return { ok: false, error: err };
     messages.push(messageItem);
   }
 
@@ -759,19 +709,8 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
     actors,
     messages,
   };
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `diagram.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'diagram.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err = copyFrameText(data, result, 'diagram');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -1216,9 +1155,9 @@ function readTime(value: unknown, forms: TimeForm[], field: string): { ok: true;
 // ---- personal-assistant types -------------------------------------------------
 //
 // calendar, tasks, timer, weather and inbox (docs/display-tool.md,
-// "Personal-assistant types"). Each item id is checked as a diagram node id
-// is (non-blank, <= 128 UTF-16 units) and is unique in its list; the
-// backend's validators hold the same rules in the same order.
+// "Personal-assistant types"). Each item id goes through checkItemId, as a
+// diagram node or actor id does (non-blank, <= 128 UTF-16 units, unique in
+// its list); the backend's validators hold the same rules in the same order.
 
 const CALENDAR_VIEWS = ['day', 'week', 'month', 'agenda'];
 /** The most days a view may show; the day and month views take no `days`. */
