@@ -18,7 +18,6 @@ let root: Root | null = null;
 let bodySize = { width: 0, height: 0 };
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}

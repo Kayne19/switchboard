@@ -1,36 +1,21 @@
 // @vitest-environment jsdom
 // The debug page renders the fixture end to end: panes, wires, and the drawer.
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DebugApp } from '../../src/debug/App';
+import { mount, rerender, stubResizeObserver } from './sceneHarness';
 
 let host: HTMLDivElement;
-let root: Root;
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.stubGlobal(
-    'ResizeObserver',
-    class {
-      observe() {}
-      disconnect() {}
-    },
-  );
+  stubResizeObserver();
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0) as unknown as number);
   vi.stubGlobal('cancelAnimationFrame', (handle: number) => clearTimeout(handle));
 });
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/?fixture=1&instant=1');
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
+  host = mount(null);
 });
 
 /** Wait for fixture mode to load and play: its last utterance is on screen. */
@@ -51,7 +36,7 @@ async function settle() {
 
 describe('debug page', () => {
   it('shows every pane, draws the routes, and opens a trace', async () => {
-    act(() => root.render(<DebugApp />));
+    rerender(host, <DebugApp />);
     await settle();
     const panes = [...host.querySelectorAll('.pane-name')].map((element) => element.textContent);
     expect(panes).toEqual(['operator', 'utility', 'alpha', 'beta']);

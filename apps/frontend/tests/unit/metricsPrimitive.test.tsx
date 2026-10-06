@@ -1,21 +1,12 @@
 // @vitest-environment jsdom
-import { beforeAll, describe, expect, it } from 'vitest';
-import { createRoot } from 'react-dom/client';
+import { describe, expect, it } from 'vitest';
 import { act } from 'react';
 import { MetricsPrimitive } from '../../src/primitives/MetricsPrimitive';
 import type { MetricData, SceneObject } from '../../src/controller/types';
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
+import { mount } from './sceneHarness';
 
 function renderMetrics(metrics: Array<SceneObject<MetricData>>, variant?: 'list' | 'primary' | 'rail') {
-  const host = document.createElement('div');
-  const root = createRoot(host);
-  act(() => {
-    root.render(<MetricsPrimitive metrics={metrics} variant={variant} />);
-  });
-  return host;
+  return mount(<MetricsPrimitive metrics={metrics} variant={variant} />);
 }
 
 describe('MetricsPrimitive', () => {
@@ -104,16 +95,11 @@ describe('MetricsPrimitive', () => {
 
   it('expands a metric in a cluster on a tap the page still hears', () => {
     const focused: string[] = [];
-    const host = document.createElement('div');
-    document.body.append(host);
-    const root = createRoot(host);
     const heard: string[] = [];
     const listen = () => heard.push('click');
     document.addEventListener('click', listen);
     try {
-      act(() => {
-        root.render(<MetricsPrimitive metrics={[metric1, metric2]} variant="primary" onFocus={(id) => focused.push(id)} />);
-      });
+      const host = mount(<MetricsPrimitive metrics={[metric1, metric2]} variant="primary" onFocus={(id) => focused.push(id)} />);
       act(() => host.querySelectorAll<HTMLElement>('.metric-row')[1].click());
       expect(focused).toEqual(['eta']);
       // Before: the row stopped its click, so the document-level listener
@@ -121,8 +107,6 @@ describe('MetricsPrimitive', () => {
       expect(heard).toEqual(['click']);
     } finally {
       document.removeEventListener('click', listen);
-      act(() => root.unmount());
-      host.remove();
     }
   });
 

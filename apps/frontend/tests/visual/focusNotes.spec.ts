@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { GEOMETRIES, runActions } from './helpers';
 
 // Focus keeps the notes about any object (FocusLayer `focusNotes`): beside
 // it when the box is wide, under it when it is tall. jsdom has no layout,
@@ -6,10 +7,7 @@ import { expect, test } from '@playwright/test';
 // cards and RETURN on the screen, each card's TARGET line whole, the panel
 // clear of the object, at every geometry the page is drawn at.
 const geometries = [
-  { name: 'portrait-phone', width: 390, height: 844 },
-  { name: 'portrait-tablet', width: 820, height: 1180 },
-  { name: 'landscape', width: 1440, height: 900 },
-  { name: 'ultrawide', width: 2560, height: 1080 },
+  ...GEOMETRIES,
   { name: 'landscape-short', width: 844, height: 390 },
   { name: 'landscape-hd', width: 1280, height: 720 },
 ];
@@ -36,7 +34,7 @@ for (const geometry of geometries) {
       test(`focus keeps ${name} on the screen, its TARGET lines whole`, async ({ page }) => {
         await page.goto(`/?scene=${scene}&chrome=0`);
         await expect(page.locator('.stage')).toBeVisible();
-        await page.evaluate((run) => window.SwitchboardController?.run(run as never), actions);
+        await runActions(page, actions);
         await page.evaluate((target) => window.SwitchboardController?.dispatch({ op: 'focus', id: target }), focus);
         const layer = page.locator('.focus-layer');
         await expect(layer.locator('.focus-layer__note .annotation-card')).toHaveCount(cards);

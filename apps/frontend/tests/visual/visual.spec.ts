@@ -1,14 +1,9 @@
 import { expect, test } from '@playwright/test';
+import { GEOMETRIES } from './helpers';
 
 const scenes = ['idle', 'conversation', 'training', 'architecture', 'email', 'code'] as const;
-const geometries = [
-  { name: 'portrait-phone', width: 390, height: 844 },
-  { name: 'portrait-tablet', width: 820, height: 1180 },
-  { name: 'landscape', width: 1440, height: 900 },
-  { name: 'ultrawide', width: 2560, height: 1080 },
-] as const;
 
-for (const geometry of geometries) {
+for (const geometry of GEOMETRIES) {
   test.describe(geometry.name, () => {
     test.use({ viewport: { width: geometry.width, height: geometry.height } });
 
@@ -51,7 +46,7 @@ test('primary metric remains visually locked', async ({ page }) => {
 });
 
 
-for (const geometry of geometries) {
+for (const geometry of GEOMETRIES) {
   test(`composed scene / ${geometry.name}`, async ({ page }) => {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
     await page.goto('/?scene=architecture&chrome=0');

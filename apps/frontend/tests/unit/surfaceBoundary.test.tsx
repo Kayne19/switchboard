@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 // A surface that throws while rendering degrades alone (issue #34).
-import { act, type ReactNode } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { type ReactNode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { SurfaceBoundary } from '../../src/components/SurfaceBoundary';
+import { mount, rerender, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement;
-let root: Root;
 let logged: MockInstance<typeof console.error>;
 let uncaught: unknown[];
 
@@ -29,27 +28,20 @@ function stage(surface: ReactNode) {
 }
 
 function render(node: ReactNode) {
-  act(() => root.render(node));
+  rerender(host, node);
 }
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 beforeEach(() => {
   uncaught = [];
   logged = vi.spyOn(console, 'error').mockImplementation(() => {});
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host, {
+  host = mount(null, {
     onUncaughtError: (error) => uncaught.push(error),
     onCaughtError: () => {},
   });
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
+  unmountAll();
   vi.restoreAllMocks();
 });
 

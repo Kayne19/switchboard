@@ -1,26 +1,12 @@
 // @vitest-environment jsdom
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { RichText } from '../../src/primitives/RichText';
+import { mount } from './sceneHarness';
 
 let host: HTMLDivElement;
-let root: Root;
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
 
 function render(text: string, allowLinks = true) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(<RichText allowLinks={allowLinks} segments={[{ text }]} />));
+  host = mount(<RichText allowLinks={allowLinks} segments={[{ text }]} />);
 }
 
 describe('RichText links and HTML safety', () => {

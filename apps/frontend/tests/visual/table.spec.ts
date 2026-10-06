@@ -1,16 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openScene, runActions } from './helpers';
 
 // Table layout the unit tests cannot see: jsdom draws no boxes.
 
 async function showTable(page: Page, data: Record<string, unknown>) {
-  await page.goto('/?scene=architecture&chrome=0');
-  await expect(page.locator('.stage')).toBeVisible();
-  await page.evaluate((tableData) => {
-    const dispatch = window.SwitchboardController?.dispatch;
-    if (!dispatch) throw new Error('controller unavailable');
-    dispatch({ op: 'clear' });
-    dispatch({ op: 'show', id: 'table', type: 'table', role: 'primary', data: tableData });
-  }, data);
+  await openScene(page, 'architecture');
+  await runActions(page, [{ op: 'clear' }, { op: 'show', id: 'table', type: 'table', role: 'primary', data }]);
   await expect(page.locator('[data-scene="table"] .table-grid')).toBeVisible();
 }
 

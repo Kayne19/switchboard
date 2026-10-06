@@ -5,7 +5,7 @@
 // These drive the real runtime adapter with the frames the backend sends.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import type { ControllerState, MessageData } from '../../src/controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
@@ -101,10 +101,6 @@ function transcriptTexts(): string[] {
   const message = latest.runtimeObjects[RUNTIME_CONVERSATION_ID]?.data as MessageData | undefined;
   return message?.transcript?.map((line) => line.text) ?? [];
 }
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 beforeEach(async () => {
   vi.stubGlobal('WebSocket', FakeSocket);

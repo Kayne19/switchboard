@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openScene, runActions } from './helpers';
 
 // A stepped progress where the unit tests cannot see it: jsdom draws no
 // boxes. As the primary it is framed to its own height; in the rail it reads
@@ -11,13 +12,8 @@ const steps = (count: number, firstOpen: number) => Array.from({ length: count }
 }));
 
 async function show(page: Page, actions: unknown[]) {
-  await page.goto('/?scene=architecture&chrome=0');
-  await expect(page.locator('.stage')).toBeVisible();
-  await page.evaluate((list) => {
-    const controller = window.SwitchboardController;
-    if (!controller) throw new Error('controller unavailable');
-    controller.run([{ op: 'clear' }, ...list]);
-  }, actions);
+  await openScene(page, 'architecture');
+  await runActions(page, [{ op: 'clear' }, ...actions]);
   await page.waitForTimeout(600);
 }
 
@@ -67,16 +63,12 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   test(`the plan in the rail reads as the metrics above it / ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto('/?scene=architecture&chrome=0');
-    await page.evaluate((plan) => {
-      const controller = window.SwitchboardController;
-      if (!controller) throw new Error('controller unavailable');
-      controller.run([
-        { op: 'clear' },
-        { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] } },
-        { op: 'show', id: 'tests', type: 'metric', data: { label: 'TESTS PASSING', value: '418', trend: 'up', delta: '+31' } },
-        { op: 'show', id: 'plan', type: 'progress', data: { label: 'SHIP', steps: plan } },
-      ]);
-    }, railSteps);
+    await runActions(page, [
+      { op: 'clear' },
+      { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] } },
+      { op: 'show', id: 'tests', type: 'metric', data: { label: 'TESTS PASSING', value: '418', trend: 'up', delta: '+31' } },
+      { op: 'show', id: 'plan', type: 'progress', data: { label: 'SHIP', steps: railSteps } },
+    ]);
     await expect(page.locator('.rail-progress .progress-primitive--rail')).toBeVisible();
     const rows = await page.evaluate(() => {
       const metric = document.querySelector<HTMLElement>('.metrics--rail .metric-row')!;

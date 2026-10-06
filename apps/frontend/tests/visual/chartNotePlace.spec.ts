@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openScene, runActions } from './helpers';
 
 // A note a chart has no clear place for stays readable beside the chart:
 // where the rail stands under the charts (a portrait stage) it lies in a
@@ -32,15 +33,8 @@ const uptime = [
 ];
 
 async function show(page: Page, scene: string, actions: unknown[] = []) {
-  await page.goto(`/?scene=${scene}&chrome=0`);
-  await expect(page.locator('.stage')).toBeVisible();
-  if (actions.length > 0) {
-    await page.evaluate((list) => {
-      const run = window.SwitchboardController?.run;
-      if (!run) throw new Error('controller unavailable');
-      run(list);
-    }, actions);
-  }
+  await openScene(page, scene);
+  if (actions.length > 0) await runActions(page, actions);
   await page.waitForTimeout(900);
 }
 

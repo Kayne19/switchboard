@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { SequenceDiagramData } from '../../src/controller/types';
 import { DiagramObject } from '../../src/components/DiagramObject';
 import { SequencePrimitive } from '../../src/primitives/SequencePrimitive';
 import { traceDiagram } from '../../src/fixtures/scenes';
 import { layoutSequence, sequenceMinScale } from '../../src/primitives/sequenceLayout';
+import { mount, stubResizeObserver, unmount } from './sceneHarness';
 
 const data: SequenceDiagramData = {
   mode: 'sequence',
@@ -25,27 +24,11 @@ const data: SequenceDiagramData = {
 };
 
 let host: HTMLDivElement;
-let root: Root;
 
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
+stubResizeObserver();
 
 function render(element: React.ReactElement) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(element));
+  host = mount(element);
 }
 
 describe('sequence rendering', () => {
@@ -96,8 +79,7 @@ describe('sequence rendering', () => {
     render(<SequencePrimitive data={data} id="seq" note={{ segments: [{ text: 'x' }], anchor: { target: 'seq', node: 'pbx' } }} />);
     const anchored = host.querySelector('.sequence-actor__body--anchored');
     expect(anchored?.querySelector('.sequence-actor-label')?.textContent).toBe('PBX');
-    act(() => root.unmount());
-    host.remove();
+    unmount(host);
     render(<SequencePrimitive data={data} id="seq" note={{ segments: [{ text: 'x' }], anchor: { target: 'other', node: 'pbx' } }} />);
     expect(host.querySelector('.sequence-actor__body--anchored')).toBeNull();
   });
@@ -114,8 +96,7 @@ describe('sequence rendering', () => {
       expect([rect?.getAttribute('width'), rect?.getAttribute('height')]).toEqual(['30', '15']);
       expect(rect?.getAttribute('stroke')).toBe('var(--orange)');
     }
-    act(() => root.unmount());
-    host.remove();
+    unmount(host);
     render(<SequencePrimitive data={traceDiagram} id="trace" note={{ segments: [{ text: 'x' }], anchor: { target: 'other', node: 'pbx' } }} />);
     expect(host.querySelector('.sequence-actor__marker')).toBeNull();
   });
@@ -143,8 +124,7 @@ describe('DiagramObject', () => {
     render(<DiagramObject data={data} id="seq" />);
     expect(host.querySelector('[data-testid="sequence"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="diagram"]')).toBeNull();
-    act(() => root.unmount());
-    host.remove();
+    unmount(host);
     render(<DiagramObject data={{ mode: 'graph', nodes: [{ id: 'a', label: 'A' }], edges: [] }} id="graph" />);
     expect(host.querySelector('[data-testid="diagram"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="sequence"]')).toBeNull();
