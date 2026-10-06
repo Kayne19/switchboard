@@ -168,6 +168,27 @@ button {
   outline: 1px solid var(--orange);
   outline-offset: 4px;
 }
+/* Every primitive's root, and the viewports drawings and lists scroll in,
+   fill the box they are given and may be shorter than what they hold:
+   each scrolls or lays itself out inside. A root's own rule says how. */
+.chart-primitive,
+.diagram-primitive,
+.sequence-primitive,
+.drawing-viewport,
+.list-viewport,
+.document-viewport,
+.code-viewport,
+.table-viewport,
+.image-primitive,
+.calendar,
+.tasks-primitive,
+.inbox-primitive,
+.timer-primitive,
+.weather {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
 
 /* Conversation corner accents: placement from #conversation .corner-a/b in
    the approved v16 composition. */
@@ -963,10 +984,7 @@ button {
     clamp(10px, 1.2cqw, 20px);
 }
 .chart-primitive {
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   display: grid;
   place-items: center;
 }
@@ -1840,11 +1858,6 @@ button {
   z-index: 1;
   padding: var(--slot-pad);
 }
-.diagram-primitive {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
 /* In the diagram slot the drawing's viewport stands between the rails
    (TechFrame "rails"): below the top rail's lower step (70 of the frame's
    700 units) and above the bottom rail's upper step (624 of 700), with
@@ -1872,10 +1885,7 @@ button {
 .drawing-viewport {
   position: relative;
   display: flex;
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   overflow: hidden;
 }
 .drawing-viewport--strip-bottom {
@@ -2216,10 +2226,7 @@ button {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
 }
 .list-viewport__head {
   flex: none;
@@ -2268,10 +2275,7 @@ button {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   color: var(--paper);
 }
 .timer__title {
@@ -2480,10 +2484,7 @@ button {
    stand is the box's (weather--wide, --tall, --compact). */
 .weather {
   position: relative;
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   color: #d9d7d1;
 }
 .weather__box {
@@ -3292,11 +3293,6 @@ button {
 
 /* A diagram in sequence mode shares the diagram slot and its motion; its
    own classes keep the two drawings' rules apart. */
-.sequence-primitive {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
 
 .sequence-actor__body {
   transform-box: fill-box;
@@ -3352,9 +3348,6 @@ button {
 /* Document */
 .document-viewport {
   position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
   background: #000;
 }
 .document-viewport__inner {
@@ -3435,9 +3428,6 @@ button {
    decoded (the object itself resolves in through ObjectMotion). */
 .image-primitive {
   position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
   margin: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
@@ -3505,9 +3495,6 @@ button {
 /* Code */
 .code-viewport {
   position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
   background: #000;
 }
 /* The table viewport shares this mask: it sits in the same frame. Its
@@ -3597,9 +3584,6 @@ button {
    row carries the hot-line accent. */
 .table-viewport {
   position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
   background: #000;
 }
 /* The mask's top padding and the meta line stand above the scroll, so the
@@ -3727,10 +3711,7 @@ button {
 
 .tasks-primitive,
 .inbox-primitive {
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   color: #d9d7d1;
   font-family: var(--font-prose);
 }
@@ -4359,10 +4340,7 @@ button {
   --now-point: polygon(0 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 0 100%);
   display: flex;
   flex-direction: column;
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   color: #d9d7d1;
 }
 .calendar-tone--none {
@@ -5274,18 +5252,9 @@ button {
   color: inherit;
   cursor: pointer;
 }
-.focus-layer__content > .chart-primitive,
-.focus-layer__content > .diagram-primitive,
-.focus-layer__content > .sequence-primitive,
-.focus-layer__content > .document-viewport,
-.focus-layer__content > .code-viewport,
-.focus-layer__content > .table-viewport,
-.focus-layer__content > .image-primitive {
-  width: 100%;
-  height: 100%;
-}
-/* Timers, a forecast, a figure and a calendar keep a margin inside the
-   focus panel (a to-do list's and an inbox's are with their rules). */
+/* A primitive fills the focus panel as it fills any box; timers, a
+   forecast, a figure and a calendar keep a margin inside it (a to-do
+   list's and an inbox's are with their rules). */
 .focus-layer__content > .timer-primitive,
 .focus-layer__content > .weather {
   padding: 5cqh 4cqw 4cqh;
