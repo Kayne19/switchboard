@@ -16,7 +16,7 @@
 
 import { monoAdvance } from '../design/tokens';
 import type { Noun } from './countText';
-import type { Box, Point, Rect } from './geometry';
+import type { Box, Point, Rect, Size } from './geometry';
 
 /**
  * What a scrolling drawing's viewport needs to know about it, in its user
@@ -411,12 +411,7 @@ export const EXIT_CHARS = 22;
 const TAG_GAP = 3;
 
 /** An exit's tag placed on its rail: its box in the viewport, CSS pixels. */
-export interface PlacedExit extends Exit {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+export interface PlacedExit extends Exit, Box {}
 
 /**
  * Places each exit's tag on its rail, as near where its line crosses as
@@ -429,7 +424,7 @@ export interface PlacedExit extends Exit {
 export function placeExits(
   exits: readonly Exit[],
   scroll: { left: number; top: number },
-  viewport: { width: number; height: number },
+  viewport: Size,
   avoid: Record<Side, ReadonlyArray<Span>>,
   inset = 0,
 ): PlacedExit[] {
@@ -493,12 +488,12 @@ export const MAP_MARGIN = 6;
 const MAP_THIN = 40;
 
 /** Whether a drawing `fitted` (its size on screen, CSS pixels) in `viewport` scrolls far enough, in room enough, to carry a map. */
-export function wantsMap(fitted: { width: number; height: number }, viewport: { width: number; height: number }): boolean {
+export function wantsMap(fitted: Size, viewport: Size): boolean {
   return Math.min(viewport.width, viewport.height) >= MAP_ROOM && Math.max(fitted.width / viewport.width, fitted.height / viewport.height) >= MAP_FROM;
 }
 
 /** The size, in CSS pixels, of the map of a drawing (`drawing`, user units) in a viewport (CSS pixels). */
-export function mapSize(drawing: { width: number; height: number }, viewport: { width: number; height: number }): { width: number; height: number } {
+export function mapSize(drawing: Size, viewport: Size): Size {
   const aspect = drawing.width / drawing.height;
   let width = Math.sqrt(MAP_AREA * viewport.width * viewport.height * aspect);
   let height = width / aspect;
@@ -528,7 +523,7 @@ export interface MapStrip {
 }
 
 /** The strip the map of a drawing (`drawing`, user units, fitted as `fit`) takes in `viewport`, or null for one that carries no map. */
-export function mapStrip(drawing: { width: number; height: number }, fit: { width: number; height: number; scrollX: boolean; scrollY: boolean }, viewport: { width: number; height: number }): MapStrip | null {
+export function mapStrip(drawing: Size, fit: Size & { scrollX: boolean; scrollY: boolean }, viewport: Size): MapStrip | null {
   if (!(fit.scrollX || fit.scrollY) || !wantsMap(fit, viewport)) return null;
   const across = fit.scrollX && (!fit.scrollY || fit.width / viewport.width >= fit.height / viewport.height);
   const map = mapSize(drawing, viewport);
@@ -536,7 +531,7 @@ export function mapStrip(drawing: { width: number; height: number }, fit: { widt
 }
 
 /** The viewport a drawing is laid out and scrolled in beside its map's strip. */
-function besideStrip<V extends { width: number; height: number }>(viewport: V, strip: MapStrip | null): V {
+function besideStrip<V extends Size>(viewport: V, strip: MapStrip | null): V {
   if (!strip) return viewport;
   return strip.side === 'bottom' ? { ...viewport, height: Math.max(1, viewport.height - strip.depth) } : { ...viewport, width: Math.max(1, viewport.width - strip.depth) };
 }
@@ -553,7 +548,7 @@ function besideStrip<V extends { width: number; height: number }>(viewport: V, s
  * graph's orientation, a sequence's header rows). Elsewhere the drawing
  * has its rails and no map.
  */
-export function viewWithMap<V extends { layout: { width: number; height: number }; fit: { width: number; height: number; scrollX: boolean; scrollY: boolean } }, P extends { width: number; height: number }>(
+export function viewWithMap<V extends { layout: Size; fit: Size & { scrollX: boolean; scrollY: boolean } }, P extends Size>(
   viewport: P,
   view: (viewport: P) => V,
   reading: (view: V) => string = () => '',
@@ -571,7 +566,7 @@ export function viewWithMap<V extends { layout: { width: number; height: number 
  * long as the drawing's shape makes it, no longer than MAP_LONG of the
  * strip's length nor MAP_MAX (then shallower, keeping the shape).
  */
-export function mapInStrip(drawing: { width: number; height: number }, strip: MapStrip, length: number): { width: number; height: number } {
+export function mapInStrip(drawing: Size, strip: MapStrip, length: number): Size {
   const aspect = drawing.width / drawing.height;
   const depth = Math.max(1, strip.depth - 2 * MAP_PAD - 2 * MAP_MARGIN);
   const longest = Math.max(1, Math.min(MAP_MAX, length * MAP_LONG));

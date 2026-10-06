@@ -57,7 +57,7 @@
 // where no note's absence helps, each card takes the place that hides the
 // least.
 
-import { clipSegment, hiddenTraceLength, intersection, overlapArea, segmentsMeet, withoutRepeats, type Point, type Rect } from './geometry';
+import { clipSegment, hiddenTraceLength, intersection, overlapArea, segmentsMeet, withoutRepeats, type Point, type Rect, type Size } from './geometry';
 
 export interface NoteToPlace {
   id: string;
@@ -76,7 +76,7 @@ export interface NoteToPlace {
    * its text needs there: tried, in turn, only where the card's own size
    * has no clear place or runs a long leader to its bar.
    */
-  sizes?: Array<{ width: number; height: number }>;
+  sizes?: Array<Size>;
 }
 
 /** The side of a point a leader comes from. */

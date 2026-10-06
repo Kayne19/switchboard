@@ -36,7 +36,7 @@ import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types'
 import { monoAdvance } from '../design/tokens';
 import { LABEL_BACKING, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
-import type { Box, Point } from './geometry';
+import type { Box, Point, Size } from './geometry';
 import { NOTE_MARKER } from './NoteMarker';
 
 export type DiagramOrientation = 'landscape' | 'portrait';
@@ -176,7 +176,7 @@ export interface CornerTagBoxes {
 /** Where a node's corner tags go, relative to its box's top-left corner. */
 export function cornerTagBoxes(width: number, tags: CornerTags): CornerTagBoxes {
   let right = width - FRAME_CUT.topRight - TAG_INSET;
-  const place = (size: { width: number; height: number }): Box => {
+  const place = (size: Size): Box => {
     const box = { x: right - size.width, y: TAG_TOP, width: size.width, height: size.height };
     right = box.x - TAG_GAP;
     return box;

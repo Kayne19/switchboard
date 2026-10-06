@@ -14,7 +14,7 @@ import {
   type ChartSide,
 } from '../primitives/chartGeometry';
 import { layoutNotes, NOTE_CARD_CUT, routeLeader, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
-import { crispLine, type Point, type Rect } from '../primitives/geometry';
+import { crispLine, type Point, type Rect, type Size } from '../primitives/geometry';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** One note on a chart: a note object, or the spoken explanation standing in for one. */
@@ -64,12 +64,12 @@ interface Placed {
   /** The notes placed, by what they say: a note shown with new words is placed again; the same words in a new object (a spoken stand-in, built every render) are not. */
   notes: string;
   /** The size each card is drawn at: a card that changes size by itself (its words reflowed) is placed again. */
-  cards: Record<string, { width: number; height: number }>;
+  cards: Record<string, Size>;
   layout: NotesLayout;
   /** The layer's room for cards when placed. */
   area: Rect;
   /** The chart's frame when placed, and where each named point's leader landed in it and on the layer. */
-  frame: { width: number; height: number };
+  frame: Size;
   points: Record<string, { view: Point; layer: Point }>;
 }
 
@@ -77,7 +77,7 @@ interface Placed {
 // that names a point moves as its point does, its leader with it; one that
 // names none keeps its distance from the corner it is nearest. Only for the
 // frames a resize passes through: the size it rests at is placed afresh.
-function follow(placed: Placed, area: Rect, toLayer: ((point: Point) => Point) | undefined, frame: { width: number; height: number }): NotesLayout {
+function follow(placed: Placed, area: Rect, toLayer: ((point: Point) => Point) | undefined, frame: Size): NotesLayout {
   const next: NotesLayout = { cards: {}, widths: placed.layout.widths, leaders: {}, away: placed.layout.away };
   for (const [key, card] of Object.entries(placed.layout.cards)) {
     const point = placed.points[key];

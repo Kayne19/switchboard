@@ -1,7 +1,7 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
 import { monoAdvance } from '../design/tokens';
 import { readableScale, type DrawingText } from './drawingFit';
-import { intersection, type Point, type Rect } from './geometry';
+import { intersection, type Point, type Rect, type Size } from './geometry';
 
 // The chart draws in a viewBox -- its frame -- and the notes laid over a
 // chart map their points and the drawn marks through the same frame, so both
@@ -12,10 +12,7 @@ export const CHART_VIEW_WIDTH = 1000;
 export const CHART_VIEW_HEIGHT = 500;
 
 /** The chart's viewBox, in its own units. */
-export interface ChartFrame {
-  width: number;
-  height: number;
-}
+export type ChartFrame = Size;
 
 /** The approved canvas: the frame every chart is drawn in where it reads. */
 export const CHART_FRAME: ChartFrame = { width: CHART_VIEW_WIDTH, height: CHART_VIEW_HEIGHT };
@@ -59,7 +56,7 @@ export interface ChartFit extends ChartFrame {
  * hold even the least frame (`CHART_MIN_FRAME`) at that scale. A slot not
  * yet measured gets the approved canvas.
  */
-export function chartFrame(slot: { width: number; height: number }): ChartFit {
+export function chartFrame(slot: Size): ChartFit {
   if (!(slot.width > 0) || !(slot.height > 0)) return { ...CHART_FRAME, scale: 1 };
   const fit = Math.min(slot.width / CHART_VIEW_WIDTH, slot.height / CHART_VIEW_HEIGHT);
   if (fit >= CHART_READABLE_SCALE && slot.height <= CHART_VIEW_HEIGHT * fit * CHART_TALL_SLACK) return { ...CHART_FRAME, scale: fit };
@@ -1034,7 +1031,7 @@ export function chartAxisBoxes(plot: Rect, frame: ChartFrame = CHART_FRAME): Rec
  * few. A wide slot stands them upright, thinned, the whole chart in view;
  * a chart whose labels all show upright (staggered, say) is drawn as it is.
  */
-export function chartScrollHeight(data: ChartData, slot: { width: number; height: number }): number | null {
+export function chartScrollHeight(data: ChartData, slot: Size): number | null {
   if (!(slot.width > 0) || !(slot.height > 0)) return null;
   const least = chartLeastHeight(data, slot.width);
   if (least === null || least <= slot.height) return null;

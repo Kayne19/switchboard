@@ -220,7 +220,7 @@ export function DrawingViewport({
   useLeastHeight(
     viewportRef,
     useCallback(
-      (box: { width: number; height: number }) =>
+      (box: Size) =>
         (fit.scrollX || fit.width <= box.width + 1) && (fit.scrollY || fit.height <= box.height + 1) ? least : undefined,
       [fit.scrollX, fit.scrollY, fit.width, fit.height, least],
     ),
