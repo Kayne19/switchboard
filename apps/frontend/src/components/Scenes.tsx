@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { useCallback, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type {
   ChartData,
   ControllerState,
@@ -12,8 +12,7 @@ import type {
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, nameFields, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
-import { stageReport, wantsStage, type StageReport } from '../app/stageFold';
-import { StageDemandContext, watchElement, type StageDemandListener } from '../hooks/useStageDemand';
+import { watchElement } from '../hooks/useStageDemand';
 import { AnnotationCard, type NoteTarget } from '../primitives/AnnotationCard';
 import { calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
@@ -26,7 +25,6 @@ import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
-import { Chevron } from '../primitives/ScrollRim';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame, type FrameVariant } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
@@ -175,12 +173,8 @@ interface RailDetailsProps {
   progressList: Array<SceneObject<ProgressData>>;
   onFocus: (id: string | null) => void;
   onOpenHistory?: () => void;
-  /** The rail is folded to a strip under a primary that takes the stage's height: it shows the note, or the live response when there is no note, and nothing else. */
-  folded?: boolean;
   /** The note is one the charts could not hold, or one about a visual off them: where the column is too short for all it carries, the note leads it, whole, rather than fall under the fold of the metrics. */
   noteLeads?: boolean;
-  /** The column's id, for the handle that opens and folds it. */
-  id?: string;
 }
 
 // Whether the rail's column holds more than it shows, measured only while
@@ -203,22 +197,20 @@ function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): b
 // the same way, then the live response, the note, and tool activity. It is
 // a permanent slot; an empty one renders nothing, and
 // the activity panel can linger after its end without the wrapper
-// unmounting it first. Its children stand in one order in every state:
-// folded to a strip, the stylesheet sets aside all but the note (or the
-// live response where there is no note); a note that leads a crowded
-// column does so by its order there. Folding or leading moves nothing in or
-// out of the page, so nothing is drawn afresh.
-function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, folded = false, noteLeads = false, id }: RailDetailsProps) {
+// unmounting it first. Its children stand in one order in every state; a
+// note that leads a crowded column does so by its order there, so leading
+// moves nothing in or out of the page, and nothing is drawn afresh.
+function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, noteLeads = false }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
   const columnRef = useRef<HTMLDivElement>(null);
-  const leads = useCrowded(columnRef, !folded && noteLeads && note !== null);
+  const leads = useCrowded(columnRef, noteLeads && note !== null);
   // The response and the note stretch into the column's free space, so while
   // either is shown the activity slot stays reserved and a tool starting or
   // clearing never resizes them. Metrics and progress keep their own size at
   // the top and are not moved by a panel below them.
   const reserveActivity = liveMessage !== null || note !== null;
   return (
-    <div ref={columnRef} id={id} className={`content-rail__details${folded && note ? ' content-rail__details--noted' : ''}`}>
+    <div ref={columnRef} className="content-rail__details">
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} slot="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
@@ -303,7 +295,6 @@ function trainingContent(
   railNote: ChartRailNote | null,
   onRailNote: (chartId: string, key: string, away: boolean) => void,
   band: ChartRailNote | null,
-  onDemand: StageDemandListener,
 ): SceneContent | null {
   const charts = objectsOfType<ChartData>(state, 'chart');
   const [firstProgress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
@@ -368,9 +359,7 @@ function trainingContent(
                   <TechFrame variant="panel" />
                   <ObjectSurface object={chart}>
                     <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
-                      <StageDemandContext.Provider value={chart.id === primary.id ? onDemand : null}>
-                        <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} led={chartNoteAnchors(chart, led)} />
-                      </StageDemandContext.Provider>
+                      <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} led={chartNoteAnchors(chart, led)} />
                     </FocusableSurface>
                   </ObjectSurface>
                   {onChart.length > 0 ? (
@@ -422,7 +411,7 @@ function trainingContent(
 // timer or forecast fills the main slot, its note in the rail -- unless the
 // diagram places the note as its own callout -- and every other visual in
 // the aux row under it.
-function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void, onDemand: StageDemandListener): SceneContent | null {
+function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
   const primary = primaryObject(state);
   const frame = primary ? sceneFrame(primary) : null;
   if (!primary || !frame) return null;
@@ -443,9 +432,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         {outline ? <TechFrame variant={outline} /> : null}
         <ObjectSurface object={primary}>
           <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-            <StageDemandContext.Provider value={onDemand}>
-              {renderObject(primary, 'primary', { onStage: state.agentObjects, notes: note ? [note] : [], onCalloutChange })}
-            </StageDemandContext.Provider>
+            {renderObject(primary, 'primary', { onStage: state.agentObjects, notes: note ? [note] : [], onCalloutChange })}
           </FocusableSurface>
         </ObjectSurface>
       </ObjectMotion>
@@ -649,165 +636,34 @@ function MainWithAux({
   );
 }
 
-// ---- The rail folded under a primary that takes the stage's height ----
-
-// What a folded rail keeps behind its handle, in the handle's words: the
-// strip itself shows the note (or the live response) and Damocles, and the
-// rest of a note held to its first lines.
-function foldedItems(state: ControllerState, content: SceneContent, note: NoteData | null, cut: boolean): string[] {
-  const items: string[] = [];
-  if (cut) items.push(note ? 'NOTE' : 'LIVE');
-  if (content.metrics.length > 0) items.push(countText(content.metrics.length, ['METRIC', 'METRICS'], { pad: true }));
-  if (content.progressList.length > 0) items.push('PROGRESS');
-  if (note && liveChatMessage(state)) items.push('LIVE');
-  if (state.activity) items.push('ACTIVITY');
-  return items;
-}
-
-// Whether the folded strip holds its text -- the note, or the live response
-// as it streams -- to fewer lines than it has.
-function useStripCut(railRef: RefObject<HTMLElement | null>, folded: boolean): boolean {
-  const [cut, setCut] = useState(false);
+// Whether the rail stands under the main column (a portrait stage) rather
+// than beside it, read from where the two boxes lie, not from a media query.
+// Where it does, the note a single chart cannot hold lies in a band under
+// it. A scene whose rail stays beside its column re-renders nothing for it.
+function useRailUnder(active: boolean, mainRef: RefObject<HTMLDivElement | null>, railRef: RefObject<HTMLElement | null>): boolean {
+  const [under, setUnder] = useState(false);
   useLayoutEffect(() => {
-    const details = folded ? railRef.current?.querySelector<HTMLElement>('.content-rail__details') : null;
-    if (!details) {
-      setCut(false);
-      return undefined;
-    }
-    const shown = () =>
-      [...details.querySelectorAll<HTMLElement>('.annotation-card__text, .live-chat-card__text')].find((text) => text.offsetParent !== null);
-    return watchElement(
-      details,
-      () => {
-        const text = shown();
-        setCut(text !== undefined && text.scrollHeight > text.clientHeight + 1);
-      },
-      { changes: true },
-    );
-  }, [railRef, folded]);
-  return folded && cut;
-}
-
-// The rail's handle, over it whenever its primary can take the stage: on
-// the folded strip it names what the rail keeps folded, and opens it; on
-// the open rail it folds it again. A strip that keeps nothing folded has a
-// rule there and no control. Its name holds the words it shows, so a
-// caller who says what they see reaches it.
-function RailHandle({ open, items, controls, onToggle }: { open: boolean; items: string[]; controls: string; onToggle: () => void }) {
-  if (!open && items.length === 0) {
-    return (
-      <div className="rail-handle rail-handle--bare" aria-hidden="true">
-        <span className="rail-handle__rule" />
-      </div>
-    );
-  }
-  const shown = open ? 'FOLD' : items.join(' / ');
-  return (
-    <button
-      type="button"
-      className={`rail-handle rail-handle--${open ? 'open' : 'folded'}`}
-      aria-expanded={open}
-      aria-controls={controls}
-      aria-label={open ? `${shown} the rail` : `${shown}: open the rail`}
-      onClick={onToggle}
-    >
-      <span className="rail-handle__rule" aria-hidden="true" />
-      <span className="rail-handle__label tech micro">{shown}</span>
-      <Chevron className="rail-handle__chevron" />
-    </button>
-  );
-}
-
-// Whether the primary takes the stage's height (stageFold.ts), and, where
-// a scene asks (`watchStacked`), whether the rail stands under the main
-// column. What it hears from the primary and measures of the column is
-// kept out of render, and a decision that does not change renders nothing:
-// a scene that never folds is drawn exactly as it was. The columns are
-// read in layout pixels: a box in a shared-layout animation is scaled on
-// screen, never in its offsets. The shared column is the probe, sized by
-// the same rule as that grid row.
-//
-// Each report is kept with the layout it was measured in (the one the
-// primary shares with the rail, or the stage), so a content measured on the
-// stage is weighed against the viewport it had in the shared layout, not
-// against a model of the frame round it. Opening the rail changes neither
-// the reports nor the decision: the handle stays where it is.
-function useStageFold(
-  subject: string | null,
-  railOpen: boolean,
-  watchStacked: boolean,
-  mainRef: RefObject<HTMLDivElement | null>,
-  railRef: RefObject<HTMLElement | null>,
-  probeRef: RefObject<HTMLDivElement | null>,
-): { foldable: boolean; staged: boolean; stacked: boolean; onDemand: StageDemandListener } {
-  const [foldable, setFoldable] = useState(false);
-  const [stacked, setStacked] = useState(false);
-  const staged = foldable && !railOpen;
-  const reports = useRef(new Map<string, StageReport>());
-  // What the page shows now, kept as it commits: a report is measured in
-  // the layout on screen, and a decision weighs what it decided last.
-  const shown = useRef({ foldable, staged, watchStacked });
-  useLayoutEffect(() => {
-    shown.current = { foldable, staged, watchStacked };
-  });
-  const measure = useCallback(() => {
     const main = mainRef.current;
     const rail = railRef.current;
-    const column = main?.offsetHeight ?? 0;
-    return {
-      stacked: main !== null && rail !== null && column > 0 && rail.offsetTop >= main.offsetTop + column - 1,
-      shared: probeRef.current?.offsetHeight ?? 0,
-    };
-  }, [mainRef, railRef, probeRef]);
-  const decide = useCallback(() => {
-    const now = measure();
-    setFoldable(wantsStage(now.stacked, [...reports.current.values()], shown.current.foldable, now.shared));
-    setStacked(shown.current.watchStacked && now.stacked);
-  }, [measure]);
-  const onDemand = useCallback<StageDemandListener>(
-    (key, said) => {
-      if (said === null) reports.current.delete(key);
-      else {
-        const now = measure();
-        reports.current.set(key, stageReport(said, now.stacked && !shown.current.staged, now.shared, reports.current.get(key)));
-      }
-      decide();
-    },
-    [measure, decide],
-  );
-  const active = subject !== null;
-  useLayoutEffect(() => {
-    const boxes = [mainRef.current, railRef.current, probeRef.current];
-    if (!active || boxes.some((box) => !box)) return undefined;
-    decide();
-    const observer = new ResizeObserver(decide);
-    for (const box of boxes) observer.observe(box!);
+    if (!active || !main || !rail) {
+      setUnder(false);
+      return undefined;
+    }
+    const measure = () => setUnder(main.offsetHeight > 0 && rail.offsetTop >= main.offsetTop + main.offsetHeight - 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(main);
+    observer.observe(rail);
     return () => observer.disconnect();
-  }, [active, mainRef, railRef, probeRef, decide]);
-  useLayoutEffect(decide, [decide, watchStacked]);
-  // A new primary is first measured in the layout it would share with the
-  // rail: its content has said nothing there yet (a primitive kept from the
-  // last one speaks for content that is gone), so the stage's height is not
-  // its until it does.
-  const shownSubject = useRef(subject);
-  useLayoutEffect(() => {
-    if (shownSubject.current === subject) return;
-    shownSubject.current = subject;
-    reports.current.clear();
-    shown.current = { ...shown.current, foldable: false };
-    setFoldable(false);
-  }, [subject]);
-  return { foldable, staged, stacked, onDemand };
+  }, [active, mainRef, railRef]);
+  return active && under;
 }
-
-
-// ---- End of the folded rail ----
 
 // ---- End of the aux row ----
 
 // Any mix of objects: the primary, or a cluster of primary metrics, over an
 // aux row of everything the rail does not carry.
-function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandListener): SceneContent | null {
+function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
   const comp = buildCompositionModel(state);
   const primary = comp.primary;
   if (!primary) return null;
@@ -873,7 +729,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
                 />
               ) : (
                 // A progress or a note: sceneKind gives every visual primary a scene of its own.
-                <StageDemandContext.Provider value={onDemand}>{renderObject(primary, 'primary', { onStage: state.agentObjects, notes: note ? [note] : [] })}</StageDemandContext.Provider>
+                renderObject(primary, 'primary', { onStage: state.agentObjects, notes: note ? [note] : [] })
               )}
             </FocusableSurface>
           </ObjectSurface>
@@ -924,18 +780,17 @@ function sceneContent(
   chartRailNote: ChartRailNote | null,
   onChartRailNote: (chartId: string, key: string, away: boolean) => void,
   chartBand: ChartRailNote | null,
-  onDemand: StageDemandListener,
 ): SceneContent | null {
   switch (props.kind) {
     case 'idle':
     case 'conversation':
       return null;
     case 'training':
-      return trainingContent(props, chartRailNote, onChartRailNote, chartBand, onDemand);
+      return trainingContent(props, chartRailNote, onChartRailNote, chartBand);
     case 'composed':
-      return composedContent(props, onDemand);
+      return composedContent(props);
     default:
-      return objectContent(props, onCalloutChange, onDemand);
+      return objectContent(props, onCalloutChange);
   }
 }
 
@@ -973,26 +828,12 @@ export function SceneShell(props: SceneProps) {
   // in less room, or for another note, must not take the note back and
   // hand it out again, the band coming and going under it.
   const [chartBand, setChartBand] = useState<ChartRailNote | null>(null);
-  // What the primary says it lacks reaches the fold (useStageFold) through
-  // a listener made before the scene is, since the scene draws the primary.
-  const foldListener = useRef<StageDemandListener | null>(null);
-  const onDemand = useCallback<StageDemandListener>((key, said) => foldListener.current?.(key, said), []);
-  const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote, chartBand, onDemand);
+  const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote, chartBand);
   const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
-  // A primary that outgrows the column it shares with a rail standing under
-  // it takes the stage's height, the rail folded to a strip (stageFold.ts).
-  // The caller may open the rail again; that holds for this primary.
   const mainRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
-  const probeRef = useRef<HTMLDivElement>(null);
-  const primaryId = content ? (primaryObject(state)?.id ?? null) : null;
-  const [openFor, setOpenFor] = useState<string | null>(null);
-  const railOpen = primaryId !== null && openFor === primaryId;
-  const { foldable, staged, stacked, onDemand: foldOnDemand } = useStageFold(primaryId, railOpen, content?.chartNotes !== undefined, mainRef, railRef, probeRef);
-  useLayoutEffect(() => {
-    foldListener.current = foldOnDemand;
-  }, [foldOnDemand]);
-  const banding = stacked ? content?.chartNotes : undefined;
+  const under = useRailUnder(content?.chartNotes !== undefined, mainRef, railRef);
+  const banding = under ? content?.chartNotes : undefined;
   const bandHeld = chartBand !== null && banding?.chart === chartBand.chart && banding.keys.includes(chartBand.note);
   useLayoutEffect(() => {
     if (chartBand) {
@@ -1002,8 +843,6 @@ export function SceneShell(props: SceneProps) {
     if (banding && chartRailNote?.chart === banding.chart) setChartBand(chartRailNote);
   }, [banding, bandHeld, chartBand, chartRailNote]);
   const railNote = calloutPlaced ? null : (content?.note ?? null);
-  const stripCut = useStripCut(railRef, staged);
-  const detailsId = useId();
   const presence = (
     <DamoclesPresence
       listening={state.listening}
@@ -1017,7 +856,7 @@ export function SceneShell(props: SceneProps) {
 
   return (
     <motion.section
-      className={`scene scene--${layout}${content ? ` scene--${kind}` : ''}${staged ? ' scene--staged' : ''}`}
+      className={`scene scene--${layout}${content ? ` scene--${kind}` : ''}`}
       data-scene={content ? kind : layout}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -1029,24 +868,11 @@ export function SceneShell(props: SceneProps) {
             <div className="scene-heading__title tech">{content.title}</div>
             <div className="scene-heading__sub tech micro">{content.subtitle}</div>
           </div>
-          <div className={`content-grid${staged ? ' content-grid--staged' : ''}`} data-stage={foldable ? (staged ? 'primary' : 'shared') : undefined}>
-            <div ref={probeRef} className="content-grid__probe" aria-hidden="true" />
+          <div className="content-grid">
             <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} drawn={calloutPlaced ? null : content.note}>
               {content.main}
             </MainWithAux>
-            <motion.aside
-              ref={railRef}
-              className={`content-rail${foldable ? ` content-rail--foldable content-rail--${staged ? 'folded' : 'open'}` : ''}`}
-              layout
-            >
-              {foldable ? (
-                <RailHandle
-                  open={railOpen}
-                  items={foldedItems(state, content, railNote, stripCut)}
-                  controls={detailsId}
-                  onToggle={() => setOpenFor(railOpen ? null : primaryId)}
-                />
-              ) : null}
+            <motion.aside ref={railRef} className="content-rail" layout>
               {presence}
               <RailDetails
                 state={state}
@@ -1056,9 +882,7 @@ export function SceneShell(props: SceneProps) {
                 progressList={content.progressList}
                 onFocus={onFocus}
                 onOpenHistory={onOpenHistory}
-                folded={staged}
                 noteLeads={content.noteLeads}
-                id={detailsId}
               />
             </motion.aside>
           </div>

@@ -5,7 +5,7 @@ import { GEOMETRIES, openScene, runActions } from './helpers';
 // apps/frontend/src/app/noteItems.ts), and the words are its point: where
 // they do not fit beside the tag they take a line of their own rather than
 // be cut. Before, a note about a table read "TARGET / test-matrix", an id,
-// and a note about a node in a phone's folded strip read "TARG…".
+// and a note about a node in a phone's rail read "TARG…".
 // tests/unit/noteItems.test.tsx pins the words; these pin the boxes, which
 // jsdom does not draw.
 
@@ -59,10 +59,9 @@ for (const geometry of geometries) {
   });
 }
 
-test('the folded strip on a phone names the node whole', async ({ page }) => {
+test('the rail on a phone names the node whole', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, 'topology');
-  await expect(page.locator('.content-rail--folded')).toBeVisible();
   const target = await railTarget(page);
   expect(target).toEqual({ text: 'TARGET / Display gate', cut: false, badge: true, besideBadge: true });
   // On a line of its own, under the tag.

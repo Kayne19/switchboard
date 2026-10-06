@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent } from 'react';
 import type { Side } from './drawingScroll';
 
-/** The chevron a rim's count points with, and the rail handle's. */
+/** The chevron a rim's count points with. */
 export function Chevron({ className }: { className: string }) {
   return (
     <svg className={className} viewBox="0 0 8 6" aria-hidden="true">
