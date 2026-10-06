@@ -2251,19 +2251,17 @@ button {
   z-index: 1;
   padding: clamp(26px, 4.2cqh, 48px) clamp(22px, 2.6cqw, 42px) clamp(18px, 3cqh, 34px);
 }
+/* Where no frame names the timers (an aux cell, focus), their title stands
+   over them and the field takes the rest. */
 .timer-primitive {
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
   color: var(--paper);
-}
-/* Where no frame names the timers (an aux cell, focus), their title stands
-   over them and the field takes the rest. */
-.timer-primitive {
-  display: flex;
-  flex-direction: column;
 }
 .timer__title {
   flex: none;
@@ -2863,22 +2861,17 @@ button {
   height: 16px;
 }
 .weather-spot__precip {
+  flex: none;
   color: var(--cyan);
 }
 
-/* In a narrow cell the readings give way at the line's end, the day and
-   its badge first in line. */
 /* Narrow, the line's readings give way in an order (WeatherPrimitive
-   Spot): the chance of rain is set aside whole first, then the
-   temperatures end in an ellipsis. */
+   Spot), the day and its badge first in line: the chance of rain is set
+   aside whole first, then the temperatures end in an ellipsis. */
 .weather-spot__temp {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.weather-spot__precip {
-  flex: none;
 }
 
 .weather-spot__precip--dropped {
@@ -3400,6 +3393,9 @@ button {
 .document-viewport__reader {
   width: min(88%, 880px);
 }
+/* Paragraphs are read as Markdown (MarkdownBlocks). Lists and code blocks
+   keep the reader's paragraph rhythm, and a long path or hash wraps inside
+   the column instead of scrolling it sideways. */
 .document-viewport__body {
   overflow: auto;
   padding-right: clamp(8px, 1cqw, 16px);
@@ -3407,18 +3403,13 @@ button {
   font-family: "Helvetica Neue", Arial, sans-serif;
   font-size: clamp(15px, 1.28cqw, 22px);
   line-height: 1.62;
+  overflow-wrap: anywhere;
   scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
-/* Paragraphs are read as Markdown (MarkdownBlocks). Lists and code blocks
-   keep the reader's paragraph rhythm, and a long path or hash wraps inside
-   the column instead of scrolling it sideways. */
 .document-viewport__body p,
 .document-viewport__body .rich-text__list,
 .document-viewport__body .rich-text__code-block {
   margin: 0 0 1.05em;
-}
-.document-viewport__body {
-  overflow-wrap: anywhere;
 }
 
 /* In the aux row the panel is short: the subject and the opening lines are
@@ -4726,10 +4717,8 @@ button {
   white-space: nowrap;
 }
 .calendar-event__detail {
-  white-space: normal;
-}
-.calendar-event__detail {
   flex: 0 1 auto;
+  white-space: normal;
 }
 /* One line: the title on it, its top in the box's first pixels, so a
    stepped cluster's earlier title reads above the event laid over it. */
@@ -5656,8 +5645,10 @@ button {
     gap: var(--scene-gap);
   }
   /* A primary that outgrows its share takes the stage's height; the rail
-     under it folds to a strip of its own height (stageFold.ts). */
+     under it folds to a strip of its own height (stageFold.ts), which
+     stands down to the footer's band. */
   .content-grid--staged {
+    bottom: 6.4cqh;
     grid-template-rows: minmax(0, 1fr) auto;
     gap: clamp(10px, 1.4cqh, 16px);
   }
@@ -5693,13 +5684,6 @@ button {
   .content-rail--foldable > .damocles-presence,
   .content-rail--foldable > .content-rail__details {
     grid-row: 2;
-  }
-  /* Folded: the note (or the live response) beside a smaller Damocles, the
-     note held to three lines; a tap on it expands it, the handle opens the
-     rest. The strip stands down to the footer's band, and its handle is
-     its top rule. */
-  .content-grid--staged {
-    bottom: 6.4cqh;
   }
   /* On the stage the frame's words keep one line, the subtitle after the
      title, cut at the stage's edge before the title is, and the primary
@@ -5740,6 +5724,9 @@ button {
     top: calc(var(--rail-top) + 10px);
     bottom: calc(var(--rail-bottom) + 10px);
   }
+  /* Folded: the note (or the live response) beside a smaller Damocles, the
+     note held to three lines; a tap on it expands it, the handle opens the
+     rest. The strip's handle is its top rule. */
   .content-rail--folded {
     grid-template-rows: auto auto;
     row-gap: clamp(6px, 0.9cqh, 10px);
