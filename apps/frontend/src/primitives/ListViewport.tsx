@@ -3,7 +3,7 @@ import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { rimCount, type Noun } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import { ScrollRim } from './ScrollRim';
-import { PAGE_SHARE, scrollMove } from './drawingScroll';
+import { PAGE_SHARE, scrollMove, type ScrollMove } from './drawingScroll';
 import { drawnScale, watchElement } from '../hooks/watchElement';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
@@ -21,7 +21,8 @@ import { drawnScale, watchElement } from '../hooks/watchElement';
 // picks where only some of them are what the list is a list of; anything
 // else in the list (a group heading, a day rule) is not counted. They are counted by their
 // boxes against the scroll's edges, whatever their layout: rows, a time
-// grid with several to a row, cards.
+// grid with several to a row, cards. Elements that share a name are one
+// item (an agenda's event on each day it runs), counted once (`countPast`).
 //
 // It opens on its lead, once per shape (the lead, the item count, the
 // viewport's height): the item `lead` names, else an element marked
@@ -61,13 +62,31 @@ const SLIVER_SHARE = 0.4;
 /** How much of an item may show in the view while it still counts as past the edge. */
 const sliver = (item: Extent) => Math.max(EDGE, Math.min(SLIVER, (item.bottom - item.top) * SLIVER_SHARE));
 
-/** How many items lie past each edge of `view`: wholly, or with only a sliver of them in view. */
-export function countPast(items: Extent[], view: Extent): ListPast {
+/** An item's box, and the name of the item it draws (`data-item`) where it has one. */
+export interface ItemBox extends Extent {
+  name?: string | null;
+}
+
+/**
+ * How many items lie past each edge of `view`: wholly, or with only a
+ * sliver of them in view. Boxes that share a name draw one item (an
+ * agenda draws an event on every day it runs; a time grid draws one cut at
+ * midnight in two columns), which counts once, and only where every one
+ * of its boxes lies past that edge: one in view, or some past each edge,
+ * and it lies neither way. A box with no name is an item of its own.
+ */
+export function countPast(items: readonly ItemBox[], view: Extent): ListPast {
+  const sides = new Map<string | number, 'above' | 'below' | null>();
+  items.forEach((item, index) => {
+    const side = item.bottom <= view.top + sliver(item) ? 'above' : item.top >= view.bottom - sliver(item) ? 'below' : null;
+    const key = item.name ?? index;
+    sides.set(key, sides.has(key) && sides.get(key) !== side ? null : side);
+  });
   let above = 0;
   let below = 0;
-  for (const item of items) {
-    if (item.bottom <= view.top + sliver(item)) above += 1;
-    else if (item.top >= view.bottom - sliver(item)) below += 1;
+  for (const side of sides.values()) {
+    if (side === 'above') above += 1;
+    else if (side === 'below') below += 1;
   }
   return { above, below };
 }
@@ -112,11 +131,27 @@ const pageLength = (viewHeight: number) => Math.max(1, Math.round(viewHeight * P
  * a page of what shows below it.
  */
 export function keyScrollTop(key: string, shift: boolean, scrollTop: number, viewHeight: number, contentHeight: number, pinned = 0): number | null {
-  const move = scrollMove(key, shift, false);
+  return keyScroll(scrollMove(key, shift, false), scrollTop, viewHeight, contentHeight, pinned);
+}
+
+/**
+ * Where a scroll key moves a pane that scrolls only across (a wide table
+ * on a phone, source with long lines): the same rule along its width, as a
+ * drawing that scrolls only across takes it (`scrollMove`, across): the
+ * arrow left or right a line, Space and Page Down a page on, Shift+Space
+ * and Page Up a page back, Home and End to either side; null for a key it
+ * does not take (the arrows up and down, Enter).
+ */
+export function keyScrollLeft(key: string, shift: boolean, scrollLeft: number, viewWidth: number, contentWidth: number): number | null {
+  return keyScroll(scrollMove(key, shift, true), scrollLeft, viewWidth, contentWidth, 0);
+}
+
+// A move along one axis: a page of the view less what is pinned over it, a line, or to an end.
+function keyScroll(move: ScrollMove | null, position: number, view: number, content: number, pinned: number): number | null {
   if (!move) return null;
-  const max = Math.max(0, contentHeight - viewHeight);
-  const by = move.kind === 'page' ? pageLength(viewHeight - pinned) : move.kind === 'step' ? LINE : max;
-  return Math.max(0, Math.min(max, scrollTop + move.direction * by));
+  const max = Math.max(0, content - view);
+  const by = move.kind === 'page' ? pageLength(view - pinned) : move.kind === 'step' ? LINE : max;
+  return Math.max(0, Math.min(max, position + move.direction * by));
 }
 
 function cssEscape(value: string): string {
@@ -155,9 +190,11 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   const scrollRef = givenRef ?? ownRef;
   const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
-  // A pane may overflow only sideways (source with long lines, a wide
-  // table on a phone): it takes no scroll keys, but it stays a tab stop,
-  // so a reader without a pointer can still scroll it across.
+  // A pane that scrolls across (a table's, source's or document's) may
+  // overflow only sideways (long lines, a wide table on a phone): it is a
+  // tab stop too, and takes the scroll keys across, so a reader without a
+  // pointer can scroll it, and Space pages it rather than reaching the
+  // surface.
   const [across, setAcross] = useState(false);
   const [viewHeight, setViewHeight] = useState(0);
   const [pinnedDepth, setPinnedDepth] = useState(0);
@@ -176,7 +213,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     const k = drawnScale(box.height, element.offsetHeight);
     const items = Array.from(element.querySelectorAll<HTMLElement>(countSelector)).map((item) => {
       const rect = item.getBoundingClientRect();
-      return { top: (rect.top - box.top) / k, bottom: (rect.bottom - box.top) / k };
+      return { top: (rect.top - box.top) / k, bottom: (rect.bottom - box.top) / k, name: item.getAttribute('data-item') };
     });
     const band = pinned ? element.querySelector<HTMLElement>(pinned) : null;
     const depth = band ? band.getBoundingClientRect().height / k : 0;
@@ -188,7 +225,9 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
       current.above === next.above && current.below === next.below && current.top === next.top && current.bottom === next.bottom ? current : next,
     );
     setScrolls(element.scrollHeight > element.clientHeight + 1);
-    setAcross(element.scrollWidth > element.clientWidth + 1);
+    // Across only where the pane can scroll that way: a list clips what
+    // sticks out sideways (overflow-x: hidden), which scrollWidth still counts.
+    setAcross(element.scrollWidth > element.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(element).overflowX));
     setViewHeight(element.clientHeight);
     setPinnedDepth(depth);
   }, [scrollRef, countSelector, pinned]);
@@ -222,14 +261,18 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   // takes is marked handled (FocusableSurface's rule: a child marks an
   // event with preventDefault and never stops it), so the surface around it
   // leaves Space alone rather than expanding the object, and Enter, which
-  // the list does not take, still expands it.
+  // the list does not take, still expands it. They move it down, or, in a
+  // pane that scrolls only across, across (a drawing's rule).
   const scrollKeys = (event: KeyboardEvent<HTMLDivElement>) => {
     const element = scrollRef.current;
     if (!element || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-    const top = keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight, pinnedDepth);
-    if (top === null) return;
+    const sideways = !scrolls;
+    const to = sideways
+      ? keyScrollLeft(event.key, event.shiftKey, element.scrollLeft, element.clientWidth, element.scrollWidth)
+      : keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight, pinnedDepth);
+    if (to === null) return;
     event.preventDefault();
-    element.scrollTo({ top, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    element.scrollTo({ [sideways ? 'left' : 'top']: to, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
   // A tap on an edge's count turns a page that way (ScrollRim marks it handled).
   const page = (direction: -1 | 1) => {
@@ -263,7 +306,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
           aria-label={label}
           role={label ? 'region' : undefined}
           onScroll={onScroll}
-          onKeyDown={scrolls ? scrollKeys : undefined}
+          onKeyDown={scrolls || across ? scrollKeys : undefined}
         >
           {children}
         </div>

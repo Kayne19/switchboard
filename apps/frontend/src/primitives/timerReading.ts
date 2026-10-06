@@ -38,6 +38,19 @@ export interface TimerReading {
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
 /**
+ * Where in each second a timer's reading turns over, in milliseconds past
+ * the whole second (0 to 999): its digits change a whole number of seconds
+ * before its end, and the time since a whole number after, so on the
+ * fraction of a second `endsAt` falls on. The page clock ticks there
+ * (usePageClock). Null for a paused timer, whose reading does not move.
+ */
+export function timerPhase(timer: Timer): number | null {
+  if (timer.state === 'paused') return null;
+  const ends = parseTimeValue(timer.endsAt);
+  return ends ? ((instantMs(ends) % 1000) + 1000) % 1000 : null;
+}
+
+/**
  * A timer at `now` (epoch ms). A running timer counts down to `endsAt` and
  * is done from the moment it is reached: at exactly `endsAt` it reads zero
  * and done. A paused one shows its `remaining`, not counted. The share gone

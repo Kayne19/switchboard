@@ -436,10 +436,18 @@ what the list viewport counts.
 
 A timer is the only thing on the page that reads the time, and it reads
 it from one clock (`apps/frontend/src/hooks/usePageClock.ts`): one
-timeout for the whole page, ticking on the wall clock's whole seconds
-while a countdown on screen is running, and none while every timer is
-paused or none is shown. Two timers therefore turn over on the same tick,
-and a page with eight timers runs one timeout, not eight. What a timer
+timeout for the whole page while a countdown on screen is running, and
+none while every timer is paused or none is shown, so a page with eight
+timers runs one timeout, not eight. It ticks where a countdown's reading
+changes: a whole number of seconds before or after its `endsAt`, so on
+the fraction of a second that end falls on (`timerPhase`; an end at
+`18:42:00.368277` turns the digits 368 ms past each second). An agent's
+end is rarely on a whole second (the skill adds minutes to its clock's
+now, to the microsecond), so a clock on the whole second would show a
+digit too many for up to a second and reach `00:00` late. The timeout is
+set for the soonest turn of every countdown shown, and two that end on
+the same fraction turn over on the same tick. A timer shown while
+another runs reads the time now, not the last tick. What a timer
 reads at a moment is pure (`readTimer`): the digits round up, so they show
 `00:01` until the end and `00:00` only at `endsAt`; from that moment it is
 done, in the warning colour, and counts how long ago it ended; a paused
@@ -447,7 +455,7 @@ timer is held at `remaining` whatever the clock does; a `startedAt` still
 to come (the agent's clock ahead of the page's) reads as nothing gone yet,
 and the countdown still runs to `endsAt`. The share gone is a bar that
 sweeps from tick to tick by a CSS transition; with reduced motion the
-transition goes and the bar steps with the digits. Tests drive the clock:
+transition goes and the bar steps at each tick. Tests drive the clock:
 Vitest's fake timers in the unit tests, Playwright's clock in the browser.
 
 ### Timers and forecasts in their slot
@@ -520,15 +528,21 @@ draws the same fade, dashed cut line and tag (one `ScrollRim`), the tag
 counting the items that lie that way in two digits at least, as every rim
 counts ("06 TASKS", "33 ROWS", "54 LINES", "04 PARAGRAPHS", a week's
 hidden days "MON-TUE / 07 EVENTS"); a row of which no more than a sliver
-shows counts as past the edge; it says MORE where none does. A table's
-rows pass under its header: they are counted, and its top edge drawn,
-below the header. A tap on the tag turns a page and does not expand the
-object. A focused list takes the keys a drawing takes (an arrow moves it
-a line, Space and Page Down a page on, Shift+Space and Page Up a page
-back, Home and End to the ends), each marked handled so Space never
-expands the object; Enter still does. It opens on the item a note names,
-never under the fade, and keeps the reader's place through an update.
-Focus gives the list the whole stage.
+shows counts as past the edge; an item drawn as several rows (an event
+on each day it runs, or cut at midnight across two columns: one
+`data-item` name) counts once, and only where every one of them lies
+past that edge; it says MORE where none does. A table's rows pass under
+its header: they are counted, and its top edge drawn, below the header.
+A tap on the tag turns a page and does not expand the object. A focused
+list takes the keys a drawing takes (an arrow moves it a line, Space and
+Page Down a page on, Shift+Space and Page Up a page back, Home and End
+to the ends), each marked handled so Space never expands the object;
+Enter still does. A pane that scrolls only across (a wide table on a
+phone, source with long lines) takes them across, as a drawing that
+scrolls only across does: the left and right arrows a line, Space and
+the page keys a page, Home and End to either side. It opens on the item
+a note names, never under the fade, and keeps the reader's place through
+an update. Focus gives the list the whole stage.
 
 ### Composition & focus
 

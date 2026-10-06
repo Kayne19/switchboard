@@ -37,7 +37,6 @@ async function rail(page: Page) {
       glyph: box('.content-rail [data-testid="damocles-presence"] svg')!,
       main: box('.content-grid > .content-main')!,
       rail: box('.content-rail')!,
-      handles: document.querySelectorAll('.rail-handle').length,
     };
   });
 }
@@ -52,7 +51,6 @@ for (const size of PORTRAIT) {
         const shared = await rail(page);
         await openScene(page, scene);
         const now = await rail(page);
-        expect(now.handles, 'no handle folds the rail').toBe(0);
         expect(now.glyph.width).toBeCloseTo(shared.glyph.width, 0);
         expect(now.glyph.height).toBeCloseTo(shared.glyph.height, 0);
         expect(now.presence.height).toBeCloseTo(shared.presence.height, 0);

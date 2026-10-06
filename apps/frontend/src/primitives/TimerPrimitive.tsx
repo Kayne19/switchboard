@@ -6,7 +6,7 @@ import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
 import type { Slot } from './slot';
-import { CELL_GAP, formatCountdown, instantClock, readTimer, timerGridLeast, timerLayout, type TimerReading } from './timerReading';
+import { CELL_GAP, formatCountdown, instantClock, readTimer, timerGridLeast, timerLayout, timerPhase, type TimerReading } from './timerReading';
 
 // Countdowns and reminders (docs/display-tool.md, "timer"). Every timer is
 // read against the page's one clock (usePageClock), which runs only while a
@@ -15,8 +15,8 @@ import { CELL_GAP, formatCountdown, instantClock, readTimer, timerGridLeast, tim
 // of the share gone when the timer has a start, then when it ends. A paused
 // timer is frozen and says so; a timer at zero is done, marked in the
 // warning colour, and counts how long ago it ended (the agent speaks; the
-// page plays nothing). With reduced motion the bar steps with the digits
-// instead of sweeping.
+// page plays nothing). With reduced motion the bar steps at each tick of
+// the clock instead of sweeping.
 //
 // The set is laid out for its box (timerLayout): a grid of cells whose
 // digits are as large as the box allows, or, where no grid gives readable
@@ -89,8 +89,8 @@ function TimerItem({ timer, reading, marked, as, measure = false }: { timer: Tim
  * (MetaTitle), so it shows once wherever they are drawn.
  */
 export function TimerPrimitive({ data, marked, slot = 'primary' }: { data: TimerData; marked?: string; slot?: Slot }) {
-  const running = data.timers.some((timer) => timer.state !== 'paused');
-  const now = usePageClock(running);
+  const phases = data.timers.map(timerPhase).filter((phase): phase is number => phase !== null);
+  const now = usePageClock(phases);
   const readings = data.timers.map((timer) => readTimer(timer, now));
   const hostRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(hostRef);
