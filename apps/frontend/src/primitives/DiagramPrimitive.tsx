@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, wrapGreedy, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
 import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
-import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker, markedPart } from './NoteMarker';
@@ -61,7 +61,6 @@ export function DiagramPrimitive({
   callout?: boolean;
   onCalloutChange?: (placed: boolean) => void;
 }) {
-  const { hostRef, width, height, scrollbar } = useDrawingViewport();
   const anchoredNodeId = markedPart(note, id).node;
   const hasAnchoredNode = Boolean(anchoredNodeId && data.nodes.some((n) => n.id === anchoredNodeId));
   const anchor = hasAnchoredNode ? anchoredNodeId : undefined;
@@ -75,15 +74,7 @@ export function DiagramPrimitive({
     (viewport: Viewport) => viewWithMap(viewport, (each) => viewDiagram(data, each, anchor, layouts), (each) => each.orientation),
     [data, anchor, layouts],
   );
-  const { layout, fit, orientation, strip } = useMemo(() => view({ width, height, scrollbar }), [view, width, height, scrollbar]);
-  // The drawing it would lay out for a viewport of another height, at this width.
-  const laidOutFor = useCallback(
-    (at: number) => {
-      const other = view({ width, height: at, scrollbar });
-      return { drawing: other.layout, fit: other.fit };
-    },
-    [view, width, scrollbar],
-  );
+  const { hostRef, layout, fit, orientation, strip, laidOutFor } = useDrawingView(view);
   const portrait = orientation === 'portrait';
   // A drawing that scrolls opens on the node its note names, or else on
   // where it begins: its first layer.

@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import type { NoteData, SequenceDiagramData } from '../controller/types';
 import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
-import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker, markedPart } from './NoteMarker';
@@ -50,7 +50,6 @@ export function SequencePrimitive({
   id: string;
   note?: NoteData | null;
 }) {
-  const { hostRef, width, height, scrollbar } = useDrawingViewport();
   // The note itself stays in the rail; the actor it names carries the NOTE
   // marker, the rail badge's twin, in its header.
   const anchoredActorId = markedPart(note, id).node;
@@ -60,15 +59,7 @@ export function SequencePrimitive({
     (viewport: Viewport) => viewWithMap(viewport, (each) => viewSequence(data, each, anchoredActorId, focused), headerReading),
     [data, anchoredActorId, focused],
   );
-  const { layout, fit, strip } = useMemo(() => view({ width, height, scrollbar }), [view, width, height, scrollbar]);
-  // The exchange it would lay out for a viewport of another height, at this width.
-  const laidOutFor = useCallback(
-    (at: number) => {
-      const other = view({ width, height: at, scrollbar });
-      return { drawing: other.layout, fit: other.fit };
-    },
-    [view, width, scrollbar],
-  );
+  const { hostRef, layout, fit, strip, laidOutFor } = useDrawingView(view);
   // What the viewport tells a reader of an exchange that scrolls: its
   // messages, counted past each edge and kept whole at rest, and the
   // sketch its map draws (headers, lifelines, the arrows).

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useElementSize } from '../hooks/useElementSize';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { useLeastHeight } from '../hooks/useStageDemand';
-import { SLIVER, type DrawingFit, type Size } from './drawingFit';
+import { SLIVER, type DrawingFit, type Size, type Viewport } from './drawingFit';
 import { countText } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import {
@@ -59,21 +59,30 @@ const leastHeight = (drawing: Size, fit: DrawingFit) => drawing.height * fit.min
 const inBox = (length: number) => Math.max(1, Math.floor(length - 1));
 
 /**
- * The viewport a drawing is read in, in CSS pixels: the host's layout size
- * once measured. Until then the first frame falls back to the screen's, so
- * a tall screen never flashes a wide drawing before the observer reports.
+ * A drawing as `view` lays it out and fits it for the viewport it is read
+ * in, in CSS pixels: the host's layout size once measured. Until then the
+ * first frame falls back to the screen's, so a tall screen never flashes a
+ * wide drawing before the observer reports. With it, `laidOutFor`: the
+ * drawing it would lay out for a viewport of another height at this width.
  */
-export function useDrawingViewport(): { hostRef: RefObject<HTMLDivElement | null>; width: number; height: number; scrollbar: number } {
+export function useDrawingView<V extends { layout: Size; fit: DrawingFit }>(
+  view: (viewport: Viewport) => V,
+): V & { hostRef: RefObject<HTMLDivElement | null>; laidOutFor: (height: number) => { drawing: Size; fit: DrawingFit } } {
   const hostRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(hostRef);
   const measured = size.width > 0 && size.height > 0;
   const [scrollbar] = useState(measureScrollbar);
-  return {
-    hostRef,
-    width: measured ? inBox(size.width) : Math.max(1, Math.floor(window.innerWidth)),
-    height: measured ? inBox(size.height) : Math.max(1, Math.floor(window.innerHeight)),
-    scrollbar,
-  };
+  const width = measured ? inBox(size.width) : Math.max(1, Math.floor(window.innerWidth));
+  const height = measured ? inBox(size.height) : Math.max(1, Math.floor(window.innerHeight));
+  const shown = useMemo(() => view({ width, height, scrollbar }), [view, width, height, scrollbar]);
+  const laidOutFor = useCallback(
+    (at: number) => {
+      const other = view({ width, height: at, scrollbar });
+      return { drawing: other.layout, fit: other.fit };
+    },
+    [view, width, scrollbar],
+  );
+  return { ...shown, hostRef, laidOutFor };
 }
 
 /** A region of a drawing, in its user units. */
