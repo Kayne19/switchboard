@@ -5849,11 +5849,12 @@ button {
   .training-charts--compare .chart-object {
     min-height: 38cqh;
   }
-  /* The plot's foot stands above the panel's lower step: on a tall portrait
-     slot the step outgrows the 8 px, and the first tick sat on it. */
+  /* The plot's foot stands above the panel's lower step, with the panel's
+     gap: on a tall portrait slot the step outgrows the 8 px, and the first
+     tick sat on it. */
   .chart-object > .focusable-content {
     display: grid;
-    grid-template-rows: minmax(0, 1fr) max(8px, var(--panel-step));
+    grid-template-rows: minmax(0, 1fr) max(8px, var(--panel-inset));
     padding: 14px 8px 0;
   }
   .chart-object > .focusable-content > * {
