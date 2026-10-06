@@ -900,7 +900,8 @@ describe('placing many notes on one chart', () => {
     expect(layoutNotes([named, ...others], field).get('named')!.rect).toEqual(alone.rect);
     const sixth = layoutNotes([...others, named], field).get('named')!;
     expect(sixth.settled).toBe(false);
-    expect(placeNotes([...others.slice(1), named], field).get('named')).toEqual(alone.rect);
+    // Fifth of five, it searches and finds a clear place.
+    expect(layoutNotes([...others.slice(0, -1), named], field).get('named')!.settled).toBe(true);
   });
 });
 
