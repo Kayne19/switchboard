@@ -8,7 +8,7 @@ import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { drawnScale } from '../../src/hooks/useStageDemand';
 import { keyStop } from '../../src/primitives/drawingScroll';
 import { continuesPast, countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
-import { mount, rerender, stubResizeObserver } from './sceneHarness';
+import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement | undefined;
 
@@ -155,6 +155,30 @@ describe('ListViewport', () => {
     layOut(scroll, 90, 0.5);
     await measured(scroll);
     expect(Array.from(page().querySelectorAll('.list-viewport .scroll-rim__count')).map((rim) => rim.textContent)).toEqual(['03 TASKS', '04 TASKS']);
+  });
+
+  it('counts in its own pixels, so a count read while a cell settles scaled up is the count at rest', async () => {
+    // A row 50px tall of which 10px show at the foot is past the edge (under
+    // the 16px sliver). Drawn three times its size mid-animation, it shows
+    // 30px on screen: still the same 10px of the list. The aux row's
+    // inbox read '3 MESSAGES' or '4 MESSAGES' by which frame it was read
+    // in, and nothing reads it again once such an animation ends.
+    const counts: string[][] = [];
+    for (const scale of [1, 3]) {
+      const scroll = render(rows(6));
+      Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 110 });
+      Object.defineProperty(scroll, 'offsetHeight', { configurable: true, value: 110 });
+      Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 300 });
+      const at = (top: number, height: number) => ({ top: 40 + top * scale, bottom: 40 + (top + height) * scale, left: 0, right: 200, width: 200, height: height * scale, x: 0, y: 40 + top * scale, toJSON() {} }) as DOMRect;
+      scroll.getBoundingClientRect = () => at(0, 110);
+      scroll.querySelectorAll<HTMLElement>('[data-item]').forEach((row, index) => {
+        row.getBoundingClientRect = () => at(index * 50, 50);
+      });
+      await measured(scroll);
+      counts.push(Array.from(page().querySelectorAll('.scroll-rim__count')).map((rim) => rim.textContent ?? ''));
+      unmountAll();
+    }
+    expect(counts).toEqual([['04 TASKS'], ['04 TASKS']]);
   });
 
   it('counts only what countSelector picks', async () => {

@@ -175,18 +175,20 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     const element = scrollRef.current;
     if (!element) return;
     // The rows' rects and the box's are on screen, scaled with it while a
-    // focus opens; the view's height is brought to that scale, so the
-    // counts are right mid-animation as at rest.
+    // focus opens or a cell of the aux row settles; they are brought back to
+    // the list's own pixels, in which a sliver is measured, so a count read
+    // mid-animation is the count at rest. Nothing reads them again when such
+    // an animation ends.
     const box = element.getBoundingClientRect();
     const k = drawnScale(box.height, element.offsetHeight);
     const items = Array.from(element.querySelectorAll<HTMLElement>(countSelector)).map((item) => {
       const rect = item.getBoundingClientRect();
-      return { top: rect.top, bottom: rect.bottom };
+      return { top: (rect.top - box.top) / k, bottom: (rect.bottom - box.top) / k };
     });
     const band = pinned ? element.querySelector<HTMLElement>(pinned) : null;
     const depth = band ? band.getBoundingClientRect().height / k : 0;
     const overflows = element.scrollHeight > element.clientHeight + 1;
-    const counts = overflows ? countPast(items, { top: box.top + depth * k, bottom: box.top + element.clientHeight * k }) : { above: 0, below: 0 };
+    const counts = overflows ? countPast(items, { top: depth, bottom: element.clientHeight }) : { above: 0, below: 0 };
     const goes = overflows ? continuesPast(element.scrollTop, element.clientHeight, element.scrollHeight) : { top: false, bottom: false };
     const next = { ...counts, top: goes.top || counts.above > 0, bottom: goes.bottom || counts.below > 0 };
     setPast((current) =>
