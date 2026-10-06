@@ -3237,7 +3237,10 @@ button {
 /* Entry motion stays in CSS on elements that carry no SVG positioning
    transform: a CSS transform on a translated node group replaces its
    transform attribute and stacks every node in one corner. */
-.diagram-edge {
+.diagram-edge,
+.diagram-edge-label-group,
+.sequence-message,
+.sequence-message-label-group {
   animation: diagram-edge-resolve 0.24s ease-out backwards;
 }
 .diagram-edge--active {
@@ -3245,18 +3248,17 @@ button {
     diagram-edge-resolve 0.24s ease-out backwards,
     diagram-edge-flow 2.2s linear infinite;
 }
-.diagram-edge-label-group {
-  animation: diagram-edge-resolve 0.24s ease-out backwards;
-}
-/* The layouts measure labels in this face at this size before drawing them
-   (drawingKit.tsx `labelBox`, which .sequence-message-label shares); change
-   one and the other must follow. */
-.diagram-edge-label {
+/* The layouts measure a label on a line in this face at this size before
+   drawing it (drawingKit.tsx `labelBox`): a graph's edge labels and a
+   sequence's message labels alike. Change one and the other must follow. */
+.diagram-edge-label,
+.sequence-message-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
   letter-spacing: 0.06em;
 }
-.diagram-edge-label__backing {
+.diagram-edge-label__backing,
+.sequence-message-label__backing {
   fill: #000;
 }
 /* A stub's names list where its edges go (or come from); an edge's own
@@ -3264,7 +3266,8 @@ button {
 .diagram-edge-label__note {
   fill-opacity: 0.55;
 }
-.diagram-node__body {
+.diagram-node__body,
+.sequence-actor__body {
   transform-box: fill-box;
   transform-origin: center;
   animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1)
@@ -3317,15 +3320,8 @@ button {
 }
 
 /* A diagram in sequence mode shares the diagram slot and its motion; its
-   own classes keep the two drawings' rules apart. */
-
-.sequence-actor__body {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1)
-    backwards;
-}
-
+   own classes keep the two drawings' rules apart, and a rule both follow
+   names both (the motion and the line labels above). */
 .sequence-actor-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   letter-spacing: 0.1em;
@@ -3338,23 +3334,6 @@ button {
   letter-spacing: 0.09em;
 }
 
-.sequence-message {
-  animation: diagram-edge-resolve 0.24s ease-out backwards;
-}
-
-.sequence-message-label-group {
-  animation: diagram-edge-resolve 0.24s ease-out backwards;
-}
-
-.sequence-message-label {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-}
-
-.sequence-message-label__backing {
-  fill: #000;
-}
 .diagram-callout {
   animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
 }
