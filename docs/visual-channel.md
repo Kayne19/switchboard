@@ -406,7 +406,8 @@ week, Monday-first rows for a month, a list of days for an agenda, each
 laid out from the box it is given rather than the device (a week too
 narrow for seven columns pages through them; a grid too short to read
 becomes the agenda of the same days; a month too small for titles marks
-its days). The wire rules and the drawing rules are in
+its days, and one too small for those marks lists them). It stands inside
+the panel frame's steps, so nothing it draws crosses the frame. The wire rules and the drawing rules are in
 `docs/display-tool.md` ("calendar").
 
 **The to-do list and the inbox are read as the table and the rail's plan
