@@ -80,6 +80,23 @@ describe('countPast', () => {
     const grid = [{ top: 0, bottom: 20 }, { top: 0, bottom: 20 }, { top: 200, bottom: 260 }, { top: 210, bottom: 240 }];
     expect(countPast(grid, { top: 30, bottom: 190 })).toEqual({ above: 2, below: 2 });
   });
+
+  // An agenda draws an event on every day it runs (a three-day trip is
+  // three rows), and a time grid draws one cut at midnight in two columns.
+  // The count is of events: the agenda's rim said 14 EVENTS of a 13-event
+  // calendar, 12 of them one stay's rows.
+  it('counts an item drawn as several boxes (one name) once, and only when every box lies past the edge', () => {
+    const trip = [0, 100, 200, 300].map((top) => ({ top, bottom: top + 30, name: 'trip' }));
+    const talks = [130, 230, 330].map((top, index) => ({ top, bottom: top + 30, name: `talk-${index}` }));
+    // The trip's first row in view: it is not past the bottom, whatever its others are.
+    expect(countPast([...trip, ...talks], { top: 0, bottom: 120 })).toEqual({ above: 0, below: 3 });
+    // Every row of it past the bottom: one trip.
+    expect(countPast([...trip, ...talks].map((item) => ({ ...item, top: item.top + 500, bottom: item.bottom + 500 })), { top: 0, bottom: 120 })).toEqual({ above: 0, below: 4 });
+    // Rows of it past both edges and none in view: it lies neither way.
+    expect(countPast([...trip, ...talks], { top: 140, bottom: 190 })).toEqual({ above: 0, below: 2 });
+    // Items with no name are each their own.
+    expect(countPast([{ top: 200, bottom: 230 }, { top: 200, bottom: 230 }], { top: 0, bottom: 120 })).toEqual({ above: 0, below: 2 });
+  });
 });
 
 describe('continuesPast', () => {
@@ -191,6 +208,25 @@ describe('ListViewport', () => {
       unmountAll();
     }
     expect(counts).toEqual([['04 TASKS'], ['04 TASKS']]);
+  });
+
+  it('counts an item once however many rows draw it, and only where none of them is in view', async () => {
+    // Ten rows: a stay drawn on rows 1, 3 and 6 (one item), the rest each its own.
+    const names = ['a', 'stay', 'b', 'stay', 'c', 'd', 'stay', 'e', 'f', 'g'];
+    const scroll = render(names.map((name, index) => <div key={index} data-item={name}>{name}</div>));
+    const rims = () => Array.from(page().querySelectorAll('.scroll-rim__count')).map((rim) => rim.textContent);
+    layOut(scroll, 0);
+    await measured(scroll);
+    // Rows 3-9 lie below (10px of row 3 shows), but the stay's row 1 is in view: c, d, e, f and g.
+    expect(rims()).toEqual(['05 TASKS']);
+    layOut(scroll, 40);
+    await measured(scroll);
+    // Row 0 above, rows 5-9 below; the stay's row 1 shows 20px.
+    expect(rims()).toEqual(['01 TASK', '04 TASKS']);
+    layOut(scroll, 200);
+    await measured(scroll);
+    // Rows 0-6 above (10px of row 6 shows): a, the stay, b, c and d.
+    expect(rims()).toEqual(['05 TASKS']);
   });
 
   it('counts only what countSelector picks', async () => {

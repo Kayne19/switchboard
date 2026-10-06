@@ -528,7 +528,10 @@ draws the same fade, dashed cut line and tag (one `ScrollRim`), the tag
 counting the items that lie that way in two digits at least, as every rim
 counts ("06 TASKS", "33 ROWS", "54 LINES", "04 PARAGRAPHS", a week's
 hidden days "MON-TUE / 07 EVENTS"); a row of which no more than a sliver
-shows counts as past the edge; it says MORE where none does. A table's
+shows counts as past the edge; an item drawn as several rows (an event
+on each day it runs, or cut at midnight across two columns: one
+`data-item` name) counts once, and only where every one of them lies past
+that edge; it says MORE where none does. A table's
 rows pass under its header: they are counted, and its top edge drawn,
 below the header. A tap on the tag turns a page and does not expand the
 object. A focused list takes the keys a drawing takes (an arrow moves it

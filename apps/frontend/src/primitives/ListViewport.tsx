@@ -21,7 +21,8 @@ import { drawnScale, watchElement } from '../hooks/watchElement';
 // picks where only some of them are what the list is a list of; anything
 // else in the list (a group heading, a day rule) is not counted. They are counted by their
 // boxes against the scroll's edges, whatever their layout: rows, a time
-// grid with several to a row, cards.
+// grid with several to a row, cards. Elements that share a name are one
+// item (an agenda's event on each day it runs), counted once (`countPast`).
 //
 // It opens on its lead, once per shape (the lead, the item count, the
 // viewport's height): the item `lead` names, else an element marked
@@ -61,13 +62,31 @@ const SLIVER_SHARE = 0.4;
 /** How much of an item may show in the view while it still counts as past the edge. */
 const sliver = (item: Extent) => Math.max(EDGE, Math.min(SLIVER, (item.bottom - item.top) * SLIVER_SHARE));
 
-/** How many items lie past each edge of `view`: wholly, or with only a sliver of them in view. */
-export function countPast(items: Extent[], view: Extent): ListPast {
+/** An item's box, and the name of the item it draws (`data-item`) where it has one. */
+export interface ItemBox extends Extent {
+  name?: string | null;
+}
+
+/**
+ * How many items lie past each edge of `view`: wholly, or with only a
+ * sliver of them in view. Boxes that share a name draw one item (an
+ * agenda draws an event on every day it runs; a time grid draws one cut at
+ * midnight in two columns), which counts once, and only where every one
+ * of its boxes lies past that edge: one in view, or some past each edge,
+ * and it lies neither way. A box with no name is an item of its own.
+ */
+export function countPast(items: readonly ItemBox[], view: Extent): ListPast {
+  const sides = new Map<string | number, 'above' | 'below' | null>();
+  items.forEach((item, index) => {
+    const side = item.bottom <= view.top + sliver(item) ? 'above' : item.top >= view.bottom - sliver(item) ? 'below' : null;
+    const key = item.name ?? index;
+    sides.set(key, sides.has(key) && sides.get(key) !== side ? null : side);
+  });
   let above = 0;
   let below = 0;
-  for (const item of items) {
-    if (item.bottom <= view.top + sliver(item)) above += 1;
-    else if (item.top >= view.bottom - sliver(item)) below += 1;
+  for (const side of sides.values()) {
+    if (side === 'above') above += 1;
+    else if (side === 'below') below += 1;
   }
   return { above, below };
 }
@@ -176,7 +195,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     const k = drawnScale(box.height, element.offsetHeight);
     const items = Array.from(element.querySelectorAll<HTMLElement>(countSelector)).map((item) => {
       const rect = item.getBoundingClientRect();
-      return { top: (rect.top - box.top) / k, bottom: (rect.bottom - box.top) / k };
+      return { top: (rect.top - box.top) / k, bottom: (rect.bottom - box.top) / k, name: item.getAttribute('data-item') };
     });
     const band = pinned ? element.querySelector<HTMLElement>(pinned) : null;
     const depth = band ? band.getBoundingClientRect().height / k : 0;
