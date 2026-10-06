@@ -82,3 +82,12 @@ export function renderObject(object: SceneObject, slot: Slot, { onStage, notes, 
       return null;
   }
 }
+
+/**
+ * `renderObject` as a component, for a place that draws the object inside
+ * an error boundary of its own (focus): a throw while choosing what to
+ * draw then stays inside that boundary, as a throw in the primitive does.
+ */
+export function ObjectView({ object, slot, ...context }: { object: SceneObject; slot: Slot } & ObjectContext) {
+  return renderObject(object, slot, context);
+}

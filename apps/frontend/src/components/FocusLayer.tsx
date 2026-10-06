@@ -4,7 +4,7 @@ import type { ControllerState, NoteData, SceneObject } from '../controller/types
 import { noteTarget } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
-import { renderObject } from './renderObject';
+import { ObjectView } from './renderObject';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /**
@@ -70,7 +70,7 @@ export function FocusLayer({
               <button type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
-              {renderObject(object, 'focus', { onStage: objects, notes: notes.map((note) => note.data) })}
+              <ObjectView object={object} slot="focus" onStage={objects} notes={notes.map((note) => note.data)} />
             </SurfaceBoundary>
             {noted ? (
               <aside className="focus-layer__note" data-notes={notes.length}>
