@@ -6,6 +6,7 @@
 // data, a week too narrow for seven columns paging through them, a grid
 // too short becoming the agenda, a month too small for titles marking its
 // days, and the note's item marked once wherever the event is drawn.
+import { readFileSync } from 'node:fs';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -55,6 +56,18 @@ function render(data: CalendarData, marked?: string, size = { width: 0, height: 
 }
 
 const boxes = (scope: Element, id: string) => [...scope.querySelectorAll(`[data-item="${id}"]`)];
+
+// The stylesheet's rules for exactly a selector (for `.a`, not `.a-b` or
+// `.a::before`), comments out, and what they declare for a property.
+const stylesheet = readFileSync(`${import.meta.dirname}/../../src/styles/index.css`, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+function rulesFor(selector: string): string[] {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return [...stylesheet.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .filter(([, selectors]) => selectors.split(',').some((each) => new RegExp(`^${escaped}$`).test(each.trim())))
+    .map(([, , body]) => body);
+}
+const declared = (selector: string, property: string) =>
+  rulesFor(selector).flatMap((body) => [...body.matchAll(new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`, 'g'))].map((match) => match[1].trim()));
 
 describe('the week', () => {
   it('draws seven day columns, today\u2019s lit, with the now line in it at the agent\u2019s now', () => {
@@ -213,6 +226,17 @@ describe('the month', () => {
     // With no room for the list, the mark carries it.
     const small = render(assistantMonth, 'dentist', { width: 330, height: 200 });
     expect([...small.querySelectorAll('.note-badge')].map((badge) => badge.closest('.calendar-mark') !== null)).toEqual([true]);
+  });
+});
+
+describe('a month too small for titles', () => {
+  it('lists the days under a small month in the room the grid leaves, less the list\u2019s own margin', () => {
+    const calendar = render(assistantMonth, 'dentist', { width: 330, height: 440 });
+    const list = calendar.querySelector('.calendar-month__list') as HTMLElement;
+    // A height set from the measured room ran the list past the calendar's foot by its margin.
+    expect(list.style.height).toBe('');
+    expect(declared('.calendar-month__list', 'flex')).toEqual(['1 1 0']);
+    expect(declared('.calendar-month__list', 'min-height')).toEqual(['0']);
   });
 });
 

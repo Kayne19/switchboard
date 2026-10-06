@@ -672,7 +672,8 @@ function MonthView({ data, model, marked, size, marks }: { data: CalendarData; m
         </div>
       </div>
       {listed ? (
-        <div className="calendar-month__list" style={{ height: `${listRoom}px` }}>
+        // The list takes the room under the grid less its own margin (the stylesheet's flex), never the room as measured: that ran it past the calendar's foot by the margin.
+        <div className="calendar-month__list">
           <AgendaList model={model} days={listDays} marked={inList ? marked : undefined} compact />
         </div>
       ) : null}
