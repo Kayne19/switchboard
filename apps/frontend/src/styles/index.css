@@ -840,7 +840,11 @@ button {
   gap: 4px 12px;
   margin-bottom: clamp(8px, 1cqh, 13px);
 }
-.annotation-card__tag {
+/* The tag that heads a rail card: a note's, the live response's, the last
+   tool's. */
+.annotation-card__tag,
+.live-chat-card__tag,
+.tool-activity__tag {
   flex: none;
   color: rgba(232, 230, 223, 0.35);
 }
@@ -874,7 +878,10 @@ button {
   vertical-align: middle;
   border-radius: 2px;
 }
-.annotation-card__history {
+/* A note and the live response share their history button, body and
+   scrolling text (the live response pads its text off the scroll bar). */
+.annotation-card__history,
+.live-chat-card__history {
   flex: none;
   padding: 0;
   border: 0;
@@ -883,10 +890,12 @@ button {
   cursor: pointer;
   transition: color 0.16s ease;
 }
-.annotation-card__history:hover {
+.annotation-card__history:hover,
+.live-chat-card__history:hover {
   color: var(--orange);
 }
-.annotation-card__body {
+.annotation-card__body,
+.live-chat-card__body {
   height: 100%;
   min-height: 0;
 }
@@ -894,7 +903,8 @@ button {
   cursor: pointer;
 }
 /* Long explanations scroll inside the card; short ones never show a bar. */
-.annotation-card__text {
+.annotation-card__text,
+.live-chat-card__text {
   height: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1742,10 +1752,6 @@ button {
   justify-content: space-between;
   gap: 10px;
 }
-.live-chat-card__tag {
-  flex: none;
-  color: rgba(232, 230, 223, 0.35);
-}
 .live-chat-card__index {
   min-width: 0;
   margin-left: auto;
@@ -1753,31 +1759,7 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.live-chat-card__history {
-  flex: none;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: rgba(232, 230, 223, 0.42);
-  cursor: pointer;
-  transition: color 0.16s ease;
-}
-.live-chat-card__history:hover {
-  color: var(--orange);
-}
-.live-chat-card__body {
-  height: 100%;
-  min-height: 0;
-}
 .live-chat-card__text {
-  height: 100%;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
-  font-family: "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(13px, 1.06cqw, 18px);
-  line-height: 1.48;
   padding-right: clamp(6px, 1cqw, 14px);
 }
 /* The last tool the project agent used: a compact status panel that
@@ -1834,10 +1816,6 @@ button {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-}
-.tool-activity__tag {
-  flex: none;
-  color: rgba(232, 230, 223, 0.35);
 }
 .tool-activity__status {
   flex: none;
