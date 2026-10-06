@@ -34,6 +34,7 @@ import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
+import { Chevron } from '../primitives/ScrollRim';
 import { TablePrimitive } from '../primitives/TablePrimitive';
 import { TasksPrimitive, taskCounts } from '../primitives/TasksPrimitive';
 import { InboxPrimitive, inboxCounts } from '../primitives/InboxPrimitive';
@@ -774,9 +775,7 @@ function RailHandle({ open, items, controls, onToggle }: { open: boolean; items:
     >
       <span className="rail-handle__rule" aria-hidden="true" />
       <span className="rail-handle__label tech micro">{shown}</span>
-      <svg className="rail-handle__chevron" viewBox="0 0 8 6" aria-hidden="true">
-        <path d="M 4 0 L 8 6 L 0 6 Z" />
-      </svg>
+      <Chevron className="rail-handle__chevron" />
     </button>
   );
 }

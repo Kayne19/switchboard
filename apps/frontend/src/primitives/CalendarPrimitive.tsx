@@ -42,6 +42,7 @@ import {
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
+import { ScrollRim } from './ScrollRim';
 
 // A calendar in the four views the agent picks (docs/display-tool.md,
 // "calendar"), drawn as one instrument with the table and the progress
@@ -531,23 +532,7 @@ function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: b
   const start = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
   const tag = (side: 'left' | 'right', text: string) => (
-    <>
-      <div className={`drawing-viewport__rail drawing-viewport__rail--${side}`} aria-hidden="true" />
-      <div
-        className={`drawing-viewport__rim drawing-viewport__rim--${side} calendar-pages__rim`}
-        onClick={(event: MouseEvent<HTMLDivElement>) => {
-          // Handled, so the surface does not also expand the calendar; it bubbles on (FocusableSurface).
-          event.preventDefault();
-          onTurn(side === 'left' ? -1 : 1);
-        }}
-        aria-hidden="true"
-      >
-        <span className="drawing-viewport__rim-text">{text}</span>
-        <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
-          <path d="M 4 0 L 8 6 L 0 6 Z" />
-        </svg>
-      </div>
-    </>
+    <ScrollRim side={side} text={text} onPage={() => onTurn(side === 'left' ? -1 : 1)} className="calendar-pages__rim" />
   );
   if (!paged) return <div className="calendar-grid">{children}</div>;
   return (

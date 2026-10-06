@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import { useElementSize } from '../hooks/useElementSize';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { useLeastHeight } from '../hooks/useStageDemand';
 import { SLIVER, type DrawingFit, type Size, type Viewport } from './drawingFit';
 import { countText } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
+import { ScrollRim } from './ScrollRim';
 import {
   EXIT_CHARS,
   clearOf,
@@ -476,10 +477,8 @@ export function DrawingViewport({
     }
   };
 
-  // A tap on a rim's count turns a page that way. The tap is marked handled,
-  // so the surface around the drawing does not expand the object.
-  const page = (side: Side) => (event: MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
+  // A tap on a rim's count turns a page that way (ScrollRim marks it handled).
+  const page = (side: Side) => {
     const element = scrollRef.current;
     if (!element || !stops) return;
     const across = side === 'left' || side === 'right';
@@ -650,21 +649,7 @@ export function DrawingViewport({
             </div>
           </div>
         ) : null}
-        {SIDES.map((side) =>
-          continues[side] ? (
-            <div
-              key={side}
-              className={`drawing-viewport__more drawing-viewport__more--${side}`}
-              style={{ [side === 'left' || side === 'right' ? 'width' : 'height']: `${fadeDepth(side)}px`, ...(side === 'bottom' ? null : { top: `${inset}px` }) }}
-              aria-hidden="true"
-            />
-          ) : null,
-        )}
-        {SIDES.map((side) =>
-          rimTexts[side] ? (
-            <div key={side} className={`drawing-viewport__rail drawing-viewport__rail--${side}`} style={side === 'bottom' ? undefined : { top: `${inset}px` }} aria-hidden="true" />
-          ) : null,
-        )}
+        {/* The names of the lines that leave, under the rims' counts, which keep clear of them. */}
         {exits.length > 0 ? (
           <div className="drawing-viewport__exits" aria-hidden="true">
             {exits.map((exit) => (
@@ -683,23 +668,17 @@ export function DrawingViewport({
             ))}
           </div>
         ) : null}
-        {SIDES.map((side) => {
-          const text = rimTexts[side];
-          return text ? (
-            <div
-              key={side}
-              className={`drawing-viewport__rim drawing-viewport__rim--${side}`}
-              style={side === 'left' || side === 'right' ? { top: `${rails[side]}px` } : { left: `${rails[side]}px`, ...(side === 'top' ? { top: `${inset}px` } : null) }}
-              onClick={page(side)}
-              aria-hidden="true"
-            >
-              <span className="drawing-viewport__rim-text">{text}</span>
-              <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
-                <path d="M 4 0 L 8 6 L 0 6 Z" />
-              </svg>
-            </div>
-          ) : null;
-        })}
+        {SIDES.map((side) => (
+          <ScrollRim
+            key={side}
+            side={side}
+            fade={continues[side] ? fadeDepth(side) : null}
+            text={rimTexts[side] || null}
+            onPage={() => page(side)}
+            inset={inset}
+            at={rails[side]}
+          />
+        ))}
       </div>
       {strip ? (
         <div className="drawing-viewport__strip" style={{ [strip.side === 'bottom' ? 'height' : 'width']: `${strip.depth}px` }}>

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { countText, type Noun } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
+import { ScrollRim } from './ScrollRim';
 import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
@@ -220,10 +221,8 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     event.preventDefault();
     element.scrollTo({ top, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
-  // A tap on an edge's count turns a page that way. The tap is marked
-  // handled, so the surface around the list does not expand the object.
-  const page = (direction: -1 | 1) => (event: MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
+  // A tap on an edge's count turns a page that way (ScrollRim marks it handled).
+  const page = (direction: -1 | 1) => {
     const element = scrollRef.current;
     if (!element) return;
     element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
@@ -234,16 +233,14 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   // of the items that lie that way, or MORE where none of them does.
   const edge = (side: 'top' | 'bottom', continues: boolean, count: number) =>
     continues ? (
-      <>
-        <div className={`drawing-viewport__more drawing-viewport__more--${side}`} style={{ height: `${fade}px` }} aria-hidden="true" />
-        <div className={`drawing-viewport__rail drawing-viewport__rail--${side}`} aria-hidden="true" />
-        <div className={`drawing-viewport__rim drawing-viewport__rim--${side} list-viewport__rim`} onClick={page(side === 'top' ? -1 : 1)} aria-hidden="true" data-count={count}>
-          <span className="drawing-viewport__rim-text">{count > 0 ? countText(count, noun) : 'MORE'}</span>
-          <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
-            <path d="M 4 0 L 8 6 L 0 6 Z" />
-          </svg>
-        </div>
-      </>
+      <ScrollRim
+        side={side}
+        fade={fade}
+        text={count > 0 ? countText(count, noun) : 'MORE'}
+        onPage={() => page(side === 'top' ? -1 : 1)}
+        className="list-viewport__rim"
+        count={count}
+      />
     ) : null;
 
   return (
