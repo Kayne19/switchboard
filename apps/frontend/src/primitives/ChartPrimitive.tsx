@@ -18,8 +18,7 @@ import {
   chartFrame,
   chartLeastHeight,
   chartLegendLayout,
-  chartPointCallouts,
-  chartScaleStep,
+  chartRings,
   chartScales,
   chartScrollHeight,
   type ChartAnchor,
@@ -155,11 +154,23 @@ export function ChartPrimitive({
   data,
   focused = false,
   named,
+  led,
 }: {
   data: ChartData;
   focused?: boolean;
-  /** The points the notes on this chart name: the chart marks each one as it marks its marker's. */
+  /**
+   * The points the notes on this chart name: a bar chart marks each one's
+   * bar as it marks its marker's; a line, area or scatter chart rings each
+   * one no leader on it reaches (`led`).
+   */
   named?: ChartAnchor[];
+  /**
+   * Of those, the points a note laid over the chart runs its leader to:
+   * the leader marks such a point on a line, area or scatter chart, so the
+   * chart rings only the others (their notes in the rail, the band, a focus
+   * panel). None where not given: no note is laid over the chart.
+   */
+  led?: ChartAnchor[];
 }) {
   const reduced = useReducedMotion();
   const clipId = useId().replace(/:/g,'');
@@ -176,11 +187,7 @@ export function ChartPrimitive({
   const scroll = useMemo(() => chartScrollHeight(data, slot), [data, slot]);
   const fit = chartFrame(scroll === null ? slot : { width: slot.width, height: scroll });
   const width = fit.width, height = fit.height;
-  // At the scale the slot draws it, which the room past a marked point's
-  // value is measured at (a note's leader keeps its clearance in pixels):
-  // stepped, so a resize does not work the chart out again every pixel.
-  const scale = chartScaleStep(fit.scale);
-  const scales=useMemo(()=>chartScales(data,{width,height,scale}),[data,width,height,scale]);
+  const scales=useMemo(()=>chartScales(data,{width,height}),[data,width,height]);
   const {plot,kind,horizontal,baseline,valueAt}=scales;
   // The plot's own padding grows to clear a legend that wraps, a second
   // row of category labels, and a horizontal bar chart's labels down the
@@ -196,17 +203,21 @@ export function ChartPrimitive({
       return {...series,points,path:linePath(points),area:areaPath(points,baseY),bars:bars.filter((bar)=>bar.series===index)};
     });
   },[data,scales,baseline,valueAt]);
-  // The marker and every point a note names are marked where the series
-  // is drawn: on a line, area or scatter chart a ring on the point, its
-  // value printed beside it where a note's leader lands
-  // (`chartPointCallouts`); a bar as a bar, outlined, its value printed past
-  // its end (`chartBarCallouts`). Neither draws a guide of its own -- a
-  // full-height dashed rule read as a stray line through the plot.
-  // Kept while what the notes name is the same: the scene builds a new
-  // array of it every render, so the memos read `named` through its key.
-  const namedKey=(named??[]).map((anchor)=>`${anchor.x}\u0000${anchor.series??''}`).join('\u0001');
-  const barCallouts=useMemo(()=>chartBarCallouts(data,named,scales),[data,namedKey,scales]);
-  const pointCallouts=useMemo(()=>chartPointCallouts(data,named,scales),[data,namedKey,scales]);
+  // A marker is a ring on the point it names, on the drawn series itself:
+  // the same interpolated point a note's leader reaches. It draws no guide
+  // of its own -- a full-height dashed rule read as a stray line through
+  // the plot, and ran on past the point beneath any leader that met it
+  // there. A point a note names that no leader on the chart reaches keeps
+  // a ring too, hollow, so the data under it still shows (`chartRings`).
+  // A bar is marked as a bar: outlined, its value printed past its end
+  // (`chartBarCallouts`), not a ring on its edge.
+  // Kept while what the notes name is the same: the scene builds new arrays
+  // of it every render, so the memos read `named` and `led` through a key.
+  const anchorsKey=(anchors?:ChartAnchor[])=>(anchors??[]).map((anchor)=>`${anchor.x}\u0000${anchor.series??''}`).join('\u0001');
+  const namedKey=anchorsKey(named);
+  const ledKey=anchorsKey(led);
+  const callouts=useMemo(()=>chartBarCallouts(data,named,scales),[data,namedKey,scales]);
+  const rings=useMemo(()=>chartRings(data,named,led,scales),[data,namedKey,ledKey,scales]);
   const grounded=kind==='bar'||kind==='area';
   const base=valueAt(baseline);
   const clip=chartClip(scales);
@@ -243,21 +254,21 @@ export function ChartPrimitive({
           </motion.g>;
         })}
       </g>
-      {/* A marked point's ring and value are drawn whole, past the plot's
-          edge where the point sits on it. The ring hides the line under it,
-          but rings a scatter's point, which it stands round. The ring and
-          the points keep their radius in focus: the value beside the ring
-          and the notes' clearances are worked out from it, and focus draws
-          the whole chart larger already. */}
-      {pointCallouts.map((callout)=>(
-        <motion.g key={`${callout.series}-${callout.x}`} className="chart-marker" data-series={data.series[callout.series]?.name} data-x={callout.x} data-from={callout.from} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
-          <circle className="chart-marker__point" cx={callout.at.x} cy={callout.at.y} r={CHART_MARKER_RADIUS} fill={kind==='scatter'?'none':'#000'} stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
-          <text className="chart-marker__value" x={callout.value.x} y={callout.value.y} textAnchor={callout.value.anchor}>{callout.value.text}</text>
+      {/* The rings are drawn whole, past the plot's edge where a point sits
+          on it. They and the points keep their radius in focus: the notes'
+          clearances are worked out from it, and focus draws the whole chart
+          larger already. */}
+      {rings.marker ? (
+        <motion.g className="chart-marker" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
+          <circle className="chart-marker__point" cx={rings.marker.x} cy={rings.marker.y} r={CHART_MARKER_RADIUS} fill="#000" stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
         </motion.g>
+      ) : null}
+      {rings.named.map((point)=>(
+        <motion.circle key={`${point.x},${point.y}`} className="chart-note-ring" cx={point.x} cy={point.y} r={CHART_MARKER_RADIUS} strokeWidth={CHART_MARKER_STROKE} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}/>
       ))}
       {/* A marked bar's printed value may stand past the plot's edge, so
           only its outline is cut to the plot, as the bar is. */}
-      {barCallouts.map((callout)=>{
+      {callouts.map((callout)=>{
         const {rect}=callout.bar;
         return <motion.g key={`${callout.bar.series}-${callout.bar.index}`} className="chart-callout" data-series={data.series[callout.bar.series]?.name} data-index={callout.bar.index} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
           <rect className="chart-callout__outline" clipPath={`url(#${clipId})`} x={rect.left} y={rect.top} width={Math.max(0.5,rect.right-rect.left)} height={Math.max(0.5,rect.bottom-rect.top)}/>

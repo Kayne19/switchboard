@@ -176,10 +176,12 @@ test('explicit anchored note survives later chat messages', async ({ page }) => 
 
 // #49 and #26: every note on a chart is shown over the plot, clear of the
 // others, and the chart keeps its size for them; a note that names a point
-// runs its leader out of its card's border to the value the chart prints at
-// the point. A stepped plan under the chart leaves it short, and the rule
-// holds there too. Where the chart has no place for every card, one note is
-// in the rail: which one is the placement's rule (notePlacement.test.ts).
+// runs its leader out of its card's border to the point on the line. A
+// stepped plan under the chart leaves it short, and the rule holds there
+// too: a card that could sit level with its point, its leader leaving by a
+// side, sits above or below. Where the chart has no place for every card,
+// one note is in the rail: which one is the placement's rule
+// (notePlacement.test.ts).
 const stepsUnderTheChart = [
   { label: 'WARMUP', state: 'done', detail: 'EPOCHS 1-5 / LR RAMP' },
   { label: 'STAGE 1 / FULL RES', state: 'done', detail: 'EPOCHS 6-30' },
@@ -270,10 +272,17 @@ for (const { chart, viewport } of chartNoteCases) {
       }));
       const rail = document.querySelector<HTMLElement>('.content-rail .rail-note')?.textContent ?? '';
       const band = document.querySelector<HTMLElement>('.chart-note-band')?.textContent ?? null;
-      const values = [...document.querySelectorAll('.chart-object[data-chart-id="loss"] .chart-marker')].map((marked) => {
-        const box = marked.querySelector('.chart-marker__value')!.getBoundingClientRect();
-        return { x: marked.getAttribute('data-x'), series: marked.getAttribute('data-series'), left: box.left, top: box.top, right: box.right, bottom: box.bottom };
-      });
+      // Each series' line as drawn, on the page.
+      const svg = document.querySelector<SVGSVGElement>('.chart-object[data-chart-id="loss"] .chart-primitive > svg')!;
+      const matrix = svg.getScreenCTM()!;
+      const lines = Object.fromEntries([...svg.querySelectorAll('.chart-series-group')].map((group) => [
+        group.getAttribute('data-series')!,
+        [...group.querySelector('.chart-series')!.getAttribute('d')!.matchAll(/[ML] ([-\d.]+) ([-\d.]+)/g)].map((match) => {
+          const [x, y] = [Number(match[1]), Number(match[2])];
+          return { x: matrix.a * x + matrix.c * y + matrix.e, y: matrix.b * x + matrix.d * y + matrix.f };
+        }),
+      ]));
+      const values = document.querySelectorAll('.chart-marker__value').length;
       const leaders = [...document.querySelectorAll<SVGGElement>('.chart-note-leader')].map((group) => ({
         id: group.dataset.note!,
         points: group.querySelector('polyline')!.getAttribute('points')!.split(' ').map((pair) => {
@@ -281,7 +290,7 @@ for (const { chart, viewport } of chartNoteCases) {
           return { x: layer.left + x, y: layer.top + y };
         }),
       }));
-      return { panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, cards, leaders, away, rail, band, values };
+      return { panel: { left: panel.left, top: panel.top, right: panel.right, bottom: panel.bottom }, cards, leaders, away, rail, band, lines, values };
     });
 
     // Every note is on screen: on the chart, or -- one at most, where the
@@ -312,22 +321,27 @@ for (const { chart, viewport } of chartNoteCases) {
     expect(geometry.leaders.map((leader) => leader.id).sort()).toEqual(
       ['early-note', 'training-note'].filter((id) => geometry.cards.some((card) => card.id === id)),
     );
+    // No value is printed by a point on a line: the leader marks it.
+    expect(geometry.values).toBe(0);
     for (const leader of geometry.leaders) {
       const card = geometry.cards.find((candidate) => candidate.id === leader.id)!;
       const start = leader.points[0];
-      // It begins on the card's border: out of its top or bottom edge, or,
-      // from a card beside the point, out of its side to run along and turn
-      // onto the value the chart prints there.
-      const onBorder = (Math.abs(start.y - (card.bottom - 0.5)) <= 1 || Math.abs(start.y - (card.top + 0.5)) <= 1) && start.x >= card.left && start.x <= card.right
-        || (Math.abs(start.x - (card.right - 0.5)) <= 1 || Math.abs(start.x - (card.left + 0.5)) <= 1) && start.y >= card.top && start.y <= card.bottom;
-      expect(onBorder, `${leader.id} leader starts on its card's border`).toBe(true);
-      // It ends by the value the chart prints at its own point.
-      const named = { 'training-note': { x: '32', series: 'VAL LOSS' }, 'early-note': { x: '6', series: 'TRAIN LOSS' } }[leader.id as 'training-note' | 'early-note'];
-      const value = geometry.values.find((each) => each.x === named.x && each.series === named.series);
-      expect(value, `${leader.id}'s point is marked`).toBeDefined();
+      // It begins on the card's bottom or top border.
+      const onEdge = Math.abs(start.y - (card.bottom - 0.5)) <= 1 || Math.abs(start.y - (card.top + 0.5)) <= 1;
+      expect(onEdge, `${leader.id} leader starts on its card's border`).toBe(true);
+      expect(start.x).toBeGreaterThanOrEqual(card.left);
+      expect(start.x).toBeLessThanOrEqual(card.right);
+      // It ends on the line of the series its note names.
+      const line = geometry.lines[{ 'training-note': 'VAL LOSS', 'early-note': 'TRAIN LOSS' }[leader.id as 'training-note' | 'early-note']];
       const end = leader.points.at(-1)!;
-      const gap = Math.max(value!.left - end.x, end.x - value!.right, value!.top - end.y, end.y - value!.bottom, 0);
-      expect(gap, `${leader.id} leader ends by its point's value`).toBeLessThanOrEqual(6);
+      const off = Math.min(...line.slice(1).map((b, index) => {
+        const a = line[index];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const t = Math.max(0, Math.min(1, ((end.x - a.x) * dx + (end.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        return Math.hypot(end.x - (a.x + dx * t), end.y - (a.y + dy * t));
+      }));
+      expect(off, `${leader.id} leader ends on its point's line`).toBeLessThanOrEqual(1.5);
     }
   });
 }
@@ -470,16 +484,18 @@ for (const { viewport, two } of barNoteCases) {
   });
 }
 
-// Kayne, round 4 ("bar chart looks sick"): a note on a line, area or
-// scatter chart follows the bar chart's rules. Its card lay across the
-// plot's top border (the training goldens), its leader faded to nothing and
-// was free to cross the other line, and the point it named was not marked.
-// A card lies wholly inside the plot, in clear space, or wholly outside it;
-// its leader runs through no other line or point to the value the chart
-// prints by the ringed point; and its tag names the x and the series as the
-// caller reads them.
+// Kayne, round 6: "I'm not sure that the line chart needed new note
+// rules ... I think I liked the way it looked before." A note on a line,
+// area or scatter chart takes the rules the training goldens were approved
+// with again (round 4 gave it the bar chart's; that is reverted). Its card
+// may lie across the plot's border; its leader leaves the card's border,
+// fades on its way and ends on the point it names -- on the drawn line, or
+// a scatter's point -- where no value is printed; its tag names the x and
+// the series as the caller reads them. On the training chart at 1440x900
+// and 2560x1080 the card stands in the top row across the plot's top
+// border, as approved.
 const pointNoteCharts = {
-  training: { actions: [], notes: { 'training-note': { x: '32', series: 'VAL LOSS', tag: 'TARGET / EPOCH 32 / VAL LOSS', value: '0.164', text: 'Validation loss turns upward here' } }, railAt: [] },
+  training: { actions: [], notes: { 'training-note': { x: 32, series: 'VAL LOSS', tag: 'TARGET / EPOCH 32 / VAL LOSS' } } },
   area: {
     actions: [
       { op: 'clear' },
@@ -495,9 +511,7 @@ const pointNoteCharts = {
       },
       { op: 'show', id: 'traffic-note', type: 'note', data: { tag: 'OBSERVATION / JULY', anchor: { target: 'traffic', x: 6, series: 'ORGANIC' }, segments: [{ text: 'Organic traffic peaked in July, the month the docs moved to the new site.' }] } },
     ],
-    notes: { 'traffic-note': { x: '6', series: 'ORGANIC', tag: 'TARGET / JUL / ORGANIC', value: '38', text: 'Organic traffic peaked in July' } },
-    // A phone's tall plot leaves no clear place above July's peak: the rail takes it there.
-    railAt: ['390x844'],
+    notes: { 'traffic-note': { x: 6, series: 'ORGANIC', tag: 'TARGET / JUL / ORGANIC' } },
   },
   scatter: {
     actions: [
@@ -511,15 +525,14 @@ const pointNoteCharts = {
       },
       { op: 'show', id: 'slow-note', type: 'note', data: { tag: 'OBSERVATION / 17:00', anchor: { target: 'slow', x: 17, series: 'P99' }, segments: [{ text: 'The 17:00 spike lines up with the nightly export job starting early.' }] } },
     ],
-    notes: { 'slow-note': { x: '17', series: 'P99', tag: 'TARGET / HOUR 17 / P99', value: '92.5', text: 'The 17:00 spike lines up' } },
-    railAt: [],
+    notes: { 'slow-note': { x: 17, series: 'P99', tag: 'TARGET / HOUR 17 / P99' } },
   },
 } as const;
 const pointNoteCases = (['training', 'area', 'scatter'] as const).flatMap((chart) =>
   [{ width: 1440, height: 900 }, { width: 2560, height: 1080 }, { width: 1280, height: 720 }, { width: 820, height: 1180 }, { width: 390, height: 844 }].map((viewport) => ({ chart, viewport })),
 );
 for (const { chart, viewport } of pointNoteCases) {
-  test(`a note on a ${chart} chart lies wholly in or out of the plot, its leader through no other mark to its point's value, at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  test(`a note on a ${chart} chart runs a fading leader onto the point it names, at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     const spec = pointNoteCharts[chart];
     await page.setViewportSize(viewport);
     await page.goto(`/?scene=${chart === 'training' ? 'training' : 'comparison'}&chrome=0`);
@@ -542,30 +555,29 @@ for (const { chart, viewport } of pointNoteCases) {
         left: Math.min(...grid.map((line) => line.left)), right: Math.max(...grid.map((line) => line.right)),
         top: Math.min(...grid.map((line) => line.top)), bottom: Math.max(...grid.map((line) => line.bottom)),
       };
-      const lines = [...svg.querySelectorAll('.chart-series')].map((path) =>
-        [...path.getAttribute('d')!.matchAll(/[ML] ([-\d.]+) ([-\d.]+)/g)].map((match) => toClient(Number(match[1]), Number(match[2]))));
-      const points = [...svg.querySelectorAll('.chart-point')].map(box);
-      const marked = [...svg.querySelectorAll('.chart-marker')].map((group) => ({
-        x: group.getAttribute('data-x'), series: group.getAttribute('data-series'),
-        ring: box(group.querySelector('.chart-marker__point')!), value: box(group.querySelector('.chart-marker__value')!),
-        text: group.querySelector('.chart-marker__value')!.textContent,
-      }));
-      // No layer where the chart's one note is in the band.
+      // Each series as drawn: its line, and a scatter's points in order.
+      const series = Object.fromEntries([...svg.querySelectorAll('.chart-series-group')].map((group) => [group.getAttribute('data-series')!, {
+        line: [...(group.querySelector('.chart-series')?.getAttribute('d') ?? '').matchAll(/[ML] ([-\d.]+) ([-\d.]+)/g)].map((match) => toClient(Number(match[1]), Number(match[2]))),
+        points: [...group.querySelectorAll('.chart-point')].map((point) => toClient(Number(point.getAttribute('cx')), Number(point.getAttribute('cy')))),
+      }]));
       const layer = document.querySelector('.chart-notes')?.getBoundingClientRect() ?? { left: 0, top: 0 };
       const notes = [...document.querySelectorAll<HTMLElement>('.chart-note')].map((card) => {
-        const polyline = document.querySelector(`.chart-note-leader[data-note="${card.dataset.note}"] polyline`);
+        const group = document.querySelector(`.chart-note-leader[data-note="${card.dataset.note}"]`);
+        const polyline = group?.querySelector('polyline');
         return {
           id: card.dataset.note!,
           away: card.classList.contains('chart-note--away'),
           card: box(card),
           anchor: card.querySelector('.annotation-card__anchor')?.textContent ?? '',
+          bar: group?.classList.contains('chart-note-leader--bar') ?? false,
+          stops: group?.querySelectorAll('stop').length ?? 0,
           leader: polyline ? polyline.getAttribute('points')!.split(' ').map((pair) => {
             const [x, y] = pair.split(',').map(Number);
             return { x: layer.left + x, y: layer.top + y };
           }) : null,
         };
       });
-      return { plot, lines, points, marked, notes, rail: [...document.querySelectorAll('.content-rail .rail-note, .chart-note-band')].map((element) => element.textContent).join(' ') };
+      return { plot, series, notes, values: document.querySelectorAll('.chart-marker__value').length };
     });
     const near = (p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) => {
       const dx = b.x - a.x;
@@ -574,65 +586,31 @@ for (const { chart, viewport } of pointNoteCases) {
       return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
     };
     const { plot } = geometry;
+    expect(geometry.values, 'no value is printed by a point').toBe(0);
     for (const note of geometry.notes) {
-      const target = spec.notes[note.id as keyof typeof spec.notes] as { x: string; series: string; tag: string; value: string; text: string };
-      // The card names the x and the series; the chart rings the point and prints its value.
+      const target = spec.notes[note.id as keyof typeof spec.notes] as { x: number; series: string; tag: string };
       expect(note.anchor).toBe(target.tag);
-      const marked = geometry.marked.find((each) => each.x === target.x && each.series === target.series);
-      expect(marked, `${note.id}'s point is marked`).toBeDefined();
-      expect(marked!.text).toBe(target.value);
-      if (note.away) {
-        expect((spec.railAt as readonly string[]).includes(`${viewport.width}x${viewport.height}`), `${note.id} keeps its place on the chart`).toBe(true);
-        expect(geometry.rail, `${note.id} is in the rail`).toContain(target.text);
-        continue;
-      }
+      if (note.away) continue;
       const { card } = note;
-      const inside = card.left >= plot.left + 4 && card.right <= plot.right - 4 && card.top >= plot.top + 4 && card.bottom <= plot.bottom - 4;
-      const outside = card.right <= plot.left - 6 || card.left >= plot.right + 6 || card.bottom <= plot.top - 6 || card.top >= plot.bottom + 6;
-      expect(inside || outside, `${note.id} lies across the plot's border`).toBe(true);
-      // Clear of the lines and the points.
-      for (const line of geometry.lines) {
-        for (let index = 1; index < line.length; index += 1) {
-          for (let step = 0; step <= 20; step += 1) {
-            const x = line[index - 1].x + ((line[index].x - line[index - 1].x) * step) / 20;
-            const y = line[index - 1].y + ((line[index].y - line[index - 1].y) * step) / 20;
-            const over = x > card.left - 3 && x < card.right + 3 && y > card.top - 3 && y < card.bottom + 3;
-            expect(over, `${note.id}'s card lies over a line`).toBe(false);
-          }
-        }
+      if (chart === 'training' && viewport.width >= 1440) {
+        // As approved: the top row, across the plot's top border.
+        expect(card.top < plot.top && card.bottom > plot.top, `${note.id} stands across the plot's top border`).toBe(true);
       }
-      for (const point of geometry.points) {
-        const apart = card.right + 3 <= point.left || point.right + 3 <= card.left || card.bottom + 3 <= point.top || point.bottom + 3 <= card.top;
-        expect(apart, `${note.id}'s card lies over a point`).toBe(true);
-      }
-      // The leader leaves the card's border and ends by the point's value.
+      // The leader leaves the card's border, fades on its way, and ends on the point it names.
       expect(note.leader, `${note.id} has a leader`).not.toBeNull();
+      expect(note.bar).toBe(false);
+      expect(note.stops).toBe(3);
       const leader = note.leader!;
       const start = leader[0];
       const onBorder = (Math.abs(start.x - card.left) <= 1.5 || Math.abs(start.x - card.right) <= 1.5) && start.y >= card.top && start.y <= card.bottom
         || (Math.abs(start.y - card.top) <= 1.5 || Math.abs(start.y - card.bottom) <= 1.5) && start.x >= card.left && start.x <= card.right;
       expect(onBorder, `${note.id}'s leader starts on its card's border`).toBe(true);
       const end = leader[leader.length - 1];
-      const value = marked!.value;
-      const gap = Math.max(value.left - end.x, end.x - value.right, value.top - end.y, end.y - value.bottom, 0);
-      expect(gap, `${note.id}'s leader ends by its point's value`).toBeLessThanOrEqual(6);
-      // Through no line and no other point on its way, short of where it lands.
-      const run = leader.slice(1).flatMap((b, index) => {
-        const a = leader[index];
-        const count = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y));
-        return Array.from({ length: count + 1 }, (_, step) => ({ x: a.x + ((b.x - a.x) * step) / Math.max(1, count), y: a.y + ((b.y - a.y) * step) / Math.max(1, count) }));
-      }).slice(0, -6);
-      for (const p of run) {
-        for (const line of geometry.lines) {
-          for (let index = 1; index < line.length; index += 1) {
-            expect(near(p, line[index - 1], line[index]), `${note.id}'s leader runs across a line`).toBeGreaterThan(2);
-          }
-        }
-        for (const point of geometry.points) {
-          const through = p.x > point.left - 1 && p.x < point.right + 1 && p.y > point.top - 1 && p.y < point.bottom + 1;
-          expect(through, `${note.id}'s leader runs through a point`).toBe(false);
-        }
-      }
+      const drawn = geometry.series[target.series];
+      const off = chart === 'scatter'
+        ? Math.hypot(end.x - drawn.points[target.x].x, end.y - drawn.points[target.x].y)
+        : Math.min(...drawn.line.slice(1).map((b, index) => near(end, drawn.line[index], b)));
+      expect(off, `${note.id}'s leader ends on its point`).toBeLessThanOrEqual(1.5);
     }
   });
 }
@@ -721,7 +699,7 @@ test('a note with no clear place on its bar chart is shown in the rail, its bar 
   await expect(page.locator('.chart-note[data-note="uptime-note"]')).toBeHidden();
   await expect(page.locator('.chart-note-leader')).toHaveCount(0);
   // The bar it names stays marked, as a bar: outlined, its value printed.
-  await expect(page.locator('.chart-marker')).toHaveCount(0);
+  await expect(page.locator('.chart-note-ring')).toHaveCount(0);
   const callout = page.locator('.chart-callout[data-index="2"][data-series="THIS MONTH"]');
   await expect(callout).toHaveCount(1);
   await expect(callout.locator('.chart-callout__value')).toHaveText('100');
