@@ -661,24 +661,8 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
             "diagram node",
         )?;
 
-        let id = nm
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| !is_blank(id) && utf16_len(id) <= 128)
-            .ok_or("diagram node id must be non-empty and <= 128 UTF-16 code units")?;
-        if !node_ids.insert(id.to_string()) {
-            return Err(format!("duplicate diagram node id: {id}"));
-        }
-
-        let label = nm
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("diagram node.label must be a string")?;
-        if utf16_len(label) > 256 {
-            return Err(
-                "diagram node.label exceeds maximum length of 256 UTF-16 code units".into(),
-            );
-        }
+        let id = check_item_id(nm, &mut node_ids, "diagram node")?;
+        let label = required_string(nm, "label", 256, "diagram node.label")?;
 
         let mut node_out = Map::new();
         node_out.insert("id".into(), id.into());
@@ -738,12 +722,7 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
 
         copy_optional_string(em, &mut edge_out, "label", 256, "diagram edge.label")?;
         copy_optional_semantic(em, &mut edge_out, "diagram edge.semantic")?;
-        if let Some(active) = em.get("active") {
-            let b = active
-                .as_bool()
-                .ok_or("diagram edge.active must be boolean")?;
-            edge_out.insert("active".into(), b.into());
-        }
+        copy_optional_bool(em, &mut edge_out, "active", "diagram edge.active")?;
         clean_edges.push(Value::Object(edge_out));
     }
 
@@ -751,19 +730,7 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
     out.insert("mode".into(), "graph".into());
     out.insert("nodes".into(), Value::Array(clean_nodes));
     out.insert("edges".into(), Value::Array(clean_edges));
-
-    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("diagram.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "diagram.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "diagram.caption")?;
+    copy_frame_text(data, &mut out, "diagram")?;
 
     Ok(Value::Object(out))
 }
@@ -803,26 +770,8 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
         let am = a.as_object().ok_or("diagram actor must be an object")?;
         check_unknown_keys(am, &["id", "label", "sub", "semantic"], "diagram actor")?;
 
-        let id = am
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or("diagram actor id must be non-empty and <= 128 UTF-16 code units")?;
-        if is_blank(id) || utf16_len(id) > 128 {
-            return Err("diagram actor id must be non-empty and <= 128 UTF-16 code units".into());
-        }
-        if !actor_ids.insert(id.to_string()) {
-            return Err(format!("duplicate diagram actor id: {id}"));
-        }
-
-        let label = am
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("diagram actor.label must be a string")?;
-        if utf16_len(label) > 256 {
-            return Err(
-                "diagram actor.label exceeds maximum length of 256 UTF-16 code units".into(),
-            );
-        }
+        let id = check_item_id(am, &mut actor_ids, "diagram actor")?;
+        let label = required_string(am, "label", 256, "diagram actor.label")?;
 
         let mut actor_out = Map::new();
         actor_out.insert("id".into(), id.into());
@@ -859,15 +808,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
                 "diagram message to endpoint \"{to}\" not found in actors"
             ));
         }
-        let label = mm
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("diagram message.label must be a string")?;
-        if utf16_len(label) > 256 {
-            return Err(
-                "diagram message.label exceeds maximum length of 256 UTF-16 code units".into(),
-            );
-        }
+        let label = required_string(mm, "label", 256, "diagram message.label")?;
 
         let mut message_out = Map::new();
         message_out.insert("from".into(), from.into());
@@ -880,12 +821,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
             &MESSAGE_KINDS,
             "diagram message.kind",
         )?;
-        if let Some(active) = mm.get("active") {
-            let b = active
-                .as_bool()
-                .ok_or("diagram message.active must be boolean")?;
-            message_out.insert("active".into(), b.into());
-        }
+        copy_optional_bool(mm, &mut message_out, "active", "diagram message.active")?;
         clean_messages.push(Value::Object(message_out));
     }
 
@@ -893,19 +829,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
     out.insert("mode".into(), "sequence".into());
     out.insert("actors".into(), Value::Array(clean_actors));
     out.insert("messages".into(), Value::Array(clean_messages));
-
-    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("diagram.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "diagram.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "diagram.caption")?;
+    copy_frame_text(data, &mut out, "diagram")?;
 
     Ok(Value::Object(out))
 }
@@ -1530,9 +1454,9 @@ fn read_time(value: Option<&Value>, forms: &[TimeForm], field: &str) -> Result<T
 // ---- personal-assistant types -------------------------------------------------
 //
 // calendar, tasks, timer, weather and inbox (docs/display-tool.md,
-// "Personal-assistant types"). Each item id is checked as a diagram node id
-// is (non-blank, <= 128 UTF-16 units) and is unique in its list; the
-// browser's validators hold the same rules in the same order.
+// "Personal-assistant types"). Each item id goes through check_item_id, as a
+// diagram node or actor id does (non-blank, <= 128 UTF-16 units, unique in
+// its list); the browser's validators hold the same rules in the same order.
 
 const CALENDAR_VIEWS: [&str; 4] = ["day", "week", "month", "agenda"];
 const MAX_CALENDAR_EVENTS: usize = 200;
