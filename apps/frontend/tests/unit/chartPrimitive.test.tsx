@@ -1,7 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primitives/ChartPrimitive';
 import {
@@ -22,6 +20,7 @@ import {
   chartScrollHeight,
   chartSeriesPoint,
 } from '../../src/primitives/chartGeometry';
+import { mount, rerender, stubResizeObserver, unmount } from './sceneHarness';
 
 const data: ChartData = {
   series: [
@@ -34,28 +33,13 @@ const data: ChartData = {
 };
 
 let host: HTMLDivElement;
-let root: Root;
 
-beforeAll(() => {
-  // The chart measures its slot; jsdom lays nothing out, so the slot reads
-  // 0 x 0 and the chart keeps the approved canvas unless a test sizes it.
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  if (root) act(() => root.unmount());
-  host?.remove();
-});
+// The chart measures its slot; jsdom lays nothing out, so the slot reads
+// 0 x 0 and the chart keeps the approved canvas unless a test sizes it.
+stubResizeObserver();
 
 function render() {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(<ChartPrimitive data={data} />));
+  host = mount(<ChartPrimitive data={data} />);
 }
 
 describe('chart series colors', () => {
@@ -87,10 +71,7 @@ describe('chart series colors', () => {
 
 
 function renderWith(chart: ChartData) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(<ChartPrimitive data={chart} />));
+  host = mount(<ChartPrimitive data={chart} />);
 }
 
 const plotWidth = 1000 - 74 - 28;
@@ -210,10 +191,7 @@ describe('chart series point', () => {
   // on the line itself, with no value printed there.
   it('rings each point a note names that no leader reaches, hollow, and none a leader reaches, whole past the plot\'s clip', () => {
     const chart: ChartData = { xMax: 3, yMin: 0, yMax: 5, series: [{ name: 'LOSS', values: [5, 3, 2, 1] }], marker: { x: 3 } };
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root.render(<ChartPrimitive data={chart} named={[{ x: 0 }, { x: 1 }, { x: 3 }]} led={[{ x: 1 }]} />));
+    host = mount(<ChartPrimitive data={chart} named={[{ x: 0 }, { x: 1 }, { x: 3 }]} led={[{ x: 1 }]} />);
     const scales = chartScales(chart);
     const marker = host.querySelector('.chart-marker__point')!;
     expect(marker.closest('[clip-path]')).toBeNull();
@@ -233,8 +211,7 @@ describe('chart series point', () => {
   it("rings a scatter's marker without hiding the point, and fills a line's ring over the line", () => {
     renderWith({ kind: 'scatter', xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } });
     expect(host.querySelector('.chart-marker__point')!.getAttribute('fill')).toBe('none');
-    act(() => root.unmount());
-    host.remove();
+    unmount(host);
     renderWith({ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } });
     expect(host.querySelector('.chart-marker__point')!.getAttribute('fill')).toBe('#000');
   });
@@ -242,7 +219,7 @@ describe('chart series point', () => {
   it('rings every point a note names where no leader is given: focus, a cell beside the primary', () => {
     renderWith({ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }] });
     expect(host.querySelectorAll('.chart-note-ring')).toHaveLength(0);
-    act(() => root.render(<ChartPrimitive data={{ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }] }} focused named={[{ x: 1 }, { x: 2 }]} />));
+    rerender(host, <ChartPrimitive data={{ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }] }} focused named={[{ x: 1 }, { x: 2 }]} />);
     expect(host.querySelectorAll('.chart-note-ring')).toHaveLength(2);
   });
 
@@ -252,17 +229,13 @@ describe('chart series point', () => {
   it('draws the ring and the points in focus at the radius the geometry keeps clear of', () => {
     for (const kind of ['line', 'scatter'] as const) {
       const chart: ChartData = { kind, xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } };
-      host = document.createElement('div');
-      document.body.append(host);
-      root = createRoot(host);
-      act(() => root.render(<ChartPrimitive data={chart} focused />));
+      host = mount(<ChartPrimitive data={chart} focused />);
       const ring = host.querySelector('.chart-marker__point')!;
       expect(Number(ring.getAttribute('r'))).toBe(CHART_MARKER_RADIUS);
       const obstacle = chartObstacles(chart).marks.at(-1)!;
       expect((obstacle.right - obstacle.left) / 2).toBe(Number(ring.getAttribute('r')) + CHART_MARKER_STROKE / 2);
       for (const point of host.querySelectorAll('.chart-point')) expect(Number(point.getAttribute('r'))).toBe(CHART_POINT_RADIUS);
-      act(() => root.unmount());
-      host.remove();
+      unmount(host);
     }
   });
 
@@ -525,10 +498,7 @@ describe('chart kinds', () => {
 
   it('marks each bar a note names, as it marks its marker', () => {
     const chart: ChartData = { kind: 'bar', labels: ['a', 'b', 'c'], series: [{ name: 'S', values: [3, 1, 2] }] };
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root.render(<ChartPrimitive data={chart} named={[{ x: 2 }]} />));
+    host = mount(<ChartPrimitive data={chart} named={[{ x: 2 }]} />);
     const callouts = [...host.querySelectorAll('.chart-callout')];
     expect(callouts.map((callout) => callout.getAttribute('data-index'))).toEqual(['2']);
     expect(callouts[0].querySelector('.chart-callout__value')!.textContent).toBe('2');
@@ -556,8 +526,7 @@ describe('chart kinds', () => {
       expect(groups).toHaveLength(2);
       groups.forEach((group, index) => expect(group.getAttribute('clip-path')).toContain(`-trace-${index}`));
       expect(host.querySelectorAll('svg > defs > clipPath > rect')).toHaveLength(3);
-      act(() => root.unmount());
-      host.remove();
+      unmount(host);
     }
   });
 });
@@ -569,8 +538,7 @@ describe('chart kinds keep the line chart as it was', () => {
       const labels = [...host.querySelectorAll<SVGTextElement>('.chart-axis-label')];
       expect(labels[0].getAttribute('x')).toBe('500');
       expect(labels[1].getAttribute('transform')).toBe('translate(17 250) rotate(-90)');
-      act(() => root.unmount());
-      host.remove();
+      unmount(host);
     }
   });
 
@@ -687,8 +655,7 @@ describe('chart frame', () => {
     expect(axis.length).toBeGreaterThan(1);
     expect(ticks.slice(0, axis.length)).toEqual(axis);
     // A chart whose rows fit its slot draws in it, as before.
-    act(() => root.unmount());
-    host.remove();
+    unmount(host);
     renderInSlot(sixty, { width: 358, height: 1200 });
     expect(host.querySelector('.chart-primitive')!.className).not.toContain('chart-primitive--scrolls');
   });

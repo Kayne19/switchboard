@@ -4,8 +4,6 @@
 // a point on the chart runs a leader from its card to that point, straight
 // and at 45 degrees like the frames; a note that names none is attached
 // without one.
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ChartNotes, type ChartNote } from '../../src/components/ChartNotes';
 import { SceneShell } from '../../src/components/Scenes';
@@ -13,6 +11,7 @@ import { ControllerProvider } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
 import type { ChartData, ControllerAction, ControllerState, SceneObject } from '../../src/controller/types';
 import { chartBarCallout, chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { mount as mountNode, rerender, stubResizeObserver } from './sceneHarness';
 
 const chart: ControllerAction = {
   op: 'show',
@@ -46,15 +45,11 @@ const SVG_TOP = 60;
 const CARD = { width: 300, height: 80 };
 
 let host: HTMLDivElement;
-let root: Root;
 let svgWidth = 1000;
 
+stubResizeObserver();
+
 beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
   Element.prototype.getBoundingClientRect = function (this: Element) {
     // The layer's frame, the box the cards are placed in.
     if (this instanceof HTMLElement && this.classList.contains('chart-notes__frame')) return rect(0, 0, 1000, 600);
@@ -70,27 +65,22 @@ afterAll(() => {
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
   svgWidth = 1000;
   CARD.height = 80;
 });
 
+const shell = (state: ControllerState) => (
+  <ControllerProvider>
+    <SceneShell kind="training" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
+  </ControllerProvider>
+);
+
 function render(state: ControllerState) {
-  act(() =>
-    root.render(
-      <ControllerProvider>
-        <SceneShell kind="training" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
-      </ControllerProvider>,
-    ),
-  );
+  rerender(host, shell(state));
 }
 
 function mount(actions: ControllerAction[]) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  render(reduceActions(createInitialState(), actions));
+  host = mountNode(shell(reduceActions(createInitialState(), actions)));
 }
 
 function card(id: string) {
@@ -304,17 +294,12 @@ describe('chart notes', () => {
     const flat = { xMax: 40, yMin: 0, yMax: 10, series: [{ name: 'A', values: [5.25, 5.25, 5.25, 5.25, 5.25] }] };
     const object = { id: 'flat', type: 'chart', role: 'primary', data: flat } as unknown as SceneObject<ChartData>;
     const named = [{ x: 20 }, { x: 21 }];
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
     const shown: ChartNote = { key: 'second', data: { tag: 'SECOND', anchor: { target: 'flat', x: 21 }, segments: [{ text: 'The second point.' }] } };
-    act(() =>
-      root.render(
-        <div className="chart-object">
-          <div className="chart-primitive"><svg /></div>
-          <ChartNotes chart={object} objects={{ flat: object }} notes={[shown]} named={named} onFocus={() => {}} />
-        </div>,
-      ),
+    host = mountNode(
+      <div className="chart-object">
+        <div className="chart-primitive"><svg /></div>
+        <ChartNotes chart={object} objects={{ flat: object }} notes={[shown]} named={named} onFocus={() => {}} />
+      </div>,
     );
     const point = chartSeriesPoint(flat, 21)!;
     const end = leader('second')!.at(-1)!;
