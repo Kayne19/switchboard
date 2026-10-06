@@ -105,6 +105,14 @@ export const CHART_TICK_ROW_HEIGHT = 16;
 // The row of x tick text sits this far below the plot, where the numeric
 // ticks have always sat (`height - 20` with the base bottom padding).
 export const CHART_TICK_BASELINE = CHART_PAD.bottom - 20;
+// The legend's rows take at most this share of the frame's height.
+const CHART_LEGEND_SHARE = 0.25;
+/**
+ * The least height the legend's rows leave the plot, with a second row of
+ * category labels under it, in any frame at least `CHART_MIN_FRAME` tall:
+ * six rows of tick text.
+ */
+export const CHART_PLOT_FLOOR = 6 * CHART_TICK_ROW_HEIGHT;
 // A horizontal bar chart's category labels end 14 before the plot, as the y
 // ticks do, and leave the rotated axis label its strip on the far left.
 const CHART_CATEGORY_PAD_GAP = 40;
@@ -137,9 +145,21 @@ export interface ChartLegendItem {
   row: number;
 }
 
+/** The last legend item, standing for the series past the rows the legend may take. */
+export interface ChartLegendMore {
+  /** `+K SERIES`. */
+  text: string;
+  x: number;
+  row: number;
+  /** The series it stands for, in order: its title names them. */
+  names: string[];
+}
+
 export interface ChartLegendLayout {
   items: ChartLegendItem[];
   rows: number;
+  /** The series the legend has no rows for, counted in one last item; none while each has its own. */
+  more?: ChartLegendMore;
 }
 
 function truncateLabel(name: string, maxWidth: number, advance: number): { text: string; truncated: boolean } {
@@ -149,15 +169,39 @@ function truncateLabel(name: string, maxWidth: number, advance: number): { text:
   return { text: `${name.slice(0, maxChars).trimEnd()}${CHART_ELLIPSIS}`, truncated: true };
 }
 
+// How far a legend item's origin moves the next one along its row.
+function legendAdvance(contentWidth: number): number {
+  return Math.max(CHART_LEGEND_STEP, contentWidth + CHART_LEGEND_GAP);
+}
+
+/**
+ * How many rows the legend may take in this frame: at most a quarter of its
+ * height, and never so many that the plot is left less than
+ * `CHART_PLOT_FLOOR` tall with a second row of category labels under it
+ * (a line's first row stands in the plot's base padding, a bar chart's
+ * every row above its plot); always one.
+ */
+function legendRowCap(kind: ChartKind, frame: ChartFrame): number {
+  const share = Math.floor((frame.height * CHART_LEGEND_SHARE) / CHART_LEGEND_ROW_HEIGHT);
+  const room = frame.height - CHART_PAD.top - CHART_PAD.bottom - CHART_TICK_ROW_HEIGHT - CHART_PLOT_FLOOR;
+  const floor = Math.floor(room / CHART_LEGEND_ROW_HEIGHT) + (kind === 'bar' ? 0 : 1);
+  return Math.max(1, Math.min(share, floor));
+}
+
 /**
  * Where each legend entry sits: each item advances by its own width (or the
  * default step, whichever is larger) along a row, wraps onto a further row
  * when the next item would run past `plotWidth`, and is truncated with an
- * ellipsis when even a row to itself is not wide enough for it.
+ * ellipsis when even a row to itself is not wide enough for it. A legend
+ * with more rows than its frame gives it (`legendRowCap`) keeps the items
+ * on those rows, less as many from the end of the last as leave room for
+ * one more after them, `+K SERIES`, which stands for the rest: the plot
+ * under it keeps its height however many series the chart carries.
  */
 export function chartLegendLayout(
   data: ChartData,
   plotWidth: number = CHART_VIEW_WIDTH - CHART_PAD.left - CHART_PAD.right,
+  frame: ChartFrame = CHART_FRAME,
 ): ChartLegendLayout {
   const items: ChartLegendItem[] = [];
   let cursor = 0;
@@ -176,9 +220,23 @@ export function chartLegendLayout(
       contentWidth = CHART_LEGEND_TEXT_X + text.length * CHART_LEGEND_CHAR_ADVANCE;
     }
     items.push({ name: series.name, text, truncated, x: cursor, row });
-    cursor += Math.max(CHART_LEGEND_STEP, contentWidth + CHART_LEGEND_GAP);
+    cursor += legendAdvance(contentWidth);
   }
-  return { items, rows: row + 1 };
+  const cap = legendRowCap(chartKind(data), frame);
+  if (row < cap) return { items, rows: row + 1 };
+  // The rows it may take, and the item that counts the rest after the last
+  // item there that leaves it room: the first of an emptied row has it.
+  const last = cap - 1;
+  const kept = items.filter((item) => item.row <= last);
+  for (;;) {
+    const text = `+${items.length - kept.length} SERIES`;
+    const tail = kept.at(-1);
+    const x = tail && tail.row === last ? tail.x + legendAdvance(CHART_LEGEND_TEXT_X + tail.text.length * CHART_LEGEND_CHAR_ADVANCE) : 0;
+    if (x === 0 || x + text.length * CHART_LEGEND_CHAR_ADVANCE <= plotWidth) {
+      return { items: kept, rows: cap, more: { text, x, row: last, names: items.slice(kept.length).map((item) => item.name) } };
+    }
+    kept.pop();
+  }
 }
 
 /** The chart's kind: how its series are drawn; a line when unset. */
@@ -381,7 +439,7 @@ export function chartCategoryLayout(data: ChartData, frame: ChartFrame = CHART_F
   const count = categories.length;
   const kind = chartKind(data);
   const plotWidth = frame.width - CHART_PAD.left - CHART_PAD.right;
-  const legendRows = chartLegendLayout(data, plotWidth).rows;
+  const legendRows = chartLegendLayout(data, plotWidth, frame).rows;
   const plotHeight = frame.height - CHART_PAD.top - legendRowsAbovePlot(kind, legendRows) * CHART_LEGEND_ROW_HEIGHT - CHART_PAD.bottom;
   const widest = Math.max(...categories.map((label) => label.length)) * CHART_TICK_CHAR_ADVANCE + CHART_TICK_GAP;
   // Bars take a band each; the other kinds spread their categories edge to edge.
@@ -411,7 +469,7 @@ export function chartCategoryLayout(data: ChartData, frame: ChartFrame = CHART_F
     // holds, up to three, and is truncated only past them. The row is
     // judged with the legend as it wraps over the narrowest plot the label
     // column can leave, so the lines never outgrow it.
-    const narrowest = chartLegendLayout(data, frame.width - categoryPadMax(frame) - CHART_PAD.right).rows;
+    const narrowest = chartLegendLayout(data, frame.width - categoryPadMax(frame) - CHART_PAD.right, frame).rows;
     const rowsHeight = frame.height - CHART_PAD.top - legendRowsAbovePlot(kind, narrowest) * CHART_LEGEND_ROW_HEIGHT - CHART_PAD.bottom;
     const lines = Math.max(1, Math.min(CHART_CATEGORY_LINES, Math.floor(rowsHeight / count / CHART_TICK_ROW_HEIGHT)));
     const room = Math.floor((categoryPadMax(frame) - CHART_CATEGORY_PAD_GAP) / CHART_TICK_CHAR_ADVANCE);
@@ -443,7 +501,7 @@ export function chartPad(data: ChartData, frame: ChartFrame = CHART_FRAME): Char
     const widest = Math.max(0, ...categories.ticks.flatMap((tick) => tick.lines.map((line) => line.length))) * CHART_TICK_CHAR_ADVANCE;
     left = Math.min(categoryPadMax(frame), Math.max(CHART_PAD.left, Math.ceil(widest + CHART_CATEGORY_PAD_GAP)));
   }
-  const legendRows = chartLegendLayout(data, frame.width - left - CHART_PAD.right).rows;
+  const legendRows = chartLegendLayout(data, frame.width - left - CHART_PAD.right, frame).rows;
   return {
     left,
     right: CHART_PAD.right,
@@ -996,18 +1054,19 @@ export function chartSeriesPoint(
 }
 
 /** The legend's own box, across the top of the plot, in viewBox units: every
- * row its items wrap onto, each as wide as its longest item's real content. */
+ * row its items wrap onto, each as wide as its longest item's real content
+ * (the item counting the series it has no rows for, a label with no key). */
 export function chartLegendBox(data: ChartData, frame: ChartFrame = CHART_FRAME): Rect {
   const pad = chartPad(data, frame);
-  const layout = chartLegendLayout(data, frame.width - pad.left - pad.right);
+  const layout = chartLegendLayout(data, frame.width - pad.left - pad.right, frame);
   // Its keys sit on this line, its 11-unit labels across it.
   const left = pad.left + 8;
   const line = CHART_PAD.top + 12;
-  const right =
-    left +
-    (layout.items.length > 0
-      ? Math.max(...layout.items.map((item) => item.x + CHART_LEGEND_TEXT_X + item.text.length * CHART_LEGEND_CHAR_ADVANCE))
-      : CHART_LEGEND_STEP - 40);
+  const ends = [
+    ...layout.items.map((item) => item.x + CHART_LEGEND_TEXT_X + item.text.length * CHART_LEGEND_CHAR_ADVANCE),
+    ...(layout.more ? [layout.more.x + layout.more.text.length * CHART_LEGEND_CHAR_ADVANCE] : []),
+  ];
+  const right = left + (ends.length > 0 ? Math.max(...ends) : CHART_LEGEND_STEP - 40);
   return { left, top: line - 7, right, bottom: line + 6 + (layout.rows - 1) * CHART_LEGEND_ROW_HEIGHT };
 }
 
@@ -1056,7 +1115,10 @@ export function chartLeastHeight(data: ChartData, width: number): number | null 
   const scale = Math.min(Math.max(CHART_READABLE_SCALE, width / CHART_VIEW_WIDTH), width / CHART_MIN_FRAME.width);
   const frame = { width: width / scale, height: Number.MAX_SAFE_INTEGER };
   if (!chartCategoryLayout(data, frame).horizontal) return null;
-  const legendRows = chartLegendLayout(data, frame.width - categoryPadMax(frame) - CHART_PAD.right).rows;
+  // Every row the legend wraps onto: the canvas of this height folds it
+  // (`chartLegendLayout`) only where those rows take more than its share of
+  // the canvas, which leaves the categories more room, never less.
+  const legendRows = chartLegendLayout(data, frame.width - categoryPadMax(frame) - CHART_PAD.right, frame).rows;
   const units = CHART_PAD.top + legendRowsAbovePlot('bar', legendRows) * CHART_LEGEND_ROW_HEIGHT + categories.length * CHART_TICK_ROW_HEIGHT + CHART_PAD.bottom;
   return units * scale;
 }

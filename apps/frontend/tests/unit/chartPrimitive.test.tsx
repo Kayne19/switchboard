@@ -3,9 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primitives/ChartPrimitive';
 import {
+  CHART_FRAME,
+  CHART_LEGEND_CHAR_ADVANCE,
   CHART_LEGEND_ROW_HEIGHT,
+  CHART_LEGEND_TEXT_X,
   CHART_MARKER_RADIUS,
   CHART_MARKER_STROKE,
+  CHART_MIN_FRAME,
+  CHART_PLOT_FLOOR,
   CHART_POINT_RADIUS,
   CHART_LEGEND_STEP,
   CHART_TICK_CHAR_ADVANCE,
@@ -13,6 +18,8 @@ import {
   CHART_TICK_ROW_HEIGHT,
   CHART_READABLE_SCALE,
   chartBars,
+  chartFrame,
+  chartLegendBox,
   chartLegendLayout,
   chartPad,
   chartObstacles,
@@ -358,6 +365,57 @@ describe('chart legend layout (#54)', () => {
   });
 });
 
+// A legend that wraps pushed the plot down a row at a time, with no bound:
+// in the least frame or a phone's aux cell twenty series left the plot no
+// height, and thirty turned it upside down, its x ticks over the legend
+// (review-drawing M1). The legend keeps the rows its frame gives it and
+// counts the series past them in one last item; the plot keeps its floor.
+describe('a legend with more series than its rows hold', () => {
+  const names = (count: number) => Array.from({ length: count }, (_, index) => `series ${index}`);
+  const chartOf = (kind: 'line' | 'bar', count: number): ChartData => ({
+    kind,
+    ...(kind === 'bar' ? { labels: ['mon', 'tue', 'wed'] } : {}),
+    series: names(count).map((name) => ({ name, values: [1, 2, 3] })),
+  });
+  // The least frame, a phone's aux cell, a short landscape's, and the approved canvas.
+  const frames = [CHART_MIN_FRAME, { width: 524, height: 262 }, { width: 850, height: 240 }, CHART_FRAME];
+
+  it('leaves the plot at least its floor, with the legend above it and every series in it or in its count', () => {
+    for (const frame of frames) {
+      for (const kind of ['line', 'bar'] as const) {
+        for (let count = 1; count <= 200; count += 1) {
+          const data = chartOf(kind, count);
+          const where = `${kind}, ${count} series, ${frame.width}x${frame.height}`;
+          const { plot } = chartScales(data, frame);
+          expect(plot.bottom - plot.top, where).toBeGreaterThanOrEqual(CHART_PLOT_FLOOR);
+          // Above a bar chart's plot; a line passes under the legend's first row.
+          expect(chartLegendBox(data, frame).bottom, where).toBeLessThanOrEqual(plot.top + (kind === 'bar' ? 0 : CHART_LEGEND_ROW_HEIGHT));
+          const width = plot.right - plot.left;
+          const legend = chartLegendLayout(data, width, frame);
+          expect([...legend.items.map((item) => item.name), ...(legend.more?.names ?? [])], where).toEqual(names(count));
+          const more = legend.more;
+          if (!more) continue;
+          expect(more.text, where).toBe(`+${more.names.length} SERIES`);
+          expect(more.row, where).toBe(legend.rows - 1);
+          expect(more.x + more.text.length * CHART_LEGEND_CHAR_ADVANCE, where).toBeLessThanOrEqual(width);
+          // After the last item on its row, clear of its label.
+          const before = legend.items.filter((item) => item.row === more.row).at(-1);
+          if (before) expect(more.x, where).toBeGreaterThan(before.x + CHART_LEGEND_TEXT_X + before.text.length * CHART_LEGEND_CHAR_ADVANCE);
+        }
+      }
+    }
+  });
+
+  it('is laid out as it was while its rows fit', () => {
+    // Twelve short names take three rows of the approved canvas: no count.
+    const data = chartOf('line', 12);
+    const legend = chartLegendLayout(data, 1000 - 74 - 28, CHART_FRAME);
+    expect(legend.more).toBeUndefined();
+    expect(legend.items).toHaveLength(12);
+    expect(legend.rows).toBe(3);
+  });
+});
+
 // A chart's kind says how its series are drawn; the labels replace the
 // numeric x ticks. The geometry behind both is tested in
 // chartCategoryLayout.test.ts; here is what the primitive draws from it.
@@ -658,6 +716,23 @@ describe('chart frame', () => {
     unmount(host);
     renderInSlot(sixty, { width: 358, height: 1200 });
     expect(host.querySelector('.chart-primitive')!.className).not.toContain('chart-primitive--scrolls');
+  });
+
+  it("keeps the plot whole in a phone's aux cell however many series it carries, the legend counting those it has no rows for", () => {
+    const slot = { width: 334, height: 167 };
+    const frame = chartFrame(slot);
+    for (const count of [20, 30, 40]) {
+      const chart: ChartData = { series: Array.from({ length: count }, (_, index) => ({ name: `series ${index}`, values: [1, 3, 2] })) };
+      const svg = renderInSlot(chart, slot);
+      expect(svg.getAttribute('viewBox')).toBe(`0 0 ${frame.width} ${frame.height}`);
+      const clip = svg.querySelector('defs > clipPath > rect')!;
+      expect(Number(clip.getAttribute('height')), `${count} series`).toBeGreaterThanOrEqual(CHART_PLOT_FLOOR);
+      const keys = svg.querySelectorAll('.chart-legend__key');
+      const more = svg.querySelector('.chart-legend__more')!;
+      expect(more.querySelector('text')!.textContent).toBe(`+${count - keys.length} SERIES`);
+      expect(more.querySelector('title')!.textContent).toBe(chart.series.slice(keys.length).map((series) => series.name).join('\n'));
+      unmount(host);
+    }
   });
 });
 
