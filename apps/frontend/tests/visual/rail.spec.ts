@@ -84,15 +84,23 @@ async function note(page: Page) {
       main: box(document.querySelector('.content-grid > .content-main')!),
       grid: box(document.querySelector('.content-grid')!),
       leads: card.classList.contains('rail-note--leads'),
-      fades: column.classList.contains('content-rail__details--more'),
+      fades: document.querySelector('.content-rail > .scroll-rim__fade--bottom') !== null,
+      // The activity panel's slot where it stands in the column's flow (not set aside).
+      slot: (() => {
+        const slot = document.querySelector('.content-rail__details > .tool-activity-slot:not(.tool-activity-slot--away)');
+        return slot && slot.getBoundingClientRect().height > 0 ? box(slot) : null;
+      })(),
     };
   });
 }
 
-// Fixtures whose rail carries a note, each of a few lines.
-const NOTED = ['architecture', 'topology', 'trace', 'handoff', 'pipeline', 'email', 'results', 'figure', 'code', 'calendar', 'weather', 'today'];
+// Fixtures whose rail carries a note, each of a few lines, some with
+// metrics over it (composed).
+const NOTED = ['architecture', 'topology', 'trace', 'handoff', 'pipeline', 'email', 'results', 'figure', 'code', 'composed', 'calendar', 'weather', 'today'];
 
-for (const size of PORTRAIT) {
+// The golden portrait sizes, and a smaller phone, where a rail with a
+// metric over its note is shortest.
+for (const size of [...PORTRAIT, { width: 360, height: 780 }]) {
   test.describe(`${size.width}x${size.height} note`, () => {
     test.use({ viewport: size });
 
@@ -103,9 +111,35 @@ for (const size of PORTRAIT) {
         expect(now.textWhole, 'the note\'s text is whole').toBe(true);
         expect(now.card.top).toBeGreaterThanOrEqual(now.column.top - 1);
         expect(now.card.bottom).toBeLessThanOrEqual(now.column.bottom + 1);
-        expect(now.fades).toBe(false);
+        // A column that holds it all has no edge to fade; one that leads with the note fades over the rest.
+        expect(now.fades).toBe(now.leads);
+        // The activity panel's slot, where it stands in the column, ends inside it.
+        if (now.slot) expect(now.slot.bottom).toBeLessThanOrEqual(now.column.bottom + 1);
       });
     }
+  });
+}
+
+// The composed golden's scene: a metric over a one-line note. Its rail
+// holds all it carries, so nothing leads or fades, and the activity
+// panel's slot stands inside the column or is set aside -- never cut at
+// its foot (the parts' margins count).
+const goldenComposed = [
+  { op: 'clear' },
+  { op: 'show', id: 'composed-diagram', type: 'diagram', role: 'primary', data: { mode: 'graph', title: 'COMPOSED / SYSTEM FLOW', nodes: [{ id: 'input', label: 'INPUT' }, { id: 'active', label: 'ACTIVE', state: 'active' }, { id: 'output', label: 'OUTPUT' }], edges: [{ from: 'input', to: 'active', label: 'route' }, { from: 'active', to: 'output', label: 'emit' }] } },
+  { op: 'show', id: 'composed-note', type: 'note', role: 'secondary', data: { tag: 'COMPOSED', segments: [{ text: 'Active path highlighted.' }] } },
+  { op: 'show', id: 'composed-metric', type: 'metric', role: 'secondary', data: { label: 'THROUGHPUT', value: '98.4%' } },
+];
+for (const size of [{ width: 390, height: 844 }, { width: 360, height: 780 }]) {
+  test(`a metric over a short note holds whole at ${size.width}x${size.height}`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await openScene(page, 'architecture');
+    await runActions(page, goldenComposed);
+    const rail = await note(page);
+    expect(rail.leads).toBe(false);
+    expect(rail.fades).toBe(false);
+    expect(rail.textWhole).toBe(true);
+    if (rail.slot) expect(rail.slot.bottom).toBeLessThanOrEqual(rail.column.bottom + 1);
   });
 }
 
@@ -148,7 +182,9 @@ test.describe('390x844 rail', () => {
       server.broadcast({ type: 'activity', state: 'start', tool: 'shell', label: 'Working', detail: 'npm test' });
       await expect(page.locator('.content-rail [data-testid="damocles-presence"]')).toContainText(/WORKING \/ shell/i);
       await expect(page.locator('.content-rail__details .tool-activity-slot--away')).toHaveCount(1);
-      await expect(page.locator('.content-rail__details .tool-activity')).toBeHidden();
+      // Unseen, and left to assistive technology.
+      expect(await page.locator('.content-rail__details .tool-activity-slot').evaluate((slot) => getComputedStyle(slot).opacity)).toBe('0');
+      await expect(page.locator('.content-rail__details .tool-activity')).toBeAttached();
       const during = await note(page);
       expect(during.textWhole).toBe(true);
       expect(during.card).toEqual(before.card);

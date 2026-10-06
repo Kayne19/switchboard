@@ -116,7 +116,7 @@ function render(actions: ControllerAction[]) {
     floor: scene.querySelector<HTMLElement>('.content-grid')!.style.getPropertyValue('--rail-floor'),
     leads: scene.querySelector('.rail-note--leads') !== null,
     away: scene.querySelector('.tool-activity-slot--away') !== null,
-    more: scene.querySelector('.content-rail__details--more') !== null,
+    fades: Array.from(scene.querySelectorAll('.content-rail > .scroll-rim__fade')).map((fade) => fade.classList[1]),
     order: Array.from(scene.querySelector('.content-rail__details')!.children).map((child) => child.classList[0]),
   };
 }
@@ -128,7 +128,7 @@ describe('the rail under the main column', () => {
     expect(rail.floor).toBe('182px');
     expect(rail.leads).toBe(false);
     expect(rail.away).toBe(true);
-    expect(rail.more).toBe(false);
+    expect(rail.fades).toEqual([]);
   });
 
   it('keeps the activity panel at its foot where a short note leaves it room', () => {
@@ -145,7 +145,37 @@ describe('the rail under the main column', () => {
     expect(rail.order).toEqual(['metrics', 'rail-progress', 'rail-note', 'tool-activity-slot']);
     expect(rail.leads).toBe(true);
     expect(rail.away).toBe(true);
-    expect(rail.more).toBe(true);
+    expect(rail.fades).toEqual(['scroll-rim__fade--bottom']);
+  });
+
+  it('holds a note longer than half the grid at half, its foot fading', () => {
+    noteHeight = 400;
+    const rail = render([...fixtures.architecture]);
+    // The floor says the note's height; the grid holds the rail at half (the room stub).
+    expect(rail.floor).toBe('400px');
+    expect(rail.fades).toEqual(['scroll-rim__fade--bottom']);
+  });
+
+  it('lets go of all it decided when the rail turns to stand beside the column', () => {
+    noteHeight = 84;
+    renderScene([...fixtures.plan]);
+    settle();
+    settle();
+    const scene = lastScene();
+    expect(scene.querySelector('.rail-note--leads')).not.toBeNull();
+    // Turned on its side: the rail stands beside the column.
+    landscape = true;
+    settle();
+    expect(scene.querySelector<HTMLElement>('.content-grid')!.style.getPropertyValue('--rail-floor')).toBe('');
+    expect(scene.querySelector('.rail-note--leads')).toBeNull();
+    expect(scene.querySelector('.tool-activity-slot--away')).toBeNull();
+    expect(scene.querySelector('.content-rail > .scroll-rim__fade')).toBeNull();
+    // Upright again: decided afresh.
+    landscape = false;
+    settle();
+    settle();
+    expect(scene.querySelector<HTMLElement>('.content-grid')!.style.getPropertyValue('--rail-floor')).toBe('84px');
+    expect(scene.querySelector('.rail-note--leads')).not.toBeNull();
   });
 
   it('measures nothing where the rail stands beside the column', () => {
@@ -154,6 +184,6 @@ describe('the rail under the main column', () => {
     expect(rail.floor).toBe('');
     expect(rail.leads).toBe(false);
     expect(rail.away).toBe(false);
-    expect(rail.more).toBe(false);
+    expect(rail.fades).toEqual([]);
   });
 });

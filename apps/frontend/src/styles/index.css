@@ -1750,16 +1750,6 @@ button {
 .tool-activity-slot:empty {
   display: none;
 }
-/* Set aside where a rail under the column has no room for the panel whole
-   (RailDetails): out of the column's flow and unseen, still measured.
-   Damocles's caption names the tool at work. */
-.tool-activity-slot--away {
-  position: absolute;
-  top: 0;
-  left: 0;
-  visibility: hidden;
-  pointer-events: none;
-}
 .tool-activity-slot > * {
   grid-area: 1 / 1;
 }
@@ -5526,10 +5516,26 @@ button {
   .content-rail__details > .rail-note .annotation-card {
     height: auto;
   }
-  /* A column holding more below what it shows fades at its foot until it
-     is scrolled to its end (RailDetails), as a scroller's rim fades. */
-  .content-rail__details--more {
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+  /* The column holds what it sets aside (the activity panel's slot, out
+     of its flow), and an edge it continues past fades over it (ScrollRim's
+     fade, placed on the column's grid area). */
+  .content-rail__details {
+    position: relative;
+  }
+  .content-rail > .scroll-rim__fade {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  /* Set aside where the column has no room for the panel whole
+     (RailDetails): out of its flow at the column's width, unseen but still
+     read by assistive technology, still measured. Damocles's caption names
+     the tool at work. */
+  .tool-activity-slot--away {
+    position: absolute;
+    top: 0;
+    inset-inline: 0;
+    opacity: 0;
+    pointer-events: none;
   }
   .scene-footer {
     left: var(--edge);

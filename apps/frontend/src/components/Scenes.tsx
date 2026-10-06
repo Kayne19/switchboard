@@ -1,4 +1,5 @@
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
+import { flushSync } from 'react-dom';
 import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import type {
   ChartData,
@@ -19,12 +20,14 @@ import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
 import { countText } from '../primitives/countText';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
+import { fadeDepth } from '../primitives/ListViewport';
 import { LiveChatCard } from '../primitives/LiveChatCard';
 import { SpokenLog } from '../primitives/SpokenLog';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
+import { ScrollRim } from '../primitives/ScrollRim';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame, type FrameVariant } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
@@ -173,16 +176,19 @@ interface RailDetailsProps {
   progressList: Array<SceneObject<ProgressData>>;
   onFocus: (id: string | null) => void;
   onOpenHistory?: () => void;
-  /** The note is one the charts could not hold, or one about a visual off them: where the column is too short for all it carries, the note leads it, whole, rather than fall below the metrics, out of view. */
+  /** The note is one the charts could not hold, or one about a visual off them: where the column beside the main one is too short for all it carries, the note leads it, whole, rather than fall below the metrics, out of view (under the main column every note does so). */
   noteLeads?: boolean;
   /** The rail stands under the main column (useRailUnder): its note reads whole there (useRailFit). */
   under?: boolean;
   /** Hears how tall the note reads whole in, CSS pixels, while the rail stands under the column; `null` with no note there. */
   onFloor?: (height: number | null) => void;
+  /** The floor the grid gives the rail now (what `onFloor` last said, applied). */
+  floor?: number | null;
 }
 
 // Whether the rail's column holds more than it shows, measured only while
-// a note may lead it.
+// a note may lead it beside the column (a chart's handed-over note); under
+// the column every note may lead, by useRailFit's measure.
 function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): boolean {
   const [crowded, setCrowded] = useState(false);
   useLayoutEffect(() => {
@@ -201,10 +207,13 @@ interface RailFit {
   leads: boolean;
   /** The column's foot has no room for the activity panel whole: it is set aside. */
   away: boolean;
-  /** The column holds more below what it shows: its foot fades, as a scroller's rim does. */
-  more: boolean;
+  /** The column continues past its top or its foot: that edge fades (ScrollRim), as a scroller's does, `fade` px deep. */
+  above: boolean;
+  below: boolean;
+  fade: number;
 }
-const FITS: RailFit = { leads: false, away: false, more: false };
+const FITS: RailFit = { leads: false, away: false, above: false, below: false, fade: 0 };
+const sameFit = (a: RailFit, b: RailFit) => a.leads === b.leads && a.away === b.away && a.above === b.above && a.below === b.below && a.fade === b.fade;
 
 // Under the main column (a portrait stage) the rail is Damocles beside the
 // note, and the note reads whole there, as Kayne approved the portrait
@@ -215,13 +224,19 @@ const FITS: RailFit = { leads: false, away: false, more: false };
 // leads, whole, the rest after it in the column's scroll; and the activity
 // panel stands at the column's foot only where it fits there whole -- where
 // it does not, Damocles's caption, which names the tool at work wherever
-// the rail stands, is what the caller sees of it. A column that holds more
-// below what it shows fades at its foot until it is scrolled to its end, so
-// a part cut there reads as the next one coming, not as broken. What these
-// decide changes nothing they are measured from: a part's height, the gaps
-// and the column's own.
-function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFloor: (height: number | null) => void): RailFit {
+// the rail stands, is what the caller sees of it. An edge the column
+// continues past fades as a scroller's edge does, so a part cut there
+// reads as the next one coming, not as broken.
+//
+// A part counts at its own height and margins (a live response, which
+// grows into the column's free space, at its least), never at what these
+// decide. Yet they feed one another -- the floor sets the column's height,
+// the panel set aside leaves its flow -- so the layout takes a second
+// measure; what the observers measure is committed before the frame is
+// painted, so no frame shows a rail half decided.
+function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFloor: (height: number | null) => void, floor: number | null): RailFit {
   const [fit, setFit] = useState(FITS);
+  const remeasure = useRef<() => void>(() => {});
   useLayoutEffect(() => {
     const column = ref.current;
     if (!under || !column) {
@@ -229,34 +244,64 @@ function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFlo
       onFloor(null);
       return undefined;
     }
+    const commit = (next: RailFit) => setFit((current) => (sameFit(current, next) ? current : next));
+    // The edges from the column's flow as decided (what its class changes do
+    // to it are not observed), and where its scroll stands.
+    let decided: Pick<RailFit, 'leads' | 'away'> = FITS;
+    let flow = 0;
+    const edges = (): RailFit => ({
+      ...decided,
+      above: column.scrollTop > 1,
+      below: column.scrollTop + column.clientHeight < flow - 1,
+      fade: fadeDepth(column.clientHeight),
+    });
     const measure = () => {
       const children = Array.from(column.children) as HTMLElement[];
       const slot = children.find((child) => child.classList.contains('tool-activity-slot'));
       const parts = children.filter((child) => child !== slot && child.offsetHeight > 0);
       const note = parts.find((child) => child.classList.contains('rail-note'));
       const gap = parseFloat(getComputedStyle(column).rowGap) || 0;
-      // A part that grows into the column's free space (the live response) counts at its least.
       const least = (part: HTMLElement) => {
         const style = getComputedStyle(part);
-        return (parseFloat(style.flexGrow) || 0) > 0 ? parseFloat(style.minHeight) || 0 : part.offsetHeight;
+        const margins = (parseFloat(style.marginTop) || 0) + (parseFloat(style.marginBottom) || 0);
+        return margins + ((parseFloat(style.flexGrow) || 0) > 0 ? parseFloat(style.minHeight) || 0 : parseFloat(style.height) || part.offsetHeight);
       };
       const content = parts.reduce((sum, part) => sum + least(part), 0) + gap * Math.max(0, parts.length - 1);
+      const panel = slot && slot.offsetHeight > 0 ? (parts.length > 0 ? gap : 0) + slot.offsetHeight : 0;
       const room = column.clientHeight;
-      onFloor(note ? note.offsetHeight : null);
-      const next = {
+      onFloor(note ? Math.ceil(least(note)) : null);
+      decided = {
         leads: note !== undefined && parts.length > 1 && content > room + 1,
-        away: slot !== undefined && slot.offsetHeight > 0 && content + gap + slot.offsetHeight > room + 1,
-        more: column.scrollTop + room < column.scrollHeight - 1,
+        away: panel > 0 && content + panel > room + 1,
       };
-      setFit((current) => (current.leads === next.leads && current.away === next.away && current.more === next.more ? current : next));
+      flow = content + (decided.away ? 0 : panel);
+      commit(edges());
     };
-    const stop = watchElement(column, measure, { children: true, changes: true });
-    column.addEventListener('scroll', measure, { passive: true });
+    // The first measure is the layout effect's own; the observers' are
+    // committed at once (flushSync), before the frame they report is painted.
+    let observing = false;
+    const stop = watchElement(column, () => (observing ? flushSync(measure) : measure()), { children: true, changes: true });
+    observing = true;
+    remeasure.current = measure;
+    // A scroll moves only the edges, read once a frame.
+    let frame = 0;
+    const scrolled = () => {
+      if (frame === 0) frame = requestAnimationFrame(() => {
+        frame = 0;
+        commit(edges());
+      });
+    };
+    column.addEventListener('scroll', scrolled, { passive: true });
     return () => {
       stop();
-      column.removeEventListener('scroll', measure);
+      cancelAnimationFrame(frame);
+      column.removeEventListener('scroll', scrolled);
+      remeasure.current = () => {};
     };
   }, [ref, under, onFloor]);
+  // The floor it said, once the grid has it: measured again in the same
+  // commit, so the first frame is drawn in the rail the floor makes.
+  useLayoutEffect(() => remeasure.current(), [floor]);
   return under ? fit : FITS;
 }
 
@@ -270,24 +315,29 @@ const noFloor = () => {};
 // unmounting it first. Its children stand in one order in every state; a
 // note that leads a crowded column does so by its order there, so leading
 // moves nothing in or out of the page, and nothing is drawn afresh.
-function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, noteLeads = false, under = false, onFloor = noFloor }: RailDetailsProps) {
+function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, noteLeads = false, under = false, onFloor = noFloor, floor = null }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
   const columnRef = useRef<HTMLDivElement>(null);
   const crowded = useCrowded(columnRef, !under && noteLeads && note !== null);
-  const fit = useRailFit(columnRef, under, onFloor);
+  const fit = useRailFit(columnRef, under, onFloor, floor);
   // The response and the note stretch into the column's free space, so while
   // either is shown the activity slot stays reserved and a tool starting or
   // clearing never resizes them. Metrics and progress keep their own size at
   // the top and are not moved by a panel below them.
   const reserveActivity = liveMessage !== null || note !== null;
   return (
-    <div ref={columnRef} className={`content-rail__details${fit.more ? ' content-rail__details--more' : ''}`}>
-      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} slot="rail" /> : null}
-      <RailProgress progressList={progressList} onFocus={onFocus} />
-      {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={noteTarget(state.agentObjects, note)} leads={under ? fit.leads : crowded} />
-      <ToolActivity activity={state.activity} reserveSpace={reserveActivity} away={fit.away} />
-    </div>
+    <>
+      <div ref={columnRef} className="content-rail__details">
+        {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} slot="rail" /> : null}
+        <RailProgress progressList={progressList} onFocus={onFocus} />
+        {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+        <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={noteTarget(state.agentObjects, note)} leads={under ? fit.leads : crowded} />
+        <ToolActivity activity={state.activity} reserveSpace={reserveActivity} away={fit.away} />
+      </div>
+      {/* The column's edges as every scroller draws them: a fade, with no tag (what lies past is the rail's own). */}
+      {fit.above ? <ScrollRim side="top" fade={fit.fade} /> : null}
+      {fit.below ? <ScrollRim side="bottom" fade={fit.fade} /> : null}
+    </>
   );
 }
 
@@ -715,17 +765,20 @@ function MainWithAux({
 function useRailUnder(active: boolean, mainRef: RefObject<HTMLDivElement | null>, railRef: RefObject<HTMLElement | null>): boolean {
   const [under, setUnder] = useState(false);
   useLayoutEffect(() => {
-    const main = mainRef.current;
-    const rail = railRef.current;
-    if (!active || !main || !rail) {
+    const boxes = [mainRef.current, railRef.current];
+    if (!active || boxes.some((box) => !box)) {
       setUnder(false);
       return undefined;
     }
-    const measure = () => setUnder(main.offsetHeight > 0 && rail.offsetTop >= main.offsetTop + main.offsetHeight - 1);
+    const measure = () => {
+      const main = mainRef.current;
+      const rail = railRef.current;
+      setUnder(main !== null && rail !== null && main.offsetHeight > 0 && rail.offsetTop >= main.offsetTop + main.offsetHeight - 1);
+    };
     measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(main);
-    observer.observe(rail);
+    // Committed before the resized frame is painted, as the rail it decides is.
+    const observer = new ResizeObserver(() => flushSync(measure));
+    for (const box of boxes) observer.observe(box!);
     return () => observer.disconnect();
   }, [active, mainRef, railRef]);
   return active && under;
@@ -959,6 +1012,7 @@ export function SceneShell(props: SceneProps) {
                 noteLeads={content.noteLeads}
                 under={under}
                 onFloor={setRailFloor}
+                floor={railFloor}
               />
             </motion.aside>
           </div>
