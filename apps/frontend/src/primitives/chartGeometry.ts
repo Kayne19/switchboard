@@ -146,7 +146,7 @@ export interface ChartLegendItem {
 }
 
 /** The last legend item, standing for the series past the rows the legend may take. */
-export interface ChartLegendMore {
+interface ChartLegendMore {
   /** `+K SERIES`. */
   text: string;
   x: number;
@@ -225,18 +225,26 @@ export function chartLegendLayout(
   const cap = legendRowCap(chartKind(data), frame);
   if (row < cap) return { items, rows: row + 1 };
   // The rows it may take, and the item that counts the rest after the last
-  // item there that leaves it room: the first of an emptied row has it.
+  // item there that leaves it room: a step on, as the items advance, or
+  // where the step leaves none, a gap past that item's label, so a row of
+  // one key still keeps it. The first of an emptied row has it.
   const last = cap - 1;
   const kept = items.filter((item) => item.row <= last);
   for (;;) {
     const text = `+${items.length - kept.length} SERIES`;
+    const width = text.length * CHART_LEGEND_CHAR_ADVANCE;
     const tail = kept.at(-1);
-    const x = tail && tail.row === last ? tail.x + legendAdvance(CHART_LEGEND_TEXT_X + tail.text.length * CHART_LEGEND_CHAR_ADVANCE) : 0;
-    if (x === 0 || x + text.length * CHART_LEGEND_CHAR_ADVANCE <= plotWidth) {
-      return { items: kept, rows: cap, more: { text, x, row: last, names: items.slice(kept.length).map((item) => item.name) } };
-    }
+    if (!tail || tail.row !== last) return folded(kept, items, { text, x: 0, row: last }, cap);
+    const content = CHART_LEGEND_TEXT_X + tail.text.length * CHART_LEGEND_CHAR_ADVANCE;
+    const x = [tail.x + legendAdvance(content), tail.x + content + CHART_LEGEND_GAP].find((at) => at + width <= plotWidth);
+    if (x !== undefined) return folded(kept, items, { text, x, row: last }, cap);
     kept.pop();
   }
+}
+
+// The legend that keeps `kept`, the rest counted in `more`.
+function folded(kept: ChartLegendItem[], items: ChartLegendItem[], more: Omit<ChartLegendMore, 'names'>, rows: number): ChartLegendLayout {
+  return { items: kept, rows, more: { ...more, names: items.slice(kept.length).map((item) => item.name) } };
 }
 
 /** The chart's kind: how its series are drawn; a line when unset. */

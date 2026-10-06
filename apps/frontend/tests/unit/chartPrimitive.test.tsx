@@ -5,6 +5,7 @@ import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primiti
 import {
   CHART_FRAME,
   CHART_LEGEND_CHAR_ADVANCE,
+  CHART_LEGEND_GAP,
   CHART_LEGEND_ROW_HEIGHT,
   CHART_LEGEND_TEXT_X,
   CHART_MARKER_RADIUS,
@@ -379,11 +380,14 @@ describe('a legend with more series than its rows hold', () => {
   });
   // The least frame, a phone's aux cell, a short landscape's, and the approved canvas.
   const frames = [CHART_MIN_FRAME, { width: 524, height: 262 }, { width: 850, height: 240 }, CHART_FRAME];
+  // And the frames the page draws in for the shortest slots, as `chartFrame` rounds them (some 239 tall).
+  const slotFrames = [166, 286, 334, 420].flatMap((width) => Array.from({ length: 101 }, (_, index) => chartFrame({ width, height: 100 + index })));
 
   it('leaves the plot at least its floor, with the legend above it and every series in it or in its count', () => {
-    for (const frame of frames) {
+    const counts = (frame: { width: number; height: number }) => (frames.includes(frame) ? Array.from({ length: 200 }, (_, index) => index + 1) : [1, 2, 3, 4, 6, 8, 12, 20, 30, 40, 80, 200]);
+    for (const frame of [...frames, ...slotFrames]) {
       for (const kind of ['line', 'bar'] as const) {
-        for (let count = 1; count <= 200; count += 1) {
+        for (const count of counts(frame)) {
           const data = chartOf(kind, count);
           const where = `${kind}, ${count} series, ${frame.width}x${frame.height}`;
           const { plot } = chartScales(data, frame);
@@ -407,12 +411,25 @@ describe('a legend with more series than its rows hold', () => {
   });
 
   it('is laid out as it was while its rows fit', () => {
-    // Twelve short names take three rows of the approved canvas: no count.
+    // Twelve short names take three rows of the approved canvas: no count,
+    // and the same layout a frame with no cap gives.
     const data = chartOf('line', 12);
     const legend = chartLegendLayout(data, 1000 - 74 - 28, CHART_FRAME);
     expect(legend.more).toBeUndefined();
-    expect(legend.items).toHaveLength(12);
     expect(legend.rows).toBe(3);
+    expect(legend).toEqual(chartLegendLayout(data, 1000 - 74 - 28, { width: 1000, height: Number.MAX_SAFE_INTEGER }));
+  });
+
+  it('keeps a key on a row of one, the count a gap past its label', () => {
+    // A slot 124px tall gives a frame of 239 units: a bar chart's legend one
+    // row, too narrow for a second item a step on.
+    const frame = chartFrame({ width: 166, height: 124 });
+    expect(frame.height).toBe(239);
+    const data: ChartData = { kind: 'bar', labels: ['backend', 'frontend'], series: [{ name: 'THIS RUN', values: [41, 18] }, { name: 'PREVIOUS', values: [44, 19] }] };
+    const { plot } = chartScales(data, frame);
+    const legend = chartLegendLayout(data, plot.right - plot.left, frame);
+    expect(legend.items.map((item) => item.text)).toEqual(['THIS RUN']);
+    expect(legend.more).toEqual({ text: '+1 SERIES', x: CHART_LEGEND_TEXT_X + 8 * CHART_LEGEND_CHAR_ADVANCE + CHART_LEGEND_GAP, row: 0, names: ['PREVIOUS'] });
   });
 });
 
