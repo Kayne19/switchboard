@@ -2,54 +2,43 @@ import { AnimatePresence, motion, useIsPresent } from 'motion/react';
 import { useCallback, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type {
   ChartData,
-  CodeData,
   ControllerState,
-  DiagramObjectData,
-  DocumentData,
-  ImageData,
   MessageData,
   MetricData,
   NoteData,
   ProgressData,
   SceneObject,
-  TableData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
-import { markedItem, noteTarget, standingNoteTarget } from '../app/noteItems';
-import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
+import { noteTarget } from '../app/noteItems';
+import { anchoredNote, besideVisuals, buildCompositionModel, cast, nameFields, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { stageReport, wantsStage, type StageReport } from '../app/stageFold';
 import { StageDemandContext, watchElement, type StageDemandListener } from '../hooks/useStageDemand';
 import { AnnotationCard, type NoteTarget } from '../primitives/AnnotationCard';
-import { CalendarPrimitive, calendarFrame } from '../primitives/CalendarPrimitive';
+import { calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
-import { CodeViewport } from '../primitives/CodeViewport';
 import { countText } from '../primitives/countText';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
-import { DocumentViewport } from '../primitives/DocumentViewport';
-import { ImagePrimitive } from '../primitives/ImagePrimitive';
 import { LiveChatCard } from '../primitives/LiveChatCard';
 import { SpokenLog } from '../primitives/SpokenLog';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
-import { TablePrimitive } from '../primitives/TablePrimitive';
-import { TasksPrimitive, taskCounts } from '../primitives/TasksPrimitive';
-import { InboxPrimitive, inboxCounts } from '../primitives/InboxPrimitive';
-import { TimerPrimitive } from '../primitives/TimerPrimitive';
-import { WeatherPrimitive } from '../primitives/WeatherPrimitive';
+import { taskCounts } from '../primitives/TasksPrimitive';
+import { inboxCounts } from '../primitives/InboxPrimitive';
 import { FocusableSurface } from '../primitives/FocusableSurface';
-import { TechFrame } from '../primitives/TechFrame';
+import { TechFrame, type FrameVariant } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
 import { TranscriptToggle } from '../primitives/TranscriptToggle';
 import { ChartNotes, chartNoteAnchors, type ChartNote } from './ChartNotes';
-import { DiagramObject } from './DiagramObject';
+import { renderObject } from './renderObject';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** A text field an object's data may carry for the scene frame, or undefined
  * when that shape has none. */
-function frameText(data: unknown, field: 'title' | 'subject' | 'label' | 'subtitle' | 'context'): string | undefined {
+function frameText(data: unknown, field: 'subtitle' | 'context'): string | undefined {
   if (data === null || typeof data !== 'object') return undefined;
   const value = (data as Record<string, unknown>)[field];
   return typeof value === 'string' ? value : undefined;
@@ -170,7 +159,7 @@ function RailProgress({ progressList, onFocus }: { progressList: Array<SceneObje
         <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
           <ObjectSurface object={progress}>
             <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-              <ProgressPrimitive data={progress.data} variant="rail" />
+              <ProgressPrimitive data={progress.data} slot="rail" />
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -231,59 +220,13 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
   const reserveActivity = liveMessage !== null || note !== null;
   return (
     <div ref={columnRef} id={id} className={`content-rail__details${folded && note ? ' content-rail__details--noted' : ''}`}>
-      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
+      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} slot="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
       <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={noteTarget(state.agentObjects, note)} leads={leads} />
       <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
     </div>
   );
-}
-
-
-// One object drawn inside a composed workspace, as the primary or in the aux
-// row beneath it. A metric and a progress change with the slot: the aux row
-// has no room for a whole step list. `onStage` are the objects on stage, by
-// id, which a note names its object among; `drawn` is the note the page
-// draws for the scene (the rail's), and the object marks what it names in
-// it: a chart's point (a bar outlined, its value printed; a point on a
-// line ringed), a list's
-// item (`markedItem`), a diagram's node or actor (its NOTE marker; the note
-// stays in the rail, never a callout in a cell).
-function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', onStage: ControllerState['agentObjects'], drawn: NoteData | null) {
-  const marked = markedItem(drawn, object.id);
-  switch (object.type) {
-    case 'chart':
-      return <ChartPrimitive data={cast.chart(object).data} named={drawn ? chartNoteAnchors(cast.chart(object), [{ key: 'drawn', data: drawn }]) : undefined} />;
-    case 'diagram':
-      return <DiagramObject data={(object as SceneObject<DiagramObjectData>).data} id={object.id} note={drawn} callout={false} />;
-    case 'document':
-      return <DocumentViewport data={(object as SceneObject<DocumentData>).data} />;
-    case 'code':
-      return <CodeViewport data={(object as SceneObject<CodeData>).data} />;
-    case 'table':
-      return <TablePrimitive data={(object as SceneObject<TableData>).data} />;
-    case 'image':
-      return <ImagePrimitive data={(object as SceneObject<ImageData>).data} />;
-    case 'metric':
-      return <MetricsPrimitive metrics={[object as SceneObject<MetricData>]} variant={slot === 'primary' ? 'primary' : undefined} />;
-    case 'progress':
-      return <ProgressPrimitive data={(object as SceneObject<ProgressData>).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
-    case 'note':
-      return <AnnotationCard data={cast.note(object).data} named={standingNoteTarget(onStage, cast.note(object).data)} />;
-    case 'timer':
-      return <TimerPrimitive data={cast.timer(object).data} marked={marked} />;
-    case 'weather':
-      return <WeatherPrimitive data={cast.weather(object).data} marked={marked} />;
-    case 'calendar':
-      return <CalendarPrimitive data={cast.calendar(object).data} marked={marked} />;
-    case 'tasks':
-      return <TasksPrimitive data={cast.tasks(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
-    case 'inbox':
-      return <InboxPrimitive data={cast.inbox(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} />;
-    default:
-      return null;
-  }
 }
 
 // Which chart panel each note is shown on: the chart it names, a compare
@@ -476,85 +419,89 @@ function trainingContent(
   };
 }
 
-// A diagram, document, code, table, or image object fills the main slot,
-// its note in the rail -- unless the diagram places the note as its own
-// callout -- and every other visual in the aux row under it.
+// A diagram, document, code, table, image, calendar, to-do list, inbox,
+// timer or forecast fills the main slot, its note in the rail -- unless the
+// diagram places the note as its own callout -- and every other visual in
+// the aux row under it.
 function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void, onDemand: StageDemandListener): SceneContent | null {
   const primary = primaryObject(state);
-  if (!primary) return null;
+  const frame = primary ? sceneFrame(primary) : null;
+  if (!primary || !frame) return null;
   const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
-  // What the shell places around the main slot: the aux row under it (every
-  // visual beside the primary) and the rail beside it.
-  const rail = {
+  const { outline, ...words } = frame;
+  return {
+    ...words,
+    // What the shell places around the main slot: the aux row under it
+    // (every visual beside the primary) and the rail beside it.
     aux: besideVisuals(buildCompositionModel(state)),
     metrics: objectsOfType<MetricData>(state, 'metric'),
     note,
     noteObject,
     progressList: objectsOfType<ProgressData>(state, 'progress'),
+    main: (
+      <ObjectMotion objectId={primary.id} className={`content-main ${primary.type}-object`}>
+        {outline ? <TechFrame variant={outline} /> : null}
+        <ObjectSurface object={primary}>
+          <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+            <StageDemandContext.Provider value={onDemand}>
+              {renderObject(primary, 'primary', { onStage: state.agentObjects, notes: note ? [note] : [], onCalloutChange })}
+            </StageDemandContext.Provider>
+          </FocusableSurface>
+        </ObjectSurface>
+      </ObjectMotion>
+    ),
   };
-  const slot = (className: string, body: ReactNode, frame: ReactNode = null) => (
-    <ObjectMotion objectId={primary.id} className={`content-main ${className}`}>
-      {frame}
-      <ObjectSurface object={primary}>
-        <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-          <StageDemandContext.Provider value={onDemand}>{body}</StageDemandContext.Provider>
-        </FocusableSurface>
-      </ObjectSurface>
-    </ObjectMotion>
-  );
+}
+
+/** What the scene's frame says about a primary that fills the main slot, and the frame drawn round the slot where its primitive draws none of its own. */
+type SceneFrame = Pick<SceneContent, 'title' | 'subtitle' | 'context' | 'footer' | 'caption'> & { outline?: FrameVariant };
+
+// The frame's words for each type that fills the main slot: the agent's
+// own where it sent them, else what the object is. The object itself is
+// drawn by `renderObject`, as everywhere else.
+function sceneFrame(primary: SceneObject): SceneFrame | null {
   switch (primary.type) {
     case 'diagram': {
       const { data } = cast.diagram(primary);
       const sequence = data.mode === 'sequence';
       return {
-        ...rail,
         title: data.title ?? (sequence ? 'SYSTEM / SEQUENCE' : 'SYSTEM / DIAGRAM'),
         subtitle: data.subtitle ?? (sequence ? 'SEQUENCE / COMPOSED' : 'GRAPH / COMPOSED'),
         context: data.context ?? (sequence ? 'SEQUENCE' : 'SYSTEM MAP'),
         footer: sequence ? 'DISPLAY / SEQUENCE' : 'DISPLAY / SYSTEM MAP',
         caption: sceneCaption(primary, sequence ? 'TRACE / MESSAGE ORDER' : 'TRACE / ACTIVE ROUTE'),
-        main: slot(
-          'diagram-object',
-          <DiagramObject data={data} id={primary.id} note={note} onCalloutChange={onCalloutChange} />,
-          <TechFrame variant="rails" />,
-        ),
+        outline: 'rails',
       };
     }
     case 'document': {
       const { data } = cast.document(primary);
       return {
-        ...rail,
         title: `DOCUMENT / ${data.kind?.toUpperCase() ?? 'CONTENT'}`,
         subtitle: 'CONTENT / ORIGINAL',
         context: data.context ?? 'DOCUMENT',
         footer: 'CONTENT / ORIGINAL EMAIL',
         caption: sceneCaption(primary, 'CHROME / SWITCHBOARD'),
-        main: slot('document-object', <DocumentViewport data={data} />),
       };
     }
     case 'code': {
       const { data } = cast.code(primary);
       return {
-        ...rail,
         title: data.title ?? 'SOURCE / LIVE',
         subtitle: data.file ?? 'SOURCE',
         context: data.context ?? 'SOURCE',
         footer: 'FRAME / INTERRUPTED RAILS',
         caption: sceneCaption(primary, 'DISPLAY / SOURCE'),
-        main: slot('code-object', <CodeViewport data={data} />),
       };
     }
     case 'table': {
       const { data } = cast.table(primary);
       return {
-        ...rail,
         title: data.title ?? 'DATA / TABLE',
         subtitle: data.subtitle ?? `${data.rows.length} ROWS / ${data.columns.length} COLUMNS`,
         context: data.context ?? 'TABLE',
         footer: 'FRAME / INTERRUPTED RAILS',
         caption: sceneCaption(primary, 'DISPLAY / TABLE'),
-        main: slot('table-object', <TablePrimitive data={data} framed />),
       };
     }
     case 'image': {
@@ -562,23 +509,21 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
       // a title it was not given.
       const { data } = cast.image(primary);
       return {
-        ...rail,
         title: data.title ?? data.alt,
         subtitle: data.subtitle ?? `IMAGE / ${data.format.toUpperCase()}`,
         context: data.context ?? 'FIGURE',
         footer: 'DISPLAY / FIGURE',
         caption: sceneCaption(primary, `FIGURE / ${data.format.toUpperCase()}`),
-        main: slot('image-object', <ImagePrimitive data={data} />, <TechFrame variant="panel" />),
+        outline: 'panel',
       };
     }
     case 'calendar': {
       const { data } = cast.calendar(primary);
       return {
-        ...rail,
         ...calendarFrame(data),
         footer: 'DISPLAY / CALENDAR',
         caption: sceneCaption(primary, `CALENDAR / ${data.view.toUpperCase()}`),
-        main: slot('calendar-object', <CalendarPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
+        outline: 'panel',
       };
     }
     case 'tasks': {
@@ -586,51 +531,47 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
       const { data } = cast.tasks(primary);
       const counts = taskCounts(data);
       return {
-        ...rail,
         title: data.title ?? 'TASKS / TO DO',
         subtitle: data.subtitle ?? `${counts.open} OPEN / ${counts.done} DONE`,
         context: data.context ?? 'TASKS',
         footer: 'DISPLAY / TASKS',
         caption: sceneCaption(primary, `TASKS / ${countText(data.items.length, ['ITEM', 'ITEMS'])}`),
-        main: slot('tasks-object', <TasksPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
+        outline: 'panel',
       };
     }
     case 'inbox': {
       const { data } = cast.inbox(primary);
       const counts = inboxCounts(data);
       return {
-        ...rail,
         title: data.title ?? 'INBOX / MESSAGES',
         subtitle: data.subtitle ?? `${countText(counts.messages, ['MESSAGE', 'MESSAGES'])} / ${counts.unread} UNREAD`,
         context: data.context ?? 'INBOX',
         footer: 'DISPLAY / INBOX',
         caption: sceneCaption(primary, `INBOX / ${countText(counts.messages, ['MESSAGE', 'MESSAGES'])}`),
-        main: slot('inbox-object', <InboxPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
+        outline: 'panel',
       };
     }
     case 'timer': {
       const { data } = cast.timer(primary);
       const paused = data.timers.filter((timer) => timer.state === 'paused').length;
       return {
-        ...rail,
         title: data.title ?? (data.timers.length === 1 ? data.timers[0].label : 'TIMERS'),
         subtitle: data.subtitle ?? [countText(data.timers.length, ['TIMER', 'TIMERS']), paused > 0 ? `${paused} PAUSED` : null].filter(Boolean).join(' / '),
         context: data.context ?? 'TIMERS',
         footer: 'DISPLAY / TIMERS',
         caption: sceneCaption(primary, 'TIMERS / PAGE CLOCK'),
-        main: slot('timer-object', <TimerPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
+        outline: 'panel',
       };
     }
     case 'weather': {
       const { data } = cast.weather(primary);
       return {
-        ...rail,
         title: data.title ?? `WEATHER / ${data.location}`,
         subtitle: data.subtitle ?? ['NOW', data.hourly?.length ? `${data.hourly.length} H` : null, data.daily?.length ? `${data.daily.length} DAYS` : null].filter(Boolean).join(' + '),
         context: data.context ?? 'FORECAST',
         footer: 'DISPLAY / FORECAST',
         caption: sceneCaption(primary, `FORECAST / DEGREES ${data.units}`),
-        main: slot('weather-object', <WeatherPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
+        outline: 'panel',
       };
     }
     default:
@@ -670,7 +611,7 @@ function AuxRow({
           <TechFrame variant="panel" />
           <ObjectSurface object={object}>
             <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-              {composedPrimitive(object, 'aux', onStage, drawn)}
+              {renderObject(object, 'aux', { onStage, notes: drawn ? [drawn] : [] })}
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -896,8 +837,8 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
   ];
 
   return {
-    // The same precedence the backend's view summary reports to the agent.
-    title: frameText(primary.data, 'title') ?? frameText(primary.data, 'subject') ?? frameText(primary.data, 'label') ?? 'COMPOSED WORKSPACE',
+    // Named by the same fields, in the same order, as the agent's view (`nameFields`).
+    title: nameFields(primary.data)[0] ?? 'COMPOSED WORKSPACE',
     subtitle: frameText(primary.data, 'subtitle') ?? 'STRUCTURED SCENE',
     context: frameText(primary.data, 'context') ?? 'COMPOSED',
     footer: 'DISPLAY / COMPOSED',
@@ -920,7 +861,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
             <div className="focusable-content">
               <MetricsPrimitive
                 metrics={primaryMetrics}
-                variant="primary"
+                slot="primary"
                 onFocus={onFocus}
               />
             </div>
@@ -931,11 +872,12 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
               {isMetricPrimary ? (
                 <MetricsPrimitive
                   metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
-                  variant="primary"
+                  slot="primary"
                   onFocus={onFocus}
                 />
               ) : (
-                <StageDemandContext.Provider value={onDemand}>{composedPrimitive(primary, 'primary', state.agentObjects, note)}</StageDemandContext.Provider>
+                // A progress or a note: sceneKind gives every visual primary a scene of its own.
+                <StageDemandContext.Provider value={onDemand}>{renderObject(primary, 'primary', { onStage: state.agentObjects, notes: note ? [note] : [] })}</StageDemandContext.Provider>
               )}
             </FocusableSurface>
           </ObjectSurface>

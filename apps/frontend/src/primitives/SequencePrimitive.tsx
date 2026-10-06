@@ -5,6 +5,7 @@ import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker, markedPart } from './NoteMarker';
+import type { Slot } from './slot';
 import { SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage } from './sequenceLayout';
 import { SEMANTIC_COLOR } from '../design/tokens';
 
@@ -40,12 +41,13 @@ function Arrowhead({ message, color }: { message: LaidOutMessage; color: string 
 
 export function SequencePrimitive({
   data,
-  focused = false,
+  slot = 'primary',
   id,
   note,
 }: {
   data: SequenceDiagramData;
-  focused?: boolean;
+  /** Where the exchange is drawn: in focus its headers stay pinned until they would take half the view (`viewSequence`). */
+  slot?: Slot;
   /** This diagram's object id: an anchored note only belongs to it when its `anchor.target` matches. */
   id: string;
   note?: NoteData | null;
@@ -55,6 +57,7 @@ export function SequencePrimitive({
   const anchoredActorId = markedPart(note, id).node;
   // The geometry follows the viewport's shape, and the drawing is fitted to
   // it, or scrolled in it once fitting would make it too small to read.
+  const focused = slot === 'focus';
   const view = useCallback(
     (viewport: Viewport) => viewWithMap(viewport, (each) => viewSequence(data, each, anchoredActorId, focused), headerReading),
     [data, anchoredActorId, focused],

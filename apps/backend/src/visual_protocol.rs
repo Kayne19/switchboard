@@ -915,7 +915,8 @@ fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
     let mut out = Map::new();
     out.insert("source".into(), Value::Object(clean_source));
     // Not copy_frame_text: code has `file` where the others have
-    // `subtitle`, and checks it between title and context.
+    // `subtitle`, and checks it between title and context (the corpus's
+    // code_order_* cases pin the order).
     for (k, max_len) in [
         ("title", 256),
         ("file", 256),

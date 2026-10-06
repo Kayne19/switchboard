@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { nonFiniteActions } from '../fixtures/nonFiniteActions';
+import { fixtures } from '../../src/fixtures/scenes';
 import {
   MAX_IMAGE_ACTION_BYTES,
   MAX_IMAGE_BYTES,
@@ -99,6 +101,34 @@ describe('display protocol validation', () => {
     expect(() => assertControllerAction({ op: 'show', id: '__runtime/x', type: 'metric', data: { label: 'L', value: '1' } })).toThrow(/reserved identifier namespace/);
   });
 
+});
+
+// The canonical fixtures (src/fixtures/scenes.ts) load around the validator
+// (`loadFixture`), so nothing on the page would notice one an agent could
+// not send. Each must be a wire action as written: accepted, and left as it
+// is, so a fixture draws the scene its action would. The one exception is
+// the conversation's `message`: that object is the page's own (the call's
+// spoken lines build it), and no agent sends one.
+describe('the canonical fixtures', () => {
+  it('are display actions an agent could send, each as the validator leaves it', () => {
+    const refused: string[] = [];
+    const changed: string[] = [];
+    const pageOwn: string[] = [];
+    for (const [scene, actions] of Object.entries(fixtures)) {
+      actions.forEach((action, index) => {
+        if (action.op === 'show' && action.type === 'message') {
+          pageOwn.push(`${scene}[${index}]`);
+          return;
+        }
+        const result = validateControllerAction(action);
+        if (!result.ok) refused.push(`${scene}[${index}]: ${result.error}`);
+        else if (!isDeepStrictEqual(result.action, action)) changed.push(`${scene}[${index}]`);
+      });
+    }
+    expect(refused).toEqual([]);
+    expect(changed).toEqual([]);
+    expect(pageOwn).toEqual(['conversation[0]']);
+  });
 });
 
 // ---- image -----------------------------------------------------------------

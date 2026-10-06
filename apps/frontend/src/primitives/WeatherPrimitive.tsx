@@ -5,6 +5,7 @@ import { MeasuredStageDemand, watchElement } from '../hooks/useStageDemand';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
+import type { Slot } from './slot';
 import { conditionText, WeatherGlyph } from './WeatherGlyph';
 import {
   COMPACT_FIGURE_GAP,
@@ -87,11 +88,11 @@ function AlertTag({ text }: { text: string }) {
   );
 }
 
-function Now({ data, compact, temp, framed, spot, outlook, figure, inline, alertLine }: {
+function Now({ data, compact, temp, slot, spot, outlook, figure, inline, alertLine }: {
   data: WeatherData;
   compact: boolean;
   temp: number;
-  framed: boolean;
+  slot: Slot;
   spot?: string;
   outlook: WeatherDay[] | null;
   /** Beside an outlook, the figure's width (weatherLayout). */
@@ -122,6 +123,7 @@ function Now({ data, compact, temp, framed, spot, outlook, figure, inline, alert
     const text = key === 'feelsLike' ? degree(value as number) : key === 'wind' ? (value as string) : `${formatTemp(value as number)}%`;
     return <Reading key={key} label={label} value={text} />;
   });
+  const framed = slot === 'primary';
   const place = framed ? data.location : placeBesideTitle(data.title, data.location);
   return (
     <section className={`weather-now${inline ? ' weather-now--inline' : ''}`} aria-label={`Weather now in ${data.location}`}>
@@ -129,7 +131,7 @@ function Now({ data, compact, temp, framed, spot, outlook, figure, inline, alert
           leads the head (MetaTitle), and the place it is for takes the
           place of NOW: what of the place the title does not name already. */}
       <div className="weather-now__head tech micro">
-        <MetaTitle title={data.title ?? 'WEATHER'} framed={framed} className="weather-now__title" />
+        <MetaTitle title={data.title ?? 'WEATHER'} slot={slot} className="weather-now__title" />
         {data.alert && !alertLine ? <AlertTag text={data.alert} /> : null}
         {place ? <span className="weather-now__location">{place}</span> : null}
         {framed ? <span>NOW</span> : null}
@@ -374,11 +376,11 @@ function fieldLeast(field: HTMLElement): number {
 }
 
 /**
- * `framed`: the scene's frame names the forecast (the main slot); elsewhere
- * (an aux cell, focus) the forecast leads with its title (MetaTitle), so it
- * shows once wherever it is drawn.
+ * In the main slot the scene's frame names the forecast; elsewhere (an aux
+ * cell, focus) the forecast leads with its title (MetaTitle), so it shows
+ * once wherever it is drawn.
  */
-export function WeatherPrimitive({ data, marked, framed = false }: { data: WeatherData; marked?: string; framed?: boolean }) {
+export function WeatherPrimitive({ data, marked, slot = 'primary' }: { data: WeatherData; marked?: string; slot?: Slot }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(boxRef);
   const hours = data.hourly ?? [];
@@ -438,7 +440,7 @@ export function WeatherPrimitive({ data, marked, framed = false }: { data: Weath
   }, [tall]);
   const field = (
     <div ref={fieldRef} className="weather__field" data-parts={parts} style={{ '--weather-temp': `${layout.temp}px`, '--weather-strip-least': `${STRIP_LEAST}px` } as CSSProperties}>
-      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} framed={framed} spot={unshown} outlook={layout.outlook ? offered : null} figure={layout.figure} inline={layout.inline} alertLine={layout.alertLine} />
+      <Now data={data} compact={arrangement === 'compact'} temp={layout.temp} slot={slot} spot={unshown} outlook={layout.outlook ? offered : null} figure={layout.figure} inline={layout.inline} alertLine={layout.alertLine} />
       {layout.hourly ? <Hours hours={hours} units={data.units} marked={marked} /> : null}
       {layout.daily ? <Days days={days} marked={marked} scroll={!tall} /> : null}
     </div>

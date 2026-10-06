@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { COMPACT_STEPS, ProgressPrimitive, aheadStepWindow, compactStepWindow, type ProgressVariant } from '../../src/primitives/ProgressPrimitive';
+import { COMPACT_STEPS, ProgressPrimitive, aheadStepWindow, compactStepWindow } from '../../src/primitives/ProgressPrimitive';
 import type { ProgressData, ProgressStep } from '../../src/controller/types';
+import type { Slot } from '../../src/primitives/slot';
 import { mount } from './sceneHarness';
 
-function render(data: ProgressData, compact: boolean | ProgressVariant = false) {
-  const variant: ProgressVariant = compact === true ? 'compact' : compact === false ? 'full' : compact;
-  return mount(<ProgressPrimitive data={data} variant={variant} />).querySelector('[data-testid="progress"]') as HTMLElement;
+function render(data: ProgressData, slot: Slot | 'rail' = 'primary') {
+  return mount(<ProgressPrimitive data={data} slot={slot} />).querySelector('[data-testid="progress"]') as HTMLElement;
 }
 
 const plan: ProgressStep[] = [
@@ -57,7 +57,7 @@ describe('ProgressPrimitive', () => {
   });
 
   it('shows a short plan whole in a compact slot', () => {
-    const progress = render({ label: 'BUILD', value: 25, steps: plan }, true);
+    const progress = render({ label: 'BUILD', value: 25, steps: plan }, 'aux');
     expect(progress.querySelectorAll('.progress-step')).toHaveLength(4);
     expect(progress.querySelector('.progress-step--elided')).toBeNull();
   });
@@ -67,7 +67,7 @@ describe('ProgressPrimitive', () => {
       label: `S${i}`,
       state: i < 7 ? ('done' as const) : i === 7 ? ('active' as const) : undefined,
     }));
-    const progress = render({ label: 'BUILD', value: 58, steps }, true);
+    const progress = render({ label: 'BUILD', value: 58, steps }, 'aux');
     const items = [...progress.querySelectorAll('.progress-step')];
     // One done step for context, then the active one and what follows it.
     expect(items.map((item) => item.textContent)).toEqual(['6 DONE', 'S6', 'S7', 'S8', 'S9', '2 MORE']);

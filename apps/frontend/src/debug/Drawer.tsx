@@ -17,7 +17,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-/** Latencies as the main page's metric rows: label left, value right. */
+/** Latencies as the main page's metric rows, listed as in an aux cell: label left, value right. */
 function Latencies({ rows }: { rows: { label: string; ms: number | undefined }[] }) {
   const metrics: SceneObject<MetricData>[] = rows.map((row, index) => ({
     id: `latency-${index}`,
@@ -28,7 +28,7 @@ function Latencies({ rows }: { rows: { label: string; ms: number | undefined }[]
   }));
   return (
     <div className="lats">
-      <MetricsPrimitive metrics={metrics} />
+      <MetricsPrimitive metrics={metrics} slot="aux" />
     </div>
   );
 }

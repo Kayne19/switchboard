@@ -6,16 +6,18 @@ import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
 import { dayText, daysFrom, readToday, timeOfDay } from './timeLabels';
 import { MetaTitle } from './MetaTitle';
+import type { Slot } from './slot';
 
 /**
- * Where an inbox is drawn decides how much of each message shows:
+ * Where an inbox is drawn (its `slot`) decides how much of each message
+ * shows, and names the list's class:
  * - `full`: the main slot and focus: the sender, the subject, the snippet
  *   and the channel;
  * - `compact`: a cell beside the primary: the sender and the subject (or
  *   the snippet of a message with none), between thin rules, as the rail's
  *   modules are read.
  */
-export type InboxVariant = 'full' | 'compact';
+const READING = { primary: 'full', focus: 'full', aux: 'compact' } as const satisfies Record<Slot, string>;
 
 /** How a message's parts are laid out: on one line, or the sender and time
  * over the rest; full or compact. */
@@ -30,10 +32,10 @@ export type InboxLayout = 'line' | 'stack' | 'compact-line' | 'compact-stack';
  */
 export const ONE_LINE_EMS = { full: 50, compact: 32 } as const;
 
-/** The layout a list `width` px wide, its text `em` px, takes. */
-export function inboxLayout(variant: InboxVariant, width: number, em: number): InboxLayout {
-  const line = width > 0 && width >= ONE_LINE_EMS[variant] * em;
-  if (variant === 'compact') return line ? 'compact-line' : 'compact-stack';
+/** The layout a list in `slot`, `width` px wide, its text `em` px, takes. */
+export function inboxLayout(slot: Slot, width: number, em: number): InboxLayout {
+  const line = width > 0 && width >= ONE_LINE_EMS[READING[slot]] * em;
+  if (READING[slot] === 'compact') return line ? 'compact-line' : 'compact-stack';
   return line ? 'line' : 'stack';
 }
 
@@ -134,19 +136,19 @@ function useListMeasure(boxRef: RefObject<HTMLDivElement | null>, scrollRef: Ref
  * message is strong and carries the orange mark; a flagged one the flag; a
  * semantic tint runs down its edge. A list that outgrows its slot scrolls
  * inside its frame with the list viewport's counts, and opens on the
- * message a note names (`marked`), which carries the NOTE badge. `framed`:
- * the scene frame above shows the title (MetaTitle).
+ * message a note names (`marked`), which carries the NOTE badge. In the
+ * main slot the scene frame above shows the title (MetaTitle).
  */
-export function InboxPrimitive({ data, variant = 'full', marked, framed = false }: { data: InboxData; variant?: InboxVariant; marked?: string; framed?: boolean }) {
+export function InboxPrimitive({ data, slot = 'primary', marked }: { data: InboxData; slot?: Slot; marked?: string }) {
   const today = readToday(data.today);
   const counts = inboxCounts(data);
   const boxRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { width, em } = useListMeasure(boxRef, scrollRef);
-  const layout = inboxLayout(variant, width, em);
+  const layout = inboxLayout(slot, width, em);
   const head = (
     <div className="inbox-primitive__meta tech micro">
-      <MetaTitle title={data.title ?? 'INBOX'} framed={framed} className="inbox-primitive__title" />
+      <MetaTitle title={data.title ?? 'INBOX'} slot={slot} className="inbox-primitive__title" />
       {/* Each count whole: a narrow list wraps between them. */}
       <span className="inbox-primitive__counts">
         <span className="meta-count">{countText(counts.messages, MESSAGE)}</span>
@@ -156,7 +158,7 @@ export function InboxPrimitive({ data, variant = 'full', marked, framed = false 
     </div>
   );
   return (
-    <div ref={boxRef} className={`inbox-primitive inbox-primitive--${variant}`} data-testid="inbox">
+    <div ref={boxRef} className={`inbox-primitive inbox-primitive--${READING[slot]}`} data-testid="inbox">
       {/* A new layout is a new list to open: the viewport leads again on the
           message a note names, at its place in the rows now drawn. */}
       <ListViewport

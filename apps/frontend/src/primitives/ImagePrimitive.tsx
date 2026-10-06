@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState, type CSSProperties } from 'reac
 import type { ImageData, ImageFormat } from '../controller/types';
 import { base64DecodedLength } from '../controller/validation';
 import { useLeastHeight } from '../hooks/useStageDemand';
+import type { Slot } from './slot';
 
 // The only image types the page draws, by the format the validators
 // accepted. SVG is not one: it is markup, and markup is never an img source.
@@ -29,7 +30,7 @@ type Decode = { state: 'loading' } | { state: 'ready'; width: number; height: nu
  * with its alt text and intrinsic size on the caption line at the bottom
  * edge. The page reads the size when the bytes decode; nothing sends it.
  */
-export function ImagePrimitive({ data, focused = false }: { data: ImageData; focused?: boolean }) {
+export function ImagePrimitive({ data, slot = 'primary' }: { data: ImageData; slot?: Slot }) {
   const src = useMemo(() => imageDataUrl(data), [data]);
   const [decode, setDecode] = useState<{ src: string | null; result: Decode }>({ src, result: { state: 'loading' } });
   // A new image starts loading again; the result of the old one is dropped.
@@ -44,7 +45,7 @@ export function ImagePrimitive({ data, focused = false }: { data: ImageData; foc
   useLeastHeight(fieldRef, useCallback((box: { width: number }) => (ready ? ready.height * Math.min(1, box.width / ready.width) : null), [ready]));
   return (
     <figure
-      className={`image-primitive${focused ? ' image-primitive--focused' : ''}`}
+      className={`image-primitive${slot === 'focus' ? ' image-primitive--focused' : ''}`}
       data-testid="image"
       data-state={failed ? 'failed' : result.state}
       // The decoded proportions, for a slot that sizes the figure to its

@@ -41,6 +41,7 @@ import type { Size } from './geometry';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
+import type { Slot } from './slot';
 import { clockText, monthName, weekdayName } from './timeLabels';
 
 // A calendar in the four views the agent picks (docs/display-tool.md,
@@ -952,8 +953,8 @@ export function calendarFrame(data: CalendarData): { title: string; subtitle: st
   };
 }
 
-/** `framed`: the scene frame above shows the calendar's title (the main slot); see MetaTitle. */
-export function CalendarPrimitive({ data, marked, focused = false, framed = false }: { data: CalendarData; marked?: string; focused?: boolean; framed?: boolean }) {
+/** In the main slot the scene frame above shows the calendar's title; see MetaTitle. */
+export function CalendarPrimitive({ data, marked, slot = 'primary' }: { data: CalendarData; marked?: string; slot?: Slot }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(bodyRef);
   const model = useMemo(() => calendarModel(data), [data]);
@@ -967,9 +968,9 @@ export function CalendarPrimitive({ data, marked, focused = false, framed = fals
   // no scene frame shows it already (MetaTitle).
   const meta = (
     <div className="calendar__meta tech micro">
-      <MetaTitle title={data.title ?? `${VIEW_NAMES[data.view]} / ${rangeText(data)}`} framed={framed} className="calendar__meta-title" />
+      <MetaTitle title={data.title ?? `${VIEW_NAMES[data.view]} / ${rangeText(data)}`} slot={slot} className="calendar__meta-title" />
       <span className="calendar__meta-range">
-        {(framed || data.title) && model.days.length > 1 ? `${rangeText(data)} / ` : ''}
+        {(slot === 'primary' || data.title) && model.days.length > 1 ? `${rangeText(data)} / ` : ''}
         {countText(count, ['EVENT', 'EVENTS'])}
         {model.outside > 0 ? ` / ${model.outside} OUT OF VIEW` : ''}
       </span>
@@ -981,7 +982,7 @@ export function CalendarPrimitive({ data, marked, focused = false, framed = fals
   else body = <AgendaList model={model} days={model.days} marked={marked} />;
   return (
     <div
-      className={`calendar calendar--${data.view} calendar--layout-${choice.layout}${focused ? ' calendar--focused' : ''}`}
+      className={`calendar calendar--${data.view} calendar--layout-${choice.layout}${slot === 'focus' ? ' calendar--focused' : ''}`}
       style={{ '--calendar-gutter': `${GUTTER_PX}px` } as CSSProperties}
       data-testid="calendar"
       data-view={data.view}

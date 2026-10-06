@@ -7,6 +7,7 @@ import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import type { Point } from './geometry';
 import { NoteMarker, markedPart } from './NoteMarker';
+import type { Slot } from './slot';
 import { SEMANTIC_COLOR } from '../design/tokens';
 
 const SEMANTICS = Object.keys(SEMANTIC_COLOR) as Semantic[];
@@ -47,21 +48,20 @@ function EdgeLabelText({ label, color, align, delay, quiet }: { label: EdgeLabel
 
 export function DiagramPrimitive({
   data,
-  focused = false,
+  slot = 'primary',
   id,
   note,
-  callout = true,
   onCalloutChange,
 }: {
   data: DiagramData;
-  focused?: boolean;
+  /** Where the graph is drawn. Only in the main slot may the note ride on the drawing as a callout where it fits; in an aux cell the rail shows it, in focus a panel of its own. */
+  slot?: Slot;
   /** This diagram's object id: an anchored note only belongs to it when its `anchor.target` matches. */
   id: string;
   note?: NoteData | null;
-  /** Whether the note may ride on the drawing as a callout where it fits; false where the host shows the note itself (focus). */
-  callout?: boolean;
   onCalloutChange?: (placed: boolean) => void;
 }) {
+  const callout = slot === 'primary';
   const anchoredNodeId = markedPart(note, id).node;
   const hasAnchoredNode = Boolean(anchoredNodeId && data.nodes.some((n) => n.id === anchoredNodeId));
   const anchor = hasAnchoredNode ? anchoredNodeId : undefined;
@@ -166,7 +166,7 @@ export function DiagramPrimitive({
   })();
 
   return (
-    <div ref={hostRef} className={`diagram-primitive${focused ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
+    <div ref={hostRef} className={`diagram-primitive${slot === 'focus' ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
       <DrawingViewport drawing={layout} fit={fit} laidOutFor={laidOutFor} lead={lead} map={map} strip={strip} ariaLabel={data.title ?? 'System diagram'}>
         <defs>
           <GlowFilters line="active-edge-glow" frame="diagram-node-glow" />

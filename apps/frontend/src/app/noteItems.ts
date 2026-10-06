@@ -1,10 +1,10 @@
-import type { CalendarData, DiagramObjectData, InboxData, NoteData, SceneObject, TasksData, TimerData, WeatherData } from '../controller/types';
+import type { DiagramObjectData, NoteData, SceneObject, SceneObjectType } from '../controller/types';
 import type { NoteTarget } from '../primitives/AnnotationCard';
 import { markedPart } from '../primitives/NoteMarker';
 import { weatherItemName } from '../primitives/weatherLayout';
 import { eventTarget } from '../primitives/calendarLayout';
 import { chartTargetText } from '../primitives/chartGeometry';
-import { cast } from './sceneModel';
+import { cast, nameFields } from './sceneModel';
 
 // A note on one item (docs/display-tool.md, "A note on one item"): a note's
 // `anchor.item` names an event, a task, a timer, a message, or a forecast
@@ -28,36 +28,29 @@ interface ItemTarget {
   text: string;
   marked: boolean;
 }
-type ItemName<T> = (data: T, item: string) => ItemTarget | undefined;
 
 // An item a list draws wherever it holds it: marked with the badge.
 const drawn = (text: string | undefined): ItemTarget | undefined => (text === undefined ? undefined : { text, marked: true });
 
-// How each type names one of its items on a card's TARGET line, or
+// How each type with items names one of them on a card's TARGET line, or
 // undefined when it holds no item of that name (the card then names the
 // object, and carries no badge). One entry per type, kept apart.
-const ITEM_NAMES: {
-  calendar: ItemName<CalendarData>;
-  tasks: ItemName<TasksData>;
-  timer: ItemName<TimerData>;
-  weather: ItemName<WeatherData>;
-  inbox: ItemName<InboxData>;
-} = {
+const ITEM_NAMES: Partial<Record<SceneObjectType, (object: SceneObject, item: string) => ItemTarget | undefined>> = {
   // An event the view does not reach is named, but nothing on screen marks it.
-  calendar: (data, item) => {
-    const event = eventTarget(data, item);
+  calendar: (object, item) => {
+    const event = eventTarget(cast.calendar(object).data, item);
     return event ? { text: event.text, marked: event.inView } : undefined;
   },
 
-  tasks: (data, item) => drawn(data.items.find((task) => task.id === item)?.text),
+  tasks: (object, item) => drawn(cast.tasks(object).data.items.find((task) => task.id === item)?.text),
 
-  timer: (data, item) => drawn(data.timers.find((timer) => timer.id === item)?.label),
+  timer: (object, item) => drawn(cast.timer(object).data.timers.find((timer) => timer.id === item)?.label),
 
   // A small slot that draws neither list draws the item on its spot line.
-  weather: (data, item) => drawn(weatherItemName(data, item)),
+  weather: (object, item) => drawn(weatherItemName(cast.weather(object).data, item)),
 
-  inbox: (data, item) => {
-    const message = data.messages.find((candidate) => candidate.id === item);
+  inbox: (object, item) => {
+    const message = cast.inbox(object).data.messages.find((candidate) => candidate.id === item);
     return drawn(message ? [message.from, message.subject].filter(Boolean).join(' / ') : undefined);
   },
 };
@@ -66,20 +59,7 @@ const ITEM_NAMES: {
  * object marks it; undefined when the object is not a type with items or
  * holds no item of that name. */
 function itemTarget(object: SceneObject, item: string): ItemTarget | undefined {
-  switch (object.type) {
-    case 'calendar':
-      return ITEM_NAMES.calendar(cast.calendar(object).data, item);
-    case 'tasks':
-      return ITEM_NAMES.tasks(cast.tasks(object).data, item);
-    case 'timer':
-      return ITEM_NAMES.timer(cast.timer(object).data, item);
-    case 'weather':
-      return ITEM_NAMES.weather(cast.weather(object).data, item);
-    case 'inbox':
-      return ITEM_NAMES.inbox(cast.inbox(object).data, item);
-    default:
-      return undefined;
-  }
+  return ITEM_NAMES[object.type]?.(object, item);
 }
 
 /** The item `item` of `object` in the object's own words, for a card's
@@ -94,13 +74,7 @@ function nodeLabel(data: DiagramObjectData, id: string): string | undefined {
   return data.mode === 'sequence' ? data.actors.find((actor) => actor.id === id)?.label : data.nodes.find((node) => node.id === id)?.label;
 }
 
-// The fields an object is named by, in the order the scene frame and the
-// agent's view take them (`summary` in apps/backend/src/display.rs): a
-// title, a document's subject, a metric's or a progress's label, an
-// image's alt text, a forecast's place.
-const NAME_FIELDS = ['title', 'subject', 'label', 'alt', 'location'] as const;
-
-/** What the page shows of an object that carries none of NAME_FIELDS, in their stead: code's file (its frame's subtitle), a note's tag, a sequence's kind. */
+/** What the page shows of an object that carries none of its name fields (`nameFields`), in their stead: code's file (its frame's subtitle), a note's tag, a sequence's kind. */
 function shownName(object: SceneObject): string | undefined {
   switch (object.type) {
     case 'code':
@@ -125,12 +99,7 @@ const said = (value: unknown): string | undefined => (typeof value === 'string' 
  * caller does not read it.
  */
 export function objectName(object: SceneObject): string {
-  const data = object.data as Partial<Record<(typeof NAME_FIELDS)[number], unknown>> | null;
-  for (const field of NAME_FIELDS) {
-    const value = said(data?.[field]);
-    if (value) return value;
-  }
-  return said(shownName(object)) ?? object.type.toUpperCase();
+  return nameFields(object.data).map(said).find(Boolean) ?? said(shownName(object)) ?? object.type.toUpperCase();
 }
 
 /**

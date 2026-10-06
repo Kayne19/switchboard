@@ -8,13 +8,14 @@ import { describe, expect, it } from 'vitest';
 import type { InboxData, InboxMessage } from '../../src/controller/types';
 import { parseTimeValue } from '../../src/controller/validation';
 import { fixtures } from '../../src/fixtures/scenes';
-import { InboxPrimitive, ONE_LINE_EMS, inboxCounts, inboxLayout, messageTime, type InboxVariant } from '../../src/primitives/InboxPrimitive';
+import { InboxPrimitive, ONE_LINE_EMS, inboxCounts, inboxLayout, messageTime } from '../../src/primitives/InboxPrimitive';
+import type { Slot } from '../../src/primitives/slot';
 import { mount, stubResizeObserver } from './sceneHarness';
 
 stubResizeObserver();
 
-function render(data: InboxData, variant: InboxVariant = 'full', marked?: string): HTMLElement {
-  return mount(<InboxPrimitive data={data} variant={variant} marked={marked} />).querySelector('[data-testid="inbox"]') as HTMLElement;
+function render(data: InboxData, slot: Slot = 'primary', marked?: string): HTMLElement {
+  return mount(<InboxPrimitive data={data} slot={slot} marked={marked} />).querySelector('[data-testid="inbox"]') as HTMLElement;
 }
 
 const today = parseTimeValue('2026-10-07');
@@ -40,12 +41,13 @@ describe('messageTime', () => {
 
 describe('inboxLayout and inboxCounts', () => {
   it('puts a message on one line only where the list has the width for it, in its own ems', () => {
-    expect(inboxLayout('full', ONE_LINE_EMS.full * 15, 15)).toBe('line');
-    expect(inboxLayout('full', ONE_LINE_EMS.full * 15 - 1, 15)).toBe('stack');
-    expect(inboxLayout('compact', ONE_LINE_EMS.compact * 12, 12)).toBe('compact-line');
-    expect(inboxLayout('compact', 200, 12)).toBe('compact-stack');
+    expect(inboxLayout('primary', ONE_LINE_EMS.full * 15, 15)).toBe('line');
+    expect(inboxLayout('focus', ONE_LINE_EMS.full * 15, 15)).toBe('line');
+    expect(inboxLayout('primary', ONE_LINE_EMS.full * 15 - 1, 15)).toBe('stack');
+    expect(inboxLayout('aux', ONE_LINE_EMS.compact * 12, 12)).toBe('compact-line');
+    expect(inboxLayout('aux', 200, 12)).toBe('compact-stack');
     // Not yet measured: the narrow layout, which fits any width.
-    expect(inboxLayout('full', 0, 15)).toBe('stack');
+    expect(inboxLayout('primary', 0, 15)).toBe('stack');
   });
 
   it('counts the fixture: messages, unread and flagged', () => {
@@ -70,7 +72,8 @@ describe('inboxLayout and inboxCounts', () => {
 
 describe('InboxPrimitive', () => {
   it('draws the messages in the order sent, each with its id', () => {
-    const list = render(inbox);
+    // In focus, where its meta line leads with its title.
+    const list = render(inbox, 'focus');
     expect([...list.querySelectorAll('[data-item]')].map((item) => item.getAttribute('data-item'))).toEqual(inbox.messages.map((m) => m.id));
     expect(list.querySelector('.inbox-primitive__meta')?.textContent).toBe('INBOX / UNREAD FIRST11 MESSAGES / 5 UNREAD / 4 FLAGGED');
   });
@@ -109,14 +112,14 @@ describe('InboxPrimitive', () => {
   });
 
   it('in a compact slot draws the sender and the subject, or the snippet where there is none, and no channel', () => {
-    const list = render(inbox, 'compact');
+    const list = render(inbox, 'aux');
     expect(list.querySelector('.inbox-row__channel')).toBeNull();
     expect(row(list, 'dentist').querySelector('.inbox-row__snippet')).toBeNull();
     expect(row(list, 'priya').querySelector('.inbox-row__snippet')?.textContent).toBe('offsite agenda draft is in the doc, can you look before Thursday?');
   });
 
   it('marks the message a note names with the NOTE badge', () => {
-    const list = render(inbox, 'full', 'ci');
+    const list = render(inbox, 'primary', 'ci');
     expect(row(list, 'ci').classList.contains('inbox-row--marked')).toBe(true);
     expect(row(list, 'ci').querySelector('.note-badge')?.textContent).toBe('NOTE');
     expect(list.querySelectorAll('.note-badge')).toHaveLength(1);

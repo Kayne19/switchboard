@@ -7,9 +7,11 @@ import { ArrowGlyph } from './MetricsPrimitive';
 import { StepGlyph } from './ProgressPrimitive';
 import { dayText, daysFrom, readToday, timeOfDay } from './timeLabels';
 import { MetaTitle } from './MetaTitle';
+import type { Slot } from './slot';
 
 /**
- * Where a to-do list is drawn decides how much of each task shows:
+ * Where a to-do list is drawn (its `slot`) decides how much of each task
+ * shows, and names the list's class:
  * - `full`: the main slot, every open task with its detail and tags; a long
  *   list counts its done tasks in each section ("3 DONE") rather than
  *   listing them;
@@ -18,7 +20,7 @@ import { MetaTitle } from './MetaTitle';
  *   read: one row per open task between thin rules, its due day at the
  *   end, each section's done tasks counted on one row.
  */
-export type TasksVariant = 'full' | 'focus' | 'compact';
+const READING = { primary: 'full', focus: 'focus', aux: 'compact' } as const satisfies Record<Slot, string>;
 
 /** A list longer than this counts its done tasks in the main slot. */
 export const LONG_TASK_LIST = 14;
@@ -90,8 +92,8 @@ export function taskCounts(data: TasksData): { open: number; done: number; overd
 }
 
 /** Whether a slot counts a section's done tasks instead of listing them. */
-export function countsDone(variant: TasksVariant, total: number): boolean {
-  return variant === 'compact' || (variant === 'full' && total > LONG_TASK_LIST);
+export function countsDone(slot: Slot, total: number): boolean {
+  return slot === 'aux' || (slot === 'primary' && total > LONG_TASK_LIST);
 }
 
 // The due label at a row's end: the word that judges the day over the day
@@ -177,19 +179,19 @@ function SectionHead({ section, today, doneCounted }: { section: TaskSection; to
  * in red and due today in orange, both from the list's own `today`. Done
  * tasks are quieter. A list that outgrows its slot scrolls inside its
  * frame with the list viewport's counts, and opens on the task a note
- * names (`marked`), which carries the NOTE badge. `framed`: the scene
- * frame above shows the title (MetaTitle).
+ * names (`marked`), which carries the NOTE badge. In the main slot the
+ * scene frame above shows the title (MetaTitle).
  */
-export function TasksPrimitive({ data, variant = 'full', marked, framed = false }: { data: TasksData; variant?: TasksVariant; marked?: string; framed?: boolean }) {
+export function TasksPrimitive({ data, slot = 'primary', marked }: { data: TasksData; slot?: Slot; marked?: string }) {
   const today = readToday(data.today);
   const sections = useMemo(() => taskSections(data.items), [data.items]);
   const counts = taskCounts(data);
   const grouped = sections.some((section) => section.group !== undefined);
-  const countDone = countsDone(variant, data.items.length);
-  const compact = variant === 'compact';
+  const countDone = countsDone(slot, data.items.length);
+  const compact = slot === 'aux';
   const head = (
     <div className="tasks-primitive__meta tech micro">
-      <MetaTitle title={data.title ?? 'TASKS'} framed={framed} className="tasks-primitive__title" />
+      <MetaTitle title={data.title ?? 'TASKS'} slot={slot} className="tasks-primitive__title" />
       {/* Each count whole: a narrow list wraps between them. */}
       <span className="tasks-primitive__counts">
         <span className="meta-count">{counts.open} OPEN</span>
@@ -199,7 +201,7 @@ export function TasksPrimitive({ data, variant = 'full', marked, framed = false 
     </div>
   );
   return (
-    <div className={`tasks-primitive tasks-primitive--${variant}`} data-testid="tasks">
+    <div className={`tasks-primitive tasks-primitive--${READING[slot]}`} data-testid="tasks">
       <ListViewport noun={['TASK', 'TASKS']} lead={marked} head={head} scrollClassName="tasks-primitive__scroll" label={data.title ?? 'Tasks'}>
         <div className={`tasks-primitive__sections${grouped ? '' : ' tasks-primitive__sections--plain'}`}>
           {sections.map((section, index) => {

@@ -2,6 +2,7 @@ import { motion } from 'motion/react';
 import { useRef } from 'react';
 import type { ProgressData, ProgressStep, ProgressStepState } from '../controller/types';
 import { useScrollDemand } from '../hooks/useStageDemand';
+import type { Slot } from './slot';
 
 /** How many steps a compact slot (the rail, an aux cell) lists before it
  * summarises the rest. The full list is a focus away. */
@@ -81,18 +82,6 @@ function StepList({ steps, window }: { steps: ProgressStep[]; window: 'all' | 'a
   );
 }
 
-/**
- * Where a progress is drawn decides how much of it shows:
- * - `full`: the main slot and focus, every step listed, scrolling inside the
- *   frame only when the list outgrows it;
- * - `compact`: a cell in the aux row, a window of the steps and a count of
- *   the rest;
- * - `rail`: the module beside the metrics, read the way they are read: a
- *   row with the label and the share done, the bar under it, the steps
- *   done counted on one row and a row per step still to do, up to the
- *   compact window's size.
- */
-export type ProgressVariant = 'full' | 'compact' | 'rail';
 
 function ProgressTrack({ data, percentage }: { data: ProgressData; percentage: number }) {
   return (
@@ -116,13 +105,21 @@ function ProgressTrack({ data, percentage }: { data: ProgressData; percentage: n
 
 /**
  * A bar, and under it the plan the bar measures when the agent sent one.
- * The full plan is always a focus away.
+ * The full plan is always a focus away. Where it is drawn (`slot`) decides
+ * how much of it shows:
+ * - the main slot and focus: every step listed, scrolling inside the frame
+ *   only when the list outgrows it;
+ * - an aux cell: a window of the steps and a count of the rest;
+ * - the rail: the module beside the metrics, read the way they are read: a
+ *   row with the label and the share done, the bar under it, the steps
+ *   done counted on one row and a row per step still to do, up to the
+ *   compact window's size.
  */
-export function ProgressPrimitive({ data, variant = 'full' }: { data: ProgressData; variant?: ProgressVariant }) {
+export function ProgressPrimitive({ data, slot = 'primary' }: { data: ProgressData; slot?: Slot | 'rail' }) {
   const percentage = Math.min(100, Math.max(0, data.value));
   const steps = data.steps && data.steps.length > 0 ? data.steps : null;
   const className = `progress-primitive${steps ? ' progress-primitive--stepped' : ''}`;
-  if (variant === 'rail') {
+  if (slot === 'rail') {
     // The head is a metric row, so the module shares the metrics' rhythm,
     // faces and rules by construction rather than by imitation.
     return (
@@ -146,7 +143,7 @@ export function ProgressPrimitive({ data, variant = 'full' }: { data: ProgressDa
       </div>
       <ProgressTrack data={data} percentage={percentage} />
       <div className="progress-primitive__text tech micro">{data.text ?? `${Math.round(percentage)}% COMPLETE`}</div>
-      {steps ? <StepList steps={steps} window={variant === 'compact' ? 'around' : 'all'} /> : null}
+      {steps ? <StepList steps={steps} window={slot === 'aux' ? 'around' : 'all'} /> : null}
     </div>
   );
 }
