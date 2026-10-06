@@ -35,6 +35,8 @@
   --focus-ring: 1px solid var(--orange);
   --focus-ring-offset: 4px;
   --focus-ring-reach: calc(var(--focus-ring-offset) + 1px);
+  /* How far in from its edge a region draws it. */
+  --focus-ring-inset: 1px;
   color: var(--paper);
   background: var(--black);
   font-family:
@@ -214,9 +216,11 @@ button {
   background: var(--orange);
 }
 /* A region fills a box that clips past its edge (a frame, a scroll), so it
-   draws the ring on its edge, inside. A scroll draws it as its outline,
-   which stays put as the content scrolls. Every box that scrolls draws it:
-   Chrome puts a scroll with nothing to focus inside it in the tab order. */
+   draws the ring inside its edge, a pixel in (`--focus-ring-inset`): a
+   box a scroll cuts a fraction of a pixel short, as a scroll's last item
+   can be, still shows it. A scroll draws it as its outline, which stays put
+   as the content scrolls. Every box that scrolls draws it: Chrome puts a
+   scroll with nothing to focus inside it in the tab order. */
 .annotation-card__text:focus-visible,
 .live-chat-card__text:focus-visible,
 .conversation-answer__text:focus-visible,
@@ -227,14 +231,8 @@ button {
 .content-rail__details:focus-visible,
 .training-charts--compare:focus-visible {
   outline: var(--focus-ring);
-  outline-offset: -1px;
+  outline-offset: calc(-1px - var(--focus-ring-inset));
 }
-/* A region with parts over its own edges draws the ring over them, on the
-   box that holds it still: an object's surface over what it holds (the
-   object's box clips everything outside it, and a part with a ground of its
-   own, a source's, would cover its outline); a calendar's paged days over
-   their rims and the hours' own; a list's or a drawing's scroll over its
-   rims and its pinned head, on the port or view it scrolls in. */
 /* A scroll that holds controls brings a focused one in with room for its
    ring (a scroll stops at a whole pixel, and a control's ring reaches past
    it). Nothing scrolls these into view but focus. */
@@ -243,6 +241,12 @@ button {
 .training-charts--compare {
   scroll-padding: var(--focus-ring-reach);
 }
+/* A region with parts over its own edges draws the ring over them, on the
+   box that holds it still: an object's surface over what it holds (the
+   object's box clips everything outside it, and a part with a ground of its
+   own, a source's, would cover its outline); a calendar's paged days over
+   their rims and the hours' own; a list's or a drawing's scroll over its
+   rims and its pinned head, on the port or view it scrolls in. */
 .focusable-content:focus-visible,
 .calendar-pages:focus-visible,
 .list-viewport__scroll:focus-visible,
@@ -256,7 +260,7 @@ button {
   content: "";
   position: absolute;
   z-index: 10;
-  inset: 0;
+  inset: var(--focus-ring-inset);
   border: var(--focus-ring);
   pointer-events: none;
 }

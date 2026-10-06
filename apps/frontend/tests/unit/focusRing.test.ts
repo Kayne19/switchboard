@@ -63,10 +63,11 @@ describe('the focus ring', () => {
     expect(css).toMatch(/--focus-ring:\s*1px solid var\(--orange\);/);
     expect(css).toMatch(/--focus-ring-offset:\s*4px;/);
     expect(control.body).toMatch(/outline:\s*var\(--focus-ring\);\s*outline-offset:\s*var\(--focus-ring-offset\);/);
-    expect(region.body).toMatch(/outline:\s*var\(--focus-ring\);\s*outline-offset:\s*-1px;/);
+    expect(css).toMatch(/--focus-ring-inset:\s*1px;/);
+    expect(region.body).toMatch(/outline:\s*var\(--focus-ring\);\s*outline-offset:\s*calc\(-1px - var\(--focus-ring-inset\)\);/);
     // An object's surface, a list's and a drawing's scroll draw it over
     // what lies on their edges, on the box that holds them still.
-    expect(over.body).toMatch(/position:\s*absolute;[\s\S]*inset:\s*0;[\s\S]*border:\s*var\(--focus-ring\);/);
+    expect(over.body).toMatch(/position:\s*absolute;[\s\S]*inset:\s*var\(--focus-ring-inset\);[\s\S]*border:\s*var\(--focus-ring\);/);
     expect(over.selectors).toEqual([
       '.focusable-content:focus-visible::after',
       '.calendar-pages:focus-visible::after',
