@@ -231,38 +231,168 @@ fn check_unknown_keys(
     Ok(())
 }
 
+// ---- field helpers ---------------------------------------------------------
+//
+// The checks the type validators share: each reads one field and copies it
+// into the result when it passes (check_string, required_string and
+// check_item_id return the value instead), and otherwise returns its error
+// text. The browser's validators have their own set (`copyOptionalString`
+// and the rest).
+
+/// A string of at most `max_len` UTF-16 units; anything else, a missing
+/// value included, is refused. The string rule, written once: the helpers
+/// below use it, and so do the array items that are strings (chart labels,
+/// paragraphs, table cells, task tags). The browser's `checkString`.
+fn check_string<'a>(
+    value: Option<&'a Value>,
+    max_len: usize,
+    field: &str,
+) -> Result<&'a str, String> {
+    let text = value
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{field} must be a string"))?;
+    if utf16_len(text) > max_len {
+        return Err(format!(
+            "{field} exceeds maximum length of {max_len} UTF-16 code units"
+        ));
+    }
+    Ok(text)
+}
+
 fn copy_optional_string(
     data: &Map<String, Value>,
     out: &mut Map<String, Value>,
     key: &str,
     max_len: usize,
-    field_name: &str,
+    field: &str,
 ) -> Result<(), String> {
-    let Some(value) = data.get(key) else {
-        return Ok(());
-    };
-    let text = value
-        .as_str()
-        .ok_or_else(|| format!("{field_name} must be a string"))?;
-    if utf16_len(text) > max_len {
-        return Err(format!(
-            "{field_name} exceeds maximum length of {max_len} UTF-16 code units"
-        ));
+    if let Some(value) = data.get(key) {
+        let text = check_string(Some(value), max_len, field)?;
+        out.insert(key.into(), text.into());
     }
-    out.insert(key.into(), text.into());
     Ok(())
 }
 
 /// Copies an optional `semantic`. Anything but one of the seven names, a
 /// non-string or `null` included, is refused, as the browser's
-/// `isName(value, SEMANTICS)` check refuses it: a field the browser refuses
-/// is refused here, never dropped.
+/// `copyOptionalName` with `SEMANTICS` refuses it: a field the browser
+/// refuses is refused here, never dropped.
 fn copy_optional_semantic(
     data: &Map<String, Value>,
     out: &mut Map<String, Value>,
-    field_name: &str,
+    field: &str,
 ) -> Result<(), String> {
-    copy_optional_name(data, out, "semantic", &SEMANTICS, field_name)
+    copy_optional_name(data, out, "semantic", &SEMANTICS, field)
+}
+
+/// The scene-frame strings, in this order: title, subtitle and context (256
+/// units), then caption (128). Most types check them last.
+fn copy_frame_text(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    kind: &str,
+) -> Result<(), String> {
+    for key in ["title", "subtitle", "context"] {
+        copy_optional_string(data, out, key, 256, &format!("{kind}.{key}"))?;
+    }
+    copy_optional_string(data, out, "caption", 128, &format!("{kind}.caption"))
+}
+
+fn required_string<'a>(
+    data: &'a Map<String, Value>,
+    key: &str,
+    max_len: usize,
+    field: &str,
+) -> Result<&'a str, String> {
+    check_string(data.get(key), max_len, field)
+}
+
+fn copy_optional_bool(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    field: &str,
+) -> Result<(), String> {
+    if let Some(value) = data.get(key) {
+        let b = value
+            .as_bool()
+            .ok_or_else(|| format!("{field} must be boolean"))?;
+        out.insert(key.into(), b.into());
+    }
+    Ok(())
+}
+
+/// An optional name from `allowed`; anything else, `null` included, is
+/// `invalid_name`'s refusal.
+fn copy_optional_name(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+    field: &str,
+) -> Result<(), String> {
+    if let Some(value) = data.get(key) {
+        let name = read_name(Some(value), allowed, field)?;
+        out.insert(key.into(), name.into());
+    }
+    Ok(())
+}
+
+fn copy_number(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    field: &str,
+    required: bool,
+) -> Result<(), String> {
+    match data.get(key) {
+        None if !required => Ok(()),
+        value => {
+            let number = value
+                .filter(|v| v.as_f64().is_some_and(f64::is_finite))
+                .ok_or_else(|| format!("{field} must be a finite number"))?;
+            out.insert(key.into(), number.clone());
+            Ok(())
+        }
+    }
+}
+
+fn copy_optional_percent(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    field: &str,
+) -> Result<(), String> {
+    if let Some(value) = data.get(key) {
+        if !value
+            .as_f64()
+            .is_some_and(|v| v.is_finite() && (0.0..=100.0).contains(&v))
+        {
+            return Err(format!("{field} must be a number from 0 to 100"));
+        }
+        out.insert(key.into(), value.clone());
+    }
+    Ok(())
+}
+
+/// An item's id: non-blank, within the id cap, and the first of its name in
+/// `seen`.
+fn check_item_id<'a>(
+    item: &'a Map<String, Value>,
+    seen: &mut HashSet<String>,
+    context: &str,
+) -> Result<&'a str, String> {
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !is_blank(id) && utf16_len(id) <= MAX_ID_UTF16)
+        .ok_or_else(|| {
+            format!("{context} id must be non-empty and <= {MAX_ID_UTF16} UTF-16 code units")
+        })?;
+    if !seen.insert(id.to_string()) {
+        return Err(format!("duplicate {context} id: {id}"));
+    }
+    Ok(id)
 }
 
 fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
@@ -287,10 +417,8 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         "chart data",
     )?;
 
-    let kind = match data.get("kind") {
-        None => None,
-        Some(v) => Some(read_name(Some(v), &CHART_KINDS, "chart.kind")?),
-    };
+    let mut out = Map::new();
+    copy_optional_name(data, &mut out, "kind", &CHART_KINDS, "chart.kind")?;
     let labels = match data.get("labels") {
         None => None,
         Some(v) => {
@@ -301,12 +429,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
                     "chart.labels must be an array of 1 to {MAX_CHART_LABELS} strings"
                 ))?;
             for label in arr {
-                let text = label.as_str().ok_or("chart label must be a string")?;
-                if utf16_len(text) > MAX_CHART_LABEL_UTF16 {
-                    return Err(format!(
-                        "chart label exceeds maximum length of {MAX_CHART_LABEL_UTF16} UTF-16 code units"
-                    ));
-                }
+                check_string(Some(label), MAX_CHART_LABEL_UTF16, "chart label")?;
             }
             Some(arr)
         }
@@ -322,13 +445,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         let sm = s.as_object().ok_or("chart series item must be an object")?;
         check_unknown_keys(sm, &["name", "semantic", "values"], "chart series item")?;
 
-        let name = sm
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or("series.name must be a string")?;
-        if utf16_len(name) > 128 {
-            return Err("series.name exceeds maximum length of 128 UTF-16 code units".into());
-        }
+        let name = required_string(sm, "name", 128, "series.name")?;
 
         let values = sm
             .get("values")
@@ -350,49 +467,17 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         clean_series.push(Value::Object(item));
     }
 
-    let mut out = Map::new();
     out.insert("series".into(), Value::Array(clean_series));
-    if let Some(kind) = kind {
-        out.insert("kind".into(), kind.into());
-    }
     if let Some(labels) = labels {
         out.insert("labels".into(), Value::Array(labels.clone()));
     }
 
-    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("chart.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "chart.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    for (k, max_len) in [
-        ("caption", 128),
-        ("xLabel", 128),
-        ("yLabel", 128),
-        ("compareLabel", 128),
-    ] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("chart.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "chart.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
+    copy_frame_text(data, &mut out, "chart")?;
+    for k in ["xLabel", "yLabel", "compareLabel"] {
+        copy_optional_string(data, &mut out, k, 128, &format!("chart.{k}"))?;
     }
     for k in ["xMax", "yMin", "yMax"] {
-        if let Some(v) = data.get(k) {
-            if !v.is_number() || !v.as_f64().is_some_and(f64::is_finite) {
-                return Err(format!("chart.{k} must be a finite number"));
-            }
-            out.insert(k.into(), v.clone());
-        }
+        copy_number(data, &mut out, k, &format!("chart.{k}"), false)?;
     }
 
     if let Some(marker_val) = data.get("marker") {
@@ -400,21 +485,9 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
             .as_object()
             .ok_or("chart.marker must be an object")?;
         check_unknown_keys(mm, &["x", "series"], "chart marker")?;
-        let x = mm
-            .get("x")
-            .filter(|v| v.is_number() && v.as_f64().is_some_and(f64::is_finite))
-            .ok_or("chart.marker.x must be a finite number")?;
         let mut marker_out = Map::new();
-        marker_out.insert("x".into(), x.clone());
-        if let Some(s) = mm.get("series") {
-            let series_str = s.as_str().ok_or("chart.marker.series must be a string")?;
-            if utf16_len(series_str) > 128 {
-                return Err(
-                    "chart.marker.series exceeds maximum length of 128 UTF-16 code units".into(),
-                );
-            }
-            marker_out.insert("series".into(), series_str.into());
-        }
+        copy_number(mm, &mut marker_out, "x", "chart.marker.x", true)?;
+        copy_optional_string(mm, &mut marker_out, "series", 128, "chart.marker.series")?;
         out.insert("marker".into(), Value::Object(marker_out));
     }
 
@@ -427,20 +500,8 @@ fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
         &["label", "value", "semantic", "caption", "trend", "delta"],
         "metric data",
     )?;
-    let label = data
-        .get("label")
-        .and_then(Value::as_str)
-        .ok_or("metric.label must be a string")?;
-    if utf16_len(label) > 128 {
-        return Err("metric.label exceeds maximum length of 128 UTF-16 code units".into());
-    }
-    let value = data
-        .get("value")
-        .and_then(Value::as_str)
-        .ok_or("metric.value must be a string")?;
-    if utf16_len(value) > 128 {
-        return Err("metric.value exceeds maximum length of 128 UTF-16 code units".into());
-    }
+    let label = required_string(data, "label", 128, "metric.label")?;
+    let value = required_string(data, "value", 128, "metric.value")?;
 
     let mut out = Map::new();
     out.insert("label".into(), label.into());
@@ -492,15 +553,7 @@ fn validate_progress_steps(value: &Value) -> Result<Vec<Value>, String> {
     for step in steps {
         let sm = step.as_object().ok_or("progress step must be an object")?;
         check_unknown_keys(sm, &["label", "state", "detail"], "progress step")?;
-        let label = sm
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("progress step.label must be a string")?;
-        if utf16_len(label) > 128 {
-            return Err(
-                "progress step.label exceeds maximum length of 128 UTF-16 code units".into(),
-            );
-        }
+        let label = required_string(sm, "label", 128, "progress step.label")?;
         let mut step_out = Map::new();
         step_out.insert("label".into(), label.into());
         copy_optional_name(
@@ -522,13 +575,7 @@ fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
         &["label", "detail", "value", "text", "caption", "steps"],
         "progress data",
     )?;
-    let label = data
-        .get("label")
-        .and_then(Value::as_str)
-        .ok_or("progress.label must be a string")?;
-    if utf16_len(label) > 128 {
-        return Err("progress.label exceeds maximum length of 128 UTF-16 code units".into());
-    }
+    let label = required_string(data, "label", 128, "progress.label")?;
 
     let steps = data.get("steps").map(validate_progress_steps).transpose()?;
 
@@ -555,20 +602,8 @@ fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
         out.insert("steps".into(), Value::Array(steps));
     }
 
-    if let Some(detail) = data.get("detail") {
-        let d = detail.as_str().ok_or("progress.detail must be a string")?;
-        if utf16_len(d) > 256 {
-            return Err("progress.detail exceeds maximum length of 256 UTF-16 code units".into());
-        }
-        out.insert("detail".into(), d.into());
-    }
-    if let Some(text) = data.get("text") {
-        let t = text.as_str().ok_or("progress.text must be a string")?;
-        if utf16_len(t) > 128 {
-            return Err("progress.text exceeds maximum length of 128 UTF-16 code units".into());
-        }
-        out.insert("text".into(), t.into());
-    }
+    copy_optional_string(data, &mut out, "detail", 256, "progress.detail")?;
+    copy_optional_string(data, &mut out, "text", 128, "progress.text")?;
     copy_optional_string(data, &mut out, "caption", 128, "progress.caption")?;
     Ok(Value::Object(out))
 }
@@ -620,24 +655,8 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
             "diagram node",
         )?;
 
-        let id = nm
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| !is_blank(id) && utf16_len(id) <= 128)
-            .ok_or("diagram node id must be non-empty and <= 128 UTF-16 code units")?;
-        if !node_ids.insert(id.to_string()) {
-            return Err(format!("duplicate diagram node id: {id}"));
-        }
-
-        let label = nm
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("diagram node.label must be a string")?;
-        if utf16_len(label) > 256 {
-            return Err(
-                "diagram node.label exceeds maximum length of 256 UTF-16 code units".into(),
-            );
-        }
+        let id = check_item_id(nm, &mut node_ids, "diagram node")?;
+        let label = required_string(nm, "label", 256, "diagram node.label")?;
 
         let mut node_out = Map::new();
         node_out.insert("id".into(), id.into());
@@ -697,12 +716,7 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
 
         copy_optional_string(em, &mut edge_out, "label", 256, "diagram edge.label")?;
         copy_optional_semantic(em, &mut edge_out, "diagram edge.semantic")?;
-        if let Some(active) = em.get("active") {
-            let b = active
-                .as_bool()
-                .ok_or("diagram edge.active must be boolean")?;
-            edge_out.insert("active".into(), b.into());
-        }
+        copy_optional_bool(em, &mut edge_out, "active", "diagram edge.active")?;
         clean_edges.push(Value::Object(edge_out));
     }
 
@@ -710,19 +724,7 @@ fn validate_graph_diagram_data(data: &Map<String, Value>) -> Result<Value, Strin
     out.insert("mode".into(), "graph".into());
     out.insert("nodes".into(), Value::Array(clean_nodes));
     out.insert("edges".into(), Value::Array(clean_edges));
-
-    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("diagram.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "diagram.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "diagram.caption")?;
+    copy_frame_text(data, &mut out, "diagram")?;
 
     Ok(Value::Object(out))
 }
@@ -762,26 +764,8 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
         let am = a.as_object().ok_or("diagram actor must be an object")?;
         check_unknown_keys(am, &["id", "label", "sub", "semantic"], "diagram actor")?;
 
-        let id = am
-            .get("id")
-            .and_then(Value::as_str)
-            .ok_or("diagram actor id must be non-empty and <= 128 UTF-16 code units")?;
-        if is_blank(id) || utf16_len(id) > 128 {
-            return Err("diagram actor id must be non-empty and <= 128 UTF-16 code units".into());
-        }
-        if !actor_ids.insert(id.to_string()) {
-            return Err(format!("duplicate diagram actor id: {id}"));
-        }
-
-        let label = am
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("diagram actor.label must be a string")?;
-        if utf16_len(label) > 256 {
-            return Err(
-                "diagram actor.label exceeds maximum length of 256 UTF-16 code units".into(),
-            );
-        }
+        let id = check_item_id(am, &mut actor_ids, "diagram actor")?;
+        let label = required_string(am, "label", 256, "diagram actor.label")?;
 
         let mut actor_out = Map::new();
         actor_out.insert("id".into(), id.into());
@@ -818,15 +802,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
                 "diagram message to endpoint \"{to}\" not found in actors"
             ));
         }
-        let label = mm
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("diagram message.label must be a string")?;
-        if utf16_len(label) > 256 {
-            return Err(
-                "diagram message.label exceeds maximum length of 256 UTF-16 code units".into(),
-            );
-        }
+        let label = required_string(mm, "label", 256, "diagram message.label")?;
 
         let mut message_out = Map::new();
         message_out.insert("from".into(), from.into());
@@ -839,12 +815,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
             &MESSAGE_KINDS,
             "diagram message.kind",
         )?;
-        if let Some(active) = mm.get("active") {
-            let b = active
-                .as_bool()
-                .ok_or("diagram message.active must be boolean")?;
-            message_out.insert("active".into(), b.into());
-        }
+        copy_optional_bool(mm, &mut message_out, "active", "diagram message.active")?;
         clean_messages.push(Value::Object(message_out));
     }
 
@@ -852,19 +823,7 @@ fn validate_sequence_diagram_data(data: &Map<String, Value>) -> Result<Value, St
     out.insert("mode".into(), "sequence".into());
     out.insert("actors".into(), Value::Array(clean_actors));
     out.insert("messages".into(), Value::Array(clean_messages));
-
-    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("diagram.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "diagram.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "diagram.caption")?;
+    copy_frame_text(data, &mut out, "diagram")?;
 
     Ok(Value::Object(out))
 }
@@ -885,13 +844,7 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
         "document data",
     )?;
 
-    let subject = data
-        .get("subject")
-        .and_then(Value::as_str)
-        .ok_or("document.subject must be a string")?;
-    if utf16_len(subject) > 256 {
-        return Err("document.subject exceeds maximum length of 256 UTF-16 code units".into());
-    }
+    let subject = required_string(data, "subject", 256, "document.subject")?;
 
     let paras = data
         .get("paragraphs")
@@ -899,12 +852,7 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
         .ok_or("document.paragraphs must be an array")?;
     let mut clean_paras = Vec::new();
     for p in paras {
-        let s = p.as_str().ok_or("document paragraph must be a string")?;
-        if utf16_len(s) > 50_000 {
-            return Err(
-                "document paragraph exceeds maximum length of 50000 UTF-16 code units".into(),
-            );
-        }
+        let s = check_string(Some(p), 50_000, "document paragraph")?;
         clean_paras.push(Value::String(s.to_string()));
     }
 
@@ -913,30 +861,15 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("paragraphs".into(), Value::Array(clean_paras));
 
     copy_optional_name(data, &mut out, "kind", &DOCUMENT_KINDS, "document.kind")?;
-
-    for (k, max_len) in [("context", 256), ("source", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("document.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "document.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
+    for (k, max_len) in [
+        ("context", 256),
+        ("source", 256),
+        ("from", 128),
+        ("timestamp", 128),
+        ("caption", 128),
+    ] {
+        copy_optional_string(data, &mut out, k, max_len, &format!("document.{k}"))?;
     }
-    for (k, max_len) in [("from", 128), ("timestamp", 128)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("document.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "document.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "document.caption")?;
 
     Ok(Value::Object(out))
 }
@@ -957,28 +890,16 @@ fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
         "code.source",
     )?;
 
-    let text = source_obj
-        .get("text")
-        .and_then(Value::as_str)
-        .ok_or("code.source.text must be a string")?;
-    if utf16_len(text) > 50_000 {
-        return Err("code.source.text exceeds maximum length of 50000 UTF-16 code units".into());
-    }
-
+    let text = required_string(source_obj, "text", 50_000, "code.source.text")?;
     let mut clean_source = Map::new();
     clean_source.insert("text".into(), text.into());
-
-    if let Some(lang) = source_obj.get("language") {
-        let l = lang
-            .as_str()
-            .ok_or("code.source.language must be a string")?;
-        if utf16_len(l) > 64 {
-            return Err(
-                "code.source.language exceeds maximum length of 64 UTF-16 code units".into(),
-            );
-        }
-        clean_source.insert("language".into(), l.into());
-    }
+    copy_optional_string(
+        source_obj,
+        &mut clean_source,
+        "language",
+        64,
+        "code.source.language",
+    )?;
     if let Some(hl) = source_obj.get("highlight") {
         let arr = hl
             .as_array()
@@ -993,19 +914,16 @@ fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
 
     let mut out = Map::new();
     out.insert("source".into(), Value::Object(clean_source));
-
-    for (k, max_len) in [("title", 256), ("file", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("code.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "code.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
+    // Not copy_frame_text: code has `file` where the others have
+    // `subtitle`, and checks it between title and context.
+    for (k, max_len) in [
+        ("title", 256),
+        ("file", 256),
+        ("context", 256),
+        ("caption", 128),
+    ] {
+        copy_optional_string(data, &mut out, k, max_len, &format!("code.{k}"))?;
     }
-    copy_optional_string(data, &mut out, "caption", 128, "code.caption")?;
 
     Ok(Value::Object(out))
 }
@@ -1018,32 +936,17 @@ fn validate_table_cell(cell: &Value) -> Result<Value, String> {
             }
             Ok(cell.clone())
         }
-        Value::String(s) => {
-            if utf16_len(s) > MAX_TABLE_CELL_UTF16 {
-                return Err(format!(
-                    "table cell exceeds maximum length of {MAX_TABLE_CELL_UTF16} UTF-16 code units"
-                ));
-            }
+        Value::String(_) => {
+            check_string(Some(cell), MAX_TABLE_CELL_UTF16, "table cell")?;
             Ok(cell.clone())
         }
         Value::Object(cm) => {
             check_unknown_keys(cm, &["text", "semantic", "bold"], "table cell")?;
-            let text = cm
-                .get("text")
-                .and_then(Value::as_str)
-                .ok_or("table cell.text must be a string")?;
-            if utf16_len(text) > MAX_TABLE_CELL_UTF16 {
-                return Err(format!(
-                    "table cell.text exceeds maximum length of {MAX_TABLE_CELL_UTF16} UTF-16 code units"
-                ));
-            }
+            let text = required_string(cm, "text", MAX_TABLE_CELL_UTF16, "table cell.text")?;
             let mut cell_out = Map::new();
             cell_out.insert("text".into(), text.into());
             copy_optional_semantic(cm, &mut cell_out, "table cell.semantic")?;
-            if let Some(bold) = cm.get("bold") {
-                let b = bold.as_bool().ok_or("table cell.bold must be boolean")?;
-                cell_out.insert("bold".into(), b.into());
-            }
+            copy_optional_bool(cm, &mut cell_out, "bold", "table cell.bold")?;
             Ok(Value::Object(cell_out))
         }
         _ => Err("table cell must be a string, a number or an object".into()),
@@ -1077,15 +980,12 @@ fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
     for c in columns_arr {
         let cm = c.as_object().ok_or("table column must be an object")?;
         check_unknown_keys(cm, &["label", "semantic"], "table column")?;
-        let label = cm
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("table column.label must be a string")?;
-        if utf16_len(label) > MAX_TABLE_COLUMN_LABEL_UTF16 {
-            return Err(format!(
-                "table column.label exceeds maximum length of {MAX_TABLE_COLUMN_LABEL_UTF16} UTF-16 code units"
-            ));
-        }
+        let label = required_string(
+            cm,
+            "label",
+            MAX_TABLE_COLUMN_LABEL_UTF16,
+            "table column.label",
+        )?;
         let mut column_out = Map::new();
         column_out.insert("label".into(), label.into());
         copy_optional_semantic(cm, &mut column_out, "table column.semantic")?;
@@ -1138,19 +1038,7 @@ fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
         }
         out.insert("highlight".into(), Value::Array(arr.clone()));
     }
-
-    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("table.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "table.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "table.caption")?;
+    copy_frame_text(data, &mut out, "table")?;
 
     Ok(Value::Object(out))
 }
@@ -1293,13 +1181,7 @@ fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
         ));
     }
 
-    let alt = data
-        .get("alt")
-        .and_then(Value::as_str)
-        .ok_or("image.alt must be a string")?;
-    if utf16_len(alt) > 256 {
-        return Err("image.alt exceeds maximum length of 256 UTF-16 code units".into());
-    }
+    let alt = required_string(data, "alt", 256, "image.alt")?;
     if is_blank(alt) {
         return Err("image.alt must not be empty".into());
     }
@@ -1308,10 +1190,7 @@ fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("format".into(), format.into());
     out.insert("bytes".into(), bytes.into());
     out.insert("alt".into(), alt.into());
-    for k in ["title", "subtitle", "context"] {
-        copy_optional_string(data, &mut out, k, 256, &format!("image.{k}"))?;
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "image.caption")?;
+    copy_frame_text(data, &mut out, "image")?;
     Ok(Value::Object(out))
 }
 
@@ -1489,127 +1368,9 @@ fn read_time(value: Option<&Value>, forms: &[TimeForm], field: &str) -> Result<T
 // ---- personal-assistant types -------------------------------------------------
 //
 // calendar, tasks, timer, weather and inbox (docs/display-tool.md,
-// "Personal-assistant types"). Each item id is checked as a diagram node id
-// is (non-blank, <= 128 UTF-16 units) and is unique in its list; the
-// browser's validators hold the same rules in the same order.
-
-/// The scene-frame text every type may carry, checked last.
-fn copy_frame_text(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    kind: &str,
-) -> Result<(), String> {
-    for key in ["title", "subtitle", "context"] {
-        copy_optional_string(data, out, key, 256, &format!("{kind}.{key}"))?;
-    }
-    copy_optional_string(data, out, "caption", 128, &format!("{kind}.caption"))
-}
-
-fn required_string<'a>(
-    data: &'a Map<String, Value>,
-    key: &str,
-    max_len: usize,
-    field: &str,
-) -> Result<&'a str, String> {
-    let text = data
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("{field} must be a string"))?;
-    if utf16_len(text) > max_len {
-        return Err(format!(
-            "{field} exceeds maximum length of {max_len} UTF-16 code units"
-        ));
-    }
-    Ok(text)
-}
-
-fn copy_optional_bool(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    key: &str,
-    field: &str,
-) -> Result<(), String> {
-    if let Some(value) = data.get(key) {
-        let b = value
-            .as_bool()
-            .ok_or_else(|| format!("{field} must be boolean"))?;
-        out.insert(key.into(), b.into());
-    }
-    Ok(())
-}
-
-/// An optional name from `allowed`; anything else, `null` included, is
-/// `invalid_name`'s refusal.
-fn copy_optional_name(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    key: &str,
-    allowed: &[&str],
-    field: &str,
-) -> Result<(), String> {
-    if let Some(value) = data.get(key) {
-        let name = read_name(Some(value), allowed, field)?;
-        out.insert(key.into(), name.into());
-    }
-    Ok(())
-}
-
-fn copy_number(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    key: &str,
-    field: &str,
-    required: bool,
-) -> Result<(), String> {
-    match data.get(key) {
-        None if !required => Ok(()),
-        value => {
-            let number = value
-                .filter(|v| v.as_f64().is_some_and(f64::is_finite))
-                .ok_or_else(|| format!("{field} must be a finite number"))?;
-            out.insert(key.into(), number.clone());
-            Ok(())
-        }
-    }
-}
-
-fn copy_optional_percent(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    key: &str,
-    field: &str,
-) -> Result<(), String> {
-    if let Some(value) = data.get(key) {
-        if !value
-            .as_f64()
-            .is_some_and(|v| v.is_finite() && (0.0..=100.0).contains(&v))
-        {
-            return Err(format!("{field} must be a number from 0 to 100"));
-        }
-        out.insert(key.into(), value.clone());
-    }
-    Ok(())
-}
-
-/// An item's id: non-blank, within the id cap, and the first of its name in
-/// `seen`.
-fn check_item_id<'a>(
-    item: &'a Map<String, Value>,
-    seen: &mut HashSet<String>,
-    context: &str,
-) -> Result<&'a str, String> {
-    let id = item
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|id| !is_blank(id) && utf16_len(id) <= MAX_ID_UTF16)
-        .ok_or_else(|| {
-            format!("{context} id must be non-empty and <= {MAX_ID_UTF16} UTF-16 code units")
-        })?;
-    if !seen.insert(id.to_string()) {
-        return Err(format!("duplicate {context} id: {id}"));
-    }
-    Ok(id)
-}
+// "Personal-assistant types"). Each item id goes through check_item_id, as a
+// diagram node or actor id does (non-blank, <= 128 UTF-16 units, unique in
+// its list); the browser's validators hold the same rules in the same order.
 
 const CALENDAR_VIEWS: [&str; 4] = ["day", "week", "month", "agenda"];
 const MAX_CALENDAR_EVENTS: usize = 200;
@@ -1761,12 +1522,7 @@ fn validate_task(task: &Value, seen: &mut HashSet<String>) -> Result<Value, Stri
                 "task.tags must be an array of at most {MAX_TASK_TAGS} strings"
             ))?;
         for tag in list {
-            let text = tag.as_str().ok_or("task tag must be a string")?;
-            if utf16_len(text) > MAX_TASK_TAG_UTF16 {
-                return Err(format!(
-                    "task tag exceeds maximum length of {MAX_TASK_TAG_UTF16} UTF-16 code units"
-                ));
-            }
+            check_string(Some(tag), MAX_TASK_TAG_UTF16, "task tag")?;
         }
         out.insert("tags".into(), tags.clone());
     }
@@ -2114,29 +1870,11 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
         let sm = seg.as_object().ok_or("note segment must be an object")?;
         check_unknown_keys(sm, &["text", "accent", "bold", "semantic"], "note segment")?;
 
-        let text = sm
-            .get("text")
-            .and_then(Value::as_str)
-            .ok_or("note segment.text must be a string")?;
-        if utf16_len(text) > 50_000 {
-            return Err(
-                "note segment.text exceeds maximum length of 50000 UTF-16 code units".into(),
-            );
-        }
-
+        let text = required_string(sm, "text", 50_000, "note segment.text")?;
         let mut seg_out = Map::new();
         seg_out.insert("text".into(), text.into());
-
-        if let Some(accent) = sm.get("accent") {
-            let b = accent
-                .as_bool()
-                .ok_or("note segment.accent must be boolean")?;
-            seg_out.insert("accent".into(), b.into());
-        }
-        if let Some(bold) = sm.get("bold") {
-            let b = bold.as_bool().ok_or("note segment.bold must be boolean")?;
-            seg_out.insert("bold".into(), b.into());
-        }
+        copy_optional_bool(sm, &mut seg_out, "accent", "note segment.accent")?;
+        copy_optional_bool(sm, &mut seg_out, "bold", "note segment.bold")?;
         copy_optional_semantic(sm, &mut seg_out, "note segment.semantic")?;
         clean_segs.push(Value::Object(seg_out));
     }
@@ -2144,13 +1882,7 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
     let mut out = Map::new();
     out.insert("segments".into(), Value::Array(clean_segs));
 
-    if let Some(tag) = data.get("tag") {
-        let t = tag.as_str().ok_or("note.tag must be a string")?;
-        if utf16_len(t) > 128 {
-            return Err("note.tag exceeds maximum length of 128 UTF-16 code units".into());
-        }
-        out.insert("tag".into(), t.into());
-    }
+    copy_optional_string(data, &mut out, "tag", 128, "note.tag")?;
     copy_optional_string(data, &mut out, "caption", 128, "note.caption")?;
 
     if let Some(anchor_value) = data.get("anchor") {
@@ -2169,12 +1901,7 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
         let target = check_identifier(target, "note.anchor.target")?;
         let mut clean_anchor = Map::new();
         clean_anchor.insert("target".into(), target.into());
-        if let Some(x) = anchor.get("x") {
-            if !x.is_number() || !x.as_f64().is_some_and(f64::is_finite) {
-                return Err("note.anchor.x must be a finite number".into());
-            }
-            clean_anchor.insert("x".into(), x.clone());
-        }
+        copy_number(anchor, &mut clean_anchor, "x", "note.anchor.x", false)?;
         for key in ["series", "node"] {
             copy_optional_string(
                 anchor,
@@ -2332,10 +2059,7 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
 
             let ty = read_name(map.get("type"), &CONTENT_TYPES, "show.type")?;
 
-            let role_opt = match map.get("role") {
-                Some(role) => Some(read_name(Some(role), &ROLES, "show.role")?),
-                None => None,
-            };
+            copy_optional_name(map, &mut out, "role", &ROLES, "show.role")?;
 
             let data_obj = map
                 .get("data")
@@ -2363,9 +2087,6 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
             out.insert("op".into(), "show".into());
             out.insert("id".into(), clean_id.into());
             out.insert("type".into(), ty.into());
-            if let Some(r) = role_opt {
-                out.insert("role".into(), r.into());
-            }
             out.insert("data".into(), clean_data);
         }
         "hide" => {
@@ -2422,22 +2143,8 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
                         return Err("say.at must contain at least one of x or series".into());
                     }
                     let mut at_clean = Map::new();
-                    if let Some(x) = at_map.get("x") {
-                        if !x.is_number() || !x.as_f64().is_some_and(f64::is_finite) {
-                            return Err("say.at.x must be a finite number".into());
-                        }
-                        at_clean.insert("x".into(), x.clone());
-                    }
-                    if let Some(series) = at_map.get("series") {
-                        let s = series.as_str().ok_or("say.at.series must be a string")?;
-                        if utf16_len(s) > 128 {
-                            return Err(
-                                "say.at.series exceeds maximum length of 128 UTF-16 code units"
-                                    .into(),
-                            );
-                        }
-                        at_clean.insert("series".into(), s.into());
-                    }
+                    copy_number(at_map, &mut at_clean, "x", "say.at.x", false)?;
+                    copy_optional_string(at_map, &mut at_clean, "series", 128, "say.at.series")?;
                     Value::Object(at_clean)
                 }
                 _ => return Err("say.at is invalid".into()),

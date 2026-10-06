@@ -25,6 +25,7 @@ import type {
   SequenceMessage,
   SpeechState,
   TableCell,
+  TableCellObject,
   TableColumn,
   TableData,
   CalendarData,
@@ -287,15 +288,98 @@ function checkString(val: unknown, maxLen: number, name: string): string | null 
   return null;
 }
 
+// ---- field helpers ---------------------------------------------------------
+//
+// The checks the type validators share: each reads one field and copies it
+// into the result when it passes (checkItemId returns the id instead), and
+// otherwise returns its error text. A result is a typed one (`ChartData`,
+// `DiagramNode`, ...), whose type names the keys a helper may write, or
+// `Fields`. The backend's validators have their own set
+// (`copy_optional_string` and the rest).
+
+/** A JSON object as a validator reads it, or a result built key by key and cast once it is whole. */
+type Fields = Record<string, unknown>;
+
+/** The four scene-frame strings most types carry, each optional. */
+interface FrameText {
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+}
+
+/**
+ * The scene-frame strings, in this order: title, subtitle and context (256
+ * units), then caption (128). Most types check them last.
+ */
+function copyFrameText(data: Fields, out: FrameText, kind: string): string | null {
+  for (const key of ['title', 'subtitle', 'context'] as const) {
+    const err = copyOptionalString(data, out, key, 256, `${kind}.${key}`);
+    if (err) return err;
+  }
+  return copyOptionalString(data, out, 'caption', 128, `${kind}.caption`);
+}
+
+function copyOptionalString<T extends object>(data: Fields, out: T, key: keyof T & string, maxLen: number, field: string): string | null {
+  if (data[key] === undefined) return null;
+  const err = checkString(data[key], maxLen, field);
+  if (err) return err;
+  (out as Fields)[key] = data[key];
+  return null;
+}
+
+function copyOptionalBoolean<T extends object>(data: Fields, out: T, key: keyof T & string, field: string): string | null {
+  if (data[key] === undefined) return null;
+  if (typeof data[key] !== 'boolean') return `${field} must be boolean`;
+  (out as Fields)[key] = data[key];
+  return null;
+}
+
+/** An optional name from `allowed`; anything else, `null` included, is `invalidName`'s refusal. */
+function copyOptionalName<T extends object>(data: Fields, out: T, key: keyof T & string, allowed: readonly string[], field: string): string | null {
+  const value = data[key];
+  if (value === undefined) return null;
+  if (!isName(value, allowed)) return invalidName(field, allowed);
+  (out as Fields)[key] = value;
+  return null;
+}
+
+function copyNumber<T extends object>(data: Fields, out: T, key: keyof T & string, field: string, required: boolean): string | null {
+  const value = data[key];
+  if (value === undefined && !required) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return `${field} must be a finite number`;
+  (out as Fields)[key] = value;
+  return null;
+}
+
+function copyOptionalPercent<T extends object>(data: Fields, out: T, key: keyof T & string, field: string): string | null {
+  const value = data[key];
+  if (value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+    return `${field} must be a number from 0 to 100`;
+  }
+  (out as Fields)[key] = value;
+  return null;
+}
+
+/** An item's id: non-blank, within the id cap, and the first of its name in `seen`. */
+function checkItemId(value: unknown, seen: Set<string>, context: string): { ok: true; id: string } | { ok: false; error: string } {
+  if (typeof value !== 'string' || isBlank(value) || value.length > MAX_ID_UTF16) {
+    return { ok: false, error: `${context} id must be non-empty and <= ${MAX_ID_UTF16} UTF-16 code units` };
+  }
+  if (seen.has(value)) return { ok: false, error: `duplicate ${context} id: ${value}` };
+  seen.add(value);
+  return { ok: true, id: value };
+}
+
 function validateChartData(data: Record<string, unknown>): { ok: true; data: ChartData } | { ok: false; error: string } {
   const allowed = new Set(['title', 'subtitle', 'context', 'caption', 'kind', 'labels', 'xLabel', 'yLabel', 'xMax', 'yMin', 'yMax', 'series', 'marker', 'compareLabel']);
   const unknownKey = checkUnknownKeys(data, allowed, 'chart data');
   if (unknownKey) return { ok: false, error: unknownKey };
 
-  if (data.kind !== undefined && !isName(data.kind, CHART_KINDS)) {
-    return { ok: false, error: invalidName('chart.kind', CHART_KINDS) };
-  }
-  let labels: string[] | undefined;
+  const result: ChartData = { series: [] };
+  const kindErr = copyOptionalName(data, result, 'kind', CHART_KINDS, 'chart.kind');
+  if (kindErr) return { ok: false, error: kindErr };
   if (data.labels !== undefined) {
     if (!Array.isArray(data.labels) || data.labels.length < 1 || data.labels.length > MAX_CHART_LABELS) {
       return { ok: false, error: `chart.labels must be an array of 1 to ${MAX_CHART_LABELS} strings` };
@@ -304,13 +388,12 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
       const err = checkString(label, MAX_CHART_LABEL_UTF16, 'chart label');
       if (err) return { ok: false, error: err };
     }
-    labels = data.labels as string[];
+    result.labels = data.labels as string[];
   }
 
   if (!Array.isArray(data.series)) {
     return { ok: false, error: 'chart.series must be an array' };
   }
-  const seriesList: ChartSeries[] = [];
   const seriesAllowed = new Set(['name', 'semantic', 'values']);
   for (const s of data.series) {
     if (!isRecord(s)) return { ok: false, error: 'chart series item must be an object' };
@@ -322,59 +405,35 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     for (const v of s.values) {
       if (typeof v !== 'number' || !Number.isFinite(v)) return { ok: false, error: 'series.values must contain finite numbers' };
     }
-    if (labels && s.values.length > labels.length) {
+    if (result.labels && s.values.length > result.labels.length) {
       return { ok: false, error: 'series.values is longer than chart.labels' };
     }
-    if (s.semantic !== undefined && !isName(s.semantic, SEMANTICS)) {
-      return { ok: false, error: invalidName('series.semantic', SEMANTICS) };
-    }
-    seriesList.push({
-      name: s.name as string,
-      values: s.values as number[],
-      ...(s.semantic !== undefined ? { semantic: s.semantic as Semantic } : {}),
-    });
+    const series: ChartSeries = { name: s.name as string, values: s.values as number[] };
+    const semanticErr = copyOptionalName(s, series, 'semantic', SEMANTICS, 'series.semantic');
+    if (semanticErr) return { ok: false, error: semanticErr };
+    result.series.push(series);
   }
 
-  const result: ChartData = { series: seriesList };
-  if (data.kind !== undefined) result.kind = data.kind as ChartKind;
-  if (labels) result.labels = labels;
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `chart.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  for (const k of ['caption', 'xLabel', 'yLabel', 'compareLabel'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 128, `chart.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  for (const k of ['xMax', 'yMin', 'yMax'] as const) {
-    if (data[k] !== undefined) {
-      if (typeof data[k] !== 'number' || !Number.isFinite(data[k])) {
-        return { ok: false, error: `chart.${k} must be a finite number` };
-      }
-      result[k] = data[k] as number;
-    }
-  }
+  const err =
+    copyFrameText(data, result, 'chart') ??
+    copyOptionalString(data, result, 'xLabel', 128, 'chart.xLabel') ??
+    copyOptionalString(data, result, 'yLabel', 128, 'chart.yLabel') ??
+    copyOptionalString(data, result, 'compareLabel', 128, 'chart.compareLabel') ??
+    copyNumber(data, result, 'xMax', 'chart.xMax', false) ??
+    copyNumber(data, result, 'yMin', 'chart.yMin', false) ??
+    copyNumber(data, result, 'yMax', 'chart.yMax', false);
+  if (err) return { ok: false, error: err };
   if (data.marker !== undefined) {
     if (!isRecord(data.marker)) return { ok: false, error: 'chart.marker must be an object' };
     const markerAllowed = new Set(['x', 'series']);
     const mUnknown = checkUnknownKeys(data.marker, markerAllowed, 'chart marker');
     if (mUnknown) return { ok: false, error: mUnknown };
-    if (typeof data.marker.x !== 'number' || !Number.isFinite(data.marker.x)) {
-      return { ok: false, error: 'chart.marker.x must be a finite number' };
-    }
-    const markerObj: { x: number; series?: string } = { x: data.marker.x };
-    if (data.marker.series !== undefined) {
-      const err = checkString(data.marker.series, 128, 'chart.marker.series');
-      if (err) return { ok: false, error: err };
-      markerObj.series = data.marker.series as string;
-    }
-    result.marker = markerObj;
+    const marker: Fields = {};
+    const markerErr =
+      copyNumber(data.marker, marker, 'x', 'chart.marker.x', true) ??
+      copyOptionalString(data.marker, marker, 'series', 128, 'chart.marker.series');
+    if (markerErr) return { ok: false, error: markerErr };
+    result.marker = marker as NonNullable<ChartData['marker']>;
   }
 
   return { ok: true, data: result };
@@ -390,35 +449,14 @@ function validateMetricData(data: Record<string, unknown>): { ok: true; data: Me
   const valErr = checkString(data.value, 128, 'metric.value');
   if (valErr) return { ok: false, error: valErr };
 
-  if (data.semantic !== undefined && !isName(data.semantic, SEMANTICS)) {
-    return { ok: false, error: invalidName('metric.semantic', SEMANTICS) };
-  }
-
-  const result: MetricData = {
-    label: data.label as string,
-    value: data.value as string,
-    ...(data.semantic !== undefined ? { semantic: data.semantic as Semantic } : {}),
-  };
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'metric.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-  if (data.trend !== undefined) {
-    if (!isName(data.trend, METRIC_TRENDS)) {
-      return { ok: false, error: invalidName('metric.trend', METRIC_TRENDS) };
-    }
-    result.trend = data.trend as MetricTrend;
-  }
-  if (data.delta !== undefined) {
-    const err = checkString(data.delta, MAX_METRIC_DELTA_UTF16, 'metric.delta');
-    if (err) return { ok: false, error: err };
-    result.delta = data.delta as string;
-  }
-  return {
-    ok: true,
-    data: result,
-  };
+  const result: MetricData = { label: data.label as string, value: data.value as string };
+  const err =
+    copyOptionalName(data, result, 'semantic', SEMANTICS, 'metric.semantic') ??
+    copyOptionalString(data, result, 'caption', 128, 'metric.caption') ??
+    copyOptionalName(data, result, 'trend', METRIC_TRENDS, 'metric.trend') ??
+    copyOptionalString(data, result, 'delta', MAX_METRIC_DELTA_UTF16, 'metric.delta');
+  if (err) return { ok: false, error: err };
+  return { ok: true, data: result };
 }
 
 /**
@@ -444,17 +482,10 @@ function validateProgressSteps(value: unknown): { ok: true; steps: ProgressStep[
     const labelErr = checkString(s.label, 128, 'progress step.label');
     if (labelErr) return { ok: false, error: labelErr };
     const step: ProgressStep = { label: s.label as string };
-    if (s.state !== undefined) {
-      if (!isName(s.state, STEP_STATES)) {
-        return { ok: false, error: invalidName('progress step.state', STEP_STATES) };
-      }
-      step.state = s.state as ProgressStepState;
-    }
-    if (s.detail !== undefined) {
-      const err = checkString(s.detail, 256, 'progress step.detail');
-      if (err) return { ok: false, error: err };
-      step.detail = s.detail as string;
-    }
+    const err =
+      copyOptionalName(s, step, 'state', STEP_STATES, 'progress step.state') ??
+      copyOptionalString(s, step, 'detail', 256, 'progress step.detail');
+    if (err) return { ok: false, error: err };
     steps.push(step);
   }
   return { ok: true, steps };
@@ -493,23 +524,11 @@ function validateProgressData(data: Record<string, unknown>): { ok: true; data: 
     value,
     ...(steps ? { steps } : {}),
   };
-
-  if (data.detail !== undefined) {
-    const err = checkString(data.detail, 256, 'progress.detail');
-    if (err) return { ok: false, error: err };
-    result.detail = data.detail as string;
-  }
-  if (data.text !== undefined) {
-    const err = checkString(data.text, 128, 'progress.text');
-    if (err) return { ok: false, error: err };
-    result.text = data.text as string;
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'progress.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err =
+    copyOptionalString(data, result, 'detail', 256, 'progress.detail') ??
+    copyOptionalString(data, result, 'text', 128, 'progress.text') ??
+    copyOptionalString(data, result, 'caption', 128, 'progress.caption');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -554,36 +573,19 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     const nUnknown = checkUnknownKeys(n, nodeAllowed, 'diagram node');
     if (nUnknown) return { ok: false, error: nUnknown };
 
-    if (typeof n.id !== 'string' || isBlank(n.id) || n.id.length > 128) {
-      return { ok: false, error: 'diagram node id must be non-empty and <= 128 UTF-16 code units' };
-    }
-    if (nodeIds.has(n.id)) {
-      return { ok: false, error: `duplicate diagram node id: ${n.id}` };
-    }
-    nodeIds.add(n.id);
+    const id = checkItemId(n.id, nodeIds, 'diagram node');
+    if (!id.ok) return id;
 
     const labelErr = checkString(n.label, 256, 'diagram node.label');
     if (labelErr) return { ok: false, error: labelErr };
 
-    const nodeItem: DiagramNode = { id: n.id, label: n.label as string };
-    if (n.sub !== undefined) {
-      const err = checkString(n.sub, 256, 'diagram node.sub');
-      if (err) return { ok: false, error: err };
-      nodeItem.sub = n.sub as string;
-    }
-    if (n.detail !== undefined) {
-      const err = checkString(n.detail, 256, 'diagram node.detail');
-      if (err) return { ok: false, error: err };
-      nodeItem.detail = n.detail as string;
-    }
-    if (n.semantic !== undefined) {
-      if (!isName(n.semantic, SEMANTICS)) return { ok: false, error: invalidName('diagram node.semantic', SEMANTICS) };
-      nodeItem.semantic = n.semantic as Semantic;
-    }
-    if (n.state !== undefined) {
-      if (!isName(n.state, STEP_STATES)) return { ok: false, error: invalidName('diagram node.state', STEP_STATES) };
-      nodeItem.state = n.state as DiagramNode['state'];
-    }
+    const nodeItem: DiagramNode = { id: id.id, label: n.label as string };
+    const err =
+      copyOptionalString(n, nodeItem, 'sub', 256, 'diagram node.sub') ??
+      copyOptionalString(n, nodeItem, 'detail', 256, 'diagram node.detail') ??
+      copyOptionalName(n, nodeItem, 'semantic', SEMANTICS, 'diagram node.semantic') ??
+      copyOptionalName(n, nodeItem, 'state', STEP_STATES, 'diagram node.state');
+    if (err) return { ok: false, error: err };
     nodes.push(nodeItem);
   }
 
@@ -617,19 +619,11 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     edgePairs.add(pairKey);
 
     const edgeItem: DiagramEdge = { from: e.from, to: e.to };
-    if (e.label !== undefined) {
-      const err = checkString(e.label, 256, 'diagram edge.label');
-      if (err) return { ok: false, error: err };
-      edgeItem.label = e.label as string;
-    }
-    if (e.semantic !== undefined) {
-      if (!isName(e.semantic, SEMANTICS)) return { ok: false, error: invalidName('diagram edge.semantic', SEMANTICS) };
-      edgeItem.semantic = e.semantic as Semantic;
-    }
-    if (e.active !== undefined) {
-      if (typeof e.active !== 'boolean') return { ok: false, error: 'diagram edge.active must be boolean' };
-      edgeItem.active = e.active;
-    }
+    const err =
+      copyOptionalString(e, edgeItem, 'label', 256, 'diagram edge.label') ??
+      copyOptionalName(e, edgeItem, 'semantic', SEMANTICS, 'diagram edge.semantic') ??
+      copyOptionalBoolean(e, edgeItem, 'active', 'diagram edge.active');
+    if (err) return { ok: false, error: err };
     edges.push(edgeItem);
   }
 
@@ -638,19 +632,8 @@ function validateGraphDiagramData(data: Record<string, unknown>): { ok: true; da
     nodes,
     edges,
   };
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `diagram.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'diagram.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err = copyFrameText(data, result, 'diagram');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -678,27 +661,17 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
     const aUnknown = checkUnknownKeys(a, actorAllowed, 'diagram actor');
     if (aUnknown) return { ok: false, error: aUnknown };
 
-    if (typeof a.id !== 'string' || isBlank(a.id) || a.id.length > 128) {
-      return { ok: false, error: 'diagram actor id must be non-empty and <= 128 UTF-16 code units' };
-    }
-    if (actorIds.has(a.id)) {
-      return { ok: false, error: `duplicate diagram actor id: ${a.id}` };
-    }
-    actorIds.add(a.id);
+    const id = checkItemId(a.id, actorIds, 'diagram actor');
+    if (!id.ok) return id;
 
     const labelErr = checkString(a.label, 256, 'diagram actor.label');
     if (labelErr) return { ok: false, error: labelErr };
 
-    const actorItem: SequenceActor = { id: a.id, label: a.label as string };
-    if (a.sub !== undefined) {
-      const err = checkString(a.sub, 256, 'diagram actor.sub');
-      if (err) return { ok: false, error: err };
-      actorItem.sub = a.sub as string;
-    }
-    if (a.semantic !== undefined) {
-      if (!isName(a.semantic, SEMANTICS)) return { ok: false, error: invalidName('diagram actor.semantic', SEMANTICS) };
-      actorItem.semantic = a.semantic as Semantic;
-    }
+    const actorItem: SequenceActor = { id: id.id, label: a.label as string };
+    const err =
+      copyOptionalString(a, actorItem, 'sub', 256, 'diagram actor.sub') ??
+      copyOptionalName(a, actorItem, 'semantic', SEMANTICS, 'diagram actor.semantic');
+    if (err) return { ok: false, error: err };
     actors.push(actorItem);
   }
 
@@ -725,14 +698,10 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
     if (labelErr) return { ok: false, error: labelErr };
 
     const messageItem: SequenceMessage = { from: m.from, to: m.to, label: m.label as string };
-    if (m.kind !== undefined) {
-      if (!isName(m.kind, MESSAGE_KINDS)) return { ok: false, error: invalidName('diagram message.kind', MESSAGE_KINDS) };
-      messageItem.kind = m.kind as SequenceMessage['kind'];
-    }
-    if (m.active !== undefined) {
-      if (typeof m.active !== 'boolean') return { ok: false, error: 'diagram message.active must be boolean' };
-      messageItem.active = m.active;
-    }
+    const err =
+      copyOptionalName(m, messageItem, 'kind', MESSAGE_KINDS, 'diagram message.kind') ??
+      copyOptionalBoolean(m, messageItem, 'active', 'diagram message.active');
+    if (err) return { ok: false, error: err };
     messages.push(messageItem);
   }
 
@@ -741,19 +710,8 @@ function validateSequenceDiagramData(data: Record<string, unknown>): { ok: true;
     actors,
     messages,
   };
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `diagram.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'diagram.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err = copyFrameText(data, result, 'diagram');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -775,33 +733,14 @@ function validateDocumentData(data: Record<string, unknown>): { ok: true; data: 
     subject: data.subject as string,
     paragraphs: data.paragraphs as string[],
   };
-
-  if (data.kind !== undefined) {
-    if (!isName(data.kind, DOCUMENT_KINDS)) {
-      return { ok: false, error: invalidName('document.kind', DOCUMENT_KINDS) };
-    }
-    result.kind = data.kind;
-  }
-  for (const k of ['context', 'source'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `document.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  for (const k of ['from', 'timestamp'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 128, `document.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'document.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err =
+    copyOptionalName(data, result, 'kind', DOCUMENT_KINDS, 'document.kind') ??
+    copyOptionalString(data, result, 'context', 256, 'document.context') ??
+    copyOptionalString(data, result, 'source', 256, 'document.source') ??
+    copyOptionalString(data, result, 'from', 128, 'document.from') ??
+    copyOptionalString(data, result, 'timestamp', 128, 'document.timestamp') ??
+    copyOptionalString(data, result, 'caption', 128, 'document.caption');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -819,11 +758,8 @@ function validateCodeData(data: Record<string, unknown>): { ok: true; data: Code
   if (textErr) return { ok: false, error: textErr };
 
   const sourceObj: CodeData['source'] = { text: data.source.text as string };
-  if (data.source.language !== undefined) {
-    const err = checkString(data.source.language, 64, 'code.source.language');
-    if (err) return { ok: false, error: err };
-    sourceObj.language = data.source.language as string;
-  }
+  const languageErr = copyOptionalString(data.source, sourceObj, 'language', 64, 'code.source.language');
+  if (languageErr) return { ok: false, error: languageErr };
   if (data.source.highlight !== undefined) {
     if (!Array.isArray(data.source.highlight)) return { ok: false, error: 'code.source.highlight must be an array' };
     for (const h of data.source.highlight) {
@@ -835,19 +771,14 @@ function validateCodeData(data: Record<string, unknown>): { ok: true; data: Code
   }
 
   const result: CodeData = { source: sourceObj };
-  for (const k of ['title', 'file', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `code.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'code.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  // Not copyFrameText: code has `file` where the others have `subtitle`,
+  // and checks it between title and context.
+  const err =
+    copyOptionalString(data, result, 'title', 256, 'code.title') ??
+    copyOptionalString(data, result, 'file', 256, 'code.file') ??
+    copyOptionalString(data, result, 'context', 256, 'code.context') ??
+    copyOptionalString(data, result, 'caption', 128, 'code.caption');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -877,10 +808,8 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
     const labelErr = checkString(c.label, MAX_TABLE_COLUMN_LABEL_UTF16, 'table column.label');
     if (labelErr) return { ok: false, error: labelErr };
     const column: TableColumn = { label: c.label as string };
-    if (c.semantic !== undefined) {
-      if (!isName(c.semantic, SEMANTICS)) return { ok: false, error: invalidName('table column.semantic', SEMANTICS) };
-      column.semantic = c.semantic as Semantic;
-    }
+    const semanticErr = copyOptionalName(c, column, 'semantic', SEMANTICS, 'table column.semantic');
+    if (semanticErr) return { ok: false, error: semanticErr };
     columns.push(column);
   }
 
@@ -912,15 +841,11 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
       if (cellUnknown) return { ok: false, error: cellUnknown };
       const textErr = checkString(cell.text, MAX_TABLE_CELL_UTF16, 'table cell.text');
       if (textErr) return { ok: false, error: textErr };
-      const cellObj: TableCell = { text: cell.text as string };
-      if (cell.semantic !== undefined) {
-        if (!isName(cell.semantic, SEMANTICS)) return { ok: false, error: invalidName('table cell.semantic', SEMANTICS) };
-        cellObj.semantic = cell.semantic as Semantic;
-      }
-      if (cell.bold !== undefined) {
-        if (typeof cell.bold !== 'boolean') return { ok: false, error: 'table cell.bold must be boolean' };
-        cellObj.bold = cell.bold;
-      }
+      const cellObj: TableCellObject = { text: cell.text as string };
+      const cellErr =
+        copyOptionalName(cell, cellObj, 'semantic', SEMANTICS, 'table cell.semantic') ??
+        copyOptionalBoolean(cell, cellObj, 'bold', 'table cell.bold');
+      if (cellErr) return { ok: false, error: cellErr };
       row.push(cellObj);
     }
     rows.push(row);
@@ -936,19 +861,8 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
     }
     result.highlight = data.highlight as number[];
   }
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `table.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'table.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err = copyFrameText(data, result, 'table');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -1059,18 +973,8 @@ function validateImageData(data: Record<string, unknown>): { ok: true; data: Ima
   if (isBlank(data.alt as string)) return { ok: false, error: 'image.alt must not be empty' };
 
   const result: ImageData = { format, bytes: data.bytes, alt: data.alt as string };
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `image.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'image.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
+  const err = copyFrameText(data, result, 'image');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -1198,72 +1102,9 @@ function readTime(value: unknown, forms: TimeForm[], field: string): { ok: true;
 // ---- personal-assistant types -------------------------------------------------
 //
 // calendar, tasks, timer, weather and inbox (docs/display-tool.md,
-// "Personal-assistant types"). Each item id is checked as a diagram node id
-// is (non-blank, <= 128 UTF-16 units) and is unique in its list; the
-// backend's validators hold the same rules in the same order.
-
-type Fields = Record<string, unknown>;
-
-/** The scene-frame text every type may carry, checked last. */
-function copyFrameText(data: Fields, out: Fields, kind: string): string | null {
-  for (const key of ['title', 'subtitle', 'context'] as const) {
-    const err = copyOptionalString(data, out, key, 256, `${kind}.${key}`);
-    if (err) return err;
-  }
-  return copyOptionalString(data, out, 'caption', 128, `${kind}.caption`);
-}
-
-function copyOptionalString(data: Fields, out: Fields, key: string, maxLen: number, field: string): string | null {
-  if (data[key] === undefined) return null;
-  const err = checkString(data[key], maxLen, field);
-  if (err) return err;
-  out[key] = data[key];
-  return null;
-}
-
-function copyOptionalBoolean(data: Fields, out: Fields, key: string, field: string): string | null {
-  if (data[key] === undefined) return null;
-  if (typeof data[key] !== 'boolean') return `${field} must be boolean`;
-  out[key] = data[key];
-  return null;
-}
-
-/** An optional name from `allowed`; anything else, `null` included, is `invalidName`'s refusal. */
-function copyOptionalName(data: Fields, out: Fields, key: string, allowed: readonly string[], field: string): string | null {
-  const value = data[key];
-  if (value === undefined) return null;
-  if (!isName(value, allowed)) return invalidName(field, allowed);
-  out[key] = value;
-  return null;
-}
-
-function copyNumber(data: Fields, out: Fields, key: string, field: string, required: boolean): string | null {
-  const value = data[key];
-  if (value === undefined && !required) return null;
-  if (typeof value !== 'number' || !Number.isFinite(value)) return `${field} must be a finite number`;
-  out[key] = value;
-  return null;
-}
-
-function copyOptionalPercent(data: Fields, out: Fields, key: string, field: string): string | null {
-  const value = data[key];
-  if (value === undefined) return null;
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
-    return `${field} must be a number from 0 to 100`;
-  }
-  out[key] = value;
-  return null;
-}
-
-/** An item's id: non-blank, within the id cap, and the first of its name in `seen`. */
-function checkItemId(value: unknown, seen: Set<string>, context: string): { ok: true; id: string } | { ok: false; error: string } {
-  if (typeof value !== 'string' || isBlank(value) || value.length > MAX_ID_UTF16) {
-    return { ok: false, error: `${context} id must be non-empty and <= ${MAX_ID_UTF16} UTF-16 code units` };
-  }
-  if (seen.has(value)) return { ok: false, error: `duplicate ${context} id: ${value}` };
-  seen.add(value);
-  return { ok: true, id: value };
-}
+// "Personal-assistant types"). Each item id goes through checkItemId, as a
+// diagram node or actor id does (non-blank, <= 128 UTF-16 units, unique in
+// its list); the backend's validators hold the same rules in the same order.
 
 const CALENDAR_VIEWS = ['day', 'week', 'month', 'agenda'];
 /** The most days a view may show; the day and month views take no `days`. */
@@ -1683,32 +1524,19 @@ function validateNoteData(data: Record<string, unknown>): { ok: true; data: Note
     if (textErr) return { ok: false, error: textErr };
 
     const segObj: RichSegment = { text: seg.text as string };
-    if (seg.accent !== undefined) {
-      if (typeof seg.accent !== 'boolean') return { ok: false, error: 'note segment.accent must be boolean' };
-      segObj.accent = seg.accent;
-    }
-    if (seg.bold !== undefined) {
-      if (typeof seg.bold !== 'boolean') return { ok: false, error: 'note segment.bold must be boolean' };
-      segObj.bold = seg.bold;
-    }
-    if (seg.semantic !== undefined) {
-      if (!isName(seg.semantic, SEMANTICS)) return { ok: false, error: invalidName('note segment.semantic', SEMANTICS) };
-      segObj.semantic = seg.semantic as Semantic;
-    }
+    const err =
+      copyOptionalBoolean(seg, segObj, 'accent', 'note segment.accent') ??
+      copyOptionalBoolean(seg, segObj, 'bold', 'note segment.bold') ??
+      copyOptionalName(seg, segObj, 'semantic', SEMANTICS, 'note segment.semantic');
+    if (err) return { ok: false, error: err };
     segments.push(segObj);
   }
 
   const result: NoteData = { segments };
-  if (data.tag !== undefined) {
-    const err = checkString(data.tag, 128, 'note.tag');
-    if (err) return { ok: false, error: err };
-    result.tag = data.tag as string;
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'note.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
+  const err =
+    copyOptionalString(data, result, 'tag', 128, 'note.tag') ??
+    copyOptionalString(data, result, 'caption', 128, 'note.caption');
+  if (err) return { ok: false, error: err };
   if (data.anchor !== undefined) {
     if (!isRecord(data.anchor)) return { ok: false, error: 'note.anchor must be an object' };
     const anchorUnknown = checkUnknownKeys(data.anchor, new Set(['target', 'x', 'series', 'node', 'item']), 'note anchor');
@@ -1716,19 +1544,11 @@ function validateNoteData(data: Record<string, unknown>): { ok: true; data: Note
     const target = checkIdentifier(data.anchor.target, 'note.anchor.target');
     if (!target.ok) return target;
     const anchor: NonNullable<NoteData['anchor']> = { target: target.id };
-    if (data.anchor.x !== undefined) {
-      if (typeof data.anchor.x !== 'number' || !Number.isFinite(data.anchor.x)) {
-        return { ok: false, error: 'note.anchor.x must be a finite number' };
-      }
-      anchor.x = data.anchor.x;
-    }
-    for (const key of ['series', 'node'] as const) {
-      if (data.anchor[key] !== undefined) {
-        const err = checkString(data.anchor[key], 128, `note.anchor.${key}`);
-        if (err) return { ok: false, error: err };
-        anchor[key] = data.anchor[key] as string;
-      }
-    }
+    const anchorErr =
+      copyNumber(data.anchor, anchor, 'x', 'note.anchor.x', false) ??
+      copyOptionalString(data.anchor, anchor, 'series', 128, 'note.anchor.series') ??
+      copyOptionalString(data.anchor, anchor, 'node', 128, 'note.anchor.node');
+    if (anchorErr) return { ok: false, error: anchorErr };
     // An item inside the target, named as the item names itself: an id, or
     // a forecast hour's `time` or day's `date`. Like `node` and `series`, it
     // is not looked up here: the note and its target are separate objects,
@@ -1955,17 +1775,10 @@ function validateActionFields(value: unknown): ActionValidationResult {
           return { ok: false, error: 'say.at must contain at least one of x or series' };
         }
         const atObj: { x?: number; series?: string } = {};
-        if (hasX) {
-          if (typeof value.at.x !== 'number' || !Number.isFinite(value.at.x)) {
-            return { ok: false, error: 'say.at.x must be a finite number' };
-          }
-          atObj.x = value.at.x;
-        }
-        if (hasSeries) {
-          const err = checkString(value.at.series, 128, 'say.at.series');
-          if (err) return { ok: false, error: err };
-          atObj.series = value.at.series as string;
-        }
+        const err =
+          copyNumber(value.at, atObj, 'x', 'say.at.x', false) ??
+          copyOptionalString(value.at, atObj, 'series', 128, 'say.at.series');
+        if (err) return { ok: false, error: err };
         atVal = atObj;
       }
 
