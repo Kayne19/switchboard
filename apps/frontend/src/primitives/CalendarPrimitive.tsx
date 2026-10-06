@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import type { CalendarData } from '../controller/types';
 import { parseTimeValue } from '../controller/validation';
-import { useElementSize, type ElementSize } from '../hooks/useElementSize';
+import { useElementSize } from '../hooks/useElementSize';
 import { MeasuredStageDemand } from '../hooks/useStageDemand';
 import {
   agendaEntries,
@@ -37,6 +37,7 @@ import {
   type TimeAxis,
 } from './calendarLayout';
 import { countText } from './countText';
+import type { Size } from './geometry';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
@@ -124,7 +125,7 @@ function gridHeadPx(lanes: number): number {
 }
 
 /** The layout a view takes in a body of `size` (its grid's head `headPx` tall); an unmeasured body draws the view whole. `noted`: a note names an event the view shows. */
-export function chooseLayout(data: CalendarData, size: ElementSize, dayCount: number, headPx = gridHeadPx(0), noted = false): LayoutChoice {
+export function chooseLayout(data: CalendarData, size: Size, dayCount: number, headPx = gridHeadPx(0), noted = false): LayoutChoice {
   const measured = size.width > 0 && size.height > 0;
   if (data.view === 'agenda') return { layout: 'agenda', columns: dayCount };
   if (data.view === 'month') {
@@ -196,7 +197,7 @@ interface GridProps {
   data: CalendarData;
   model: CalendarModel;
   marked?: string;
-  size: ElementSize;
+  size: Size;
   columns: number;
 }
 
@@ -664,7 +665,7 @@ function firstPlaces(plans: WeekPlan[], marks: boolean): Map<string, string> {
   return first;
 }
 
-function MonthView({ data, model, marked, size, marks }: { data: CalendarData; model: CalendarModel; marked?: string; size: ElementSize; marks: boolean }) {
+function MonthView({ data, model, marked, size, marks }: { data: CalendarData; model: CalendarModel; marked?: string; size: Size; marks: boolean }) {
   const grid = monthGrid(parseTimeValue(data.start)?.dayNumber ?? 0);
   const rows = grid.weeks.length;
   // A month too small for titles marks each day's events and lists them

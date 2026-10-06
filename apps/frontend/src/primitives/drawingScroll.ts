@@ -15,19 +15,7 @@
 //   viewport, so the map covers none of it (`mapStrip`, `viewWithMap`).
 
 import type { Noun } from './countText';
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-/** A region of a drawing, in its user units. */
-export interface Region {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+import type { Box, Point, Rect } from './geometry';
 
 /**
  * What a scrolling drawing's viewport needs to know about it, in its user
@@ -35,15 +23,15 @@ export interface Region {
  */
 export interface DrawingMap {
   /** What a reader counts past each edge, and what a view at rest keeps whole at the edge it is read from: a graph's nodes, a sequence's messages. */
-  parts: Array<{ box: Region; label: string }>;
+  parts: Array<{ box: Box; label: string }>;
   /** What one part, and several, are called in those counts. */
   noun: Noun;
   /** Regions a view at rest does not cut either, where it can help it, and whose cut it fades, but does not count: a graph's edge labels. */
-  marks: Region[];
+  marks: Box[];
   /** Lines from one part to another (a graph's edges, by index into `parts`): where one leaves the view, the rim names the part at its far end. */
   links: Array<{ points: Point[]; from: number; to: number; tone: string }>;
   /** The map's sketch of the drawing. */
-  sketch: { boxes: Array<{ box: Region; tone: string }>; lines: Array<{ points: Point[]; tone: string }> };
+  sketch: { boxes: Array<{ box: Box; tone: string }>; lines: Array<{ points: Point[]; tone: string }> };
 }
 
 export type Side = 'left' | 'right' | 'top' | 'bottom';
@@ -60,12 +48,7 @@ export interface Placement {
 export type Span = readonly [number, number];
 
 /** The part of the content in view, CSS pixels: the scroller's box at its scroll position, less what a pinned band covers at its top. */
-export interface View {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-}
+export type View = Rect;
 
 const EPSILON = 0.5;
 
@@ -77,7 +60,7 @@ const EPSILON = 0.5;
 export const RAIL = 18;
 
 /** A region of the drawing in content pixels. */
-export function placed(box: Region, place: Placement): View {
+export function placed(box: Box, place: Placement): View {
   return {
     left: place.offsetX + box.x * place.scale,
     top: place.offsetY + box.y * place.scale,

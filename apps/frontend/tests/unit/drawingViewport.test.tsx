@@ -3,7 +3,8 @@ import { act } from 'react';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DrawingViewport } from '../../src/primitives/DrawingViewport';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
-import type { DrawingFit, Size } from '../../src/primitives/drawingFit';
+import type { DrawingFit } from '../../src/primitives/drawingFit';
+import type { Size } from '../../src/primitives/geometry';
 import { RAIL, type DrawingMap } from '../../src/primitives/drawingScroll';
 import { mount, rerender } from './sceneHarness';
 
