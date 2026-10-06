@@ -220,7 +220,11 @@ as long as the rows fit the plot; otherwise its labels are staggered or thinned
 like any other chart's. Down the left a label takes at most three tenths of
 the width: a longer one wraps onto as many lines as its row holds (up to
 three), after a space or a path separator where it can, and is cut only past
-them -- a path at its start, so its file name stays. There is no pie chart and
+them -- a path at its start, so its file name stays. The legend wraps onto as
+many rows as its series need, up to a quarter of the chart's height and never
+so many that the plot is left less than six rows of tick text tall; past those
+rows it counts the rest in one last item (`+12 SERIES`), whose title names
+them. There is no pie chart and
 no sparkline: a single series with no axes is a `metric`, and a share of a
 whole reads better as a bar per part.
 
@@ -681,6 +685,18 @@ chart's size, as a graph is laid out again once a step: between steps each
 card moves with the point it names (one naming none keeps its corner), and
 once the size holds still for a moment the notes are placed for it, where
 they would stand had the page opened at that size.
+
+A chart with more than five notes on it is placed with bounded work, so a
+chart the agent keeps adding notes to never holds the page for seconds: the
+rail takes none of its notes, no card tries a narrower width, and only the
+first five cards placed (the notes naming no point first, then the rest in the
+order they were shown) look for a clear place anywhere within reach of their
+points. Each card after them takes the best of the rows -- along the top and
+the bottom of the layer, and beside the cards and labels already there -- and,
+where none of those clears its point, of the places straight above, below or
+beside it, and may lie over the data or another card. Up to five notes are
+placed as above; five on a dense bar chart is the costliest placement, a few
+hundred milliseconds.
 
 The note a chart hands over stays readable beside it. Where the rail stands
 under a chart (a portrait stage), the note is drawn in a band under it, full
