@@ -1,6 +1,6 @@
-// The segment maths the chart and its notes share (segments.ts).
+// The segment maths the notes over a chart place and draw their leaders by (segments.ts).
 import { describe, expect, it } from 'vitest';
-import { clipSegment, crispLine, hiddenTraceLength, segmentDistance, segmentsMeet, type Rect } from '../../src/primitives/segments';
+import { clipSegment, crispLine, hiddenTraceLength, segmentsMeet, type Rect } from '../../src/primitives/segments';
 
 const box = (left: number, top: number, width: number, height: number): Rect => ({ left, top, right: left + width, bottom: top + height });
 
@@ -20,11 +20,10 @@ describe('a segment against a rect', () => {
 });
 
 describe('two segments', () => {
-  it('meet where they cross or touch, and are that far apart where they do not', () => {
+  it('meet where they cross or touch, and not where they are apart', () => {
     expect(segmentsMeet({ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 10, y: 0 })).toBe(true);
     expect(segmentsMeet({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 5 })).toBe(true);
-    expect(segmentDistance({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 4 }, { x: 10, y: 4 })).toBe(4);
-    expect(segmentDistance({ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 10, y: 0 })).toBe(0);
+    expect(segmentsMeet({ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 0, y: 4 }, { x: 10, y: 4 })).toBe(false);
   });
 });
 

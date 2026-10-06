@@ -139,7 +139,8 @@ export function objectName(object: SceneObject): string {
  * whether that object marks it with the NOTE badge:
  * - the part the anchor names, where the object holds it: on a chart the
  *   point (`chartTargetText`: its category or x, then its series; the chart
- *   rings or outlines it and prints its value, no badge); on a diagram the
+ *   outlines a bar and prints its value, and rings a point no leader on it
+ *   reaches; no badge); on a diagram the
  *   node's or actor's label; in a list the item (`itemTargetText`: an
  *   event's title and start, a task's text, a message's sender and
  *   subject, a timer's label, a forecast's day or hour). A node, an actor
