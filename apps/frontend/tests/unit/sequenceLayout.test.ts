@@ -6,6 +6,7 @@ import { SLIVER } from '../../src/primitives/drawingFit';
 import { NOTE_MARKER } from '../../src/primitives/NoteMarker';
 import { viewWithMap } from '../../src/primitives/drawingScroll';
 import { headerReading, layoutSequence, pinnedDepth, sequenceMinScale, viewSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
+import { overlaps } from './drawingGeometry';
 
 const handoffDiagram = (fixtures.handoff[0] as { data: SequenceDiagramData }).data;
 
@@ -43,9 +44,6 @@ const sequences: Record<string, SequenceDiagramData> = {
   lone: sequence(['one'], [['one', 'one', 'tick']]),
   silent: sequence(['x', 'y'], []),
 };
-
-const overlaps = (a: Box, b: Box) =>
-  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
 for (const orientation of ['landscape', 'portrait'] as SequenceOrientation[]) {
   describe(`sequence layout / ${orientation}`, () => {

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
-import { ARROW_LENGTH, layoutDiagram, type Box, type DiagramLayout, type DiagramOrientation, type Point } from '../../src/primitives/diagramLayout';
+import { layoutDiagram, type DiagramLayout, type DiagramOrientation } from '../../src/primitives/diagramLayout';
 import { leastCpuMs } from './cpuTime';
+import { arrowhead, inset, onRoute, overlaps, segmentBox, within } from './drawingGeometry';
 
 // A small deterministic generator, so a failing seed can be replayed.
 function random(seed: number) {
@@ -40,31 +41,6 @@ function randomGraph(seed: number, size = { nodes: 40, edges: 80 }): DiagramData
   }
   return { mode: 'graph', nodes, edges };
 }
-
-const overlaps = (a: Box, b: Box) => a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-const inset = (box: Box, by: number): Box => ({ x: box.x + by, y: box.y + by, width: box.width - 2 * by, height: box.height - 2 * by });
-const segmentBox = (a: Point, b: Point): Box => ({
-  x: Math.min(a.x, b.x),
-  y: Math.min(a.y, b.y),
-  width: Math.max(Math.abs(a.x - b.x), 0.001),
-  height: Math.max(Math.abs(a.y - b.y), 0.001),
-});
-const onRoute = (point: Point, points: Point[]) =>
-  points.slice(1).some((end, index) => {
-    const box = segmentBox(points[index], end);
-    return point.x >= box.x - 1e-6 && point.x <= box.x + box.width + 1e-6 && point.y >= box.y - 1e-6 && point.y <= box.y + box.height + 1e-6;
-  });
-const arrowhead = (points: Point[]): Box => {
-  const end = points[points.length - 1];
-  const before = points[points.length - 2];
-  if (Math.abs(end.y - before.y) < 1e-6) {
-    const back = end.x - Math.sign(end.x - before.x) * ARROW_LENGTH;
-    return { x: Math.min(end.x, back), y: end.y - ARROW_LENGTH / 2, width: ARROW_LENGTH, height: ARROW_LENGTH };
-  }
-  const back = end.y - Math.sign(end.y - before.y) * ARROW_LENGTH;
-  return { x: end.x - ARROW_LENGTH / 2, y: Math.min(end.y, back), width: ARROW_LENGTH, height: ARROW_LENGTH };
-};
-const within = (box: Box, width: number, height: number) => box.x >= 0 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= height;
 
 // Budgets are CPU time (cpuTime.ts says why): the least of a few runs, or
 // one run per seed in the sixty-seed fuzz, each seed its own graph.
