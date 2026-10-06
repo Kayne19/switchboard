@@ -220,6 +220,22 @@ function frameCrossings() {
   return hits;
 }
 
+/** NOTE badges in a calendar that a box clips, so a reader sees part of one or none. */
+function badgesCut(scope: string) {
+  return [...document.querySelectorAll<HTMLElement>(`${scope} [data-testid="calendar"] .note-badge`)].flatMap((badge) => {
+    const rect = badge.getBoundingClientRect();
+    const shown = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+    for (let clip = badge.parentElement; clip; clip = clip.parentElement) {
+      const style = getComputedStyle(clip);
+      const box = clip.getBoundingClientRect();
+      if (style.overflowX !== 'visible') [shown.left, shown.right] = [Math.max(shown.left, box.left), Math.min(shown.right, box.right)];
+      if (style.overflowY !== 'visible') [shown.top, shown.bottom] = [Math.max(shown.top, box.top), Math.min(shown.bottom, box.bottom)];
+    }
+    const whole = shown.right - shown.left >= rect.width - 0.5 && shown.bottom - shown.top >= rect.height - 0.5;
+    return whole ? [] : [`${badge.closest('[data-item]')?.getAttribute('data-item') ?? '?'} ${Math.round(rect.height - Math.max(0, shown.bottom - shown.top))}px cut`];
+  });
+}
+
 // A primary beside which the calendar stands in the aux row.
 const codePrimary = {
   op: 'show', id: 'source', type: 'code', role: 'primary',
@@ -249,6 +265,8 @@ for (const geometry of frameGeometries) {
         await expect(page.locator('.composed-aux-object [data-testid="calendar"]')).toBeVisible();
         await page.waitForTimeout(400);
         expect(await page.evaluate(frameCrossings), 'aux').toEqual([]);
+        // However small its cell, the calendar shows the NOTE badge of the event the rail's note names, whole.
+        expect(await page.evaluate(badgesCut, '.composed-aux-object'), 'aux badge').toEqual([]);
         if (scene !== 'today') {
           // Alone in the aux row, the calendar asks it for its whole share (two fifths of the column): an inset the row
           // is not asked for shrank a calendar that fills its box, a step at a time, to the cell's floor.

@@ -238,6 +238,40 @@ describe('a month too small for titles', () => {
     expect(declared('.calendar-month__list', 'flex')).toEqual(['1 1 0']);
     expect(declared('.calendar-month__list', 'min-height')).toEqual(['0']);
   });
+
+  const marksOf = (calendar: HTMLElement, day: string) => {
+    const cell = [...calendar.querySelectorAll('.calendar-month__cell')].find((each) => each.querySelector('.calendar-month__number')?.textContent === day && !each.className.includes('outside'));
+    return [...(cell?.querySelector('.calendar-marks')?.children ?? [])].map((part) => (part.querySelector('.note-badge') ? 'NOTE' : part.className.includes('calendar-marks__more') ? part.textContent : 'mark'));
+  };
+
+  it('leads the marked day\u2019s line with the NOTE badge, the other marks after it as far as the line holds, the rest counted', () => {
+    // 100 px cells, rows 44 px, no room for a list: the badge is drawn in the grid.
+    const calendar = render(assistantMonth, 'dentist', { width: 700, height: 240 });
+    expect(calendar.getAttribute('data-layout')).toBe('month-marks');
+    expect(calendar.querySelector('.calendar-month__list')).toBeNull();
+    // Wednesday the 7th: Ana's visit, the standup, the dentist, the review, the 1:1, the dry cleaning.
+    expect(marksOf(calendar, '7')).toEqual(['NOTE', 'mark', 'mark', 'mark', '+2']);
+    expect(calendar.querySelectorAll('.note-badge')).toHaveLength(1);
+    // A narrow cell keeps the badge on its line and drops what has no room after it.
+    const narrow = render(assistantMonth, 'dentist', { width: 330, height: 230 });
+    expect(narrow.getAttribute('data-layout')).toBe('month-marks');
+    expect(marksOf(narrow, '7')).toEqual(['NOTE']);
+    expect(narrow.querySelector('.calendar-month__cell--today .calendar-marks')?.getAttribute('aria-label')).toBe('6 events');
+  });
+
+  it('is the agenda of the month\u2019s own days where its rows cannot hold the marks, or the badge on them', () => {
+    const short = { width: 700, height: 160 };
+    // Rows of 28 px hold a line of marks, but not the badge.
+    expect(chooseLayout(assistantMonth, short, 35).layout).toBe('month-marks');
+    expect(chooseLayout(assistantMonth, short, 35, undefined, true).layout).toBe('agenda');
+    expect(chooseLayout(assistantMonth, { width: 700, height: 120 }, 35).layout).toBe('agenda');
+    const calendar = render(assistantMonth, 'dentist', short);
+    expect(calendar.getAttribute('data-layout')).toBe('agenda');
+    const days = [...calendar.querySelectorAll('.calendar-agenda__day-name')].map((name) => name.textContent);
+    expect(days[0]).toBe('THU OCT 1');
+    expect(days.some((day) => /SEP|NOV/.test(day ?? ''))).toBe(false);
+    expect(boxes(calendar, 'dentist')[0].querySelector('.note-badge')).not.toBeNull();
+  });
 });
 
 describe('the meta line', () => {
