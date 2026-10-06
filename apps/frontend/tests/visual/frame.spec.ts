@@ -6,7 +6,8 @@ import { FRAME_GEOMETRIES, frameCrossings, openScene, runActions } from './helpe
 // aux row. Nothing it draws crosses the frame (helpers.ts `frameCrossings`;
 // calendar.spec.ts asks the same of the calendar). A list's rows, a table's
 // last row, a figure's caption and a document's meta line each ran over a
-// step of their frame on visual-palette.
+// step of their frame on visual-palette, and a long first line of source ran
+// under the code frame's top-right step in focus on a phone.
 
 const table80 = {
   title: 'RUNS / 80',
@@ -47,14 +48,6 @@ const cases: Case[] = [
   { name: 'figure', scene: 'figure', type: 'image', testId: 'image' },
 ];
 
-// Known and open: on a phone, focus draws a source's first line long enough
-// to run under the code frame's top-right step. Clearing it would move every
-// source pane down by its step (the code goldens), so it waits for Kayne.
-// The case fails here once it is fixed, to be taken off this list.
-const known: Record<string, string[]> = {
-  'source portrait-phone': ['focus code-line__source top'],
-};
-
 // A primary beside which another stands in the aux row (a source beside a table).
 const aside = {
   code: { op: 'show', id: 'aside', type: 'table', role: 'primary', data: { title: 'GRID', columns: [{ label: 'A' }], rows: [['x']] } },
@@ -94,8 +87,30 @@ for (const geometry of FRAME_GEOMETRIES) {
         await expect(page.locator(`.composed-aux-object ${selector}`)).toBeVisible();
         await page.waitForTimeout(500);
         hits.push(...(await page.evaluate(frameCrossings, `.composed-aux-object ${selector}`)));
-        expect(hits.map((hit) => hit.replace(/ \+[\d.]+px$/, ''))).toEqual(known[`${item.name} ${geometry.name}`] ?? []);
+        expect(hits).toEqual([]);
       });
     }
+
+    // Scrolled to the middle, a line passes under neither of the source
+    // frame's steps: the scroll stands between them (it passed under the
+    // top-right one at every geometry).
+    test('source of 200 lines, scrolled: no line passes under its frame, as the primary or in focus', async ({ page }) => {
+      const item = cases.find((each) => each.name === 'source of 200 lines')!;
+      const id = await open(page, item);
+      const scrolledHits = async (where: string) => {
+        await page.evaluate((selector) => {
+          const scroll = document.querySelector<HTMLElement>(selector)!;
+          scroll.scrollTop = Math.round((scroll.scrollHeight - scroll.clientHeight) / 2);
+        }, `${where} .code-viewport__scroll`);
+        await page.waitForTimeout(300);
+        return page.evaluate(frameCrossings, `${where} [data-testid="code"]`);
+      };
+      const hits = await scrolledHits('.scene');
+      await runActions(page, [{ op: 'focus', id }]);
+      await expect(page.locator('.focus-layer [data-testid="code"]')).toBeVisible();
+      await page.waitForTimeout(700);
+      hits.push(...(await scrolledHits('.focus-layer')));
+      expect(hits).toEqual([]);
+    });
   });
 }

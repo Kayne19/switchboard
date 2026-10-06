@@ -3478,17 +3478,19 @@ button {
 }
 
 /* Code */
-/* The table viewport shares this mask: it sits in the same frame. Its
-   lower row is the frame's lower step (the clip's 4.6% at the bottom left;
-   a share of the content box, so a little less under the table's top
-   padding) with a gap that covers that: the scroll stands above it, so no
-   row or line ever runs under that corner, and the rims sit clear of it. */
+/* The table viewport shares this mask: it sits in the same frame, and the
+   clip is that frame's inside. Each stands its scroll between the frame's
+   steps in rows of the mask's grid. The lower row is the frame's lower step (the
+   clip's 4.6% at the bottom left; a share of the content box, so a little
+   less under the table's top padding) with a gap that covers that, so no
+   row or line ever runs under that corner and the rims sit clear of it;
+   above, the source has a row of its own (below), the table its padding and
+   meta line. */
 .code-viewport__mask,
 .table-viewport__mask {
   position: absolute;
   z-index: 1;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
   inset: clamp(8px, 1.1cqh, 16px) clamp(8px, 1cqw, 16px);
   /* The inside of the approved code frame (TechFrame "code"), so source
      never crosses the rails as it scrolls. */
@@ -3505,11 +3507,24 @@ button {
   background: #000;
   overflow: hidden;
 }
+/* Source stands below the frame's top-right step as it stands above the
+   lower one: the scroll's top row is the step (the clip's 5.7%) with the
+   same gap, or the source's own top padding (--code-top) where that is
+   deeper. A long first line ran under the step (in focus on a phone), and a
+   line scrolled up passed under it. The row spans the mask, as the lower
+   one does: a CSS rule cannot know which lines are long enough to reach
+   the step. */
+.code-viewport__mask {
+  --code-top: clamp(20px, 3cqh, 34px);
+  grid-template-rows: max(var(--code-top), calc(5.7% + clamp(6px, 0.9cqh, 12px))) minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
+}
+.code-viewport__mask > .list-viewport {
+  grid-row: 2;
+}
 /* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
 .code-viewport__scroll {
   overflow: auto;
-  padding: clamp(20px, 3cqh, 34px) clamp(28px, 3cqw, 52px)
-    clamp(14px, 2cqh, 24px) clamp(52px, 4.7cqw, 78px);
+  padding: 0 clamp(28px, 3cqw, 52px) clamp(14px, 2cqh, 24px) clamp(52px, 4.7cqw, 78px);
 }
 .code-viewport pre {
   min-width: max-content;
@@ -3568,6 +3583,7 @@ button {
    never into a band above it, and the header stays below the frame's
    top-right cut. */
 .table-viewport__mask {
+  grid-template-rows: minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
   padding-top: clamp(20px, 3cqh, 34px);
 }
 /* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
@@ -5781,10 +5797,11 @@ button {
   }
 
   .code-viewport__mask {
+    --code-top: 24px;
     inset: 7px;
   }
   .code-viewport__scroll {
-    padding: 24px 34px 16px 55px;
+    padding: 0 34px 16px 55px;
   }
   .code-viewport pre {
     font-size: clamp(12px, 2.45cqw, 17px);
@@ -5905,8 +5922,10 @@ button {
     font-size: clamp(13px, 1.05cqw, 19px);
     line-height: 1.45;
   }
+  .code-viewport__mask {
+    --code-top: 18px;
+  }
   .code-viewport__scroll {
-    padding-top: 18px;
     padding-bottom: 16px;
   }
   .table-viewport__mask {
