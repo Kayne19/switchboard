@@ -1,14 +1,12 @@
 import { useCallback, useMemo } from 'react';
 import type { NoteData, SequenceDiagramData } from '../controller/types';
+import { GlowFilters, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
-import { LABEL_HEIGHT, SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
+import { LABEL_HEIGHT, SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage } from './sequenceLayout';
 import { SEMANTIC_COLOR } from '../design/tokens';
-
-const pathThrough = (points: Point[]) =>
-  points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
 
 const ARROW_LENGTH = 10;
 const ARROW_HALF = 4.5;
@@ -168,28 +166,7 @@ export function SequencePrimitive({
     <div ref={hostRef} className={`sequence-primitive${focused ? ' sequence-primitive--focused' : ''}`} data-testid="sequence">
       <DrawingViewport drawing={layout} fit={fit} laidOutFor={laidOutFor} pinned={{ height: pinnedDepth(layout), content: actors }} map={map} strip={strip} ariaLabel={data.title ?? 'Sequence diagram'}>
         <defs>
-          {/* The region is the whole drawing, not each message's bounding box:
-              a straight message has a zero-height box, and a filter region
-              derived from it would erase the message entirely. */}
-          <filter id="sequence-active-glow" filterUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%">
-            <feGaussianBlur stdDeviation="2.2" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          {/* An anchored actor's frame is drawn inside its header's
-              translated group, where the drawing-wide region above would
-              begin at the frame's own corner and cut the glow, and half the
-              stroke, off its top and left edges. A frame has a real box, so
-              this region is that box with room on every side. */}
-          <filter id="sequence-anchor-glow" x="-25%" y="-50%" width="150%" height="200%">
-            <feGaussianBlur stdDeviation="2.2" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
+          <GlowFilters line="sequence-active-glow" frame="sequence-anchor-glow" />
         </defs>
         <g className="sequence-lifelines">
           {layout.actors.map(({ actor, x, box, lifelineEnd }) => (

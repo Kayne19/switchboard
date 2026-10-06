@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
+import { GlowFilters, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
@@ -14,9 +15,6 @@ const SEMANTICS = Object.keys(SEMANTIC_COLOR) as Semantic[];
 // frames do, while the stroke itself does not.
 // Edge label line pitch, in user units (.diagram-edge-label is 11 units).
 const LABEL_LINE = 14;
-
-const pathThrough = (points: Point[]) =>
-  points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
 
 // The callout box is 240 units wide with 14 units of inset each side: about
 // 32 characters of its 11-unit body face, or 34 of its 9-unit tracked tag.
@@ -202,28 +200,7 @@ export function DiagramPrimitive({
     <div ref={hostRef} className={`diagram-primitive${focused ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
       <DrawingViewport drawing={layout} fit={fit} laidOutFor={laidOutFor} lead={lead} map={map} strip={strip} ariaLabel={data.title ?? 'System diagram'}>
         <defs>
-          {/* The region is the whole drawing, not each edge's bounding box: a
-              straight edge has a zero-height box, and a filter region derived
-              from it would erase the edge entirely. */}
-          <filter id="active-edge-glow" filterUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%">
-            <feGaussianBlur stdDeviation="2.2" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          {/* A lit node's frame is drawn inside its node's translated group,
-              where the drawing-wide region above would begin at the frame's
-              own corner and cut the glow, and half the stroke, off its top
-              and left edges. A frame has a real box, so this region is that
-              box with room on every side. */}
-          <filter id="diagram-node-glow" x="-25%" y="-50%" width="150%" height="200%">
-            <feGaussianBlur stdDeviation="2.2" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
+          <GlowFilters line="active-edge-glow" frame="diagram-node-glow" />
           {/* One arrowhead per colour: a marker cannot take its fill from the
               path it ends, so each edge points at the marker of its own hue. */}
           {SEMANTICS.map((semantic) => (
