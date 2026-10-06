@@ -3464,9 +3464,11 @@ button {
 /* The panel frame is drawn behind the content, so the figure sits inside
    its outline rather than over it. */
 .image-object .focusable-content {
+  --slot-top: clamp(22px, 3.6cqh, 42px);
+  --slot-bottom: clamp(16px, 2.6cqh, 30px);
   position: relative;
   z-index: 1;
-  padding: clamp(22px, 3.6cqh, 42px) clamp(22px, 2.6cqw, 42px) clamp(16px, 2.6cqh, 30px);
+  padding: 0 clamp(22px, 2.6cqw, 42px);
 }
 .image-primitive__field {
   position: relative;
@@ -3763,9 +3765,11 @@ button {
    outline, clear of its cut corners. */
 .tasks-object .focusable-content,
 .inbox-object .focusable-content {
+  --slot-top: clamp(22px, 3.6cqh, 42px);
+  --slot-bottom: clamp(16px, 2.6cqh, 30px);
   position: relative;
   z-index: 1;
-  padding: clamp(22px, 3.6cqh, 42px) clamp(22px, 2.6cqw, 42px) clamp(16px, 2.6cqh, 30px);
+  padding: 0 clamp(22px, 2.6cqw, 42px);
 }
 
 .tasks-primitive,
@@ -4362,17 +4366,30 @@ button {
   padding: 0 clamp(18px, 2.2cqw, 38px);
 }
 /* A calendar fills its box to the edges (the grid's foot, the month's last
-   row, the agenda's cut line), so the box is the panel frame's inner box:
-   inside both of its steps (--panel-step), with a gap. The step is a share
-   of the frame's height, and the main slot's height is the frame's and is
-   set by the layout, so there the inset is a row of the slot's own grid,
-   exact at any height. A padding in stage units fell short of the step on
-   every slot taller than it assumed, and the grid ran over the lower step. */
-.calendar-object > .focusable-content {
+   row, the agenda's cut line), so in the main slot the box is the panel
+   frame's inner box, with no more room than that (the panel rule, with the
+   to-do list's). */
+/* A primary in the panel frame that reaches its edges (a calendar, a to-do
+   list, an inbox, a figure's caption) stands in the frame's inner box:
+   inside both of its steps (--panel-step), with a gap. The step is a share of the frame's
+   height, and the main slot's height is the frame's and is set by the
+   layout, so the inset is a row of the slot's own grid, exact at any
+   height; a type that keeps more room than that keeps it (--slot-top,
+   --slot-bottom). A padding in stage units fell short of the step on every
+   slot taller than it assumed: a calendar's grid, a list's last rows and a
+   figure's caption ran over the lower step. Timers and a forecast keep
+   their own padding, which clears both steps (frame.spec.ts). */
+.calendar-object > .focusable-content,
+.tasks-object > .focusable-content,
+.inbox-object > .focusable-content,
+.image-object > .focusable-content {
   display: grid;
-  grid-template-rows: var(--panel-inset) minmax(0, 1fr) var(--panel-inset);
+  grid-template-rows: max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px));
 }
-.calendar-object > .focusable-content > * {
+.calendar-object > .focusable-content > *,
+.tasks-object > .focusable-content > *,
+.inbox-object > .focusable-content > *,
+.image-object > .focusable-content > * {
   grid-row: 2;
   min-height: 0;
 }

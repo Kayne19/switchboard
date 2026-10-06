@@ -350,8 +350,12 @@ describe('the panel frame round a calendar', () => {
     expect(declared(':root', '--panel-inset')[0]).toMatch(/^calc\(var\(--panel-step\) \+ /);
     // The main slot: the step is a row of the slot's own grid (a share of
     // its height, which the layout sets), not a padding in stage units.
+    // It is the panel rule, which a type keeping more room than the inset
+    // widens (--slot-top, --slot-bottom); the calendar keeps none.
     const slot = '.calendar-object > .focusable-content';
-    expect(declared(slot, 'grid-template-rows')).toEqual(['var(--panel-inset) minmax(0, 1fr) var(--panel-inset)']);
+    expect(declared(slot, 'grid-template-rows')).toEqual(['max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px))']);
+    expect(declared('.calendar-object .focusable-content', '--slot-top')).toEqual([]);
+    expect(declared('.calendar-object .focusable-content', '--slot-bottom')).toEqual([]);
     expect(declared('.calendar-object .focusable-content', 'padding')).toEqual(['0 clamp(18px, 2.2cqw, 38px)']);
     expect(declared(`${slot} > *`, 'grid-row')).toEqual(['2']);
   });
