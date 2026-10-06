@@ -36,6 +36,7 @@ import {
   type PlacedEvent,
   type TimeAxis,
 } from './calendarLayout';
+import { countText } from './countText';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
@@ -834,7 +835,7 @@ function DayMarks({ cell, model, marked, isFirst, room }: { cell: WeekPlan['cell
   const others = noted ? ordered.filter((placed) => placed !== noted) : ordered;
   const { shown, counted } = marksLine(others.length, room, noted !== undefined);
   return (
-    <span className="calendar-marks" aria-label={`${ordered.length} ${ordered.length === 1 ? 'event' : 'events'}`}>
+    <span className="calendar-marks" aria-label={countText(ordered.length, ['event', 'events'])}>
       {noted ? (
         <span className={eventClasses('calendar-mark', noted, model)} data-item={noted.event.id} title={noted.event.title}>
           <NoteBadge className="calendar-mark__note" />
@@ -885,7 +886,7 @@ function AgendaList({ model, days, marked, compact = false }: { model: CalendarM
                 <span className="calendar-agenda__day-name">{dayLabel(entry.day)}</span>
                 {entry.day === model.today ? <span className="calendar-agenda__today">TODAY</span> : null}
                 {/* One day's count is the meta line's already. */}
-                {days.length > 1 || count === 0 ? <span className="calendar-agenda__day-count">{count === 0 ? 'NOTHING SCHEDULED' : `${count} ${count === 1 ? 'EVENT' : 'EVENTS'}`}</span> : null}
+                {days.length > 1 || count === 0 ? <span className="calendar-agenda__day-count">{count === 0 ? 'NOTHING SCHEDULED' : countText(count, ['EVENT', 'EVENTS'])}</span> : null}
               </div>
               {rows.length > 0 ? <ol className="calendar-agenda__items">{rows}</ol> : null}
             </li>
@@ -968,7 +969,7 @@ export function CalendarPrimitive({ data, marked, focused = false, framed = fals
       <MetaTitle title={data.title ?? `${VIEW_NAMES[data.view]} / ${rangeText(data)}`} framed={framed} className="calendar__meta-title" />
       <span className="calendar__meta-range">
         {(framed || data.title) && model.days.length > 1 ? `${rangeText(data)} / ` : ''}
-        {count} {count === 1 ? 'EVENT' : 'EVENTS'}
+        {countText(count, ['EVENT', 'EVENTS'])}
         {model.outside > 0 ? ` / ${model.outside} OUT OF VIEW` : ''}
       </span>
     </div>
