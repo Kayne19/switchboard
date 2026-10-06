@@ -84,18 +84,18 @@ chart, diagram, document, code, table or image page is drawn exactly as it
 was before the column existed, and the composed workspace no longer keeps
 an empty row's gap under a lone primary.
 
-The shell also decides when the primary takes the stage's height
-(`useStageFold`, the rule in `src/app/stageFold.ts`). The primary's own
-surface, and only it, gets a listener (`StageDemandContext`); a primitive
-that can outgrow its viewport says through it how much height it lacks
-(`src/hooks/useStageDemand.ts`). Where the rail stands under the column and
-the primary needs more than the column it shares with the rail, the grid
-gives the column the stage (`content-grid--staged`) and the rail folds to a
-strip with a handle (`RailHandle`) that opens it again. What is heard and
-measured is kept out of render: a scene that never folds renders nothing
-more to decide so. On a chart page the shell also moves the note the
-primary chart hands over into a band under the charts where the rail
-stands under them.
+The shell also measures whether the rail stands under the column
+(`useRailUnder`, from where the two boxes lie, not from a media query).
+Where it does (a portrait stage), the rail is Damocles beside the note, and
+the note reads whole (`useRailFit` in `RailDetails`): it keeps its own
+height, and the grid gives the rail at least that height (`--rail-floor`),
+the main column keeping the larger share. Where what the rail carries does
+not all fit, the note leads and the rest scrolls under it, the column's
+foot fading; the activity panel stands at the column's foot only where it
+fits there whole. A primary that outgrows its share scrolls in it or is
+drawn smaller; it never takes the rail's room. On a chart page the shell
+also moves the note the primary chart hands over into a band under the
+charts where the rail stands under them.
 
 Two exceptions are deliberate (decided 2026-10-02; see #121 and #124). Review them
 in a later refactor or audit instead of folding them in by habit:
