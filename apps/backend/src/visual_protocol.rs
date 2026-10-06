@@ -1890,29 +1890,11 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
         let sm = seg.as_object().ok_or("note segment must be an object")?;
         check_unknown_keys(sm, &["text", "accent", "bold", "semantic"], "note segment")?;
 
-        let text = sm
-            .get("text")
-            .and_then(Value::as_str)
-            .ok_or("note segment.text must be a string")?;
-        if utf16_len(text) > 50_000 {
-            return Err(
-                "note segment.text exceeds maximum length of 50000 UTF-16 code units".into(),
-            );
-        }
-
+        let text = required_string(sm, "text", 50_000, "note segment.text")?;
         let mut seg_out = Map::new();
         seg_out.insert("text".into(), text.into());
-
-        if let Some(accent) = sm.get("accent") {
-            let b = accent
-                .as_bool()
-                .ok_or("note segment.accent must be boolean")?;
-            seg_out.insert("accent".into(), b.into());
-        }
-        if let Some(bold) = sm.get("bold") {
-            let b = bold.as_bool().ok_or("note segment.bold must be boolean")?;
-            seg_out.insert("bold".into(), b.into());
-        }
+        copy_optional_bool(sm, &mut seg_out, "accent", "note segment.accent")?;
+        copy_optional_bool(sm, &mut seg_out, "bold", "note segment.bold")?;
         copy_optional_semantic(sm, &mut seg_out, "note segment.semantic")?;
         clean_segs.push(Value::Object(seg_out));
     }
@@ -1920,13 +1902,7 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
     let mut out = Map::new();
     out.insert("segments".into(), Value::Array(clean_segs));
 
-    if let Some(tag) = data.get("tag") {
-        let t = tag.as_str().ok_or("note.tag must be a string")?;
-        if utf16_len(t) > 128 {
-            return Err("note.tag exceeds maximum length of 128 UTF-16 code units".into());
-        }
-        out.insert("tag".into(), t.into());
-    }
+    copy_optional_string(data, &mut out, "tag", 128, "note.tag")?;
     copy_optional_string(data, &mut out, "caption", 128, "note.caption")?;
 
     if let Some(anchor_value) = data.get("anchor") {
@@ -1945,12 +1921,7 @@ fn validate_note_data(data: &Map<String, Value>) -> Result<Value, String> {
         let target = check_identifier(target, "note.anchor.target")?;
         let mut clean_anchor = Map::new();
         clean_anchor.insert("target".into(), target.into());
-        if let Some(x) = anchor.get("x") {
-            if !x.is_number() || !x.as_f64().is_some_and(f64::is_finite) {
-                return Err("note.anchor.x must be a finite number".into());
-            }
-            clean_anchor.insert("x".into(), x.clone());
-        }
+        copy_number(anchor, &mut clean_anchor, "x", "note.anchor.x", false)?;
         for key in ["series", "node"] {
             copy_optional_string(
                 anchor,
@@ -2198,22 +2169,8 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
                         return Err("say.at must contain at least one of x or series".into());
                     }
                     let mut at_clean = Map::new();
-                    if let Some(x) = at_map.get("x") {
-                        if !x.is_number() || !x.as_f64().is_some_and(f64::is_finite) {
-                            return Err("say.at.x must be a finite number".into());
-                        }
-                        at_clean.insert("x".into(), x.clone());
-                    }
-                    if let Some(series) = at_map.get("series") {
-                        let s = series.as_str().ok_or("say.at.series must be a string")?;
-                        if utf16_len(s) > 128 {
-                            return Err(
-                                "say.at.series exceeds maximum length of 128 UTF-16 code units"
-                                    .into(),
-                            );
-                        }
-                        at_clean.insert("series".into(), s.into());
-                    }
+                    copy_number(at_map, &mut at_clean, "x", "say.at.x", false)?;
+                    copy_optional_string(at_map, &mut at_clean, "series", 128, "say.at.series")?;
                     Value::Object(at_clean)
                 }
                 _ => return Err("say.at is invalid".into()),
