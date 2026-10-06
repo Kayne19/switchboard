@@ -4,17 +4,13 @@
 // caller can scroll back up to read earlier lines.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MessageData, SpokenLine } from '../../src/controller/types';
 import { LiveChatCard } from '../../src/primitives/LiveChatCard';
 import { SpokenLog } from '../../src/primitives/SpokenLog';
 
 let host: HTMLDivElement;
 let root: Root;
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 beforeEach(() => {
   height = () => 40;

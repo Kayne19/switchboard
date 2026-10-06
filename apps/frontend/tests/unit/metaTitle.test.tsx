@@ -55,7 +55,6 @@ const titleTexts = (scope: Element | null, type: string) =>
   [...(scope?.querySelectorAll(`[data-testid="${type}"] *`) ?? [])].filter((node) => node.childElementCount === 0 && node.textContent === objects[type].title);
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}

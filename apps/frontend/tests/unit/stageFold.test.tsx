@@ -159,7 +159,6 @@ function render(actions: ControllerAction[]): Element {
 const handle = (page: Element) => page.querySelector<HTMLButtonElement>('button.rail-handle');
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver = class {
     private live = false;
     constructor(private readonly callback: () => void) {}

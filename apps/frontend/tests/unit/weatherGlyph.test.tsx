@@ -5,17 +5,13 @@
 // here rather than drawing nothing on a caller's forecast.
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import schema from '../../../../docs/display-action-v1.schema.json';
 import type { WeatherCondition } from '../../src/controller/types';
 import { validateControllerAction } from '../../src/controller/validation';
 import { conditionText, WEATHER_GLYPHS, WeatherGlyph } from '../../src/primitives/WeatherGlyph';
 
 const conditions = (schema as { definitions: { WeatherCondition: { enum: WeatherCondition[] } } }).definitions.WeatherCondition.enum;
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 describe('weather glyphs', () => {
   it('the contract names thirteen conditions, and the glyph table holds exactly those', () => {

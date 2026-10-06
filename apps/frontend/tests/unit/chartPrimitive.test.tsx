@@ -37,7 +37,6 @@ let host: HTMLDivElement;
 let root: Root;
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   // The chart measures its slot; jsdom lays nothing out, so the slot reads
   // 0 x 0 and the chart keeps the approved canvas unless a test sizes it.
   globalThis.ResizeObserver ??= class {

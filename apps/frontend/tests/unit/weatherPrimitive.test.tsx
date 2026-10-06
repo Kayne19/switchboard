@@ -55,7 +55,6 @@ function render(data: WeatherData, marked?: string, size: Box = { width: 0, heig
 const marks = (scope: HTMLElement) => [...scope.querySelectorAll('.note-badge')].map((badge) => badge.closest('[data-item]')!.getAttribute('data-item'));
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}

@@ -99,7 +99,6 @@ const markedItems = (scope: Element | null, type: ListType) =>
 const scene = () => [...host!.querySelectorAll('[data-scene]')].at(-1)!;
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}

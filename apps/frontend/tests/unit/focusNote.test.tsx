@@ -49,7 +49,6 @@ const measured: Record<string, (this: HTMLElement) => number> = {
 const saved: Record<string, PropertyDescriptor | undefined> = {};
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}

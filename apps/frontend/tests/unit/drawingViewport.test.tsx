@@ -19,7 +19,6 @@ let root: Root;
 const box = { clientWidth: 320, clientHeight: 300 };
 const saved: Record<string, PropertyDescriptor | undefined> = {};
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   for (const [name, value] of Object.entries(box)) {
     saved[name] = Object.getOwnPropertyDescriptor(HTMLElement.prototype, name);
     Object.defineProperty(HTMLElement.prototype, name, {

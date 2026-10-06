@@ -41,7 +41,6 @@ const digits = (host: HTMLElement, id: string) => item(host, id).querySelector('
 const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}

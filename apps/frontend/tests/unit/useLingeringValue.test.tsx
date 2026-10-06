@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLingeringValue } from '../../src/hooks/useLingeringValue';
 
 function Probe({ value }: { value: string | null }) {
@@ -22,10 +22,6 @@ let root: Root;
 const show = (value: string | null) => act(() => root.render(<Probe value={value} />));
 const hold = (value: string | null) => act(() => root.render(<HeldProbe value={value} />));
 const advance = (ms: number) => act(() => vi.advanceTimersByTime(ms));
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 beforeEach(() => {
   vi.useFakeTimers();

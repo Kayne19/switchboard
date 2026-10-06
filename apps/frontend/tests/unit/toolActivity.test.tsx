@@ -3,16 +3,12 @@
 // one tool must read as a run of calls, not as one call still running.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityState } from '../../src/controller/types';
 import { activitySummary, ToolActivity } from '../../src/primitives/ToolActivity';
 
 let host: HTMLDivElement;
 let root: Root;
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 beforeEach(() => {
   vi.useFakeTimers();

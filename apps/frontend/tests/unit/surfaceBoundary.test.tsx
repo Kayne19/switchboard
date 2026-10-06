@@ -2,7 +2,7 @@
 // A surface that throws while rendering degrades alone (issue #34).
 import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { SurfaceBoundary } from '../../src/components/SurfaceBoundary';
 
 let host: HTMLDivElement;
@@ -31,10 +31,6 @@ function stage(surface: ReactNode) {
 function render(node: ReactNode) {
   act(() => root.render(node));
 }
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 beforeEach(() => {
   uncaught = [];

@@ -76,7 +76,6 @@ const drawn = (page: Element, testId: string) => page.querySelectorAll(`[data-te
 const inAux = (page: Element, testId: string) => page.querySelectorAll(`.composed-aux [data-testid="${testId}"]`).length;
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver ??= class {
     observe() {}
     unobserve() {}
