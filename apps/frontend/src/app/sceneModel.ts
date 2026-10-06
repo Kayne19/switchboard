@@ -160,19 +160,10 @@ export function primaryObject(state: ControllerState): SceneObject | null {
 /** The content types that need a slot of their own to be read. The others
  * (metrics, notes, progress) are small enough for the rail or a compact
  * place in a scene. */
-export const VISUAL_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectType>([
-  'chart',
-  'diagram',
-  'document',
-  'code',
-  'table',
-  'image',
-  'calendar',
-  'tasks',
-  'timer',
-  'weather',
-  'inbox',
-]);
+const VISUAL_TYPE_LIST = ['chart', 'diagram', 'document', 'code', 'table', 'image', 'calendar', 'tasks', 'timer', 'weather', 'inbox'] as const;
+type VisualType = (typeof VISUAL_TYPE_LIST)[number];
+export const VISUAL_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectType>(VISUAL_TYPE_LIST);
+const isVisual = (type: SceneObjectType): type is VisualType => VISUAL_TYPES.has(type);
 
 /**
  * Every visual on stage beside the primary, in the order a composition
@@ -187,21 +178,8 @@ export function besideVisuals(comp: CompositionModel): SceneObject[] {
   return [...comp.compare, ...comp.secondary, ...comp.ambient].filter((object) => VISUAL_TYPES.has(object.type));
 }
 
-export type SceneKind =
-  | 'idle'
-  | 'conversation'
-  | 'training'
-  | 'architecture'
-  | 'document'
-  | 'code'
-  | 'table'
-  | 'image'
-  | 'calendar'
-  | 'tasks'
-  | 'timer'
-  | 'weather'
-  | 'inbox'
-  | 'composed';
+/** The composition a scene is drawn as: one per visual type that can be the primary, named for its type but for the two the page drew first (a chart's training run, a diagram's architecture), and the four that are not a visual's. */
+export type SceneKind = 'idle' | 'conversation' | 'composed' | 'training' | 'architecture' | Exclude<VisualType, 'chart' | 'diagram'>;
 
 export function sceneKind(state: ControllerState): SceneKind {
   if (state.workspace.effectiveView === 'comms') {
@@ -219,18 +197,8 @@ export function sceneKind(state: ControllerState): SceneKind {
     return 'idle';
   }
   if (primary.type === 'message') return 'conversation';
-  if (primary.type === 'chart') return 'training';
-  if (primary.type === 'diagram') return 'architecture';
-  if (primary.type === 'document') return 'document';
-  if (primary.type === 'code') return 'code';
-  if (primary.type === 'table') return 'table';
-  if (primary.type === 'image') return 'image';
-  if (primary.type === 'calendar') return 'calendar';
-  if (primary.type === 'tasks') return 'tasks';
-  if (primary.type === 'timer') return 'timer';
-  if (primary.type === 'weather') return 'weather';
-  if (primary.type === 'inbox') return 'inbox';
-  return 'composed';
+  if (!isVisual(primary.type)) return 'composed';
+  return primary.type === 'chart' ? 'training' : primary.type === 'diagram' ? 'architecture' : primary.type;
 }
 
 export function deriveScreenState(
