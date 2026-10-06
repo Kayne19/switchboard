@@ -4781,8 +4781,14 @@ button {
 }
 
 /* The paged week: the days a narrow grid has no room for are named on a
-   rail at each side, as a scrolled drawing's rails count its parts. */
-.calendar-pages {
+   rail at each side, as a scrolled drawing's rails count its parts. A
+   swipe across the days is the page's (PagedDays): the browser keeps only
+   the pan down. The hours scroll on their own, and a browser reads a
+   touch's touch-action only up to the nearest scroll, so they say it too,
+   or a swipe in them (most of a phone's grid) is taken as a pan across and
+   never turns the days. */
+.calendar-pages,
+.calendar-pages .calendar-grid__scroll {
   touch-action: pan-y;
 }
 .calendar-pages__edges {

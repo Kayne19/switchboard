@@ -126,6 +126,45 @@ test('a week in a narrow portrait box pages its columns from today, names the hi
   await expect(page.locator('.focus-layer')).toHaveCount(0);
 });
 
+// A finger swipe, as a touch screen sends it: down, across in steps, up.
+async function swipe(page: Page, x: number, y: number, dx: number) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+  for (let step = 1; step <= 12; step += 1) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + (dx * step) / 12, y }] });
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await cdp.detach();
+}
+
+test.describe('a touch screen', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+  // The hours are a scroll of their own, and a browser reads a touch's
+  // touch-action only up to the nearest scroll: the days' pan-y did not
+  // reach a swipe that started in the hours (most of a phone's grid), the
+  // browser took the pan across, cancelled the pointer, and the days
+  // stayed. Out of demo mode, where a swipe loads the next fixture.
+  test('a swipe across a paged week turns the days, in the hours as on the day row', async ({ page }) => {
+    await page.goto('/?chrome=0');
+    await expect(page.locator('.stage')).toBeVisible();
+    await page.evaluate(() => window.SwitchboardController!.load('calendar'));
+    await expect(page.locator('.scene [data-testid="calendar"]')).toBeVisible();
+    await page.waitForTimeout(400);
+    const days = () => page.locator('.scene .calendar-grid__weekday').allTextContents();
+    expect(await days()).toEqual(['WED', 'THU', 'FRI']);
+    const hours = (await page.locator('.scene .calendar-grid__scroll').boundingBox())!;
+    await swipe(page, hours.x + hours.width * 0.75, hours.y + hours.height / 2, -180);
+    await expect.poll(days).toEqual(['FRI', 'SAT', 'SUN']);
+    const head = (await page.locator('.scene .calendar-grid__head').boundingBox())!;
+    await swipe(page, head.x + head.width * 0.25, head.y + 18, 180);
+    // A page back from Friday: Tuesday on.
+    await expect.poll(days).toEqual(['TUE', 'WED', 'THU']);
+    // A swipe is not a tap: focus stayed shut.
+    await expect(page.locator('.focus-layer')).toHaveCount(0);
+  });
+});
+
 test('the now line opens in view, and the agenda opens on it with the marked event below', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   for (const scene of ['calendar', 'calendar-day', 'today'] as const) {
