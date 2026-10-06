@@ -653,6 +653,20 @@ button {
   min-width: 0;
   min-height: 0;
 }
+/* Every visual that fills the main slot (Scenes.tsx objectContent) has a
+   black ground, as a chart's object does (.chart-object). */
+.diagram-object,
+.document-object,
+.code-object,
+.table-object,
+.image-object,
+.calendar-object,
+.tasks-object,
+.inbox-object,
+.timer-object,
+.weather-object {
+  background: #000;
+}
 .content-rail {
   position: relative;
   min-width: 0;
@@ -1820,9 +1834,6 @@ button {
 }
 
 /* Diagram */
-.diagram-object {
-  background: #000;
-}
 .diagram-object .focusable-content {
   --slot-pad: clamp(18px, 2.2cqw, 38px);
   position: relative;
@@ -2243,9 +2254,6 @@ button {
    orange while it runs, muted when paused, amber (the warning colour) once
    it is done. Several too many for readable cells are listed as rows, and
    the list scrolls inside the frame like any list. */
-.timer-object {
-  background: #000;
-}
 .timer-object .focusable-content {
   position: relative;
   z-index: 1;
@@ -2470,9 +2478,6 @@ button {
    cyan, labelled as often as the width allows. The days are rows, each
    range a bar on one cold-to-warm scale they all share. How the three
    stand is the box's (weather--wide, --tall, --compact). */
-.weather-object {
-  background: #000;
-}
 .weather-object .focusable-content {
   position: relative;
   z-index: 1;
@@ -3353,9 +3358,6 @@ button {
 }
 
 /* Document */
-.document-object {
-  background: #000;
-}
 .document-viewport {
   position: relative;
   width: 100%;
@@ -3439,9 +3441,6 @@ button {
    zoomed; its alt text and decoded size sit on the caption line at the
    bottom edge, on the metadata baseline. The picture fades in once it has
    decoded (the object itself resolves in through ObjectMotion). */
-.image-object {
-  background: #000;
-}
 .image-primitive {
   position: relative;
   width: 100%;
@@ -3524,9 +3523,6 @@ button {
 }
 
 /* Code */
-.code-object {
-  background: #000;
-}
 .code-viewport {
   position: relative;
   width: 100%;
@@ -3619,9 +3615,6 @@ button {
    only when they overflow. Thin rules, not cards; the header in the tech
    face; quantities in mono, set to the end so digits line up; a highlighted
    row carries the hot-line accent. */
-.table-object {
-  background: #000;
-}
 .table-viewport {
   position: relative;
   width: 100%;
@@ -3739,10 +3732,6 @@ button {
    message's unread mark is the orange square, its flag the amber pennant.
    No cards: a section is a heading over its rows. A list that outgrows its
    slot scrolls inside the frame in the list viewport. */
-.tasks-object,
-.inbox-object {
-  background: #000;
-}
 
 /* The panel frame is drawn behind the list, so the rows sit inside its
    outline, clear of its cut corners. */
@@ -4340,9 +4329,6 @@ button {
    last day) is cut. Today's column or cell and the now line are orange.
    The heights the layout reckons with (CalendarPrimitive.tsx: DAY_ROW_PX,
    LANE_PX, LINE_PX, MONTH_*) are set inline or match these sizes. */
-.calendar-object {
-  background: #000;
-}
 .calendar-object .focusable-content {
   position: relative;
   z-index: 1;
