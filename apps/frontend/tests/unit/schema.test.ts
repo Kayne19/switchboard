@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import Ajv, { type ValidateFunction } from 'ajv';
 import schema from '../../../../docs/display-action-v1.schema.json';
-import fixtures from '../fixtures/display-actions.json';
+import { nonFiniteActions } from '../fixtures/nonFiniteActions';
 import { corpusCases, expandCorpusValue } from '../fixtures/validatorCorpus';
 import { validateControllerAction } from '../../src/controller/validation';
 
@@ -30,6 +30,39 @@ const validate: ValidateFunction = ajv.compile(schema);
 function errorSummary(): string {
   return ajv.errorsText(validate.errors, { separator: '; ' });
 }
+
+/** A schema node, as far as these tests read one. A `$ref` names a definition. */
+interface SchemaNode {
+  $ref?: string;
+  enum?: string[];
+  required?: string[];
+  properties?: Record<string, SchemaNode>;
+  oneOf?: SchemaNode[];
+  anyOf?: SchemaNode[];
+}
+const contract = schema as unknown as { oneOf: SchemaNode[]; definitions: Record<string, SchemaNode> };
+const definitions = contract.definitions;
+/** The definition a node's `$ref` names, or the node itself. */
+const resolve = (node: SchemaNode): SchemaNode => (node.$ref ? definitions[node.$ref.split('/').pop()!] : node);
+/** The properties of every action the schema lists: one entry per op, one per show type. */
+const actions = contract.oneOf.map((variant) => resolve(variant).properties!);
+
+/**
+ * Every show type's data shapes: one per type, or (a diagram's) one per
+ * `mode`, named `type` or `type/mode`. `required` is the keys the shape
+ * requires; a shape with an `anyOf` of `required` branches (progress: value
+ * or steps) needs one branch met, and `branches` lists them.
+ */
+interface ShowShape { name: string; type: string; mode?: string; required: string[]; branches: string[][] }
+const showShapes: ShowShape[] = actions.flatMap((properties) => {
+  const type = properties.type?.enum?.[0];
+  if (!type) return [];
+  const data = resolve(properties.data);
+  return (data.oneOf ? data.oneOf.map(resolve) : [data]).map((shape) => {
+    const mode = shape.properties?.mode?.enum?.[0];
+    return { name: mode ? `${type}/${mode}` : type, type, mode, required: shape.required ?? [], branches: (shape.anyOf ?? []).map((branch) => branch.required ?? []) };
+  });
+});
 
 // The corpus cases both validators refuse and the schema accepts: each breaks
 // a rule JSON Schema cannot state (docs/display-tool.md, "Canonical schema &
@@ -132,21 +165,18 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
   // the same set; two sets with the same names in another order (a task's
   // state and a progress step's) cannot stand in for each other.
   it('lists, in every refusal of a name, the set the schema states for that field, in its order', () => {
-    const definitions = schema.definitions as Record<string, any>;
-    const resolve = (node: any) => (node.$ref ? definitions[node.$ref.split('/').pop()!] : node);
     const property = (definition: string, key: string): string[] => {
       const shape = resolve(definitions[definition]);
       // A table cell is a string, a number or an object; the object has the semantic.
-      const object = shape.oneOf ? shape.oneOf.find((branch: any) => branch.properties) : shape;
-      return resolve(object.properties[key]).enum;
+      const object = shape.oneOf?.find((branch) => branch.properties) ?? shape;
+      return resolve(object.properties![key]).enum!;
     };
-    const actions = (schema.oneOf as Array<{ $ref: string }>).map((variant) => definitions[variant.$ref.split('/').pop()!].properties);
     const stated: Record<string, string[]> = {
       // The op, the show type and the diagram mode are stated one per action
       // or shape, across the schema's `oneOf`s.
-      op: [...new Set(actions.map((properties) => properties.op.enum[0] as string))],
-      'show.type': actions.filter((properties) => properties.type).map((properties) => properties.type.enum[0] as string),
-      'diagram.mode': (definitions.DiagramData.oneOf as Array<{ $ref: string }>).map((shape) => resolve(shape).properties.mode.enum[0] as string),
+      op: [...new Set(actions.map((properties) => properties.op.enum![0]))],
+      'show.type': [...new Set(showShapes.map((shape) => shape.type))],
+      'diagram.mode': showShapes.filter((shape) => shape.type === 'diagram').map((shape) => shape.mode!),
       'show.role': property('ShowChartAction', 'role'),
       'chart.kind': property('ChartData', 'kind'),
       'series.semantic': property('ChartSeries', 'semantic'),
@@ -188,23 +218,8 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
 
   // JSON cannot hold a NaN or an infinity, so these are not corpus cases.
   it('refuses every non-finite mutation (NaN, Infinity, -Infinity)', () => {
-    for (const mutation of fixtures.nonFiniteMutations) {
-      const cloned = JSON.parse(JSON.stringify(mutation.baseAction));
-      let target: any = cloned;
-      for (let i = 0; i < mutation.path.length - 1; i++) {
-        target = target[mutation.path[i]];
-      }
-      const lastKey = mutation.path[mutation.path.length - 1];
-      if (mutation.value === 'Infinity') {
-        target[lastKey] = Number.POSITIVE_INFINITY;
-      } else if (mutation.value === '-Infinity') {
-        target[lastKey] = Number.NEGATIVE_INFINITY;
-      } else if (mutation.value === 'NaN') {
-        target[lastKey] = Number.NaN;
-      }
-
-      const ok = validate(cloned);
-      expect(ok, `expected schema to reject non-finite mutation "${mutation.name}"`).toBe(false);
+    for (const { name, action } of nonFiniteActions) {
+      expect(validate(action), `expected schema to reject non-finite mutation "${name}"`).toBe(false);
     }
   });
 });
@@ -213,25 +228,8 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
 // the schema lists with exactly the data the schema requires, and refuses each
 // when a required key is missing.
 describe('validateControllerAction follows display-action-v1.schema.json', () => {
-  const definitions = schema.definitions as Record<string, any>;
-  const resolve = (node: any) => (node.$ref ? definitions[node.$ref.split('/').pop()!] : node);
-  // A type's data is one shape, or (a diagram's) one shape per `mode`; a
-  // shape is named by its type and, when it has one, its mode.
-  const requiredByShape: Record<string, string[]> = {};
-  for (const variant of schema.oneOf as Array<{ $ref: string }>) {
-    const action = definitions[variant.$ref.split('/').pop()!];
-    const kind: string | undefined = action.properties.type?.enum?.[0];
-    if (!kind) continue;
-    const data = resolve(action.properties.data);
-    const shapes: any[] = data.oneOf ? data.oneOf.map(resolve) : [data];
-    for (const shape of shapes) {
-      const mode: string | undefined = shape.properties.mode?.enum?.[0];
-      // A shape with an `anyOf` of `required` branches (progress: value or
-      // steps) needs one branch met; the first is the one the sample carries.
-      const firstBranch: string[] = shape.anyOf?.[0]?.required ?? [];
-      requiredByShape[mode ? `${kind}/${mode}` : kind] = [...shape.required, ...firstBranch].sort();
-    }
-  }
+  // The first `anyOf` branch is the one the sample carries.
+  const requiredByShape = Object.fromEntries(showShapes.map((shape) => [shape.name, [...shape.required, ...(shape.branches[0] ?? [])].sort()]));
   // The smallest data the validator accepts for each shape; each carries
   // exactly the schema's required keys (and the first `anyOf` branch's),
   // checked below.
@@ -273,8 +271,7 @@ describe('validateControllerAction follows display-action-v1.schema.json', () =>
   }
 
   it('accepts a progress with steps in place of value, the schema\'s other anyOf branch', () => {
-    const branches = (definitions.ProgressData.anyOf as Array<{ required: string[] }>).map((branch) => branch.required);
-    expect(branches).toEqual([['value'], ['steps']]);
+    expect(showShapes.find((shape) => shape.name === 'progress')!.branches).toEqual([['value'], ['steps']]);
     const action = { op: 'show', id: 'x', type: 'progress', data: { label: 'L', steps: [{ label: 'S' }] } };
     expect(validate(action), errorSummary()).toBe(true);
     expect(validateControllerAction(action).ok).toBe(true);
