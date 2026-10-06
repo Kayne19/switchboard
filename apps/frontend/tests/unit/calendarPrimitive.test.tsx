@@ -292,3 +292,56 @@ describe('the layout a box gives a view', () => {
     expect(chooseLayout(week, { width: 730, height: 300 }, 7, 80).layout).toBe('grid');
   });
 });
+
+describe('the panel frame round a calendar', () => {
+  // The frame's steps, read from its paths (TechFrame "panel"): the top
+  // edge's lowest run and the bottom edge's highest, in its own units.
+  function panelSteps() {
+    const source = readFileSync(`${import.meta.dirname}/../../src/primitives/TechFrame.tsx`, 'utf8');
+    const panel = /panel: \{\s*viewBox: '0 0 (\d+) (\d+)',\s*paths: \[([\s\S]*?)\],\s*\}/.exec(source);
+    if (!panel) throw new Error('no panel frame in TechFrame.tsx');
+    const height = Number(panel[2]);
+    const runs: number[] = [];
+    for (const [, d] of panel[3].matchAll(/d: '([^']+)'/g)) {
+      let y = 0;
+      for (const [, op, args] of d.matchAll(/([MLHV])([^MLHV]*)/g)) {
+        const numbers = args.trim().split(/\s+/).map(Number);
+        if (op === 'H') runs.push(y);
+        if (op === 'V') y = numbers[0];
+        if (op === 'M' || op === 'L') y = numbers[1];
+      }
+    }
+    return {
+      height,
+      top: Math.max(...runs.filter((run) => run < height / 2)),
+      bottom: height - Math.min(...runs.filter((run) => run > height / 2)),
+    };
+  }
+
+  it('stands it in the box inside both of the frame\u2019s steps, as a share of the frame\u2019s height, in the main slot', () => {
+    const steps = panelSteps();
+    // One step serves both edges: the frame steps in as far at its foot as at its head.
+    expect(steps.bottom).toBe(steps.top);
+    expect(declared(':root', '--panel-step-share')).toEqual([`calc(${steps.top} / ${steps.height})`]);
+    expect(declared(':root', '--panel-step')).toEqual(['calc(var(--panel-step-share) * 100%)']);
+    expect(declared(':root', '--panel-inset')[0]).toMatch(/^calc\(var\(--panel-step\) \+ /);
+    // The main slot: the step is a row of the slot's own grid (a share of
+    // its height, which the layout sets), not a padding in stage units.
+    const slot = '.calendar-object > .focusable-content';
+    expect(declared(slot, 'grid-template-rows')).toEqual(['var(--panel-inset) minmax(0, 1fr) var(--panel-inset)']);
+    expect(declared(slot, 'padding-block')).toEqual(['0']);
+    expect(declared(`${slot} > *`, 'grid-row')).toEqual(['2']);
+  });
+
+  it('keeps it clear of the steps of an aux cell as tall as the aux row may grow, in an inset the row is asked for', () => {
+    // The cell is sized by what it holds, so its inset is a padding (a
+    // percentage track would ask the row for nothing, and the cell would
+    // shrink a step at a time): the step of the tallest cell the row allows.
+    const cap = /^fit-content\((\d+)%\)$/.exec(declared('.composed-main', 'grid-auto-rows')[0] ?? '')?.[1];
+    expect(cap).toBeDefined();
+    expect(declared('.composed-aux-object--calendar > .focusable-content', 'padding-block')).toEqual([
+      `max(clamp(12px, 1.4cqw, 22px), calc(var(--panel-step-share) * ${cap}cqh + 4px))`,
+    ]);
+    expect(declared('.composed-aux-object--calendar > .focusable-content', 'grid-template-rows')).toEqual([]);
+  });
+});

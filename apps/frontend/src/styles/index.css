@@ -16,6 +16,14 @@
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     monospace;
   --font-prose: "Helvetica Neue", Arial, sans-serif;
+  /* The panel frame's steps (TechFrame "panel": 24 of its 620 units, in at
+     its top right and its bottom left): a share of the frame's height. The
+     inset keeps content that fills a panel clear of both with a gap; a
+     percentage resolves where it is used, a track of the box the frame is
+     drawn over. */
+  --panel-step-share: calc(24 / 620);
+  --panel-step: calc(var(--panel-step-share) * 100%);
+  --panel-inset: calc(var(--panel-step) + clamp(6px, 0.9cqh, 12px));
   color: var(--paper);
   background: var(--black);
   font-family:
@@ -4329,7 +4337,33 @@ button {
 .calendar-object .focusable-content {
   position: relative;
   z-index: 1;
-  padding: clamp(18px, 3cqh, 36px) clamp(18px, 2.2cqw, 38px) clamp(14px, 2.4cqh, 28px);
+  padding: 0 clamp(18px, 2.2cqw, 38px);
+}
+/* A calendar fills its box to the edges (the grid's foot, the month's last
+   row, the agenda's cut line), so the box is the panel frame's inner box:
+   inside both of its steps (--panel-step), with a gap. The step is a share
+   of the frame's height, and the main slot's height is the frame's and is
+   set by the layout, so there the inset is a row of the slot's own grid,
+   exact at any height. A padding in stage units fell short of the step on
+   every slot taller than it assumed, and the grid ran over the lower step. */
+.calendar-object > .focusable-content {
+  display: grid;
+  grid-template-rows: var(--panel-inset) minmax(0, 1fr) var(--panel-inset);
+  padding-block: 0;
+}
+.calendar-object > .focusable-content > * {
+  grid-row: 2;
+  min-height: 0;
+}
+/* An aux cell is as tall as what it holds asks, so a share of the cell
+   cannot be its inset: a track in percent asks for nothing while the row
+   is sized, and a calendar that fills its box then shrank the cell a step
+   at a time to its floor. The cell is never taller than two fifths of the
+   stage (the aux row's cap, `.composed-main`) or its floor, so its step is
+   never more than that share of two fifths of the stage: the inset is that
+   and a gap, in stage units, and is asked for. */
+.composed-aux-object--calendar > .focusable-content {
+  padding-block: max(clamp(12px, 1.4cqw, 22px), calc(var(--panel-step-share) * 40cqh + 4px));
 }
 .calendar {
   display: flex;

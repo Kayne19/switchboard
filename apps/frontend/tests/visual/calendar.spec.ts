@@ -145,3 +145,120 @@ test('the now line opens in view, and the agenda opens on it with the marked eve
     expect(placed, scene).toEqual({ nowIn: true, dentistBelow: true });
   }
 });
+
+// Every geometry the visual suites use, the two short landscapes included.
+const frameGeometries = [
+  ...geometries,
+  { name: 'landscape-short', width: 844, height: 390 },
+  { name: 'landscape-hd', width: 1280, height: 720 },
+] as const;
+
+/**
+ * Every calendar part that crosses the inner box of the frame it is drawn
+ * in, as `role layout: part side +px`. The inner box of a TechFrame is the
+ * box inside every run of its outline (inside its steps, at its top right
+ * and its bottom left for the panel), read from the frame's own paths as
+ * drawn; focus has no frame, so it is the focus box. A part is what shows of
+ * it: clipped by every box that clips it on the way up.
+ */
+function frameCrossings() {
+  const runs = (d: string) => {
+    const found: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+    let [x, y] = [0, 0];
+    for (const [, op, args] of d.matchAll(/([MLHV])([^MLHV]*)/g)) {
+      const n = args.trim().split(/\s+/).map(Number);
+      const [nx, ny] = op === 'H' ? [n[0], y] : op === 'V' ? [x, n[0]] : [n[0], n[1]];
+      if (op !== 'M') found.push({ x1: x, y1: y, x2: nx, y2: ny });
+      [x, y] = [nx, ny];
+    }
+    return found;
+  };
+  const hits: string[] = [];
+  for (const calendar of document.querySelectorAll<HTMLElement>('[data-testid="calendar"]')) {
+    let owner = calendar.parentElement;
+    let frame: SVGSVGElement | null = null;
+    while (owner && !owner.classList.contains('focus-layer__content') && !(frame = owner.querySelector<SVGSVGElement>(':scope > svg.tech-frame'))) owner = owner.parentElement;
+    if (!owner) continue;
+    let inner: { left: number; top: number; right: number; bottom: number };
+    if (frame) {
+      const box = frame.getBoundingClientRect();
+      const view = frame.viewBox.baseVal;
+      const all = [...frame.querySelectorAll('path')].flatMap((path) => runs(path.getAttribute('d') ?? ''));
+      const across = all.filter((run) => run.y1 === run.y2).map((run) => run.y1);
+      const down = all.filter((run) => run.x1 === run.x2).map((run) => run.x1);
+      const sx = box.width / view.width;
+      const sy = box.height / view.height;
+      inner = {
+        left: box.left + sx * Math.max(0, ...down.filter((at) => at < view.width / 2)),
+        right: box.left + sx * Math.min(view.width, ...down.filter((at) => at > view.width / 2)),
+        top: box.top + sy * Math.max(0, ...across.filter((at) => at < view.height / 2)),
+        bottom: box.top + sy * Math.min(view.height, ...across.filter((at) => at > view.height / 2)),
+      };
+    } else {
+      const box = owner.getBoundingClientRect();
+      const style = getComputedStyle(owner);
+      inner = { left: box.left, right: box.right, top: box.top + parseFloat(style.borderTopWidth), bottom: box.bottom };
+    }
+    const role = frame ? (owner.classList.contains('composed-aux-object') ? 'aux' : 'primary') : 'focus';
+    for (const part of [calendar, ...calendar.querySelectorAll<HTMLElement>('*')]) {
+      if (part.getClientRects().length === 0 || getComputedStyle(part).visibility === 'hidden') continue;
+      const rect = part.getBoundingClientRect();
+      const shown = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+      for (let clip = part.parentElement; clip && clip !== owner; clip = clip.parentElement) {
+        const style = getComputedStyle(clip);
+        const box = clip.getBoundingClientRect();
+        if (style.overflowX !== 'visible') [shown.left, shown.right] = [Math.max(shown.left, box.left), Math.min(shown.right, box.right)];
+        if (style.overflowY !== 'visible') [shown.top, shown.bottom] = [Math.max(shown.top, box.top), Math.min(shown.bottom, box.bottom)];
+      }
+      if (shown.right - shown.left < 0 || shown.bottom - shown.top < 0 || (shown.right - shown.left < 0.5 && shown.bottom - shown.top < 0.5)) continue;
+      const over = { top: inner.top - shown.top, bottom: shown.bottom - inner.bottom, left: inner.left - shown.left, right: shown.right - inner.right };
+      for (const [side, by] of Object.entries(over)) {
+        if (by > 0.5) hits.push(`${role} ${calendar.dataset.layout}: ${String(part.className).split(' ')[0] || part.tagName} ${side} +${by.toFixed(1)}px`);
+      }
+    }
+  }
+  return hits;
+}
+
+// A primary beside which the calendar stands in the aux row.
+const codePrimary = {
+  op: 'show', id: 'source', type: 'code', role: 'primary',
+  data: { title: 'SOURCE / ROUTER', file: 'router.rs', source: { language: 'rust', text: 'fn route(call: &Call) -> Leg {\n    Leg::operator()\n}' } },
+};
+
+for (const geometry of frameGeometries) {
+  test.describe(`${geometry.name} frame`, () => {
+    test.use({ viewport: { width: geometry.width, height: geometry.height } });
+
+    for (const scene of scenes) {
+      test(`${scene}: no calendar part crosses its frame's inner box, as the primary, in focus, or beside another primary`, async ({ page }) => {
+        await open(page, scene);
+        // On a phone the week, the day and the month take the stage (the rail folds): that stage is measured here.
+        if (geometry.name === 'portrait-phone' && scene === 'calendar') await expect(page.locator('[data-stage="primary"]')).toHaveCount(1);
+        expect(await page.evaluate(frameCrossings), 'primary').toEqual([]);
+        await page.evaluate(() => window.SwitchboardController?.run([{ op: 'focus', id: 'week' }]));
+        await expect(page.locator('.focus-layer [data-testid="calendar"]')).toBeVisible();
+        await page.waitForTimeout(400);
+        expect(await page.evaluate(frameCrossings), 'focus').toEqual([]);
+        await open(page, scene);
+        await page.evaluate((primary) => {
+          const controller = window.SwitchboardController!;
+          const week = controller.state().agentObjects.week;
+          controller.run([{ op: 'show', id: 'week', type: 'calendar', role: 'secondary', data: week.data }, primary]);
+        }, codePrimary);
+        await expect(page.locator('.composed-aux-object [data-testid="calendar"]')).toBeVisible();
+        await page.waitForTimeout(400);
+        expect(await page.evaluate(frameCrossings), 'aux').toEqual([]);
+        if (scene !== 'today') {
+          // Alone in the aux row, the calendar asks it for its whole share (two fifths of the column): an inset the row
+          // is not asked for shrank a calendar that fills its box, a step at a time, to the cell's floor.
+          const share = await page.evaluate(() => {
+            const height = (selector: string) => document.querySelector(selector)!.getBoundingClientRect().height;
+            return height('.composed-aux') / height('.composed-main');
+          });
+          expect(share).toBeGreaterThan(0.39);
+        }
+      });
+    }
+  });
+}
