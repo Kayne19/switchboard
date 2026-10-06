@@ -8,22 +8,16 @@
 // days, and the note's item marked once wherever the event is drawn.
 import { readFileSync } from 'node:fs';
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { CalendarData } from '../../src/controller/types';
 import { CalendarPrimitive, chooseLayout } from '../../src/primitives/CalendarPrimitive';
 import { assistantAgenda, assistantAgendaWeek, assistantDay, assistantMonth, assistantWeek } from '../../src/fixtures/scenes';
+import { mount, stubResizeObserver, unmountAll } from './sceneHarness';
 
-let host: HTMLDivElement | null = null;
-let root: Root | null = null;
 let bodySize = { width: 0, height: 0 };
 
 beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
+  stubResizeObserver();
   // jsdom lays nothing out: the calendar's body reports the size a test gives it.
   const sized = (axis: 'width' | 'height') => ({
     configurable: true,
@@ -36,22 +30,14 @@ beforeAll(() => {
 });
 
 afterEach(() => {
-  const rendered = root;
-  if (rendered) act(() => rendered.unmount());
-  host?.remove();
-  root = null;
-  host = null;
+  // Every calendar a test drew goes before the size its body reads is taken back.
+  unmountAll();
   bodySize = { width: 0, height: 0 };
 });
 
 function render(data: CalendarData, marked?: string, size = { width: 0, height: 0 }, framed = false): HTMLElement {
   bodySize = size;
-  host = document.createElement('div');
-  document.body.append(host);
-  const pageRoot = createRoot(host);
-  root = pageRoot;
-  act(() => pageRoot.render(<CalendarPrimitive data={data} marked={marked} framed={framed} />));
-  return host.querySelector('[data-testid="calendar"]') as HTMLElement;
+  return mount(<CalendarPrimitive data={data} marked={marked} framed={framed} />).querySelector('[data-testid="calendar"]') as HTMLElement;
 }
 
 const boxes = (scope: Element, id: string) => [...scope.querySelectorAll(`[data-item="${id}"]`)];

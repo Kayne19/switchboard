@@ -1,23 +1,17 @@
 import { expect, test, type Page } from '@playwright/test';
+import { GEOMETRIES, openScene, runActions } from './helpers';
 
 // The calendar in a real browser, at each geometry the visual suite uses:
 // what jsdom cannot see because it draws no boxes. No golden is compared;
 // each test asks a question of the layout.
 
-const geometries = [
-  { name: 'portrait-phone', width: 390, height: 844 },
-  { name: 'portrait-tablet', width: 820, height: 1180 },
-  { name: 'landscape', width: 1440, height: 900 },
-  { name: 'ultrawide', width: 2560, height: 1080 },
-] as const;
-
 const scenes = ['calendar', 'calendar-day', 'calendar-month', 'calendar-agenda', 'today'] as const;
 
 async function open(page: Page, scene: string, focus = false) {
-  await page.goto(`/?scene=${scene}&chrome=0`);
+  await openScene(page, scene);
   await expect(page.locator('[data-testid="calendar"]').first()).toBeVisible();
   if (focus) {
-    await page.evaluate(() => window.SwitchboardController?.run([{ op: 'focus', id: 'week' }]));
+    await runActions(page, [{ op: 'focus', id: 'week' }]);
     await expect(page.locator('.focus-layer [data-testid="calendar"]')).toBeVisible();
   }
   // Let the body be measured and the layout settle on it.
@@ -75,7 +69,7 @@ function coveredTitles() {
   return hits;
 }
 
-for (const geometry of geometries) {
+for (const geometry of GEOMETRIES) {
   test.describe(geometry.name, () => {
     test.use({ viewport: { width: geometry.width, height: geometry.height } });
 
@@ -148,7 +142,7 @@ test('the now line opens in view, and the agenda opens on it with the marked eve
 
 // Every geometry the visual suites use, the two short landscapes included.
 const frameGeometries = [
-  ...geometries,
+  ...GEOMETRIES,
   { name: 'landscape-short', width: 844, height: 390 },
   { name: 'landscape-hd', width: 1280, height: 720 },
 ] as const;
@@ -256,17 +250,15 @@ for (const geometry of frameGeometries) {
         if (geometry.name === 'portrait-phone' && scene === 'calendar') await expect(page.locator('[data-stage="primary"]')).toHaveCount(1);
         expect(await page.evaluate(frameCrossings), 'primary').toEqual([]);
         expect(await page.evaluate(partsCut, '.content-main [data-testid="calendar"] .note-badge'), 'primary badge').toEqual([]);
-        await page.evaluate(() => window.SwitchboardController?.run([{ op: 'focus', id: 'week' }]));
+        await runActions(page, [{ op: 'focus', id: 'week' }]);
         await expect(page.locator('.focus-layer [data-testid="calendar"]')).toBeVisible();
         // Past the focus layer's layout transition (0.46 s), and the calendar's measure after it.
         await page.waitForTimeout(700);
         expect(await page.evaluate(frameCrossings), 'focus').toEqual([]);
         await open(page, scene);
-        await page.evaluate((primary) => {
-          const controller = window.SwitchboardController!;
-          const week = controller.state().agentObjects.week;
-          controller.run([{ op: 'show', id: 'week', type: 'calendar', role: 'secondary', data: week.data }, primary]);
-        }, codePrimary);
+        // The same calendar, sent again beside a code primary.
+        const week = await page.evaluate(() => window.SwitchboardController!.state().agentObjects.week.data);
+        await runActions(page, [{ op: 'show', id: 'week', type: 'calendar', role: 'secondary', data: week }, codePrimary]);
         await expect(page.locator('.composed-aux-object [data-testid="calendar"]')).toBeVisible();
         await page.waitForTimeout(400);
         expect(await page.evaluate(frameCrossings), 'aux').toEqual([]);
