@@ -118,7 +118,7 @@ describe('how tall a scroll region\'s content is', () => {
 });
 
 describe('what a drawing asks of the stage', () => {
-  const map: DrawingMap = { parts: [], noun: { one: 'NODE', many: 'NODES' }, marks: [], links: [], sketch: { boxes: [], lines: [] } };
+  const map: DrawingMap = { parts: [], noun: ['NODE', 'NODES'], marks: [], links: [], sketch: { boxes: [], lines: [] } };
   const drawing = { width: 400, height: 2000 };
   // Its viewport: 330 x 374 px, a phone's diagram slot.
   const sizes: Record<string, number> = { offsetWidth: 330, offsetHeight: 374, clientWidth: 330, clientHeight: 374 };

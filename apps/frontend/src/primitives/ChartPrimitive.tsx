@@ -24,18 +24,15 @@ import {
   type ChartAnchor,
   type ChartScales,
 } from './chartGeometry';
+import { SEMANTIC_COLOR } from '../design/tokens';
 import { useElementSize } from '../hooks/useElementSize';
 import { useLeastHeight } from '../hooks/useStageDemand';
 import { ListViewport } from './ListViewport';
 
-const semanticColor: Record<Semantic,string> = {
-  red:'var(--red)',orange:'var(--orange)',green:'var(--green)',cyan:'var(--cyan)',amber:'var(--amber)',paper:'var(--paper)',muted:'var(--muted)'
-};
-
 const fallbackSeriesSemantics: Semantic[] = ['green', 'orange', 'cyan', 'amber', 'paper', 'muted'];
 
 export function chartSeriesColor(series: ChartSeries, index: number): string {
-  return semanticColor[series.semantic ?? fallbackSeriesSemantics[index % fallbackSeriesSemantics.length]];
+  return SEMANTIC_COLOR[series.semantic ?? fallbackSeriesSemantics[index % fallbackSeriesSemantics.length]];
 }
 
 // The x axis is labelled at round values of its domain -- steps of 1, 2, 2.5

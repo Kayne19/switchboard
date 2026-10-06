@@ -8,6 +8,16 @@
 // drawing's readable minimum holds at the page's micro floor; on the card
 // and in a list it is the same badge in HTML (`NoteBadge`).
 
+import type { NoteData } from '../controller/types';
+
+/** The part of the object `objectId` the drawn note `note` names, which the
+ * object marks: a list's `item`, a graph's or a sequence's `node`; nothing
+ * for a note about another object, even one that names a part of this one. */
+export function markedPart(note: NoteData | null | undefined, objectId: string): { item?: string; node?: string } {
+  const anchor = note?.anchor;
+  return anchor?.target === objectId ? { item: anchor.item, node: anchor.node } : {};
+}
+
 /** The marker's size in user units: the one both layouts make room for. */
 export const NOTE_MARKER = { width: 30, height: 15 } as const;
 

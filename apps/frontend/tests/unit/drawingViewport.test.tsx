@@ -41,7 +41,7 @@ const scrollsDown: DrawingFit = { scale: 0.8, width: 320, height: 1600, scrollX:
 // Twenty rows, 80 units deep with 20 between: on screen, rows of 64 px with 16 px gaps.
 const rows: DrawingMap = {
   parts: Array.from({ length: 20 }, (_, index) => ({ box: { x: 0, y: index * 100 + 10, width: 400, height: 80 }, label: `ROW ${index}` })),
-  noun: { one: 'ROW', many: 'ROWS' },
+  noun: ['ROW', 'ROWS'],
   marks: [],
   links: [],
   sketch: { boxes: [], lines: [] },
