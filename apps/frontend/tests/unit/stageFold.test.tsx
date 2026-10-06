@@ -4,14 +4,12 @@
 // Damocles under it (app/stageFold.ts). Before, the rail always took its
 // share: on a phone a forty-step pipeline was read through a slot of 374 px
 // of 844, the note and the emblem under it.
-import { act, useEffect } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
+import { act } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { STAGE_PAST, UNSTAGE_UNDER, sharedExcess, stageReport, wantsStage, type StageReport } from '../../src/app/stageFold';
-import { SceneRenderer } from '../../src/components/SceneRenderer';
-import { ControllerProvider, useController } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
+import { lastScene, renderScene, runActions, unmountAll } from './sceneHarness';
 
 describe('when the primary takes the stage', () => {
   // In the shared layout the column is 498 px and the viewport 374.
@@ -133,33 +131,14 @@ const settle = () => act(() => {
   for (const observer of [...observers]) observer.report();
 });
 
-let host: HTMLDivElement | undefined;
-let root: Root;
-let runActions: (actions: ControllerAction[]) => void = () => {};
-function Scene({ actions }: { actions: ControllerAction[] }) {
-  const { run } = useController();
-  runActions = (more) => run(more);
-  useEffect(() => run(actions), [actions, run]);
-  return null;
-}
 function render(actions: ControllerAction[]): Element {
-  const element = document.createElement('div');
-  host = element;
-  document.body.append(element);
-  root = createRoot(element);
-  act(() => root.render(
-    <ControllerProvider>
-      <Scene actions={actions} />
-      <SceneRenderer />
-    </ControllerProvider>,
-  ));
+  renderScene(actions);
   settle();
-  return [...element.querySelectorAll('[data-scene]')].at(-1)!;
+  return lastScene();
 }
 const handle = (page: Element) => page.querySelector<HTMLButtonElement>('button.rail-handle');
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver = class {
     private live = false;
     constructor(private readonly callback: () => void) {}
@@ -202,10 +181,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (!host) return;
-  act(() => root.unmount());
-  host.remove();
-  host = undefined;
+  unmountAll();
   observers.clear();
 });
 
@@ -278,9 +254,9 @@ describe('a primary that outgrows a rail standing under it', () => {
   it('gives the rail back when the same graph is sent again small enough to read whole in its share', () => {
     const page = render([...fixtures.pipeline]);
     expect(page.querySelector('.content-grid--staged')).not.toBeNull();
-    act(() => runActions([
+    runActions([
       { op: 'show', id: 'pipeline', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'lint', label: 'LINT' }, { id: 'unit', label: 'UNIT' }, { id: 'visual', label: 'VISUAL' }], edges: [{ from: 'lint', to: 'unit' }, { from: 'unit', to: 'visual' }] } },
-    ]));
+    ]);
     settle();
     settle();
     expect(page.querySelector('.content-grid--staged')).toBeNull();
@@ -298,7 +274,7 @@ describe('a primary that outgrows a rail standing under it', () => {
     // One stage fewer: still forty-odd steps.
     const nodes = data.nodes.slice(1);
     const kept = new Set(nodes.map((node) => node.id));
-    act(() => runActions([{ ...pipeline, data: { ...data, nodes, edges: data.edges.filter((edge) => kept.has(edge.from) && kept.has(edge.to)) } } as ControllerAction]));
+    runActions([{ ...pipeline, data: { ...data, nodes, edges: data.edges.filter((edge) => kept.has(edge.from) && kept.has(edge.to)) } } as ControllerAction]);
     settle();
     settle();
     expect(page.querySelector('.content-grid--staged')).not.toBeNull();
@@ -322,13 +298,13 @@ describe('a primary that outgrows a rail standing under it', () => {
   it('gives the rail back when the primary is replaced by one that fits', () => {
     const page = render([...fixtures.pipeline]);
     expect(page.querySelector('.content-grid--staged')).not.toBeNull();
-    act(() => runActions([
+    runActions([
       { op: 'clear' },
       { op: 'show', id: 'small', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] } },
-    ]));
+    ]);
     settle();
     settle();
-    const shown = [...host!.querySelectorAll('[data-scene]')].at(-1)!;
+    const shown = lastScene();
     expect(shown.querySelector('.content-grid--staged')).toBeNull();
     expect(shown.querySelector('.content-rail--foldable')).toBeNull();
   });

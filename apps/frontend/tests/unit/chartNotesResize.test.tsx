@@ -6,7 +6,6 @@
 // laid out once a step; within a step the cards follow their points, and
 // where the size comes to rest they are placed for it.
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/primitives/notePlacement', async (importOriginal) => {
@@ -19,6 +18,7 @@ import type { ChartData, SceneObject } from '../../src/controller/types';
 import { ChartPrimitive } from '../../src/primitives/ChartPrimitive';
 import { chartFrame, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 import { layoutNotes } from '../../src/primitives/notePlacement';
+import { mount as mountNode, rerender, unmount, unmountAll } from './sceneHarness';
 
 const data: ChartData = {
   xLabel: 'EPOCH',
@@ -49,10 +49,8 @@ const SVG_TOP = 60;
 const observers = new Set<() => void>();
 
 let host: HTMLDivElement;
-let root: Root;
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver = class {
     private readonly callback: () => void;
     constructor(callback: () => void) {
@@ -105,8 +103,7 @@ afterAll(() => {
 afterEach(() => {
   Object.assign(size, { width: 1000, tall: 0.5, slot: false });
   Object.assign(card, { width: 300, height: 80 });
-  act(() => root.unmount());
-  host.remove();
+  unmountAll();
   observers.clear();
   vi.useRealTimers();
   vi.mocked(layoutNotes).mockClear();
@@ -122,10 +119,7 @@ function view(shown: ChartNote[] = notes) {
 }
 
 function mount() {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(view()));
+  host = mountNode(view());
 }
 
 const placements = () => vi.mocked(layoutNotes).mock.calls.length;
@@ -189,8 +183,7 @@ describe('chart notes through a resize', () => {
     expect(placements()).toBeGreaterThan(0);
     expect(placements()).toBeLessThanOrEqual(atMount);
     const rested = drawn();
-    act(() => root.unmount());
-    host.remove();
+    unmount(host);
     observers.clear();
     mount();
     expect(drawn()).toEqual(rested);
@@ -258,7 +251,7 @@ describe('chart notes through a resize', () => {
     mount();
     vi.mocked(layoutNotes).mockClear();
     for (let width = 1001; width <= 1007; width += 1) {
-      act(() => root.render(view(notes.map((note) => ({ ...note, data: { ...note.data } })))));
+      rerender(host, view(notes.map((note) => ({ ...note, data: { ...note.data } }))));
       resize(width);
     }
     expect(placements()).toBe(0);

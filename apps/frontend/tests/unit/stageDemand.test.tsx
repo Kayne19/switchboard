@@ -6,15 +6,11 @@
 import { act, useRef } from 'react';
 import type { StageNeed } from '../../src/app/stageFold';
 import { createRoot } from 'react-dom/client';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { MeasuredStageDemand, scrollContentHeight, StageDemandContext, useLeastHeight } from '../../src/hooks/useStageDemand';
 import { DrawingViewport } from '../../src/primitives/DrawingViewport';
 import { SLIVER, type DrawingFit } from '../../src/primitives/drawingFit';
 import type { DrawingMap } from '../../src/primitives/drawingScroll';
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 function Box({ least }: { least: number | null }) {
   const ref = useRef<HTMLDivElement>(null);

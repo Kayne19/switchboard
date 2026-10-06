@@ -20,7 +20,6 @@ const observers = new Set<() => void>();
 const sizes = ['offsetWidth', 'offsetHeight'].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)] as const);
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver = class {
     private readonly fire: () => void;
     constructor(callback: () => void) {

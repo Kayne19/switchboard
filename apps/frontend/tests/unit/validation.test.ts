@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import fixtures from '../fixtures/display-actions.json';
+import { nonFiniteActions } from '../fixtures/nonFiniteActions';
 import {
   MAX_IMAGE_ACTION_BYTES,
   MAX_IMAGE_BYTES,
@@ -84,22 +84,8 @@ describe('display protocol validation', () => {
   // JSON cannot hold a NaN or an infinity (display-actions.json says why),
   // but in-page code can hand the controller one.
   it('refuses non-finite mutations (NaN, Infinity, -Infinity)', () => {
-    for (const mutation of fixtures.nonFiniteMutations) {
-      const cloned = JSON.parse(JSON.stringify(mutation.baseAction));
-      let target: any = cloned;
-      for (let i = 0; i < mutation.path.length - 1; i++) {
-        target = target[mutation.path[i]];
-      }
-      const lastKey = mutation.path[mutation.path.length - 1];
-      if (mutation.value === 'Infinity') {
-        target[lastKey] = Number.POSITIVE_INFINITY;
-      } else if (mutation.value === '-Infinity') {
-        target[lastKey] = Number.NEGATIVE_INFINITY;
-      } else if (mutation.value === 'NaN') {
-        target[lastKey] = Number.NaN;
-      }
-
-      expect(validateControllerAction(cloned), mutation.name).toEqual({ ok: false, error: 'action contains a non-finite number' });
+    for (const { name, action } of nonFiniteActions) {
+      expect(validateControllerAction(action), name).toEqual({ ok: false, error: 'action contains a non-finite number' });
     }
   });
 

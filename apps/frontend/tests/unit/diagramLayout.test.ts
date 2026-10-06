@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
 import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import {
-  ARROW_LENGTH,
   breakCycles,
   cornerTagBoxes,
   frameFor,
@@ -17,6 +16,7 @@ import {
   type LaidOutEdge,
   type Point,
 } from '../../src/primitives/diagramLayout';
+import { arrowhead, inset, onRoute, overlaps, segmentBox, within } from './drawingGeometry';
 
 const NO_TAGS = { glyph: false, marker: false };
 // An arrowhead is 11 units wide; two keep a 3-unit gap between them.
@@ -138,52 +138,10 @@ graphs.ciPipeline = pipelineDiagram;
 graphs.wideLabelled = { ...graphs.wide, edges: graphs.wide.edges.map((edge) => ({ ...edge, label: 'go' })) };
 graphs.wideBack = { ...graphs.wide, edges: [...graphs.wide.edges, { from: 'w6', to: 'root', label: 'retry' }] };
 
-const overlaps = (a: Box, b: Box) =>
-  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-
-const inset = (box: Box, by: number): Box => ({
-  x: box.x + by,
-  y: box.y + by,
-  width: box.width - 2 * by,
-  height: box.height - 2 * by,
-});
-
-const within = (box: Box, width: number, height: number) =>
-  box.x >= 0 && box.y >= 0 && box.x + box.width <= width && box.y + box.height <= height;
-
-// Every route is axis-aligned, so a segment is a zero-thickness box.
-const segmentBox = (a: Point, b: Point): Box => ({
-  x: Math.min(a.x, b.x),
-  y: Math.min(a.y, b.y),
-  width: Math.max(Math.abs(a.x - b.x), 0.001),
-  height: Math.max(Math.abs(a.y - b.y), 0.001),
-});
-
-// A label names the route it sits on: its centre lies on one of the
-// route's segments.
-const onRoute = (point: Point, points: Point[]) =>
-  points.slice(1).some((end, index) => {
-    const box = segmentBox(points[index], end);
-    return point.x >= box.x - 1e-6 && point.x <= box.x + box.width + 1e-6 && point.y >= box.y - 1e-6 && point.y <= box.y + box.height + 1e-6;
-  });
-
 // A line of the route passes under the label, at least 9 units inside
 // each edge of its backing.
 const underLabel = (box: Box, points: Point[]) =>
   points.slice(1).some((end, index) => overlaps(segmentBox(points[index], end), inset(box, 9)));
-
-// The arrowhead at a route's end: the last ARROW_LENGTH of its final
-// segment, as wide as it is long.
-const arrowhead = (points: Point[]): Box => {
-  const end = points[points.length - 1];
-  const before = points[points.length - 2];
-  if (Math.abs(end.y - before.y) < 1e-6) {
-    const back = end.x - Math.sign(end.x - before.x) * ARROW_LENGTH;
-    return { x: Math.min(end.x, back), y: end.y - ARROW_LENGTH / 2, width: ARROW_LENGTH, height: ARROW_LENGTH };
-  }
-  const back = end.y - Math.sign(end.y - before.y) * ARROW_LENGTH;
-  return { x: end.x - ARROW_LENGTH / 2, y: Math.min(end.y, back), width: ARROW_LENGTH, height: ARROW_LENGTH };
-};
 
 // What an edge draws: its route, or the two stubs of an edge too long to
 // follow. Each line names the boxes it may touch: its ends' outlines, or a

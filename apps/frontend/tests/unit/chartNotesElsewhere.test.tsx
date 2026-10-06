@@ -4,8 +4,6 @@
 // its point: on a line chart a hollow ring, since no leader reaches it
 // there. The cards laid over the chart keep off that ring, as off any mark,
 // and the points their own leaders reach get no ring.
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/primitives/notePlacement', async (importOriginal) => {
@@ -18,6 +16,7 @@ import type { ChartData, SceneObject } from '../../src/controller/types';
 import { ChartPrimitive } from '../../src/primitives/ChartPrimitive';
 import { CHART_MARKER_RADIUS, CHART_MARKER_STROKE, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 import { layoutNotes } from '../../src/primitives/notePlacement';
+import { mount, stubResizeObserver } from './sceneHarness';
 
 const data: ChartData = {
   xLabel: 'EPOCH',
@@ -37,16 +36,9 @@ const SVG_TOP = 60;
 const originalRect = Element.prototype.getBoundingClientRect;
 const rect = (left: number, top: number, width: number, height: number) =>
   ({ left, top, width, height, x: left, y: top, right: left + width, bottom: top + height, toJSON: () => ({}) }) as DOMRect;
-let host: HTMLDivElement;
-let root: Root;
+stubResizeObserver();
 
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
   Element.prototype.getBoundingClientRect = function (this: Element) {
     if (this instanceof HTMLElement && this.classList.contains('chart-notes__frame')) return rect(0, 0, 1000, 600);
     if (this instanceof HTMLElement && this.classList.contains('chart-note')) return rect(0, 0, 300, 80);
@@ -60,8 +52,6 @@ afterAll(() => {
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
   vi.mocked(layoutNotes).mockClear();
 });
 
@@ -71,16 +61,11 @@ describe('a point whose note is shown off the chart', () => {
     // one over the chart, and holds the other in the band.
     const named = chartNoteAnchors(chart, [laid, banded]);
     const led = chartNoteAnchors(chart, [laid]);
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() =>
-      root.render(
-        <div className="chart-object">
-          <ChartPrimitive data={data} named={named} led={led} />
-          <ChartNotes chart={chart} objects={{ loss: chart }} notes={[laid]} named={named} onFocus={() => {}} />
-        </div>,
-      ),
+    const host = mount(
+      <div className="chart-object">
+        <ChartPrimitive data={data} named={named} led={led} />
+        <ChartNotes chart={chart} objects={{ loss: chart }} notes={[laid]} named={named} onFocus={() => {}} />
+      </div>,
     );
     const point = chartSeriesPoint(data, 5, 'TRAIN')!;
     // Drawn: one hollow ring, on the band's point; none on the point the laid note's leader reaches.

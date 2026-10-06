@@ -1,21 +1,16 @@
 import { expect, test } from '@playwright/test';
+import { GEOMETRIES } from './helpers';
 
 // A scrolled diagram's map stands in a strip of its own and covers no part
 // of the drawing, and focus keeps the note about the diagram. jsdom has no
 // layout, so the unit tests see the strip's structure; this sees the boxes.
-const geometries = [
-  { name: 'portrait-phone', width: 390, height: 844 },
-  { name: 'portrait-tablet', width: 820, height: 1180 },
-  { name: 'landscape', width: 1440, height: 900 },
-  { name: 'ultrawide', width: 2560, height: 1080 },
-];
 const scenes = [
   { scene: 'topology', id: 'topology' },
   { scene: 'pipeline', id: 'pipeline' },
   { scene: 'trace', id: 'trace' },
 ];
 
-for (const geometry of geometries) {
+for (const geometry of GEOMETRIES) {
   test.describe(geometry.name, () => {
     test.use({ viewport: { width: geometry.width, height: geometry.height } });
     for (const { scene, id } of scenes) {

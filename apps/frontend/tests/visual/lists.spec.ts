@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openScene, runActions } from './helpers';
 
 // To-do list and inbox layout the unit tests cannot see: jsdom draws no
 // boxes. These hold the rules docs/visual-channel.md gives the two lists
@@ -14,14 +15,9 @@ const geometries = [
 ] as const;
 
 async function show(page: Page, actions: unknown[], load = true) {
-  if (load) await page.goto('/?scene=idle&chrome=0');
-  await expect(page.locator('.stage')).toBeVisible();
-  await page.evaluate((list) => {
-    const controller = window.SwitchboardController;
-    if (!controller) throw new Error('controller unavailable');
-    controller.dispatch({ op: 'clear' });
-    controller.run(list);
-  }, actions);
+  if (load) await openScene(page, 'idle');
+  else await expect(page.locator('.stage')).toBeVisible();
+  await runActions(page, [{ op: 'clear' }, ...actions]);
 }
 
 // Two frames: the list measures itself and its viewport counts and leads.

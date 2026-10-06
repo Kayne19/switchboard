@@ -14,7 +14,6 @@ import { ListViewport } from '../../src/primitives/ListViewport';
 let height: PropertyDescriptor | undefined;
 
 beforeEach(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
