@@ -537,7 +537,10 @@ below the header. A tap on the tag turns a page and does not expand the
 object. A focused list takes the keys a drawing takes (an arrow moves it
 a line, Space and Page Down a page on, Shift+Space and Page Up a page
 back, Home and End to the ends), each marked handled so Space never
-expands the object; Enter still does. It opens on the item a note names,
+expands the object; Enter still does. A pane that scrolls only across (a
+wide table on a phone, source with long lines) takes them across, as a
+drawing that scrolls only across does: the left and right arrows a line,
+Space and the page keys a page, Home and End to either side. It opens on the item a note names,
 never under the fade, and keeps the reader's place through an update.
 Focus gives the list the whole stage.
 

@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { drawnScale } from '../../src/hooks/watchElement';
 import { keyStop } from '../../src/primitives/drawingScroll';
-import { continuesPast, countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
+import { continuesPast, countPast, keyScrollLeft, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement | undefined;
@@ -150,7 +150,7 @@ describe('ListViewport', () => {
     expect(scroll.tabIndex).toBe(-1);
   });
 
-  it('stays a tab stop when it overflows only sideways, and leaves Space to the surface', async () => {
+  it('stays a tab stop when it overflows only sideways, and takes the keys across; Space does not expand the object', async () => {
     const scroll = render(rows(3));
     layOut(scroll, 0);
     Object.defineProperty(scroll, 'clientWidth', { configurable: true, value: 200 });
@@ -158,7 +158,17 @@ describe('ListViewport', () => {
     await measured(scroll);
     expect(scroll.tabIndex).toBe(0);
     expect(page().querySelector('.scroll-rim__count')).toBeNull();
-    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })));
+    const calls: ScrollToOptions[] = [];
+    scroll.scrollTo = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollTo;
+    const press = (key: string) => act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));
+    press(' ');
+    press('ArrowRight');
+    press('End');
+    // The arrows up and down are not its keys: they go on, unmarked.
+    press('ArrowDown');
+    expect(calls.map((call) => [call.left, call.top])).toEqual([[175, undefined], [40, undefined], [400, undefined]]);
+    expect(surfaceClicks).toBe(0);
+    press('Enter');
     expect(surfaceClicks).toBe(1);
   });
 
@@ -358,6 +368,24 @@ describe('ListViewport', () => {
     expect(surfaceClicks).toBe(0);
     press('Enter');
     expect(surfaceClicks).toBe(1);
+  });
+});
+
+describe('keyScrollLeft', () => {
+  it('takes the keys a drawing that scrolls only across takes, by the one rule (scrollMove, across)', () => {
+    for (const key of [' ', 'PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter', 'Tab', 'a']) {
+      expect(keyScrollLeft(key, false, 0, 200, 600) === null, key).toBe(keyStop(key, false, true, [0, 300], 0, 200) === null);
+    }
+  });
+
+  it('moves a line, a page, or to either side, and no further', () => {
+    expect(keyScrollLeft('ArrowRight', false, 0, 100, 400)).toBe(40);
+    expect(keyScrollLeft('ArrowLeft', false, 10, 100, 400)).toBe(0);
+    expect(keyScrollLeft(' ', false, 250, 100, 400)).toBe(300);
+    expect(keyScrollLeft(' ', true, 200, 100, 400)).toBe(112);
+    expect(keyScrollLeft('Home', false, 200, 100, 400)).toBe(0);
+    expect(keyScrollLeft('End', false, 0, 100, 400)).toBe(300);
+    expect(keyScrollLeft('ArrowDown', false, 0, 100, 400)).toBeNull();
   });
 });
 
