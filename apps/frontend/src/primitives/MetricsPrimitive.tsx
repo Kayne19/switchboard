@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { KeyboardEvent } from 'react';
 import type { MetricData, SceneObject } from '../controller/types';
+import { useLayoutMotion } from '../hooks/useLayoutMotion';
 import { SHARP } from './ObjectMotion';
 import type { Slot } from './slot';
 
@@ -42,6 +43,9 @@ function MetricTrend({ data }: { data: MetricData }) {
 }
 
 export function MetricsPrimitive({ metrics, slot = 'primary', onFocus }: MetricsPrimitiveProps) {
+  // The list and each row move and resize with the layout, one rule for
+  // both: read as the list mounts, so a row that comes later takes it too.
+  const layoutMotion = useLayoutMotion({ layout: true });
   if (slot === 'rail' && metrics.length === 0) {
     return null;
   }
@@ -60,7 +64,7 @@ export function MetricsPrimitive({ metrics, slot = 'primary', onFocus }: Metrics
     <motion.div
       className={`metrics metrics--${READING[slot]}${isCluster ? ' metrics--cluster' : ''}`}
       data-count={metrics.length}
-      layout
+      {...layoutMotion}
       data-testid="metrics"
     >
       <AnimatePresence mode="popLayout" initial={false}>
@@ -68,7 +72,7 @@ export function MetricsPrimitive({ metrics, slot = 'primary', onFocus }: Metrics
           <motion.div
             className="metric-row"
             key={metric.id}
-            layout
+            {...layoutMotion}
             initial={{ opacity: 0, x: 12, filter: 'blur(5px)' }}
             animate={{ opacity: 1, x: 0, ...SHARP }}
             exit={{ opacity: 0, x: 10, filter: 'blur(5px)' }}

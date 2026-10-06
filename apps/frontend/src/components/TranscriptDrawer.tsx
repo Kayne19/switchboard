@@ -35,7 +35,7 @@ export function TranscriptDrawer({ open, lines, onClose, onSend }: TranscriptDra
         >
           <div className="transcript__header tech micro">
             <span>CONVERSATION / HISTORY</span>
-            <button type="button" onClick={onClose}>RETURN / ESC</button>
+            <button className="transcript__return" type="button" onClick={onClose}>RETURN / ESC</button>
           </div>
           <TranscriptBody lines={lines} />
           <TranscriptComposer onSend={onSend} />

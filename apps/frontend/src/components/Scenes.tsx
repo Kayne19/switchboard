@@ -13,6 +13,7 @@ import type {
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, nameFields, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
+import { useLayoutMotion } from '../hooks/useLayoutMotion';
 import { watchElement } from '../hooks/watchElement';
 import { AnnotationCard, type NoteTarget } from '../primitives/AnnotationCard';
 import { calendarFrame } from '../primitives/CalendarPrimitive';
@@ -464,7 +465,7 @@ function trainingContent(
     chartNotes: charts.length === 1 ? { chart: primary.id, keys: primaryNotes.map((note) => note.key) } : undefined,
     aux: firstProgress && !progress ? [...besideCharts, firstProgress] : besideCharts,
     main: (
-      <motion.div className="content-main training-main" layout>
+      <StageColumn className="content-main training-main">
         <div className={`training-charts${charts.length > 1 ? ' training-charts--compare' : ''}`}>
           <AnimatePresence mode="popLayout" initial={false}>
             {charts.map((chart) => {
@@ -523,7 +524,7 @@ function trainingContent(
             </ObjectSurface>
           </ObjectMotion>
         ) : null}
-      </motion.div>
+      </StageColumn>
     ),
   };
 }
@@ -726,6 +727,17 @@ function AuxRow({
   );
 }
 
+// A column of the stage that moves and resizes with its layout: the main
+// column, and a scene's own column in its main slot (`useLayoutMotion`).
+function StageColumn({ className, ref, children }: { className: string; ref?: RefObject<HTMLDivElement | null>; children: ReactNode }) {
+  const layoutMotion = useLayoutMotion({ layout: true });
+  return (
+    <motion.div ref={ref} className={className} {...layoutMotion}>
+      {children}
+    </motion.div>
+  );
+}
+
 // The main column of every content scene: the scene's own main slot over
 // the aux row. The slot sits here whether or not the row is shown, so an
 // object arriving beside the primary resizes the primary in place rather
@@ -750,10 +762,10 @@ function MainWithAux({
   children: ReactNode;
 }) {
   return (
-    <motion.div ref={ref} className={`content-main composed-main${variant ? ` ${variant}` : ''}`} layout>
+    <StageColumn ref={ref} className={`content-main composed-main${variant ? ` ${variant}` : ''}`}>
       {children}
       {aux.length > 0 ? <AuxRow objects={aux} onStage={onStage} onFocus={onFocus} drawn={drawn} /> : null}
-    </motion.div>
+    </StageColumn>
   );
 }
 
@@ -970,6 +982,7 @@ export function SceneShell(props: SceneProps) {
     if (banding && chartRailNote?.chart === banding.chart) setChartBand(chartRailNote);
   }, [banding, bandHeld, chartBand, chartRailNote]);
   const railNote = calloutPlaced ? null : (content?.note ?? null);
+  const railMotion = useLayoutMotion({ layout: true });
   const presence = (
     <DamoclesPresence
       listening={state.listening}
@@ -999,7 +1012,7 @@ export function SceneShell(props: SceneProps) {
             <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} drawn={calloutPlaced ? null : content.note}>
               {content.main}
             </MainWithAux>
-            <motion.aside ref={railRef} className="content-rail" layout>
+            <motion.aside ref={railRef} className="content-rail" {...railMotion}>
               {presence}
               <RailDetails
                 state={state}

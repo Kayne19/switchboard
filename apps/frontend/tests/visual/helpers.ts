@@ -151,3 +151,74 @@ export function frameCrossings(selector: string): string[] {
   }
   return hits;
 }
+
+/**
+ * What is wrong with the focus ring the focused control draws, or nothing
+ * (DESIGN_SYSTEM.md, "Focus ring"): run in the page with a control focused
+ * from the keyboard. Its ring is the page's (one 1px orange line: its
+ * outline, or for an object's surface the line its ::after draws over its
+ * box), not the browser's; and no box above it that clips (an overflow, a
+ * clip path) cuts it. A side counts only where the control itself fits the
+ * clipping box that way: a control longer than the scroll it stands in is
+ * cut with it, ring and all, and reached by scrolling.
+ */
+export function focusRingFault(): string | null {
+  const control = document.activeElement as HTMLElement | null;
+  if (!control || control === document.body) return null;
+  const name = `${control.tagName.toLowerCase()}.${String(control.getAttribute('class') ?? '').split(' ').filter(Boolean).slice(0, 2).join('.')}`;
+  const style = getComputedStyle(control);
+  const orange = 'rgb(241, 90, 36)';
+  // A region drawn over carries the ring on its own ::after (a surface) or
+  // on the one of the box it scrolls in (a list's port, a drawing's view).
+  const over = (host: Element | null) => {
+    if (!host) return false;
+    const after = getComputedStyle(host, '::after');
+    return after.position === 'absolute' && after.borderTopStyle === 'solid' && after.borderTopWidth === '1px' && after.borderTopColor === orange;
+  };
+  let reach: number | null = null;
+  let ringed: Element = control;
+  // A text field shows focus by its caret and its field's border.
+  if (control.matches('input, textarea')) {
+    const field = control.parentElement!;
+    const border = getComputedStyle(field).borderTopColor;
+    return border.startsWith('rgba(241, 90, 36') || border === orange ? null : `${name}: its field's border is not lit (${border})`;
+  }
+  // A control clipped to a shape of its own clips its own outline; one whose
+  // edge is a line (a metric card in a cluster) lights that edge instead.
+  const clipped = style.clipPath !== 'none';
+  if (style.outlineStyle === 'solid' && style.outlineWidth === '1px' && style.outlineColor === orange) {
+    reach = parseFloat(style.outlineOffset) + 1;
+    if (clipped && reach > 0) return `${name}: its own clip path cuts its ring`;
+  } else if (style.outlineStyle === 'none' && clipped && style.backgroundColor === orange) reach = 0;
+  else if (style.outlineStyle === 'none' && over(control)) reach = 0;
+  else if (style.outlineStyle === 'none' && over(control.parentElement)) [reach, ringed] = [0, control.parentElement!];
+  if (reach === null) return `${name}: not the page's ring (outline ${style.outlineStyle} ${style.outlineWidth} ${style.outlineColor})`;
+  const box = ringed.getBoundingClientRect();
+  const ring = { left: box.left - reach, top: box.top - reach, right: box.right + reach, bottom: box.bottom + reach };
+  const cuts: string[] = [];
+  for (let clip = ringed.parentElement; clip && clip !== document.documentElement; clip = clip.parentElement) {
+    const clipStyle = getComputedStyle(clip);
+    const clipBox = clip.getBoundingClientRect();
+    let shown: { left: number; top: number; right: number; bottom: number } | null = null;
+    if (clipStyle.overflowX !== 'visible' || clipStyle.overflowY !== 'visible') {
+      const left = clipBox.left + parseFloat(clipStyle.borderLeftWidth);
+      const top = clipBox.top + parseFloat(clipStyle.borderTopWidth);
+      shown = { left, top, right: left + clip.clientWidth, bottom: top + clip.clientHeight };
+    } else if (clipStyle.clipPath !== 'none') {
+      shown = { left: clipBox.left, top: clipBox.top, right: clipBox.right, bottom: clipBox.bottom };
+    }
+    if (!shown) continue;
+    // A scroll stops at a whole pixel, so a control it brings into view
+    // may stand a fraction of one past its edge: a pixel is allowed.
+    const fitsAcross = box.width <= shown.right - shown.left + 1;
+    const fitsDown = box.height <= shown.bottom - shown.top + 1;
+    const sides = [
+      fitsAcross && ring.left < shown.left - 1 ? 'left' : '',
+      fitsDown && ring.top < shown.top - 1 ? 'top' : '',
+      fitsAcross && ring.right > shown.right + 1 ? 'right' : '',
+      fitsDown && ring.bottom > shown.bottom + 1 ? 'bottom' : '',
+    ].filter(Boolean);
+    if (sides.length) cuts.push(`${String(clip.getAttribute('class') ?? clip.tagName).split(' ')[0]} cuts its ${sides.join(', ')}`);
+  }
+  return cuts.length ? `${name}: ${cuts.join('; ')}` : null;
+}

@@ -130,6 +130,7 @@ Motion owns semantic continuity:
 
 - `layout` animates recomposition when objects are added or removed.
 - `layoutId` preserves object identity through focus transitions.
+- Both reach motion through `useLayoutMotion`, which hands it neither under `prefers-reduced-motion`: there nothing moves, so no layout projection runs that could leave a box at an old size.
 - `AnimatePresence` resolves new and removed objects.
 - SVG paths trace charts, diagram routes, and technical frames.
 - CSS and motion values drive the continuous Damocles float.
