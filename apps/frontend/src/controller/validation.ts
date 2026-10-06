@@ -25,6 +25,7 @@ import type {
   SequenceMessage,
   SpeechState,
   TableCell,
+  TableCellObject,
   TableColumn,
   TableData,
   CalendarData,
@@ -732,33 +733,14 @@ function validateDocumentData(data: Record<string, unknown>): { ok: true; data: 
     subject: data.subject as string,
     paragraphs: data.paragraphs as string[],
   };
-
-  if (data.kind !== undefined) {
-    if (!isName(data.kind, DOCUMENT_KINDS)) {
-      return { ok: false, error: invalidName('document.kind', DOCUMENT_KINDS) };
-    }
-    result.kind = data.kind;
-  }
-  for (const k of ['context', 'source'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `document.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  for (const k of ['from', 'timestamp'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 128, `document.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'document.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err =
+    copyOptionalName(data, result, 'kind', DOCUMENT_KINDS, 'document.kind') ??
+    copyOptionalString(data, result, 'context', 256, 'document.context') ??
+    copyOptionalString(data, result, 'source', 256, 'document.source') ??
+    copyOptionalString(data, result, 'from', 128, 'document.from') ??
+    copyOptionalString(data, result, 'timestamp', 128, 'document.timestamp') ??
+    copyOptionalString(data, result, 'caption', 128, 'document.caption');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -776,11 +758,8 @@ function validateCodeData(data: Record<string, unknown>): { ok: true; data: Code
   if (textErr) return { ok: false, error: textErr };
 
   const sourceObj: CodeData['source'] = { text: data.source.text as string };
-  if (data.source.language !== undefined) {
-    const err = checkString(data.source.language, 64, 'code.source.language');
-    if (err) return { ok: false, error: err };
-    sourceObj.language = data.source.language as string;
-  }
+  const languageErr = copyOptionalString(data.source, sourceObj, 'language', 64, 'code.source.language');
+  if (languageErr) return { ok: false, error: languageErr };
   if (data.source.highlight !== undefined) {
     if (!Array.isArray(data.source.highlight)) return { ok: false, error: 'code.source.highlight must be an array' };
     for (const h of data.source.highlight) {
@@ -792,19 +771,12 @@ function validateCodeData(data: Record<string, unknown>): { ok: true; data: Code
   }
 
   const result: CodeData = { source: sourceObj };
-  for (const k of ['title', 'file', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `code.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'code.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err =
+    copyOptionalString(data, result, 'title', 256, 'code.title') ??
+    copyOptionalString(data, result, 'file', 256, 'code.file') ??
+    copyOptionalString(data, result, 'context', 256, 'code.context') ??
+    copyOptionalString(data, result, 'caption', 128, 'code.caption');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -834,10 +806,8 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
     const labelErr = checkString(c.label, MAX_TABLE_COLUMN_LABEL_UTF16, 'table column.label');
     if (labelErr) return { ok: false, error: labelErr };
     const column: TableColumn = { label: c.label as string };
-    if (c.semantic !== undefined) {
-      if (!isName(c.semantic, SEMANTICS)) return { ok: false, error: invalidName('table column.semantic', SEMANTICS) };
-      column.semantic = c.semantic as Semantic;
-    }
+    const semanticErr = copyOptionalName(c, column, 'semantic', SEMANTICS, 'table column.semantic');
+    if (semanticErr) return { ok: false, error: semanticErr };
     columns.push(column);
   }
 
@@ -869,15 +839,11 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
       if (cellUnknown) return { ok: false, error: cellUnknown };
       const textErr = checkString(cell.text, MAX_TABLE_CELL_UTF16, 'table cell.text');
       if (textErr) return { ok: false, error: textErr };
-      const cellObj: TableCell = { text: cell.text as string };
-      if (cell.semantic !== undefined) {
-        if (!isName(cell.semantic, SEMANTICS)) return { ok: false, error: invalidName('table cell.semantic', SEMANTICS) };
-        cellObj.semantic = cell.semantic as Semantic;
-      }
-      if (cell.bold !== undefined) {
-        if (typeof cell.bold !== 'boolean') return { ok: false, error: 'table cell.bold must be boolean' };
-        cellObj.bold = cell.bold;
-      }
+      const cellObj: TableCellObject = { text: cell.text as string };
+      const cellErr =
+        copyOptionalName(cell, cellObj, 'semantic', SEMANTICS, 'table cell.semantic') ??
+        copyOptionalBoolean(cell, cellObj, 'bold', 'table cell.bold');
+      if (cellErr) return { ok: false, error: cellErr };
       row.push(cellObj);
     }
     rows.push(row);
@@ -893,19 +859,8 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
     }
     result.highlight = data.highlight as number[];
   }
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `table.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'table.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
-
+  const err = copyFrameText(data, result, 'table');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
@@ -1016,18 +971,8 @@ function validateImageData(data: Record<string, unknown>): { ok: true; data: Ima
   if (isBlank(data.alt as string)) return { ok: false, error: 'image.alt must not be empty' };
 
   const result: ImageData = { format, bytes: data.bytes, alt: data.alt as string };
-  for (const k of ['title', 'subtitle', 'context'] as const) {
-    if (data[k] !== undefined) {
-      const err = checkString(data[k], 256, `image.${k}`);
-      if (err) return { ok: false, error: err };
-      result[k] = data[k] as string;
-    }
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'image.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
+  const err = copyFrameText(data, result, 'image');
+  if (err) return { ok: false, error: err };
   return { ok: true, data: result };
 }
 
