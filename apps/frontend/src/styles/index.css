@@ -214,6 +214,13 @@ button {
   height: 100%;
   min-height: 0;
 }
+/* A document, source and a table stand on black inside their frame. */
+.document-viewport,
+.code-viewport,
+.table-viewport {
+  position: relative;
+  background: #000;
+}
 
 /* Conversation corner accents: placement from #conversation .corner-a/b in
    the approved v16 composition. */
@@ -3318,10 +3325,6 @@ button {
 }
 
 /* Document */
-.document-viewport {
-  position: relative;
-  background: #000;
-}
 .document-viewport__inner {
   position: absolute;
   z-index: 1;
@@ -3465,10 +3468,6 @@ button {
 }
 
 /* Code */
-.code-viewport {
-  position: relative;
-  background: #000;
-}
 /* The table viewport shares this mask: it sits in the same frame. Its
    lower row is the frame's lower step (the clip's 4.6% at the bottom left;
    a share of the content box, so a little less under the table's top
@@ -3554,10 +3553,6 @@ button {
    only when they overflow. Thin rules, not cards; the header in the tech
    face; quantities in mono, set to the end so digits line up; a highlighted
    row carries the hot-line accent. */
-.table-viewport {
-  position: relative;
-  background: #000;
-}
 /* The mask's top padding and the meta line stand above the scroll, so the
    sticky header is the scroll's top edge: a row scrolling up passes under it,
    never into a band above it, and the header stays below the frame's
