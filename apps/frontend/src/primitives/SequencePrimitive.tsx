@@ -1,20 +1,11 @@
 import { useCallback, useMemo } from 'react';
-import type { NoteData, Semantic, SequenceDiagramData } from '../controller/types';
+import type { NoteData, SequenceDiagramData } from '../controller/types';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
 import { LABEL_HEIGHT, SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
-
-const colors: Record<Semantic, string> = {
-  red: 'var(--red)',
-  orange: 'var(--orange)',
-  green: 'var(--green)',
-  cyan: 'var(--cyan)',
-  amber: 'var(--amber)',
-  paper: 'var(--paper)',
-  muted: 'var(--muted)',
-};
+import { SEMANTIC_COLOR } from '../design/tokens';
 
 const pathThrough = (points: Point[]) =>
   points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
@@ -99,9 +90,9 @@ export function SequencePrimitive({
       marks: [],
       links: [],
       sketch: {
-        boxes: layout.actors.map(({ actor, box }) => ({ box, tone: actor.id === anchoredActorId ? 'var(--orange)' : colors[actor.semantic ?? 'paper'] })),
+        boxes: layout.actors.map(({ actor, box }) => ({ box, tone: actor.id === anchoredActorId ? 'var(--orange)' : SEMANTIC_COLOR[actor.semantic ?? 'paper'] })),
         lines: [
-          ...layout.actors.map(({ actor, x, box, lifelineEnd }) => ({ points: [{ x, y: box.y + box.height }, { x, y: lifelineEnd }], tone: colors[actor.semantic ?? 'paper'] })),
+          ...layout.actors.map(({ actor, x, box, lifelineEnd }) => ({ points: [{ x, y: box.y + box.height }, { x, y: lifelineEnd }], tone: SEMANTIC_COLOR[actor.semantic ?? 'paper'] })),
           ...layout.messages.map((item) => ({ points: item.points, tone: item.message.active ? 'var(--orange)' : 'var(--paper)' })),
         ],
       },
@@ -117,7 +108,7 @@ export function SequencePrimitive({
     <g className="sequence-actors">
       {layout.actors.map(({ actor, box, labelLines, labelX, labelY, subY, subLines, marker }, index) => {
         const isAnchored = anchoredActorId !== undefined && actor.id === anchoredActorId;
-        const color = isAnchored ? 'var(--orange)' : colors[actor.semantic ?? 'paper'];
+        const color = isAnchored ? 'var(--orange)' : SEMANTIC_COLOR[actor.semantic ?? 'paper'];
         const { width, height } = box;
         return (
           <g key={actor.id} transform={`translate(${box.x} ${box.y})`}>
@@ -209,7 +200,7 @@ export function SequencePrimitive({
               y1={box.y + box.height}
               x2={x}
               y2={lifelineEnd}
-              stroke={colors[actor.semantic ?? 'paper']}
+              stroke={SEMANTIC_COLOR[actor.semantic ?? 'paper']}
               strokeOpacity="0.28"
               strokeDasharray="4 6"
               vectorEffect="non-scaling-stroke"

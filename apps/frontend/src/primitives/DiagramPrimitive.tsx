@@ -5,17 +5,9 @@ import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
+import { SEMANTIC_COLOR } from '../design/tokens';
 
-const colors: Record<Semantic, string> = {
-  red: 'var(--red)',
-  orange: 'var(--orange)',
-  green: 'var(--green)',
-  cyan: 'var(--cyan)',
-  amber: 'var(--amber)',
-  paper: 'var(--paper)',
-  muted: 'var(--muted)',
-};
-const SEMANTICS = Object.keys(colors) as Semantic[];
+const SEMANTICS = Object.keys(SEMANTIC_COLOR) as Semantic[];
 
 // The arrowhead at an edge's target is ARROW_LENGTH user units, which the
 // layout keeps labels clear of: it scales with the drawing, as the node
@@ -135,7 +127,7 @@ export function DiagramPrimitive({
   // map draws.
   const map = useMemo<DrawingMap>(() => {
     const indexOf = new Map(layout.nodes.map(({ node }, index) => [node.id, index]));
-    const toneOf = (semantic?: Semantic) => colors[semantic ?? 'paper'];
+    const toneOf = (semantic?: Semantic) => SEMANTIC_COLOR[semantic ?? 'paper'];
     // An edge drawn as stubs is linked by its two stub lines: where one
     // leaves the view, the rim names the edge's far end, as its names do (a
     // line several edges share is a link for each, so each far end is
@@ -187,7 +179,7 @@ export function DiagramPrimitive({
   const lit = litEdges(data);
   const edges = layout.edges.map((laidOut, index) => {
     const { edge } = laidOut;
-    return { ...laidOut, key: `${edge.from}-${edge.to}-${index}`, index, active: lit(edge), color: colors[edge.semantic ?? 'paper'] };
+    return { ...laidOut, key: `${edge.from}-${edge.to}-${index}`, index, active: lit(edge), color: SEMANTIC_COLOR[edge.semantic ?? 'paper'] };
   });
   // Stubs, each drawn once: the stubs leaving one side of a node share a
   // line and a label, and the layout shares them only between edges of one
@@ -247,7 +239,7 @@ export function DiagramPrimitive({
               markerUnits="userSpaceOnUse"
               orient="auto"
             >
-              <path d="M 0 0 L 10 5 L 0 10 Z" fill={colors[semantic]} />
+              <path d="M 0 0 L 10 5 L 0 10 Z" fill={SEMANTIC_COLOR[semantic]} />
             </marker>
           ))}
         </defs>
@@ -294,7 +286,7 @@ export function DiagramPrimitive({
           {layout.nodes.map(({ node, box, lines, ruleY }, index) => {
             const isAnchored = hasAnchoredNode && node.id === anchoredNodeId;
             const state = node.state ?? 'todo';
-            const color = isAnchored ? 'var(--orange)' : colors[node.semantic ?? 'paper'];
+            const color = isAnchored ? 'var(--orange)' : SEMANTIC_COLOR[node.semantic ?? 'paper'];
             // A blocked node is framed in red even when a note anchors it: the
             // anchor still shows in the label, the glow, and the badge or
             // leader. The frame's stroke is set here only; the stylesheet
