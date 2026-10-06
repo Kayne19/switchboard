@@ -117,9 +117,14 @@ const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
     ],
   },
   signature: {
-    why: "an image's bytes must start with the signature its format names: a cross-field check over decoded bytes (the schema pins the base64 alphabet, padding and length)",
+    why:
+      "an image's bytes must start with the signature its format names, a cross-field check over decoded bytes, and " +
+      'their base64 must be a multiple of four characters long, which a pattern states only with a repeated group: ' +
+      "Ajv's regular expression then overflows its stack on an image of about 3 MiB, under the 8 MiB cap (the schema " +
+      'pins the base64 alphabet, the padding and the length cap)',
     cases: [
       'image_bytes_jpeg_named_png', 'image_bytes_png_named_jpeg', 'image_bytes_riff_wave_named_webp',
+      'image_bytes_not_a_multiple_of_four',
     ],
   },
 };
