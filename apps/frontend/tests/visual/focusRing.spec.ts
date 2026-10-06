@@ -10,8 +10,8 @@ import { FRAME_GEOMETRIES, focusRingFault, openScene, runActions } from './helpe
 // ring, and no box that clips cuts it. The browser drew its own ring on
 // RETURN / ESC, on the scrolls Chrome puts in the tab order (a note's text,
 // the answer, a scrolled drawing) and on a calendar's paged days; an object's
-// ring was cut away whole by its box; both HISTORY rings lost their right
-// side to the rail's edge.
+// ring was cut away whole by its box, and a metric card's by its own
+// chamfer; both HISTORY rings lost their right side to the rail's edge.
 
 const fixtures = ['idle', 'conversation', 'training', 'architecture', 'email', 'code', 'results', 'handoff', 'comparison', 'figure', 'plan', 'composed', 'topology', 'pipeline', 'trace', 'calendar', 'calendar-day', 'calendar-month', 'calendar-agenda', 'tasks', 'timer', 'weather', 'inbox', 'today'];
 
@@ -19,16 +19,24 @@ const fixtures = ['idle', 'conversation', 'training', 'architecture', 'email', '
 async function tabThrough(page: Page, where: string, within: string): Promise<{ reached: string[]; faults: string[] }> {
   const reached: string[] = [];
   const faults: string[] = [];
+  // The walk ends where it began: the controls reached are held by the
+  // element, so two with one class and one name are two.
+  await page.evaluate(() => {
+    (window as unknown as { reachedControls: WeakSet<Element> }).reachedControls = new WeakSet();
+  });
   for (let step = 0; step < 60; step += 1) {
     await page.keyboard.press('Tab');
     const seen = await page.evaluate((scope) => {
       const control = document.activeElement as HTMLElement | null;
       if (!control || !control.closest(scope)) return null;
-      return { key: `${control.className} ${control.getAttribute('aria-label') ?? control.textContent?.slice(0, 40)}`, visible: control.matches(':focus-visible') };
+      const reachedControls = (window as unknown as { reachedControls: WeakSet<Element> }).reachedControls;
+      const again = reachedControls.has(control);
+      reachedControls.add(control);
+      return { again, key: `${control.className} ${control.getAttribute('aria-label') ?? control.textContent?.slice(0, 40)}`, visible: control.matches(':focus-visible') };
     }, within);
     if (!seen) continue;
+    if (seen.again) break;
     const fault = await page.evaluate(focusRingFault);
-    if (reached.includes(seen.key)) break;
     reached.push(seen.key);
     if (!seen.visible) faults.push(`${where} ${seen.key}: reached by Tab but not :focus-visible`);
     if (fault) faults.push(`${where} ${fault}`);
@@ -60,6 +68,17 @@ for (const geometry of FRAME_GEOMETRIES) {
         reached += focus.reached.length;
       }
     }
+    // A metric in a cluster, which no fixture draws: its card is clipped to
+    // its chamfer and lights its edge.
+    await openScene(page, 'idle');
+    await runActions(page, [
+      { op: 'clear' },
+      ...['GPU', 'MEMORY', 'P95 LATENCY'].map((label, index) => ({ op: 'show', id: `metric-${index}`, type: 'metric', role: 'primary', data: { label, value: `${40 + index}%` } })),
+    ]);
+    await page.waitForTimeout(700);
+    const cluster = await tabThrough(page, 'metric cluster', '.metrics--cluster');
+    faults.push(...cluster.faults);
+    expect(cluster.reached).toHaveLength(3);
     expect(faults).toEqual([]);
     expect(reached).toBeGreaterThan(fixtures.length);
   });

@@ -203,10 +203,16 @@ button {
 .rail-handle:focus-visible,
 .focus-layer__return:focus-visible,
 .transcript__return:focus-visible,
-.transcript__send:focus-visible,
-.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible {
+.transcript__send:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
+}
+/* A metric in a cluster is a card clipped to its chamfer, which would clip
+   an outline away whole; its edge is already a line (its ground round its
+   black face), so its ring is that edge in the ring's colour. */
+.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible {
+  outline: none;
+  background: var(--orange);
 }
 /* A region fills a box that clips past its edge (a frame, a scroll), so it
    draws the ring on its edge, inside. A scroll draws it as its outline,

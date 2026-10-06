@@ -88,7 +88,8 @@ describe('the focus ring', () => {
   it('is drawn by every element the page puts in the tab order', () => {
     const { classes, where } = tagged(/<\w+\b(?:=>|[^>])*?\btabIndex=(?:=>|[^>])*>/gs);
     expect(where).toEqual([]);
-    const reached = (name: string) => ringed(name) || control.selectors.some((selector) => selector.includes(`.${name}[`) || selector.includes(`.${name}:`));
+    const lit = (name: string) => rules().some((rule) => rule.selectors.some((selector) => selector.includes(`.${name}[`) && selector.endsWith(':focus-visible')) && /background:\s*var\(--orange\)/.test(rule.body));
+    const reached = (name: string) => ringed(name) || lit(name) || control.selectors.some((selector) => selector.includes(`.${name}[`) || selector.includes(`.${name}:`));
     expect(classes.sort()).toEqual(['calendar-grid', 'drawing-viewport__scroll', 'focusable-content', 'list-viewport__scroll', 'metric-row']);
     // The paged days carry the grid's class first; the ring names the pages.
     expect(ringed('calendar-pages')).toBe(true);
@@ -110,13 +111,20 @@ describe('the focus ring', () => {
     expect([...scrolling].filter((selector) => !ringed(selector.slice(1)))).toEqual([]);
   });
 
-  it('is never taken away: no rule draws no outline on a focused control but for a region drawn over', () => {
+  it('is never taken away: no rule draws no outline on a focused control but for a region drawn over and a card that lights its edge', () => {
     const removed = rules()
       .filter((rule) => /outline:\s*(?:none|0)\b/.test(rule.body))
       .flatMap((rule) => rule.selectors)
       .filter((selector) => /:focus/.test(selector));
-    expect(removed).toEqual(['.focusable-content:focus-visible', '.calendar-pages:focus-visible', '.list-viewport__scroll:focus-visible', '.drawing-viewport__scroll:focus-visible']);
-    expect(removed.every((selector) => drawnOver(selector.slice(1, -':focus-visible'.length)))).toBe(true);
+    const cluster = '.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible';
+    expect(removed).toEqual([cluster, '.focusable-content:focus-visible', '.calendar-pages:focus-visible', '.list-viewport__scroll:focus-visible', '.drawing-viewport__scroll:focus-visible']);
+    expect(removed.slice(1).every((selector) => drawnOver(selector.slice(1, -':focus-visible'.length)))).toBe(true);
+    // A metric card in a cluster is clipped to its chamfer, which would clip an
+    // outline away whole: its edge (its ground round its black face) takes the
+    // ring's colour.
+    expect(ruleNaming(cluster).body).toMatch(/background:\s*var\(--orange\);/);
+    expect(ruleNaming('.metrics--primary .metric-row').body).toMatch(/clip-path:\s*polygon/);
+    expect(ruleNaming('.metrics--primary .metric-row::before').body).toMatch(/inset:\s*1px;[\s\S]*background:\s*#000;/);
   });
 
   it('reaches no further than a HISTORY button keeps from its card\'s right edge, which clips', () => {

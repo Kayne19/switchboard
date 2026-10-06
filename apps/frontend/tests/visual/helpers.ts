@@ -183,7 +183,13 @@ export function focusRingFault(): string | null {
     const border = getComputedStyle(field).borderTopColor;
     return border.startsWith('rgba(241, 90, 36') || border === orange ? null : `${name}: its field's border is not lit (${border})`;
   }
-  if (style.outlineStyle === 'solid' && style.outlineWidth === '1px' && style.outlineColor === orange) reach = parseFloat(style.outlineOffset) + 1;
+  // A control clipped to a shape of its own clips its own outline; one whose
+  // edge is a line (a metric card in a cluster) lights that edge instead.
+  const clipped = style.clipPath !== 'none';
+  if (style.outlineStyle === 'solid' && style.outlineWidth === '1px' && style.outlineColor === orange) {
+    reach = parseFloat(style.outlineOffset) + 1;
+    if (clipped && reach > 0) return `${name}: its own clip path cuts its ring`;
+  } else if (style.outlineStyle === 'none' && clipped && style.backgroundColor === orange) reach = 0;
   else if (style.outlineStyle === 'none' && over(control)) reach = 0;
   else if (style.outlineStyle === 'none' && over(control.parentElement)) [reach, ringed] = [0, control.parentElement!];
   if (reach === null) return `${name}: not the page's ring (outline ${style.outlineStyle} ${style.outlineWidth} ${style.outlineColor})`;
