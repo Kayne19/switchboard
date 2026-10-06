@@ -31,6 +31,11 @@ async function setAside(page: Page) {
   return (await page.locator('.content-rail__details .tool-activity-slot--away').count()) > 0;
 }
 
+// Set aside, the panel is unseen (left to assistive technology).
+async function unseen(page: Page) {
+  return page.locator('.content-rail__details .tool-activity-slot').evaluate((slot) => getComputedStyle(slot).opacity === '0');
+}
+
 function overlap(first: Box, second: Box) {
   return !(
     first.x + first.width <= second.x
@@ -284,9 +289,13 @@ for (const viewport of viewports) {
 
       const metricsBoxDuring = await page.locator('.content-rail__details .metrics').boundingBox();
       const chatBoxDuring = await page.locator('.content-rail__details .live-chat-card').boundingBox();
-      if (await setAside(page)) {
-        // Under the column, with no room for the panel whole: Damocles names the tool.
-        await expect(page.locator('.content-rail__details .tool-activity')).toBeHidden();
+      // Under the column (a portrait stage) a live response and a metric leave
+      // no room for the panel whole; beside it there always is.
+      const aside = await setAside(page);
+      expect(aside).toBe(viewport.height > viewport.width);
+      if (aside) {
+        // Damocles names the tool.
+        expect(await unseen(page)).toBe(true);
         await expect(page.locator('.content-rail [data-testid="damocles-presence"]')).toContainText(/WORKING \/ route_check/i);
       } else {
         await expect(page.locator('.content-rail__details .tool-activity')).toBeVisible();
@@ -389,8 +398,10 @@ for (const viewport of viewports) {
       await page.waitForTimeout(300);
 
       const during = await settledBoxes();
+      // Crowded under the column (a portrait stage), the panel is set aside; beside it, never.
       const aside = await setAside(page);
-      if (aside) await expect(page.locator('.content-rail__details .tool-activity')).toBeHidden();
+      expect(aside).toBe(viewport.height > viewport.width);
+      if (aside) expect(await unseen(page)).toBe(true);
       const activityBox = (await page.locator('.content-rail__details .tool-activity').boundingBox())!;
       surfaces.forEach((selector, index) => {
         if (!aside) expect(overlap(activityBox, during[index]), `activity covers ${selector}`).toBe(false);
