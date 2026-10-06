@@ -99,7 +99,9 @@ export function SceneRenderer() {
   // Opacity still fades. Without it every layout animation ignored the
   // setting (DESIGN_SYSTEM.md, "Respect prefers-reduced-motion"), and the
   // visual goldens, taken under reduced motion, were compared with a frame
-  // from the middle of the move or with the settled page, by chance.
+  // from the middle of the move or with the settled page, by chance. The
+  // elements that move take no layout props at all then (useLayoutMotion):
+  // motion's instant layout animation could leave a box at its old size.
   return (
     <MotionConfig reducedMotion="user">
       <SurfaceBoundary

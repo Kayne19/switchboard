@@ -100,7 +100,7 @@ A page-level patch that duplicates one of these responsibilities is usually inco
 | Annotation | Explanation resolves near its semantic target |
 | Clear | Content recedes until only Damocles remains |
 
-Ordinary structural motion should remain quick, generally about 200 to 500 ms. Idle motion and rare flourishes may be slower. Respect `prefers-reduced-motion`.
+Ordinary structural motion should remain quick, generally about 200 to 500 ms. Idle motion and rare flourishes may be slower. Respect `prefers-reduced-motion`: under it nothing moves. A recomposition is drawn where it ends, and no element is handed to motion's layout projection (`useLayoutMotion`), so no box can be left at an old size; focus fades in over the object, which stays in its slot; opacity still fades.
 
 ## Change policy
 

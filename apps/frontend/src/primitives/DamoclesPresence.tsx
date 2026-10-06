@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useController } from '../controller/context';
 import type { ActivityState } from '../controller/types';
 import { useFloatingMotion } from '../hooks/useFloatingMotion';
+import { useLayoutMotion } from '../hooks/useLayoutMotion';
 import { ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS, useLingeringValue } from '../hooks/useLingeringValue';
 import { DamoclesGlyph } from './DamoclesGlyph';
 import { activitySummary } from './ToolActivity';
@@ -34,6 +35,7 @@ export function DamoclesPresence({
   // animation frames, so level changes do not rerender the scene.
   const voiceLevel = useController().voiceRuntime?.getVoiceLevel;
   const shownActivity = useLingeringValue(activity, ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS);
+  const layoutMotion = useLayoutMotion({ layoutId, layout: 'position' });
   const { y, rotate } = useFloatingMotion({ listening, amplitude: size === 'idle' ? 8.5 : size === 'conversation' ? 5.5 : 4 });
   const content = (
     <>
@@ -54,7 +56,7 @@ export function DamoclesPresence({
     </>
   );
   return (
-    <motion.div className={`damocles-presence damocles-presence--${size}`} layoutId={layoutId} layout="position" transition={{ layout: { duration: 0.42, ease: [0.22,0.61,0.36,1] } }} data-testid="damocles-presence">
+    <motion.div className={`damocles-presence damocles-presence--${size}`} {...layoutMotion} transition={{ layout: { duration: 0.42, ease: [0.22,0.61,0.36,1] } }} data-testid="damocles-presence">
       {interactive ? (
         <button className="damocles-presence__button" type="button" onClick={onToggleListening} aria-pressed={listening} aria-label={listening ? 'Stop listening' : 'Start listening'}>{content}</button>
       ) : (

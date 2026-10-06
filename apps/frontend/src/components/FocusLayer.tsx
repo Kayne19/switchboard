@@ -4,6 +4,7 @@ import type { ControllerState, NoteData, SceneObject } from '../controller/types
 import { noteTarget } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
+import { useLayoutMotion } from '../hooks/useLayoutMotion';
 import { ObjectView } from './renderObject';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
@@ -44,6 +45,8 @@ export function FocusLayer({
   onClose: () => void;
 }) {
   const noted = notes.length > 0;
+  // The focused object shares its identity with the object in its slot.
+  const shared = useLayoutMotion({ layoutId: object ? `switchboard-object-${object.id}` : undefined });
   return (
     <AnimatePresence>
       {object ? (
@@ -62,7 +65,7 @@ export function FocusLayer({
         >
           <motion.div
             className={`focus-layer__content focus-layer__content--${object.type}${noted ? ' focus-layer__content--noted' : ''}`}
-            layoutId={`switchboard-object-${object.id}`}
+            {...shared}
             transition={{ layout: { duration: 0.46, ease: [0.22, 0.61, 0.36, 1] } }}
           >
             <div className="focus-layer__header tech micro">
