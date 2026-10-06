@@ -415,10 +415,8 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         "chart data",
     )?;
 
-    let kind = match data.get("kind") {
-        None => None,
-        Some(v) => Some(read_name(Some(v), &CHART_KINDS, "chart.kind")?),
-    };
+    let mut out = Map::new();
+    copy_optional_name(data, &mut out, "kind", &CHART_KINDS, "chart.kind")?;
     let labels = match data.get("labels") {
         None => None,
         Some(v) => {
@@ -467,11 +465,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         clean_series.push(Value::Object(item));
     }
 
-    let mut out = Map::new();
     out.insert("series".into(), Value::Array(clean_series));
-    if let Some(kind) = kind {
-        out.insert("kind".into(), kind.into());
-    }
     if let Some(labels) = labels {
         out.insert("labels".into(), Value::Array(labels.clone()));
     }
@@ -2063,10 +2057,7 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
 
             let ty = read_name(map.get("type"), &CONTENT_TYPES, "show.type")?;
 
-            let role_opt = match map.get("role") {
-                Some(role) => Some(read_name(Some(role), &ROLES, "show.role")?),
-                None => None,
-            };
+            copy_optional_name(map, &mut out, "role", &ROLES, "show.role")?;
 
             let data_obj = map
                 .get("data")
@@ -2094,9 +2085,6 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
             out.insert("op".into(), "show".into());
             out.insert("id".into(), clean_id.into());
             out.insert("type".into(), ty.into());
-            if let Some(r) = role_opt {
-                out.insert("role".into(), r.into());
-            }
             out.insert("data".into(), clean_data);
         }
         "hide" => {
