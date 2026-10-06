@@ -57,7 +57,7 @@
 // where no note's absence helps, each card takes the place that hides the
 // least.
 
-import { clipSegment, hiddenTraceLength, segmentsMeet, withoutRepeats, type Point, type Rect } from './segments';
+import { clipSegment, hiddenTraceLength, intersection, overlapArea, segmentsMeet, withoutRepeats, type Point, type Rect } from './geometry';
 
 export interface NoteToPlace {
   id: string;
@@ -182,17 +182,6 @@ type Standing = 'clear' | 'level' | 'skirting';
 // another card, level with its point, across a bar chart's plot border).
 // From `far` on, a card is astray.
 const SHORT = { clear: 0, fill: 1, label: 2, far: 3, route: 3.5, data: 4, more: 5 } as const;
-
-function overlapArea(a: Rect, b: Rect): number {
-  const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
-  const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
-  return width > 0 && height > 0 ? width * height : 0;
-}
-
-function intersection(a: Rect, b: Rect): Rect | undefined {
-  const rect = { left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) };
-  return rect.right > rect.left && rect.bottom > rect.top ? rect : undefined;
-}
 
 function inflate(rect: Rect, by: number): Rect {
   return { left: rect.left - by, top: rect.top - by, right: rect.right + by, bottom: rect.bottom + by };

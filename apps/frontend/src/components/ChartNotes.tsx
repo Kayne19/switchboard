@@ -12,11 +12,9 @@ import {
   type ChartAnchor,
   type ChartScales,
   type ChartSide,
-  type ViewPoint,
-  type ViewRect,
 } from '../primitives/chartGeometry';
 import { layoutNotes, NOTE_CARD_CUT, routeLeader, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
-import { crispLine, type Point, type Rect } from '../primitives/segments';
+import { crispLine, type Point, type Rect } from '../primitives/geometry';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** One note on a chart: a note object, or the spoken explanation standing in for one. */
@@ -72,14 +70,14 @@ interface Placed {
   area: Rect;
   /** The chart's frame when placed, and where each named point's leader landed in it and on the layer. */
   frame: { width: number; height: number };
-  points: Record<string, { view: ViewPoint; layer: Point }>;
+  points: Record<string, { view: Point; layer: Point }>;
 }
 
 // The layout placed for one size, moved to another within its step: a card
 // that names a point moves as its point does, its leader with it; one that
 // names none keeps its distance from the corner it is nearest. Only for the
 // frames a resize passes through: the size it rests at is placed afresh.
-function follow(placed: Placed, area: Rect, toLayer: ((point: ViewPoint) => Point) | undefined, frame: { width: number; height: number }): NotesLayout {
+function follow(placed: Placed, area: Rect, toLayer: ((point: Point) => Point) | undefined, frame: { width: number; height: number }): NotesLayout {
   const next: NotesLayout = { cards: {}, widths: placed.layout.widths, leaders: {}, away: placed.layout.away };
   for (const [key, card] of Object.entries(placed.layout.cards)) {
     const point = placed.points[key];
@@ -111,7 +109,7 @@ function chartNotePoint(
   note: NoteData,
   chart: SceneObject<ChartData>,
   scales?: ChartScales,
-): { point: ViewPoint; from?: ChartSide; bar?: ViewRect; value?: ViewRect } | undefined {
+): { point: Point; from?: ChartSide; bar?: Rect; value?: Rect } | undefined {
   if (note.anchor?.target !== chart.id || note.anchor.x === undefined) return undefined;
   return chartNoteTarget(chart.data, { x: note.anchor.x, series: note.anchor.series }, scales);
 }
@@ -301,7 +299,7 @@ export function ChartNotes({
       const { kx, ky } = screenScale(layer, layerRect);
       const field: NoteField = { area: { left: 0, top: 0, right: layerRect.width / kx, bottom: layerRect.height / ky } };
 
-      let toLayer: ((point: ViewPoint) => Point) | undefined;
+      let toLayer: ((point: Point) => Point) | undefined;
       const svg = svgOf();
       const svgRect = svg?.getBoundingClientRect();
       // The frame the chart draws in, decided from its slot as the chart
@@ -347,7 +345,7 @@ export function ChartNotes({
           return;
         }
       }
-      const rectToLayer = (rect: ViewRect): Rect => {
+      const rectToLayer = (rect: Rect): Rect => {
         const a = toLayer!({ x: rect.left, y: rect.top });
         const b = toLayer!({ x: rect.right, y: rect.bottom });
         return { left: a.x, top: a.y, right: b.x, bottom: b.y };
