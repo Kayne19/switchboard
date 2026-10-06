@@ -455,7 +455,7 @@ timer is held at `remaining` whatever the clock does; a `startedAt` still
 to come (the agent's clock ahead of the page's) reads as nothing gone yet,
 and the countdown still runs to `endsAt`. The share gone is a bar that
 sweeps from tick to tick by a CSS transition; with reduced motion the
-transition goes and the bar steps with the digits. Tests drive the clock:
+transition goes and the bar steps at each tick. Tests drive the clock:
 Vitest's fake timers in the unit tests, Playwright's clock in the browser.
 
 ### Timers and forecasts in their slot
@@ -530,19 +530,19 @@ counts ("06 TASKS", "33 ROWS", "54 LINES", "04 PARAGRAPHS", a week's
 hidden days "MON-TUE / 07 EVENTS"); a row of which no more than a sliver
 shows counts as past the edge; an item drawn as several rows (an event
 on each day it runs, or cut at midnight across two columns: one
-`data-item` name) counts once, and only where every one of them lies past
-that edge; it says MORE where none does. A table's
-rows pass under its header: they are counted, and its top edge drawn,
-below the header. A tap on the tag turns a page and does not expand the
-object. A focused list takes the keys a drawing takes (an arrow moves it
-a line, Space and Page Down a page on, Shift+Space and Page Up a page
-back, Home and End to the ends), each marked handled so Space never
-expands the object; Enter still does. A pane that scrolls only across (a
-wide table on a phone, source with long lines) takes them across, as a
-drawing that scrolls only across does: the left and right arrows a line,
-Space and the page keys a page, Home and End to either side. It opens on the item a note names,
-never under the fade, and keeps the reader's place through an update.
-Focus gives the list the whole stage.
+`data-item` name) counts once, and only where every one of them lies
+past that edge; it says MORE where none does. A table's rows pass under
+its header: they are counted, and its top edge drawn, below the header.
+A tap on the tag turns a page and does not expand the object. A focused
+list takes the keys a drawing takes (an arrow moves it a line, Space and
+Page Down a page on, Shift+Space and Page Up a page back, Home and End
+to the ends), each marked handled so Space never expands the object;
+Enter still does. A pane that scrolls only across (a wide table on a
+phone, source with long lines) takes them across, as a drawing that
+scrolls only across does: the left and right arrows a line, Space and
+the page keys a page, Home and End to either side. It opens on the item
+a note names, never under the fade, and keeps the reader's place through
+an update. Focus gives the list the whole stage.
 
 ### Composition & focus
 
