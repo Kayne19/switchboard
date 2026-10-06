@@ -153,6 +153,8 @@ test.describe('a touch screen', () => {
     await page.waitForTimeout(400);
     const days = () => page.locator('.scene .calendar-grid__weekday').allTextContents();
     expect(await days()).toEqual(['WED', 'THU', 'FRI']);
+    // The hours still scroll under a finger: they leave the browser the pan up and down, and no more.
+    expect(await page.locator('.scene .calendar-grid__scroll').evaluate((element) => getComputedStyle(element).touchAction)).toBe('pan-y');
     const hours = (await page.locator('.scene .calendar-grid__scroll').boundingBox())!;
     await swipe(page, hours.x + hours.width * 0.75, hours.y + hours.height / 2, -180);
     await expect.poll(days).toEqual(['FRI', 'SAT', 'SUN']);
@@ -191,14 +193,17 @@ function rimOverCounts() {
   return faults;
 }
 
-test('a calendar list counts events, not the rows that draw them', async ({ page }) => {
-  for (const geometry of FRAME_GEOMETRIES) {
+for (const geometry of FRAME_GEOMETRIES) {
+  test(`${geometry.name}: a calendar list counts events, not the rows that draw them`, async ({ page }) => {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
     for (const scene of scenes) {
       await open(page, scene);
-      expect(await page.evaluate(rimOverCounts), `${scene} at ${geometry.name}`).toEqual([]);
+      expect(await page.evaluate(rimOverCounts), scene).toEqual([]);
     }
-  }
+  });
+}
+
+test('an agenda counts a stay drawn on each of its days once', async ({ page }) => {
   // Twelve days with one stay over all of them and an hour on each: thirteen events, the stay drawn twelve times.
   await page.setViewportSize({ width: 1440, height: 900 });
   await openScene(page, 'idle');
