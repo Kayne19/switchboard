@@ -5,7 +5,7 @@ import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
 import { ArrowGlyph } from './MetricsPrimitive';
 import { StepGlyph } from './ProgressPrimitive';
-import { clockText, dayText, daysFrom, readToday } from './timeLabels';
+import { dayText, daysFrom, readToday, timeOfDay } from './timeLabels';
 import { MetaTitle } from './MetaTitle';
 import type { Slot } from './slot';
 
@@ -47,7 +47,7 @@ export interface TaskDue {
 export function taskDue(task: TaskItem, today: TimeValue | null): TaskDue | null {
   const due = task.due === undefined ? null : parseTimeValue(task.due);
   if (!due) return null;
-  const clock = due.form === 'wall' ? clockText(due) : '';
+  const clock = due.form === 'wall' ? timeOfDay(due) : '';
   if (!today) return { standing: 'unjudged', when: [dayText(due), clock].filter(Boolean).join(' ') };
   const days = daysFrom(today, due);
   if (days < 0) {

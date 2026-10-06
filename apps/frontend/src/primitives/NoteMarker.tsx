@@ -9,6 +9,7 @@
 // and in a list it is the same badge in HTML (`NoteBadge`).
 
 import type { NoteData } from '../controller/types';
+import type { Box } from './geometry';
 
 /** The part of the object `objectId` the drawn note `note` names, which the
  * object marks: a list's `item`, a graph's or a sequence's `node`; nothing
@@ -21,14 +22,7 @@ export function markedPart(note: NoteData | null | undefined, objectId: string):
 /** The marker's size in user units: the one both layouts make room for. */
 export const NOTE_MARKER = { width: 30, height: 15 } as const;
 
-export interface MarkerBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export function NoteMarker({ box, className }: { box: MarkerBox; className: string }) {
+export function NoteMarker({ box, className }: { box: Box; className: string }) {
   return (
     <g className={className} transform={`translate(${box.x}, ${box.y})`}>
       <rect width={box.width} height={box.height} rx="2" fill="rgba(var(--orange-rgb), 0.25)" stroke="var(--orange)" strokeWidth="1" />

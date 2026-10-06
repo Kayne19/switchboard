@@ -10,8 +10,8 @@ import {
   type DiagramLayout,
   type DiagramOrientation,
   type LaidOutEdge,
-  type Point,
 } from '../../src/primitives/diagramLayout';
+import type { Point } from '../../src/primitives/geometry';
 import { leastCpuMs } from './cpuTime';
 
 // Dense graphs (fixtures `topology` and `pipeline`) as a reader meets them:

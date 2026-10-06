@@ -9,13 +9,12 @@ import {
   measureNode,
   nodeFramePath,
   wrapEdgeLabel,
-  type Box,
   type DiagramLayout,
   type DiagramOrientation,
   type EdgeLabel,
   type LaidOutEdge,
-  type Point,
 } from '../../src/primitives/diagramLayout';
+import type { Box, Point } from '../../src/primitives/geometry';
 import { arrowhead, inset, onRoute, overlaps, segmentBox, within } from './drawingGeometry';
 
 const NO_TAGS = { glyph: false, marker: false };

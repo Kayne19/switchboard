@@ -10,11 +10,7 @@
 // recomposes for it, so that what scrolls is one axis.
 
 import { TYPE_FLOOR_PX } from '../design/tokens';
-
-export interface Size {
-  width: number;
-  height: number;
-}
+import type { Size } from './geometry';
 
 /** A line of text a drawing sets, in user units, and the page face whose floor it must keep. */
 export interface DrawingText {

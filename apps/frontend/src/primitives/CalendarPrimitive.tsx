@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import type { CalendarData } from '../controller/types';
 import { parseTimeValue } from '../controller/validation';
-import { useElementSize, type ElementSize } from '../hooks/useElementSize';
+import { useElementSize } from '../hooks/useElementSize';
 import { MeasuredStageDemand } from '../hooks/useStageDemand';
 import {
   agendaEntries,
@@ -9,7 +9,6 @@ import {
   AXIS,
   axisY,
   calendarDay,
-  clockText,
   crowdedColumns,
   dayBars,
   dayLabel,
@@ -22,7 +21,6 @@ import {
   MINUTES_PER_DAY,
   monthRowPlan,
   monthGrid,
-  monthName,
   nowMinutes,
   overlapping,
   packColumns,
@@ -32,17 +30,19 @@ import {
   timedOn,
   timeAxis,
   todayNumber,
-  weekdayName,
   type AgendaItem,
   type DayBar,
   type GridSegment,
   type PlacedEvent,
   type TimeAxis,
 } from './calendarLayout';
+import { countText } from './countText';
+import type { Size } from './geometry';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
 import type { Slot } from './slot';
+import { clockText, monthName, weekdayName } from './timeLabels';
 
 // A calendar in the four views the agent picks (docs/display-tool.md,
 // "calendar"), drawn as one instrument with the table and the progress
@@ -126,7 +126,7 @@ function gridHeadPx(lanes: number): number {
 }
 
 /** The layout a view takes in a body of `size` (its grid's head `headPx` tall); an unmeasured body draws the view whole. `noted`: a note names an event the view shows. */
-export function chooseLayout(data: CalendarData, size: ElementSize, dayCount: number, headPx = gridHeadPx(0), noted = false): LayoutChoice {
+export function chooseLayout(data: CalendarData, size: Size, dayCount: number, headPx = gridHeadPx(0), noted = false): LayoutChoice {
   const measured = size.width > 0 && size.height > 0;
   if (data.view === 'agenda') return { layout: 'agenda', columns: dayCount };
   if (data.view === 'month') {
@@ -198,7 +198,7 @@ interface GridProps {
   data: CalendarData;
   model: CalendarModel;
   marked?: string;
-  size: ElementSize;
+  size: Size;
   columns: number;
 }
 
@@ -666,7 +666,7 @@ function firstPlaces(plans: WeekPlan[], marks: boolean): Map<string, string> {
   return first;
 }
 
-function MonthView({ data, model, marked, size, marks }: { data: CalendarData; model: CalendarModel; marked?: string; size: ElementSize; marks: boolean }) {
+function MonthView({ data, model, marked, size, marks }: { data: CalendarData; model: CalendarModel; marked?: string; size: Size; marks: boolean }) {
   const grid = monthGrid(parseTimeValue(data.start)?.dayNumber ?? 0);
   const rows = grid.weeks.length;
   // A month too small for titles marks each day's events and lists them
@@ -837,7 +837,7 @@ function DayMarks({ cell, model, marked, isFirst, room }: { cell: WeekPlan['cell
   const others = noted ? ordered.filter((placed) => placed !== noted) : ordered;
   const { shown, counted } = marksLine(others.length, room, noted !== undefined);
   return (
-    <span className="calendar-marks" aria-label={`${ordered.length} ${ordered.length === 1 ? 'event' : 'events'}`}>
+    <span className="calendar-marks" aria-label={countText(ordered.length, ['event', 'events'])}>
       {noted ? (
         <span className={eventClasses('calendar-mark', noted, model)} data-item={noted.event.id} title={noted.event.title}>
           <NoteBadge className="calendar-mark__note" />
@@ -888,7 +888,7 @@ function AgendaList({ model, days, marked, compact = false }: { model: CalendarM
                 <span className="calendar-agenda__day-name">{dayLabel(entry.day)}</span>
                 {entry.day === model.today ? <span className="calendar-agenda__today">TODAY</span> : null}
                 {/* One day's count is the meta line's already. */}
-                {days.length > 1 || count === 0 ? <span className="calendar-agenda__day-count">{count === 0 ? 'NOTHING SCHEDULED' : `${count} ${count === 1 ? 'EVENT' : 'EVENTS'}`}</span> : null}
+                {days.length > 1 || count === 0 ? <span className="calendar-agenda__day-count">{count === 0 ? 'NOTHING SCHEDULED' : countText(count, ['EVENT', 'EVENTS'])}</span> : null}
               </div>
               {rows.length > 0 ? <ol className="calendar-agenda__items">{rows}</ol> : null}
             </li>
@@ -971,7 +971,7 @@ export function CalendarPrimitive({ data, marked, slot = 'primary' }: { data: Ca
       <MetaTitle title={data.title ?? `${VIEW_NAMES[data.view]} / ${rangeText(data)}`} slot={slot} className="calendar__meta-title" />
       <span className="calendar__meta-range">
         {(slot === 'primary' || data.title) && model.days.length > 1 ? `${rangeText(data)} / ` : ''}
-        {count} {count === 1 ? 'EVENT' : 'EVENTS'}
+        {countText(count, ['EVENT', 'EVENTS'])}
         {model.outside > 0 ? ` / ${model.outside} OUT OF VIEW` : ''}
       </span>
     </div>

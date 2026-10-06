@@ -27,6 +27,7 @@ import {
 import { SEMANTIC_COLOR } from '../design/tokens';
 import { useElementSize } from '../hooks/useElementSize';
 import { useLeastHeight } from '../hooks/useStageDemand';
+import type { Point } from './geometry';
 import { ListViewport } from './ListViewport';
 import type { Slot } from './slot';
 
@@ -71,14 +72,14 @@ function valueGridLines(scales: ChartScales): Array<{ value: number; tick: boole
   return [...valueTicks.map((value) => ({ value, tick: true })), ...ends.map((value) => ({ value, tick: false }))];
 }
 
-const point = (p: { x: number; y: number }) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
+const point = (p: Point) => `${p.x.toFixed(2)} ${p.y.toFixed(2)}`;
 
-function linePath(points: Array<{ x: number; y: number }>): string {
+function linePath(points: Array<Point>): string {
   return points.map((p, index) => `${index === 0 ? 'M' : 'L'} ${point(p)}`).join(' ');
 }
 
 // The line's path closed down to the baseline and back, for the fill.
-function areaPath(points: Array<{ x: number; y: number }>, baseY: number): string {
+function areaPath(points: Array<Point>, baseY: number): string {
   if (points.length === 0) return '';
   const first = points[0];
   const last = points[points.length - 1];

@@ -13,7 +13,7 @@ import {
   type NoteToPlace,
   type PlaceOptions,
 } from '../../src/primitives/notePlacement';
-import { hiddenTraceLength, type Point, type Rect } from '../../src/primitives/segments';
+import { hiddenTraceLength, type Point, type Rect } from '../../src/primitives/geometry';
 import { leastCpuMs } from './cpuTime';
 
 // Each card's box, as most of these cases read it.

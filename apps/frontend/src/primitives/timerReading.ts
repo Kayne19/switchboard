@@ -1,5 +1,7 @@
 import type { Timer } from '../controller/types';
+import { monoAdvance } from '../design/tokens';
 import { parseTimeValue, type TimeValue } from '../controller/validation';
+import { timeOfDay, two } from './timeLabels';
 
 // What a timer reads at a moment of the page clock, and how a set of timers
 // is laid out for the box it is drawn in. Pure, so the boundaries (exactly
@@ -15,7 +17,7 @@ export function instantMs(time: TimeValue): number {
 export function instantClock(value: string): string | null {
   const time = parseTimeValue(value);
   if (!time || time.form !== 'instant') return null;
-  const clock = `${String(time.hour).padStart(2, '0')}:${String(time.minute).padStart(2, '0')}`;
+  const clock = timeOfDay(time);
   return /(?:Z|[+-]00:00)$/.test(value) ? `${clock} UTC` : clock;
 }
 
@@ -59,8 +61,6 @@ export function readTimer(timer: Timer, now: number): TimerReading {
   return { phase: 'running', seconds: Math.ceil(left / 1000), over: 0, gone: spanMs !== null && start !== null ? clamp01((now - start) / spanMs) : null, span };
 }
 
-const two = (value: number) => String(value).padStart(2, '0');
-
 /** Seconds as a countdown reads them: `MM:SS`, `H:MM:SS` from an hour, `ND HH:MM:SS` from a day. */
 export function formatCountdown(totalSeconds: number): string {
   const seconds = Math.max(0, Math.floor(totalSeconds));
@@ -75,8 +75,10 @@ export function formatCountdown(totalSeconds: number): string {
 
 // ---- layout ------------------------------------------------------------------
 
-/** A digit's advance in the mono face, as a share of its size. */
-export const DIGIT_ADVANCE = 0.62;
+/** A digit's advance in the mono face, as a share of its size: the face's
+ * at the digits' -0.03em tracking (.timer__digits), and 0.05 to spare, so a
+ * countdown sized to its cell keeps clear of the cell's sides (0.62). */
+export const DIGIT_ADVANCE = monoAdvance(1, -0.03) + 0.05;
 /** The least digit size a timer's own cell is drawn with; below it the timers are listed. */
 export const MIN_CELL_DIGITS = 30;
 /** The largest a countdown is drawn. */

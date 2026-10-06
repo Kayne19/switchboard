@@ -1,5 +1,6 @@
 import type { CalendarData, CalendarEvent } from '../controller/types';
 import { parseTimeValue } from '../controller/validation';
+import { clockText, dayText, monthName, weekdayOf, type CivilDay } from './timeLabels';
 
 // Where every part of a calendar goes (docs/display-tool.md, "calendar"),
 // in plain numbers the primitive draws: the days a view shows, each event
@@ -16,15 +17,8 @@ export const MINUTES_PER_DAY = 1440;
 /** A timed event sent with no `end` is drawn as a block this long. */
 export const UNTIMED_BLOCK_MINUTES = 30;
 
-const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
-const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'] as const;
-
-/** A day as the calendar names it. `weekday` counts from Sunday (0). */
-export interface CalendarDay {
-  dayNumber: number;
-  year: number;
-  month: number;
-  day: number;
+/** A day as the calendar steps through it. `weekday` counts from Sunday (0). */
+export interface CalendarDay extends CivilDay {
   weekday: number;
 }
 
@@ -40,28 +34,12 @@ export function calendarDay(dayNumber: number): CalendarDay {
   const day = dayOfYear - Math.floor((153 * mp + 2) / 5) + 1;
   const month = mp < 10 ? mp + 3 : mp - 9;
   const year = yearOfEra + era * 400 + (month <= 2 ? 1 : 0);
-  return { dayNumber, year, month, day, weekday: (((dayNumber + 4) % 7) + 7) % 7 };
+  return { dayNumber, year, month, day, weekday: weekdayOf(dayNumber) };
 }
 
-export function weekdayName(dayNumber: number): string {
-  return WEEKDAYS[calendarDay(dayNumber).weekday];
-}
-
-export function monthName(month: number): string {
-  return MONTHS[month - 1] ?? '';
-}
-
-/** `WED OCT 7`. */
+/** A day by its number, as the page names a day (`dayText`): `WED OCT 7`. */
 export function dayLabel(dayNumber: number): string {
-  const day = calendarDay(dayNumber);
-  return `${WEEKDAYS[day.weekday]} ${MONTHS[day.month - 1]} ${day.day}`;
-}
-
-/** `09:30`, from minutes into a day (1440 is `24:00`, the day's end). */
-export function clockText(minuteOfDay: number): string {
-  const hours = Math.floor(minuteOfDay / 60);
-  const minutes = minuteOfDay - hours * 60;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  return dayText(calendarDay(dayNumber));
 }
 
 // ---- events in time ----------------------------------------------------------

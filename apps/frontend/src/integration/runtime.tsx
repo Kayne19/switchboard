@@ -10,6 +10,7 @@ import { planReportDispatch, shouldClearRejectionOnSend } from "../app/reportDis
 import { useController } from "../controller/context";
 import type { MessageData, ScreenStateReport, SpokenLine } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID } from "../controller/types";
+import { two } from "../primitives/timeLabels";
 import type { ServerMessage, TranscriptEntry } from "../protocol";
 import {
   CallRuntime,
@@ -118,7 +119,7 @@ export function RuntimeIntegration() {
             ? "OPERATOR LINE"
             : `PROJECT / ${runtime.route.toUpperCase()}`,
         tag: "CURRENT RESPONSE / LIVE",
-        caption: `VOICE / ${String(Math.max(1, responseCount)).padStart(2, "0")}`,
+        caption: `VOICE / ${two(Math.max(1, responseCount))}`,
         // No response yet means no segments: the conversation scene shows
         // its own open-line prompt, and a content rail shows no live card.
         segments: currentResponseRef.current ? [{ text: currentResponseRef.current }] : [],

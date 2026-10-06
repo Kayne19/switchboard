@@ -33,23 +33,13 @@
 // drawn as a stub pair naming its far ends (`chooseStubs`, `bundledEdges`).
 
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
+import { monoAdvance } from '../design/tokens';
 import { LABEL_BACKING, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
+import type { Box, Point, Size } from './geometry';
 import { NOTE_MARKER } from './NoteMarker';
 
 export type DiagramOrientation = 'landscape' | 'portrait';
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-export interface Box {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 export interface NodeLine {
   kind: 'label' | 'sub' | 'detail';
@@ -136,13 +126,15 @@ const PAD_MAIN = 28;
 const PAD_CROSS = 32;
 
 // Node text is set in the monospace face (.diagram-node-label, -sub,
-// -detail); each line's advance is 0.6em plus its tracking, so a box's
-// width is known before it is drawn. A line longer than its wrap width
-// breaks at a space; a word longer than that widens the box instead.
-const NODE_TEXT = {
-  label: { advance: 10.8, lineHeight: 19, wrapAt: 14, maxLines: 2 },
-  sub: { advance: 6.3, lineHeight: 13, wrapAt: 26, maxLines: 2 },
-  detail: { advance: 4.8, lineHeight: 11, wrapAt: 36, maxLines: 2 },
+// -detail: 15px with 0.1em tracking, 9px with 0.09em, 7px with 0.08em), so
+// a box's width is known before it is drawn (monoAdvance). The name is
+// given 0.3 units a character past its face's advance (10.8, not 10.5):
+// every graph so far is drawn with that room. A line longer than its wrap
+// width breaks at a space; a word longer than that widens the box instead.
+export const NODE_TEXT = {
+  label: { advance: monoAdvance(15, 0.1) + 0.3, lineHeight: 19, wrapAt: 14, maxLines: 2 },
+  sub: { advance: monoAdvance(9, 0.09, { roundUp: true }), lineHeight: 13, wrapAt: 26, maxLines: 2 },
+  detail: { advance: monoAdvance(7, 0.08, { roundUp: true }), lineHeight: 11, wrapAt: 36, maxLines: 2 },
 } as const;
 const NODE_PAD_SIDE = 18;
 const NODE_MIN_WIDTH = 140;
@@ -184,7 +176,7 @@ export interface CornerTagBoxes {
 /** Where a node's corner tags go, relative to its box's top-left corner. */
 export function cornerTagBoxes(width: number, tags: CornerTags): CornerTagBoxes {
   let right = width - FRAME_CUT.topRight - TAG_INSET;
-  const place = (size: { width: number; height: number }): Box => {
+  const place = (size: Size): Box => {
     const box = { x: right - size.width, y: TAG_TOP, width: size.width, height: size.height };
     right = box.x - TAG_GAP;
     return box;
