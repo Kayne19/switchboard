@@ -1,4 +1,5 @@
 import type { Timer } from '../controller/types';
+import { monoAdvance } from '../design/tokens';
 import { parseTimeValue, type TimeValue } from '../controller/validation';
 import { timeOfDay, two } from './timeLabels';
 
@@ -74,8 +75,10 @@ export function formatCountdown(totalSeconds: number): string {
 
 // ---- layout ------------------------------------------------------------------
 
-/** A digit's advance in the mono face, as a share of its size. */
-export const DIGIT_ADVANCE = 0.62;
+/** A digit's advance in the mono face, as a share of its size: the face's
+ * at the digits' -0.03em tracking (.timer__digits), and 0.05 to spare, so a
+ * countdown sized to its cell keeps clear of the cell's sides (0.62). */
+export const DIGIT_ADVANCE = monoAdvance(1, -0.03) + 0.05;
 /** The least digit size a timer's own cell is drawn with; below it the timers are listed. */
 export const MIN_CELL_DIGITS = 30;
 /** The largest a countdown is drawn. */

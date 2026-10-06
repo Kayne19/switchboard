@@ -2,6 +2,7 @@
 // sequence (SequencePrimitive + sequenceLayout) draw alike, said once. Each
 // drawing keeps its own sizes (its frames' cuts, its arrowheads).
 
+import { monoAdvance } from '../design/tokens';
 import type { Point, Size } from './geometry';
 
 /** An SVG path through `points`, straight from each to the next. */
@@ -15,9 +16,9 @@ export function steppedFrame(width: number, height: number, { topLeft, topRight,
 
 // A label on a line (.diagram-edge-label, .sequence-message-label) is set in
 // the monospace face at 11 units with 0.06em tracking, so it is measured
-// before it is drawn: 0.6em advance plus the tracking, rounded up; its lines
-// LABEL_HEIGHT apart, on a backing LABEL_BACKING past them each side.
-export const LABEL_ADVANCE = 7.3;
+// before it is drawn (monoAdvance, rounded up: 7.3); its lines LABEL_HEIGHT
+// apart, on a backing LABEL_BACKING past them each side.
+export const LABEL_ADVANCE = monoAdvance(11, 0.06, { roundUp: true });
 export const LABEL_HEIGHT = 14;
 export const LABEL_BACKING = 4;
 

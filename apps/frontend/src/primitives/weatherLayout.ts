@@ -1,4 +1,5 @@
 import type { WeatherData, WeatherHour } from '../controller/types';
+import { monoAdvance } from '../design/tokens';
 import { parseTimeValue } from '../controller/validation';
 import { dayText, timeOfDay, two, weekdayName } from './timeLabels';
 
@@ -236,11 +237,12 @@ export function outlookDays<T extends { date: string }>(days: T[], count: number
 
 /**
  * The hero's row in ems of its temperature: the glyph (1.1), the gap
- * (0.24), the digits (a mono advance, 0.6 each), and the unit after them
+ * (0.24), the digits (the mono face's advance, 0.6 each: their -0.04em
+ * tracking, .weather-now__temp, is left as room), and the unit after them
  * (0.55). The hero sizes its temperature so the row fits its column.
  */
 export function heroEms(tempText: string): number {
-  return 1.1 + 0.24 + tempText.length * 0.6 + 0.55;
+  return 1.1 + 0.24 + tempText.length * monoAdvance(1, 0) + 0.55;
 }
 
 /** The glyph's width beside a compact figure in ems of its temperature

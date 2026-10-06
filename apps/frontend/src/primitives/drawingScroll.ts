@@ -14,6 +14,7 @@
 //   its own beside the drawing, which is laid out for the rest of the
 //   viewport, so the map covers none of it (`mapStrip`, `viewWithMap`).
 
+import { monoAdvance } from '../design/tokens';
 import type { Noun } from './countText';
 import type { Box, Point, Rect } from './geometry';
 
@@ -396,11 +397,11 @@ export function findExits(parts: readonly View[], links: DrawingMap['links'], la
 // The rails
 
 
-/** The length, in CSS pixels, a tag takes along its rail for `chars` characters of the rail face (the mono face at 9px, 0.08em tracking: 0.6em advance plus the tracking), its chevron and padding. */
+/** The length, in CSS pixels, a tag takes along its rail for `chars` characters of the rail face (the mono face at 9px, 0.08em tracking), its chevron and padding. */
 export function tagLength(chars: number): number {
   return (chars + 2) * TAG_ADVANCE + 2 * TAG_PAD;
 }
-const TAG_ADVANCE = 6.12;
+export const TAG_ADVANCE = monoAdvance(9, 0.08);
 const TAG_PAD = 5;
 /** A tag's depth across its rail, CSS pixels. */
 const TAG_DEPTH = 15;

@@ -1,4 +1,5 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
+import { monoAdvance } from '../design/tokens';
 import { readableScale, type DrawingText } from './drawingFit';
 import { intersection, type Point, type Rect } from './geometry';
 
@@ -87,18 +88,17 @@ export const CHART_LEGEND_TEXT_X = 34;
 export const CHART_LEGEND_GAP = 32;
 // The vertical advance from one wrapped legend row to the next.
 export const CHART_LEGEND_ROW_HEIGHT = 20;
-// The legend text is `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-// monospace` at 11px with 0.08em letter-spacing (see index.css). jsdom (where
-// the unit tests run) cannot measure SVG text, but a monospace font makes the
-// measurement unnecessary: every glyph advances the same amount, so a
-// label's width is exactly its character count times that advance. Measured
-// against the same font stack in the Chromium the visual suite renders with
-// (getComputedTextLength), the advance is 7.5 viewBox units per character.
-export const CHART_LEGEND_CHAR_ADVANCE = 7.5;
+// The legend text is the monospace face at 11px with 0.08em letter-spacing
+// (.chart-legend text in index.css). jsdom (where the unit tests run) cannot
+// measure SVG text, but in a monospace face every glyph advances the same
+// amount, so a label's width is its character count times that advance
+// (monoAdvance, rounded up: 7.5 viewBox units, what the Chromium the visual
+// suite renders with measures too, by getComputedTextLength).
+export const CHART_LEGEND_CHAR_ADVANCE = monoAdvance(11, 0.08, { roundUp: true });
 const CHART_ELLIPSIS = '…';
 // The grid's tick text is the same monospace stack at 13px, so a category
 // label's width is its character count times the legend's advance scaled
-// to that size.
+// to that size (8.86, a little over its face's 8.84).
 export const CHART_TICK_CHAR_ADVANCE = (CHART_LEGEND_CHAR_ADVANCE * 13) / 11;
 // Clear space between two neighbouring category labels along the x axis.
 export const CHART_TICK_GAP = 14;
