@@ -145,9 +145,55 @@ const markdown = () => ["AGENTS.md", "README.md", "docs", "apps", "skills", "ext
 	else if (rs !== py) findings.push(`frame depth differs: service MAX_FRAME_DEPTH ${rs}, skill _MAX_FRAME_DEPTH ${py}`);
 }
 
+// 11. The image caps are one set of numbers wherever they are written. The
+//     raw image cap is in both validators, in the skill module (which
+//     refuses a larger file before sending) and in the schema (as the
+//     base64 length of that many bytes); the image action cap is in both
+//     validators. Each link the action crosses leaves room around it: the
+//     skill socket's line holds the action and 1 MiB of envelope, and the
+//     host link's frame holds that line and 1 MiB more. The corpus pins what
+//     the validators make of the caps; this pins the copies it cannot run.
+{
+	// A cap as the source writes it: an integer or a product of integers (`8 * 1024 * 1024`).
+	const cap = (file, pattern) => {
+		const text = readFileSync(path.join(root, file), "utf8").match(pattern)?.[1];
+		if (!text || !/^\d[\d_]*(?:\s*\*\s*\d[\d_]*)*$/.test(text.trim())) {
+			findings.push(`image caps: could not read ${pattern.source} from ${file} (the check needs updating)`);
+			return NaN;
+		}
+		return text.split("*").reduce((product, factor) => product * Number(factor.trim().replaceAll("_", "")), 1);
+	};
+	const mib = 1024 * 1024;
+	const image = {
+		"validation.ts": cap("apps/frontend/src/controller/validation.ts", /^export const MAX_IMAGE_BYTES = ([^;]+);$/m),
+		"visual_protocol.rs": cap("apps/backend/src/visual_protocol.rs", /^pub const MAX_IMAGE_BYTES: usize = ([^;]+);$/m),
+		"__init__.py": cap("skills/switchboard/src/switchboard/__init__.py", /^_MAX_IMAGE_BYTES = (.+)$/m),
+	};
+	const action = {
+		"validation.ts": cap("apps/frontend/src/controller/validation.ts", /^export const MAX_IMAGE_ACTION_BYTES = ([^;]+);$/m),
+		"visual_protocol.rs": cap("apps/backend/src/visual_protocol.rs", /^pub const MAX_IMAGE_ACTION_BYTES: usize = ([^;]+);$/m),
+	};
+	const line = cap("apps/host-agent/src/skill_socket.ts", /^export const MAX_LINE_BYTES = ([^;]+);$/m);
+	const frame = cap("apps/backend/src/hosts.rs", /^const MAX_HOST_FRAME_BYTES: usize = ([^;]+);$/m);
+	const schema = JSON.parse(readFileSync(path.join(root, "docs/display-action-v1.schema.json"), "utf8"));
+	const base64 = schema.definitions?.ImageData?.properties?.bytes?.maxLength;
+	const read = [...Object.values(image), ...Object.values(action), line, frame].every((value) => !Number.isNaN(value));
+	const same = (what, values) => {
+		if (new Set(Object.values(values)).size > 1) findings.push(`${what} differs: ${Object.entries(values).map(([file, value]) => `${file} ${value}`).join(", ")}`);
+	};
+	if (read) {
+		same("raw image cap (MAX_IMAGE_BYTES)", image);
+		same("image action cap (MAX_IMAGE_ACTION_BYTES)", action);
+		const raw = image["validation.ts"];
+		if (base64 !== 4 * Math.ceil(raw / 3)) findings.push(`docs/display-action-v1.schema.json: ImageData.bytes maxLength ${base64} is not the base64 length of ${raw} bytes (${4 * Math.ceil(raw / 3)})`);
+		if (line < action["validation.ts"] + mib) findings.push(`apps/host-agent/src/skill_socket.ts: MAX_LINE_BYTES ${line} leaves less than 1 MiB around a ${action["validation.ts"]}-byte image action`);
+		if (frame < line + mib) findings.push(`apps/backend/src/hosts.rs: MAX_HOST_FRAME_BYTES ${frame} leaves less than 1 MiB around a ${line}-byte skill socket line`);
+	}
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of image caps");

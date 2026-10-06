@@ -64,8 +64,8 @@ commit.
   `scripts/check_hygiene.mjs`, which enforces the structural rules below that
   a grep can check (private modules, no lint allowances, one `Config`, a
   documented environment, one fake-executable writer, one skill socket path,
-  one frame depth, live paths, routes and settings in the docs); a new rule of
-  that kind gets a check there.
+  one frame depth, one set of image caps, live paths, routes and settings in
+  the docs); a new rule of that kind gets a check there.
 - A `static/` or `static-debug/` merge conflict is resolved by rebuilding from the merged source
   (`npm ci && npm run build`), never by picking a side (see #37).
 - `master` requires a passing CI `test` check on an up-to-date head. If

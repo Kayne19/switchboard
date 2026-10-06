@@ -81,7 +81,8 @@ _ONE_OF = {
 # ---- image ------------------------------------------------------------------
 
 # The service and the page take at most this many raw image bytes
-# (MAX_IMAGE_BYTES in visual_protocol.rs and validation.ts).
+# (MAX_IMAGE_BYTES in visual_protocol.rs and validation.ts);
+# scripts/check_hygiene.mjs keeps the numbers equal.
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
 

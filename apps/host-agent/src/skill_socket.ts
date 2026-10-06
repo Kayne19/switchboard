@@ -25,6 +25,8 @@ export const MODULE_CALLS: readonly string[] = ["speak", "request_to_speak", "di
  * over 16 MiB (MAX_HOST_FRAME_BYTES in hosts.rs) by dropping the whole link,
  * so the cap stays well under that: a line this accepts always fits a frame.
  * A longer line is answered `refused`, `too_large`, and ends the connection.
+ * scripts/check_hygiene.mjs checks both margins: 1 MiB over the image action
+ * cap, and 1 MiB under the host link's frame cap.
  */
 export const MAX_LINE_BYTES = 13 * 1024 * 1024;
 

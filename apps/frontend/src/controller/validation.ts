@@ -84,7 +84,10 @@ const MAX_ACTION_BYTES = 48_000;
  * image is at most 8 MiB, and the action around its base64 at most 12 MiB.
  * Every other type keeps the 48,000-byte cap. Both socket links allow
  * 16 MiB frames, so one image action always fits one frame; the reconnect
- * snapshot replays each action as its own frame for the same reason.
+ * snapshot replays each action as its own frame for the same reason. The
+ * corpus pins both numbers on both sides, and scripts/check_hygiene.mjs
+ * keeps every other copy (the skill module, the schema, the socket caps) in
+ * step with them.
  */
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_IMAGE_ACTION_BYTES = 12 * 1024 * 1024;

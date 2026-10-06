@@ -8,7 +8,9 @@ pub const MAX_ACTION_BYTES: usize = 48_000;
 /// socket both allow 16 MiB frames (`hosts::MAX_HOST_FRAME_BYTES`,
 /// `browser::MAX_WEBSOCKET_MESSAGE_BYTES`), so one image action always fits
 /// one frame; the reconnect snapshot sends each action as its own frame for
-/// the same reason. The browser's `validation.ts` holds the same two numbers.
+/// the same reason. The browser's `validation.ts` holds the same two numbers;
+/// the corpus pins both sides, and `scripts/check_hygiene.mjs` keeps every
+/// other copy (the skill module, the schema, the socket caps) in step.
 pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_IMAGE_ACTION_BYTES: usize = 12 * 1024 * 1024;
 pub const MAX_ID_UTF16: usize = 128;
