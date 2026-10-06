@@ -238,6 +238,26 @@ fn check_unknown_keys(
 // browser's validators have their own set (`copyOptionalString` and the
 // rest).
 
+/// A string of at most `max_len` UTF-16 units; anything else, a missing
+/// value included, is refused. The string rule, written once: the helpers
+/// below use it, and so do the array items that are strings (chart labels,
+/// paragraphs, table cells, task tags). The browser's `checkString`.
+fn check_string<'a>(
+    value: Option<&'a Value>,
+    max_len: usize,
+    field: &str,
+) -> Result<&'a str, String> {
+    let text = value
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{field} must be a string"))?;
+    if utf16_len(text) > max_len {
+        return Err(format!(
+            "{field} exceeds maximum length of {max_len} UTF-16 code units"
+        ));
+    }
+    Ok(text)
+}
+
 fn copy_optional_string(
     data: &Map<String, Value>,
     out: &mut Map<String, Value>,
@@ -245,18 +265,10 @@ fn copy_optional_string(
     max_len: usize,
     field_name: &str,
 ) -> Result<(), String> {
-    let Some(value) = data.get(key) else {
-        return Ok(());
-    };
-    let text = value
-        .as_str()
-        .ok_or_else(|| format!("{field_name} must be a string"))?;
-    if utf16_len(text) > max_len {
-        return Err(format!(
-            "{field_name} exceeds maximum length of {max_len} UTF-16 code units"
-        ));
+    if let Some(value) = data.get(key) {
+        let text = check_string(Some(value), max_len, field_name)?;
+        out.insert(key.into(), text.into());
     }
-    out.insert(key.into(), text.into());
     Ok(())
 }
 
@@ -290,16 +302,7 @@ fn required_string<'a>(
     max_len: usize,
     field: &str,
 ) -> Result<&'a str, String> {
-    let text = data
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("{field} must be a string"))?;
-    if utf16_len(text) > max_len {
-        return Err(format!(
-            "{field} exceeds maximum length of {max_len} UTF-16 code units"
-        ));
-    }
-    Ok(text)
+    check_string(data.get(key), max_len, field)
 }
 
 fn copy_optional_bool(
@@ -426,12 +429,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
                     "chart.labels must be an array of 1 to {MAX_CHART_LABELS} strings"
                 ))?;
             for label in arr {
-                let text = label.as_str().ok_or("chart label must be a string")?;
-                if utf16_len(text) > MAX_CHART_LABEL_UTF16 {
-                    return Err(format!(
-                        "chart label exceeds maximum length of {MAX_CHART_LABEL_UTF16} UTF-16 code units"
-                    ));
-                }
+                check_string(Some(label), MAX_CHART_LABEL_UTF16, "chart label")?;
             }
             Some(arr)
         }
@@ -858,12 +856,7 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
         .ok_or("document.paragraphs must be an array")?;
     let mut clean_paras = Vec::new();
     for p in paras {
-        let s = p.as_str().ok_or("document paragraph must be a string")?;
-        if utf16_len(s) > 50_000 {
-            return Err(
-                "document paragraph exceeds maximum length of 50000 UTF-16 code units".into(),
-            );
-        }
+        let s = check_string(Some(p), 50_000, "document paragraph")?;
         clean_paras.push(Value::String(s.to_string()));
     }
 
@@ -947,12 +940,8 @@ fn validate_table_cell(cell: &Value) -> Result<Value, String> {
             }
             Ok(cell.clone())
         }
-        Value::String(s) => {
-            if utf16_len(s) > MAX_TABLE_CELL_UTF16 {
-                return Err(format!(
-                    "table cell exceeds maximum length of {MAX_TABLE_CELL_UTF16} UTF-16 code units"
-                ));
-            }
+        Value::String(_) => {
+            check_string(Some(cell), MAX_TABLE_CELL_UTF16, "table cell")?;
             Ok(cell.clone())
         }
         Value::Object(cm) => {
@@ -1537,12 +1526,7 @@ fn validate_task(task: &Value, seen: &mut HashSet<String>) -> Result<Value, Stri
                 "task.tags must be an array of at most {MAX_TASK_TAGS} strings"
             ))?;
         for tag in list {
-            let text = tag.as_str().ok_or("task tag must be a string")?;
-            if utf16_len(text) > MAX_TASK_TAG_UTF16 {
-                return Err(format!(
-                    "task tag exceeds maximum length of {MAX_TASK_TAG_UTF16} UTF-16 code units"
-                ));
-            }
+            check_string(Some(tag), MAX_TASK_TAG_UTF16, "task tag")?;
         }
         out.insert("tags".into(), tags.clone());
     }
