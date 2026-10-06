@@ -36,7 +36,7 @@ Refactoring must preserve:
 - exact glyph geometry
 - geometry-driven layouts
 - semantic color meaning
-- shared focus identity
+- shared focus identity (under normal motion; under `prefers-reduced-motion` nothing is handed to layout projection, `useLayoutMotion`)
 - scroll clipping against irregular frames
 - reduced-motion behavior
 
