@@ -21,6 +21,9 @@ export default defineConfig({
     // with two or three copies of the suite running at once, against the
     // default 5 s. Budgets are CPU time, in tests/unit/cpuTime.ts.
     testTimeout: 30_000,
+    // The act-environment flag every jsdom test needs; the rest of the
+    // shared harness is opt-in (tests/unit/sceneHarness.tsx).
+    setupFiles: ['./tests/unit/setup.ts'],
   },
   build: {
     outDir: '../../static',

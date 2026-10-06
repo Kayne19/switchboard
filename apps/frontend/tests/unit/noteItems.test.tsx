@@ -11,15 +11,12 @@
 // The convention every type keeps, whatever primitive draws it: each item
 // element carries `data-item` (the name a note uses for it), and the marked
 // one holds a `.note-badge`. Focus keeps the note beside the object.
-import { act, useEffect } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { itemTargetText, markedItem, noteTarget, objectName } from '../../src/app/noteItems';
-import { SceneRenderer } from '../../src/components/SceneRenderer';
-import { ControllerProvider, useController } from '../../src/controller/context';
 import type { ControllerAction, NoteData, SceneObject, SceneObjectType } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { lastScene, renderScene, runActions, stubResizeObserver } from './sceneHarness';
 
 // For each type: an object holding two items, and the name a note uses for
 // the second.
@@ -68,53 +65,12 @@ const noteOn = (item: string, target = 'list'): ControllerAction =>
   ({ op: 'show', id: 'item-note', type: 'note', data: { tag: 'NOTE', anchor: { target, item }, segments: [{ text: 'About this one.' }] } });
 const table: ControllerAction = { op: 'show', id: 'grid', type: 'table', role: 'primary', data: { columns: [{ label: 'A' }], rows: [['1']] } };
 
-let host: HTMLDivElement | null = null;
-let root: Root | null = null;
-let runActions: (actions: ControllerAction[]) => void = () => {};
-
-function Scene({ actions }: { actions: ControllerAction[] }) {
-  const { run } = useController();
-  runActions = (more) => run(more);
-  useEffect(() => run(actions), [actions, run]);
-  return null;
-}
-
-function render(actions: ControllerAction[]): HTMLElement {
-  const page = document.createElement('div');
-  document.body.append(page);
-  const pageRoot = createRoot(page);
-  host = page;
-  root = pageRoot;
-  act(() => pageRoot.render(
-    <ControllerProvider>
-      <Scene actions={actions} />
-      <SceneRenderer />
-    </ControllerProvider>,
-  ));
-  return page;
-}
-
 const badges = (scope: Element | null, type: ListType) => [...(scope?.querySelectorAll(`[data-testid="${type}"] [data-item] .note-badge`) ?? [])];
 const markedItems = (scope: Element | null, type: ListType) =>
   badges(scope, type).map((badge) => badge.closest('[data-item]')!.getAttribute('data-item'));
-const scene = () => [...host!.querySelectorAll('[data-scene]')].at(-1)!;
+const scene = lastScene;
 
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  const rendered = root;
-  if (rendered) act(() => rendered.unmount());
-  host?.remove();
-  root = null;
-  host = null;
-});
+stubResizeObserver();
 
 describe('markedItem', () => {
   it('is the item the drawn note names in the object', () => {
@@ -150,7 +106,7 @@ describe('itemTargetText', () => {
 
 describe('the item a note names is marked wherever its object is drawn', () => {
   it.each(types)('a %s primary marks the item, and the rail card names it with the badge', (type) => {
-    render([object(type, 'primary'), noteOn(lists[type].item)]);
+    renderScene([object(type, 'primary'), noteOn(lists[type].item)]);
     expect(markedItems(scene(), type)).toEqual([lists[type].item]);
     const card = scene().querySelector('.content-rail .annotation-card');
     const named = itemTargetText({ id: 'list', type, data: lists[type].data, createdAt: 0, updatedAt: 0 }, lists[type].item);
@@ -159,14 +115,14 @@ describe('the item a note names is marked wherever its object is drawn', () => {
   });
 
   it.each(types)('a %s in the aux row marks the item', (type) => {
-    render([table, object(type, 'secondary'), noteOn(lists[type].item)]);
+    renderScene([table, object(type, 'secondary'), noteOn(lists[type].item)]);
     expect(markedItems(scene().querySelector('.composed-aux'), type)).toEqual([lists[type].item]);
   });
 
   it.each(types)('a %s in focus marks the item and keeps the note, naming the item', (type) => {
-    render([object(type, 'primary'), noteOn(lists[type].item)]);
-    act(() => runActions([{ op: 'focus', id: 'list' }]));
-    const layer = host!.querySelector('.focus-layer');
+    const page = renderScene([object(type, 'primary'), noteOn(lists[type].item)]);
+    runActions([{ op: 'focus', id: 'list' }]);
+    const layer = page.querySelector('.focus-layer');
     expect(markedItems(layer, type)).toEqual([lists[type].item]);
     const named = itemTargetText({ id: 'list', type, data: lists[type].data, createdAt: 0, updatedAt: 0 }, lists[type].item);
     const card = layer?.querySelector('.focus-layer__note .annotation-card');
@@ -178,7 +134,7 @@ describe('the item a note names is marked wherever its object is drawn', () => {
   // note naming it is the one drawn for its object.
   it('marks nothing when the note the rail shows is another one about the list', () => {
     const plain: ControllerAction = { op: 'show', id: 'plain-note', type: 'note', data: { tag: 'PLAIN', anchor: { target: 'list' }, segments: [{ text: 'About the list.' }] } };
-    render([object('tasks', 'primary'), plain, noteOn('passport')]);
+    renderScene([object('tasks', 'primary'), plain, noteOn('passport')]);
     expect(badges(scene(), 'tasks')).toHaveLength(0);
     const card = scene().querySelector('.content-rail .annotation-card');
     expect(card?.querySelector('.annotation-card__tag')?.textContent).toBe('PLAIN');
@@ -187,13 +143,13 @@ describe('the item a note names is marked wherever its object is drawn', () => {
 
   it('marks nothing in the aux row while the rail shows the primary\'s note', () => {
     const onGrid: ControllerAction = { op: 'show', id: 'grid-note', type: 'note', data: { tag: 'GRID', anchor: { target: 'grid' }, segments: [{ text: 'About the table.' }] } };
-    render([table, object('inbox', 'secondary'), onGrid, noteOn('ci')]);
+    renderScene([table, object('inbox', 'secondary'), onGrid, noteOn('ci')]);
     expect(badges(scene().querySelector('.composed-aux'), 'inbox')).toHaveLength(0);
     expect(scene().querySelector('.content-rail .annotation-card__tag')?.textContent).toBe('GRID');
   });
 
   it('keeps what the card names and its badge together, so a line of its own takes both', () => {
-    render([object('tasks', 'primary'), noteOn('passport')]);
+    renderScene([object('tasks', 'primary'), noteOn('passport')]);
     const target = scene().querySelector('.content-rail .annotation-card__target');
     expect([...(target?.children ?? [])].map((child) => child.className)).toEqual(['annotation-card__anchor tech micro', 'note-badge tech micro']);
   });
@@ -202,14 +158,14 @@ describe('the item a note names is marked wherever its object is drawn', () => {
     const chart: ControllerAction = { op: 'show', id: 'trend', type: 'chart', role: 'primary', data: { series: [{ name: 'S', values: [1, 2, 3] }] } };
     const stray: ControllerAction = { op: 'show', id: 'stray', type: 'note', data: { tag: 'STRAY', anchor: { target: 'trend', x: 1, item: 'x' }, segments: [{ text: 'On the chart.' }] } };
     const tasksBeside: ControllerAction = { op: 'show', id: 'list', type: 'tasks', role: 'secondary', data: lists.tasks.data };
-    render([chart, tasksBeside, stray]);
+    renderScene([chart, tasksBeside, stray]);
     expect(scene().querySelectorAll('.note-badge')).toHaveLength(0);
   });
 
   // The card showed the anchor as sent, "TARGET / list / ITEM no-such-item":
   // an object id and an item id a caller never reads.
   it.each(types)('a %s holding no item of the name marks nothing, and the card names the list, with no badge', (type) => {
-    render([object(type, 'primary'), noteOn('no-such-item')]);
+    renderScene([object(type, 'primary'), noteOn('no-such-item')]);
     expect(badges(scene(), type)).toHaveLength(0);
     const card = scene().querySelector('.content-rail .annotation-card');
     const named = type === 'weather' ? 'San Francisco' : type.toUpperCase();
@@ -307,49 +263,49 @@ describe('every card names its object in its own words', () => {
     ({ op: 'show', id: 'results-note', type: 'note', data: { tag: 'DAMOCLES / FAILURES', anchor: { target, ...extra }, segments: [{ text: 'Two failures.' }] } });
 
   it('in the rail and in focus: a table by its title', () => {
-    render([...results, noteAbout('test-matrix')]);
+    const page = renderScene([...results, noteAbout('test-matrix')]);
     expect(anchorText(scene().querySelector('.content-rail .annotation-card'))).toBe('TARGET / TESTS / MATRIX');
-    act(() => runActions([{ op: 'focus', id: 'test-matrix' }]));
-    expect(anchorText(host!.querySelector('.focus-layer__note .annotation-card'))).toBe('TARGET / TESTS / MATRIX');
+    runActions([{ op: 'focus', id: 'test-matrix' }]);
+    expect(anchorText(page.querySelector('.focus-layer__note .annotation-card'))).toBe('TARGET / TESTS / MATRIX');
   });
 
   it('a metric and a progress by their labels', () => {
-    render([...results, { op: 'show', id: 'passed', type: 'metric', data: { label: 'TESTS PASSED', value: '870' } }, noteAbout('passed')]);
+    const page = renderScene([...results, { op: 'show', id: 'passed', type: 'metric', data: { label: 'TESTS PASSED', value: '870' } }, noteAbout('passed')]);
     expect(anchorText(scene().querySelector('.content-rail .annotation-card'))).toBe('TARGET / TESTS PASSED');
-    act(() => runActions([{ op: 'focus', id: 'passed' }]));
-    expect(anchorText(host!.querySelector('.focus-layer__note .annotation-card'))).toBe('TARGET / TESTS PASSED');
-    act(() => runActions([{ op: 'clear' }, ...fixtures.plan]));
+    runActions([{ op: 'focus', id: 'passed' }]);
+    expect(anchorText(page.querySelector('.focus-layer__note .annotation-card'))).toBe('TARGET / TESTS PASSED');
+    runActions([{ op: 'clear' }, ...fixtures.plan]);
     expect(anchorText(scene().querySelector('.content-rail .annotation-card'))).toBe('TARGET / VISUAL-PALETTE');
   });
 
   it('a node by its label, with the badge that matches its marker; a node the diagram does not hold by the diagram, with none', () => {
-    render([...fixtures.topology]);
+    renderScene([...fixtures.topology]);
     const card = scene().querySelector('.content-rail .annotation-card');
     expect(anchorText(card)).toBe('TARGET / Display gate');
     expect(card?.querySelectorAll('.annotation-card__header .note-badge')).toHaveLength(1);
-    act(() => runActions([{ op: 'show', id: 'topology-note', type: 'note', data: { tag: 'GONE', anchor: { target: 'topology', node: 'gone' }, segments: [{ text: 'Its node is gone.' }] } }]));
+    runActions([{ op: 'show', id: 'topology-note', type: 'note', data: { tag: 'GONE', anchor: { target: 'topology', node: 'gone' }, segments: [{ text: 'Its node is gone.' }] } }]);
     const after = scene().querySelector('.content-rail .annotation-card');
     expect(anchorText(after)).toBe('TARGET / SYSTEM / SWITCHBOARD TOPOLOGY');
     expect(after?.querySelectorAll('.note-badge')).toHaveLength(0);
   });
 
   it('a focused note, and a note drawn as the primary, name their object too, with no badge', () => {
-    render([...fixtures.plan]);
-    act(() => runActions([{ op: 'focus', id: 'plan-note' }]));
-    const focused = host!.querySelector('.focus-layer .annotation-card');
+    const page = renderScene([...fixtures.plan]);
+    runActions([{ op: 'focus', id: 'plan-note' }]);
+    const focused = page.querySelector('.focus-layer .annotation-card');
     expect(anchorText(focused)).toBe('TARGET / VISUAL-PALETTE');
-    act(() => runActions([
+    runActions([
       { op: 'clear' },
       { op: 'show', id: 'latency', type: 'metric', data: { label: 'P95 LATENCY', value: '182 ms' } },
       { op: 'show', id: 'latency-note', type: 'note', role: 'primary', data: { tag: 'DAMOCLES / LATENCY', anchor: { target: 'latency' }, segments: [{ text: 'Back under two hundred.' }] } },
-    ]));
+    ]);
     const primary = scene().querySelector('.composed-primary-object .annotation-card');
     expect(anchorText(primary)).toBe('TARGET / P95 LATENCY');
     expect(primary?.querySelectorAll('.note-badge')).toHaveLength(0);
   });
 
   it('a note about no object on stage has no TARGET line at all', () => {
-    render([...results, noteAbout('gone')]);
+    renderScene([...results, noteAbout('gone')]);
     const card = scene().querySelector('.content-rail .annotation-card');
     expect(card?.querySelector('.annotation-card__tag')?.textContent).toBe('DAMOCLES / FAILURES');
     expect(card?.querySelector('.annotation-card__anchor')).toBeNull();
@@ -367,7 +323,7 @@ describe('a diagram beside the primary marks the node the rail note names', () =
   const onGate: ControllerAction = { op: 'show', id: 'gate-note', type: 'note', data: { tag: 'GATE', anchor: { target: 'flow', node: 'gate' }, segments: [{ text: 'The gate stamps each action.' }] } };
 
   it('marks the node in its cell while the rail shows that note, and no node while it shows another', () => {
-    render([table, flow, onGate]);
+    renderScene([table, flow, onGate]);
     const card = scene().querySelector('.content-rail .annotation-card');
     expect(card?.querySelector('.annotation-card__anchor')?.textContent).toBe('TARGET / Display gate');
     expect(card?.querySelectorAll('.annotation-card__header .note-badge')).toHaveLength(1);
@@ -375,7 +331,7 @@ describe('a diagram beside the primary marks the node the rail note names', () =
     expect(cell?.querySelectorAll('.diagram-node__body--anchored')).toHaveLength(1);
     expect(cell?.querySelector('.diagram-node__body--anchored')?.textContent).toContain('Display gate');
     const onGrid: ControllerAction = { op: 'show', id: 'grid-note', type: 'note', data: { tag: 'GRID', anchor: { target: 'grid' }, segments: [{ text: 'About the table.' }] } };
-    act(() => runActions([onGrid]));
+    runActions([onGrid]);
     expect(scene().querySelector('.content-rail .annotation-card__tag')?.textContent).toBe('GRID');
     expect(scene().querySelectorAll('.composed-aux .diagram-node__body--anchored')).toHaveLength(0);
   });
@@ -396,7 +352,7 @@ describe('an event the calendar does not draw', () => {
     ['a day', later],
     ['an agenda of two days', { ...later, view: 'agenda', days: 2 }],
   ])('in %s is named on the card, with no badge, as the calendar marks nothing', (_view, data) => {
-    render([calendar(data), noteOn('later')]);
+    renderScene([calendar(data), noteOn('later')]);
     expect(badges(scene(), 'calendar')).toHaveLength(0);
     const card = scene().querySelector('.content-rail .annotation-card');
     expect(card?.querySelector('.annotation-card__anchor')?.textContent).toBe('TARGET / Later / TUE OCT 20 10:30');
@@ -404,7 +360,7 @@ describe('an event the calendar does not draw', () => {
   });
 
   it('in a week that holds it is marked, the card with its badge', () => {
-    render([calendar({ ...later, view: 'week', start: '2026-10-19', days: 7 }), noteOn('later')]);
+    renderScene([calendar({ ...later, view: 'week', start: '2026-10-19', days: 7 }), noteOn('later')]);
     expect(markedItems(scene(), 'calendar')).toEqual(['later']);
     expect(scene().querySelectorAll('.content-rail .annotation-card .note-badge')).toHaveLength(1);
   });
@@ -417,7 +373,7 @@ describe('a chart beside the primary marks the point the rail note names', () =>
   it('rings the point in its cell while the rail shows that note', () => {
     const trend: ControllerAction = { op: 'show', id: 'trend', type: 'chart', role: 'secondary', data: { title: 'TREND', labels: ['a', 'b', 'c'], series: [{ name: 'S', values: [1, 3, 2] }] } };
     const onPoint: ControllerAction = { op: 'show', id: 'point-note', type: 'note', data: { tag: 'PEAK', anchor: { target: 'trend', x: 1 }, segments: [{ text: 'The peak.' }] } };
-    render([table, trend, onPoint]);
+    renderScene([table, trend, onPoint]);
     expect(scene().querySelector('.content-rail .annotation-card__anchor')?.textContent).toBe('TARGET / b');
     // No leader reaches it in the cell: a hollow ring marks it, on the line.
     const ring = scene().querySelector('.composed-aux .chart-note-ring');

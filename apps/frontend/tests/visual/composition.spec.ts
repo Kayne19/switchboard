@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openScene, runActions } from './helpers';
 
 // The aux row's geometry, which the unit tests cannot see: jsdom draws no
 // boxes. tests/unit/auxRowLayout.test.ts pins the stylesheet rules these
@@ -26,13 +27,8 @@ const crowded = [
 ];
 
 async function show(page: Page, actions: unknown[]) {
-  await page.goto('/?scene=architecture&chrome=0');
-  await expect(page.locator('.stage')).toBeVisible();
-  await page.evaluate((list) => {
-    const controller = window.SwitchboardController;
-    if (!controller) throw new Error('controller unavailable');
-    controller.run([{ op: 'clear' }, ...list]);
-  }, actions);
+  await openScene(page, 'architecture');
+  await runActions(page, [{ op: 'clear' }, ...actions]);
   await expect(page.locator('.composed-aux')).toBeVisible();
   await page.waitForTimeout(600);
 }

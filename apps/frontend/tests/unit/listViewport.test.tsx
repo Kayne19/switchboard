@@ -3,30 +3,15 @@
 // continues past says how many items lie that way, as a scrolled drawing's
 // rails do. jsdom draws no boxes, so the rows' boxes are given here.
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { drawnScale } from '../../src/hooks/useStageDemand';
 import { continuesPast, countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
+import { mount, rerender, stubResizeObserver } from './sceneHarness';
 
 let host: HTMLDivElement | undefined;
-let root: Root | undefined;
 
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  if (root) act(() => root!.unmount());
-  host?.remove();
-  root = undefined;
-  host = undefined;
-});
+stubResizeObserver();
 
 const ROW = 30;
 
@@ -58,16 +43,12 @@ let surfaceClicks = 0;
 // The list inside the surface that expands its object, as a primitive sits.
 function render(children: React.ReactNode, props: { lead?: string } = {}) {
   surfaceClicks = 0;
-  const element = document.createElement('div');
-  document.body.append(element);
-  host = element;
-  root = createRoot(element);
-  act(() => root!.render(
+  host = mount(
     <FocusableSurface onActivate={() => (surfaceClicks += 1)} ariaLabel="Expand tasks">
       <ListViewport noun={['TASK', 'TASKS']} {...props}>{children}</ListViewport>
     </FocusableSurface>,
-  ));
-  return element.querySelector<HTMLElement>('.list-viewport__scroll')!;
+  );
+  return host.querySelector<HTMLElement>('.list-viewport__scroll')!;
 }
 
 const page = () => host!;
@@ -176,15 +157,11 @@ describe('ListViewport', () => {
   });
 
   it('counts only what countSelector picks', async () => {
-    const element = document.createElement('div');
-    document.body.append(element);
-    host = element;
-    root = createRoot(element);
-    act(() => root!.render(
+    const element = mount(
       <ListViewport noun={['DAY', 'DAYS']} countSelector=".day">
         {Array.from({ length: 10 }, (_, index) => <div key={index} data-item={`i${index}`} className={index % 2 ? 'day' : 'hour'}>x</div>)}
       </ListViewport>,
-    ));
+    );
     const scroll = element.querySelector<HTMLElement>('.list-viewport__scroll')!;
     layOut(scroll, 0);
     await measured(scroll);
@@ -196,15 +173,11 @@ describe('ListViewport', () => {
     // A header taller than the view above the rows, as a forecast's
     // conditions stand above its days: scrolled to the rows, the top edge
     // has no row past it, and still says the list goes on.
-    const element = document.createElement('div');
-    document.body.append(element);
-    host = element;
-    root = createRoot(element);
-    act(() => root!.render(
+    const element = mount(
       <ListViewport noun={['DAY', 'DAYS']} countSelector=".day">
         {[<h3 key="h">NOW</h3>, <h3 key="h2">HOURS</h3>, <h3 key="h3">MORE</h3>, ...[0, 1, 2, 3].map((index) => <div key={index} data-item={`d${index}`} className="day">day</div>)]}
       </ListViewport>,
-    ));
+    );
     const scroll = element.querySelector<HTMLElement>('.list-viewport__scroll')!;
     layOut(scroll, 90);
     await measured(scroll);
@@ -238,11 +211,11 @@ describe('ListViewport', () => {
     const scroll = render(rows(10));
     layOut(scroll, 0);
     const again = (lead: string) =>
-      act(() => root!.render(
+      rerender(page(),
         <FocusableSurface onActivate={() => (surfaceClicks += 1)} ariaLabel="Expand tasks">
           <ListViewport noun={['TASK', 'TASKS']} lead={lead}>{rows(10)}</ListViewport>
         </FocusableSurface>,
-      ));
+      );
     again('t8');
     // Row 8 (240-270) would rest a quarter view down, at 215; the list's
     // end stops it at 200.

@@ -1,19 +1,18 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NoteData } from '../../src/controller/types';
 import { pipelineDiagram, topologyDiagram, traceDiagram } from '../../src/fixtures/scenes';
 import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { RAIL } from '../../src/primitives/drawingScroll';
 import { SequencePrimitive } from '../../src/primitives/SequencePrimitive';
+import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
 
 // A scrolled drawing in the diagram slot, measured as a browser would: jsdom
 // has no layout, so the host reports the slot's viewport and the scroller
 // its box (the visual suite's 1440 x 900 and 390 x 844 stages).
 let host: HTMLDivElement;
-let root: Root;
 let size = { width: 914, height: 526 };
 const descriptors: Record<string, PropertyDescriptor | undefined> = {};
 // The scroller is the view: the viewport less the map's strip, when the
@@ -37,14 +36,7 @@ const measured = {
   },
 };
 
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
+stubResizeObserver();
 
 beforeEach(() => {
   for (const [name, get] of Object.entries(measured)) {
@@ -60,8 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
+  unmountAll();
   for (const [name, descriptor] of Object.entries(descriptors)) {
     if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
     else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
@@ -70,13 +61,10 @@ afterEach(() => {
 });
 
 function render(element: React.ReactElement) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(element));
+  host = mount(element);
   // The first frame lays the drawing out for the screen; the measured
   // viewport arrives with the next.
-  act(() => root.render(element));
+  rerender(host, element);
 }
 
 const gateNote: NoteData = { tag: 'NOTE', anchor: { target: 'topology', node: 'gate' }, segments: [{ text: 'A display counts as shown only when the page confirms it, and this note is long enough to stay in the rail.' }] };
@@ -465,7 +453,7 @@ describe('a long exchange scrolled down', () => {
       scroller.dispatchEvent(new Event('scroll'));
     });
     const grown = <SequencePrimitive data={plain} id="trace" note={{ segments: [{ text: 'x' }], anchor: { target: 'trace', node: 'pbx' } }} />;
-    act(() => root.render(grown));
+    rerender(host, grown);
     expect(host.querySelector('.sequence-actor__marker')).not.toBeNull();
     expect(scroller.scrollTop).toBe(600);
   });

@@ -49,147 +49,6 @@ fn fills_in_the_value_from_the_steps_when_the_agent_gives_none() {
     assert_eq!(all_done["value"], json!(100));
 }
 
-/// The validator is held to `docs/display-action-v1.schema.json`, the one
-/// source for the display protocol: it accepts every show type the schema
-/// lists with exactly the data the schema requires, refuses each of those
-/// types when a required key is missing, and knows no other type.
-#[test]
-fn show_types_and_their_required_data_follow_the_schema() {
-    let schema: Value = serde_json::from_str(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/docs/display-action-v1.schema.json"
-    )))
-    .unwrap();
-    let definitions = &schema["definitions"];
-    fn resolve<'a>(definitions: &'a Value, node: &'a Value) -> &'a Value {
-        match node["$ref"].as_str() {
-            Some(reference) => &definitions[reference.rsplit('/').next().unwrap()],
-            None => node,
-        }
-    }
-    // A type's data is one shape, or (a diagram's) one shape per `mode`:
-    // (type, mode, required keys).
-    let mut required_by_shape: Vec<(String, Option<String>, Vec<String>)> = Vec::new();
-    for variant in schema["oneOf"].as_array().unwrap() {
-        let name = variant["$ref"]
-            .as_str()
-            .unwrap()
-            .rsplit('/')
-            .next()
-            .unwrap();
-        let properties = &definitions[name]["properties"];
-        let Some(kind) = properties["type"]["enum"][0].as_str() else {
-            continue;
-        };
-        let data = resolve(definitions, &properties["data"]);
-        let shapes: Vec<&Value> = match data["oneOf"].as_array() {
-            Some(branches) => branches
-                .iter()
-                .map(|branch| resolve(definitions, branch))
-                .collect(),
-            None => vec![data],
-        };
-        // A shape with an `anyOf` of `required` branches (progress: value
-        // or steps) needs one branch met; the first is the one the sample
-        // carries.
-        for shape in shapes {
-            let mode = shape["properties"]["mode"]["enum"][0]
-                .as_str()
-                .map(str::to_owned);
-            let first_branch = shape["anyOf"][0]["required"].as_array();
-            let required = shape["required"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .chain(first_branch.into_iter().flatten())
-                .map(|key| key.as_str().unwrap().to_owned())
-                .collect();
-            required_by_shape.push((kind.to_owned(), mode, required));
-        }
-    }
-    let mut schema_types: Vec<&str> = required_by_shape
-        .iter()
-        .map(|(k, _, _)| k.as_str())
-        .collect();
-    schema_types.sort_unstable();
-    schema_types.dedup();
-    let mut content_types = CONTENT_TYPES.to_vec();
-    content_types.sort_unstable();
-    assert_eq!(
-        content_types, schema_types,
-        "the validator's types are the schema's"
-    );
-
-    // The smallest data the validator accepts for each shape. Each carries
-    // exactly the schema's required keys (and the first `anyOf` branch's),
-    // checked below, so a key the schema adds or drops fails here until both
-    // sides agree.
-    let smallest = |kind: &str, mode: Option<&str>| -> Value {
-        match (kind, mode) {
-            ("chart", None) => json!({"series": [{"name": "a", "values": [1]}]}),
-            ("metric", None) => json!({"label": "L", "value": "1"}),
-            ("progress", None) => json!({"label": "L", "value": 50}),
-            ("diagram", Some("graph")) => {
-                json!({"mode": "graph", "nodes": [{"id": "n", "label": "N"}], "edges": []})
-            }
-            ("diagram", Some("sequence")) => {
-                json!({"mode": "sequence", "actors": [{"id": "a", "label": "A"}], "messages": []})
-            }
-            ("document", None) => json!({"subject": "S", "paragraphs": ["p"]}),
-            ("code", None) => json!({"source": {"text": "x"}}),
-            ("table", None) => json!({"columns": [{"label": "c"}], "rows": []}),
-            ("note", None) => json!({"segments": [{"text": "t"}]}),
-            ("image", None) => json!({"format": "png", "bytes": PNG_1X1, "alt": "a"}),
-            ("calendar", None) => json!({"view": "week", "start": "2026-10-05", "events": []}),
-            ("tasks", None) => json!({"items": [{"id": "t", "text": "T"}]}),
-            ("timer", None) => {
-                json!({"timers": [{"id": "t", "label": "T", "endsAt": "2026-10-05T18:42:00Z"}]})
-            }
-            ("weather", None) => {
-                json!({"location": "L", "units": "C", "current": {"temp": 1, "condition": "clear"}})
-            }
-            ("inbox", None) => {
-                json!({"messages": [{"id": "m", "from": "F", "time": "2026-10-05"}]})
-            }
-            other => panic!("no sample for {other:?}; the schema grew a type or a mode"),
-        }
-    };
-    for (kind, mode, required) in &required_by_shape {
-        let shape = match mode {
-            Some(mode) => format!("{kind}/{mode}"),
-            None => kind.clone(),
-        };
-        let data = smallest(kind, mode.as_deref());
-        let mut keys: Vec<&str> = data
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
-        keys.sort_unstable();
-        let mut wanted: Vec<&str> = required.iter().map(String::as_str).collect();
-        wanted.sort_unstable();
-        assert_eq!(
-            keys, wanted,
-            "{shape}: the sample carries the schema's required keys"
-        );
-        let action = json!({"op": "show", "id": "x", "type": kind, "data": data});
-        assert!(
-            validate_action(&action).is_ok(),
-            "{shape}: {:?}",
-            validate_action(&action)
-        );
-        for key in required {
-            let mut short = action.clone();
-            short["data"].as_object_mut().unwrap().remove(key);
-            assert!(
-                validate_action(&short).is_err(),
-                "{shape} without {key} must be refused"
-            );
-        }
-    }
-}
-
 // ---- image -----------------------------------------------------------------
 
 /// A real 1x1 PNG (69 bytes), the same one the validator corpus carries.
@@ -494,6 +353,13 @@ fn same_json(a: &Value, b: &Value) -> bool {
 /// `validatorCorpus.test.ts` runs the same file. An accepted action is
 /// accepted again, unchanged, when it is validated a second time: the
 /// browser validates what this side normalized.
+///
+/// This is also what holds the validator to `docs/display-action-v1.schema.json`:
+/// `schema.test.ts` checks that the corpus accepts every show type's
+/// smallest data, refuses a case without each key the schema requires,
+/// whose error names it, and holds no accepted action the schema refuses;
+/// and the corpus's `show_type_*` errors list this side's types, which
+/// `schema.test.ts` compares, in order, with the schema's.
 #[test]
 fn agrees_with_the_shared_validator_corpus() {
     let cases = validator_corpus();

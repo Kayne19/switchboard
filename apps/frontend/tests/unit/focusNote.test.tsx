@@ -5,8 +5,7 @@
 // its own; a chart keeps every note about it, its points marked; a table,
 // code, a document or a figure keeps the rail's note about it.
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { focusNotes } from '../../src/components/FocusLayer';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { ControllerProvider, useController } from '../../src/controller/context';
@@ -14,9 +13,9 @@ import { createInitialState, reduceActions } from '../../src/controller/reducer'
 import type { ChartData, ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { mount, stubResizeObserver, unmount, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement;
-let root: Root;
 let dispatch: (action: ControllerAction) => void;
 
 function ControllerHandle() {
@@ -49,14 +48,7 @@ const measured: Record<string, (this: HTMLElement) => number> = {
 };
 const saved: Record<string, PropertyDescriptor | undefined> = {};
 
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
+stubResizeObserver();
 
 beforeEach(() => {
   for (const [name, get] of Object.entries(measured)) {
@@ -66,8 +58,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
+  unmountAll();
   for (const [name, descriptor] of Object.entries(saved)) {
     if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
     else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
@@ -75,16 +66,11 @@ afterEach(() => {
 });
 
 function focusOn(actions: ControllerAction[], id: string): HTMLElement {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() =>
-    root.render(
-      <ControllerProvider>
-        <SceneRenderer />
-        <ControllerHandle />
-      </ControllerProvider>,
-    ),
+  host = mount(
+    <ControllerProvider>
+      <SceneRenderer />
+      <ControllerHandle />
+    </ControllerProvider>,
   );
   for (const action of actions) act(() => dispatch(action));
   act(() => dispatch({ op: 'focus', id }));
@@ -212,8 +198,7 @@ describe('any object in focus keeps the notes about it', () => {
   it("keeps the note about a plan's progress, and about a metric, beside it", () => {
     const plan = focusOn(fixtures.plan, 'ship-plan');
     expect(plan.querySelector('.focus-layer__note .annotation-card')?.textContent).toContain('waits on the graph layout');
-    act(() => root.unmount());
-    host.remove();
+    unmount(host);
     const metric: ControllerAction = { op: 'show', id: 'build-note', type: 'note', data: { anchor: { target: 'build-time' }, segments: [{ text: 'Two seconds faster since the cache moved.' }] } };
     const layer = focusOn([...fixtures.plan, metric], 'build-time');
     expect(layer.querySelector('.focus-layer__note .annotation-card')?.textContent).toContain('Two seconds faster');

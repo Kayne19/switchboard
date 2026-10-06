@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DrawingViewport } from '../../src/primitives/DrawingViewport';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import type { DrawingFit, Size } from '../../src/primitives/drawingFit';
 import { RAIL, type DrawingMap } from '../../src/primitives/drawingScroll';
+import { mount, rerender } from './sceneHarness';
 
 // What the drawing would be laid out as in a box of another height: these cases never ask (no stage listens).
 const notAsked = (): { drawing: Size; fit: DrawingFit } => {
@@ -13,13 +13,11 @@ const notAsked = (): { drawing: Size; fit: DrawingFit } => {
 };
 
 let host: HTMLDivElement;
-let root: Root;
 
 // jsdom has no layout: the scroller reports a 320 x 300 box.
 const box = { clientWidth: 320, clientHeight: 300 };
 const saved: Record<string, PropertyDescriptor | undefined> = {};
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   for (const [name, value] of Object.entries(box)) {
     saved[name] = Object.getOwnPropertyDescriptor(HTMLElement.prototype, name);
     Object.defineProperty(HTMLElement.prototype, name, {
@@ -38,11 +36,6 @@ afterAll(() => {
   }
 });
 
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
-
 const drawing = { width: 400, height: 2000 };
 const scrollsDown: DrawingFit = { scale: 0.8, width: 320, height: 1600, scrollX: false, scrollY: true, minScale: 0.8 };
 // Twenty rows, 80 units deep with 20 between: on screen, rows of 64 px with 16 px gaps.
@@ -55,18 +48,14 @@ const rows: DrawingMap = {
 };
 const rowSpans = rows.parts.map(({ box: part }) => [part.y * 0.8, (part.y + part.height) * 0.8] as const);
 
+// The first render in a test mounts; the rest render into the same root.
 function render(element: React.ReactElement) {
-  if (!host) {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-  }
-  act(() => root.render(element));
+  if (host?.isConnected) rerender(host, element);
+  else host = mount(element);
 }
 
 describe('a drawing viewport', () => {
   it('opens a scrolling drawing on its lead, at rest, and keeps the reader there through an update that leaves its shape alone', () => {
-    host = undefined as unknown as HTMLDivElement;
     render(
       <DrawingViewport laidOutFor={notAsked} drawing={drawing} fit={scrollsDown} lead={{ x: 0, y: 500, width: 100, height: 100 }} map={rows} ariaLabel="d">
         <rect width="10" height="10" />
@@ -96,7 +85,6 @@ describe('a drawing viewport', () => {
   });
 
   it('takes the keys that scroll it, from stop to stop, and leaves the surface around it the rest', () => {
-    host = undefined as unknown as HTMLDivElement;
     const expanded: string[] = [];
     // Keys still reach the page: the scroller marks the ones it takes
     // rather than stopping them.
@@ -150,7 +138,6 @@ describe('a drawing viewport', () => {
   });
 
   it('moves on from where a key or a count is taking it, not from where the scroll has got to', () => {
-    host = undefined as unknown as HTMLDivElement;
     // A smooth scroll still on its way: the scroller has not moved yet.
     const asked: number[] = [];
     const scrollTo = HTMLElement.prototype.scrollTo;
@@ -182,7 +169,6 @@ describe('a drawing viewport', () => {
   });
 
   it('leaves a key with Ctrl, Alt or Meta held to the browser and the surface alike', () => {
-    host = undefined as unknown as HTMLDivElement;
     const expanded: string[] = [];
     render(
       <FocusableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
@@ -201,7 +187,6 @@ describe('a drawing viewport', () => {
   });
 
   it('pins its header band only when it scrolls down, and is contained otherwise', () => {
-    host = undefined as unknown as HTMLDivElement;
     render(
       <DrawingViewport laidOutFor={notAsked} drawing={drawing} fit={scrollsDown} pinned={{ height: 80, content: <text>HEADERS</text> }} map={rows} ariaLabel="d">
         <rect width="10" height="10" />
