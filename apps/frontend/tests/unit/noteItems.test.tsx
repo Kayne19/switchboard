@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { itemTargetText, markedItem, noteTarget, objectName } from '../../src/app/noteItems';
 import type { ControllerAction, NoteData, SceneObject, SceneObjectType } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
+import { chartSeriesPoint } from '../../src/primitives/chartGeometry';
 import { lastScene, renderScene, runActions, stubResizeObserver } from './sceneHarness';
 
 // For each type: an object holding two items, and the name a note uses for
@@ -374,7 +375,9 @@ describe('a chart beside the primary marks the point the rail note names', () =>
     const onPoint: ControllerAction = { op: 'show', id: 'point-note', type: 'note', data: { tag: 'PEAK', anchor: { target: 'trend', x: 1 }, segments: [{ text: 'The peak.' }] } };
     renderScene([table, trend, onPoint]);
     expect(scene().querySelector('.content-rail .annotation-card__anchor')?.textContent).toBe('TARGET / b');
-    const marker = scene().querySelector('.composed-aux .chart-marker');
-    expect(marker?.getAttribute('data-x')).toBe('1');
+    // No leader reaches it in the cell: a hollow ring marks it, on the line.
+    const ring = scene().querySelector('.composed-aux .chart-note-ring');
+    const point = chartSeriesPoint({ title: 'TREND', labels: ['a', 'b', 'c'], series: [{ name: 'S', values: [1, 3, 2] }] }, 1);
+    expect(Number(ring?.getAttribute('cx'))).toBeCloseTo(point!.x, 3);
   });
 });

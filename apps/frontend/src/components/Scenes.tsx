@@ -245,7 +245,8 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
 // has no room for a whole step list. `onStage` are the objects on stage, by
 // id, which a note names its object among; `drawn` is the note the page
 // draws for the scene (the rail's), and the object marks what it names in
-// it: a chart's point (ringed or outlined, its value printed), a list's
+// it: a chart's point (a bar outlined, its value printed; a point on a
+// line ringed), a list's
 // item (`markedItem`), a diagram's node or actor (its NOTE marker; the note
 // stays in the rail, never a callout in a cell).
 function composedPrimitive(object: SceneObject, slot: 'primary' | 'aux', onStage: ControllerState['agentObjects'], drawn: NoteData | null) {
@@ -415,13 +416,17 @@ function trainingContent(
               const notes = notesByPanel.get(chart.id) ?? [];
               // Its bar or point stays marked; the card is in the band.
               const onChart = banded ? notes.filter((note) => note.key !== banded.key) : notes;
+              // The notes whose leaders run to their points on the chart: not
+              // the one in the band, nor the one the chart left for the rail.
+              const away = railNote?.chart === chart.id ? railNote.note : undefined;
+              const led = onChart.filter((note) => note.key !== away);
               return (
                 <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object" data-chart-id={chart.id}>
                   <TechFrame variant="panel" />
                   <ObjectSurface object={chart}>
                     <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
                       <StageDemandContext.Provider value={chart.id === primary.id ? onDemand : null}>
-                        <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} />
+                        <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} led={chartNoteAnchors(chart, led)} />
                       </StageDemandContext.Provider>
                     </FocusableSurface>
                   </ObjectSurface>
