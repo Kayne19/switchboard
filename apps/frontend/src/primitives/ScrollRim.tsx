@@ -33,7 +33,6 @@ export function ScrollRim({
   inset,
   at,
   className,
-  count,
 }: {
   /** The edge: a drawing has four, a list two. */
   side: Side;
@@ -44,8 +43,6 @@ export function ScrollRim({
   at?: number;
   /** The tag's own class, beside the rim's. */
   className?: string;
-  /** What the tag counts, for a test to read. */
-  count?: number;
 }) {
   const along = side === 'left' || side === 'right';
   const below = inset !== undefined && side !== 'bottom' ? { top: `${inset}px` } : null;
@@ -63,7 +60,7 @@ export function ScrollRim({
       {text !== null ? (
         <>
           <div className={`scroll-rim__rail scroll-rim__rail--${side}`} style={below ?? undefined} aria-hidden="true" />
-          <div className={`scroll-rim__count scroll-rim__count--${side}${className ? ` ${className}` : ''}`} style={tagAt ?? undefined} onClick={page} aria-hidden="true" data-count={count}>
+          <div className={`scroll-rim__count scroll-rim__count--${side}${className ? ` ${className}` : ''}`} style={tagAt ?? undefined} onClick={page} aria-hidden="true">
             <span className="scroll-rim__text">{text}</span>
             <Chevron className="scroll-rim__chevron" />
           </div>

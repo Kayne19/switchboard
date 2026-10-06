@@ -426,10 +426,13 @@ frame's top-right step.
 module are read**: rows between thin rules under a meta line that names
 the list and counts what it holds, the prose face for what a person wrote,
 the tech face for states, days and counts, no cards. A count is said once
-on screen: the meta line (or a section's head) says it, and the scene
-frame's subtitle and caption, where the agent sent none, name what the
-object is (`CHECKLIST`, `MESSAGES / AS SENT`, a table's `ROWS / COLUMNS`,
-a calendar's dates), never how much it holds. A to-do list in sections
+on screen: for an object whose meta line counts (a table, a calendar, a
+to-do list, an inbox), the meta line (or a section's head) says it, and
+the scene frame's subtitle and caption, where the agent sent none, name
+what the object is (`CHECKLIST`, `MESSAGES / AS SENT`, a table's `ROWS /
+COLUMNS`, a calendar's dates), never how much it holds. Timers and a
+forecast have no meta line that counts, so their frame subtitle does
+(`3 TIMERS / 1 PAUSED`, `NOW + 24 H + 7 DAYS`). A to-do list in sections
 counts each at its head (`2 OPEN / 1 DONE / 1 OVERDUE`) and gives no total
 over them; one with no sections counts the whole list on its meta line.
 
@@ -455,9 +458,9 @@ over them; one with no sections counts the whole list on its meta line.
   task (its day on one line, done tasks counted, no detail or tags), a
   message as its sender and subject.
 - A list that outgrows its slot scrolls inside its frame in the list
-  viewport (`ListViewport`): the drawing viewport's fade, cut line and
-  count of the items past each edge, and it opens on the item a note
-  names. Focus gives it the stage, and keeps that note beside it.
+  viewport (`ListViewport`): the scroll rim a drawing has (`ScrollRim`:
+  the fade, the cut line and the count of the items past each edge), and
+  it opens on the item a note names. Focus gives it the stage, and keeps that note beside it.
 
 **A note on one item** (`anchor.item`) marks that item wherever its object
 is drawn, as a diagram marks the node a note names, while that note is the

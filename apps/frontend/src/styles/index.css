@@ -3401,15 +3401,12 @@ button {
   width: min(88%, 880px);
 }
 .document-viewport__body {
-  min-height: 0;
   overflow: auto;
-  overscroll-behavior: contain;
   padding-right: clamp(8px, 1cqw, 16px);
   color: #cfcbc4;
   font-family: "Helvetica Neue", Arial, sans-serif;
   font-size: clamp(15px, 1.28cqw, 22px);
   line-height: 1.62;
-  scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
 /* Paragraphs are read as Markdown (MarkdownBlocks). Lists and code blocks
@@ -3547,9 +3544,10 @@ button {
   background: #000;
 }
 /* The table viewport shares this mask: it sits in the same frame. Its
-   lower row is the frame's lower step (the clip's 4.6% at the bottom left)
-   with a gap: the scroll stands above it, so no row or line ever runs under
-   that corner, and the rims sit clear of it. */
+   lower row is the frame's lower step (the clip's 4.6% at the bottom left;
+   a share of the content box, so a little less under the table's top
+   padding) with a gap that covers that: the scroll stands above it, so no
+   row or line ever runs under that corner, and the rims sit clear of it. */
 .code-viewport__mask,
 .table-viewport__mask {
   position: absolute;
@@ -3572,15 +3570,11 @@ button {
   background: #000;
   overflow: hidden;
 }
+/* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
 .code-viewport__scroll {
-  width: 100%;
-  height: 100%;
   overflow: auto;
-  overscroll-behavior: contain;
   padding: clamp(20px, 3cqh, 34px) clamp(28px, 3cqw, 52px)
     clamp(14px, 2cqh, 24px) clamp(52px, 4.7cqw, 78px);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
 }
 .code-viewport pre {
   min-width: max-content;
@@ -3651,20 +3645,14 @@ button {
 .table-viewport__mask {
   padding-top: clamp(20px, 3cqh, 34px);
 }
+/* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
 .table-viewport__scroll {
-  flex: 1 1 auto;
-  width: 100%;
-  min-height: 0;
   overflow: auto;
-  overscroll-behavior: contain;
   padding: 0 clamp(28px, 3cqw, 52px) clamp(14px, 2cqh, 24px);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
 }
 /* Left-set, clear of the frame's top-right cut. */
 .table-viewport__meta {
   display: flex;
-  flex: none;
   gap: clamp(18px, 2.4cqw, 36px);
   margin-bottom: clamp(10px, 1.6cqh, 18px);
   padding: 0 clamp(28px, 3cqw, 52px);
@@ -4369,20 +4357,18 @@ button {
   z-index: 1;
   padding: 0 clamp(18px, 2.2cqw, 38px);
 }
-/* A calendar fills its box to the edges (the grid's foot, the month's last
-   row, the agenda's cut line), so in the main slot the box is the panel
-   frame's inner box, with no more room than that (the panel rule, with the
-   to-do list's). */
-/* A primary in the panel frame that reaches its edges (a calendar, a to-do
-   list, an inbox, a figure's caption) stands in the frame's inner box:
-   inside both of its steps (--panel-step), with a gap. The step is a share of the frame's
-   height, and the main slot's height is the frame's and is set by the
-   layout, so the inset is a row of the slot's own grid, exact at any
-   height; a type that keeps more room than that keeps it (--slot-top,
-   --slot-bottom). A padding in stage units fell short of the step on every
-   slot taller than it assumed: a calendar's grid, a list's last rows and a
-   figure's caption ran over the lower step. Timers and a forecast keep
-   their own padding, which clears both steps (frame.spec.ts). */
+/* A primary in the panel frame that reaches its edges stands in the
+   frame's inner box: inside both of its steps (--panel-step), with a gap.
+   A calendar fills its box to the edges (the grid's foot, the month's last
+   row, the agenda's cut line) and keeps no more room than that; a to-do
+   list, an inbox and a figure keep their own padding where it is deeper
+   (--slot-top, --slot-bottom). The step is a share of the frame's height,
+   and the main slot's height is the frame's and is set by the layout, so
+   the inset is a row of the slot's own grid, exact at any height. A padding
+   in stage units fell short of the step on every slot taller than it
+   assumed: a calendar's grid, a list's last rows and a figure's caption ran
+   over the lower step. Timers and a forecast keep their own padding, which
+   clears both steps (frame.spec.ts). */
 .calendar-object > .focusable-content,
 .tasks-object > .focusable-content,
 .inbox-object > .focusable-content,

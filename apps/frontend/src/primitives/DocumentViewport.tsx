@@ -5,8 +5,8 @@ import { MarkdownBlocks } from './RichText';
 import type { Slot } from './slot';
 import { TechFrame } from './TechFrame';
 
-// What the rims count a document's blocks as: its paragraphs, a list or a
-// code block among them standing as one.
+// What the rims count a document's blocks as: its paragraphs (a heading is
+// drawn as a bold one), a list or a code block among them standing as one.
 const PARAGRAPH: Noun = ['PARAGRAPH', 'PARAGRAPHS'];
 
 // Each paragraph is agent prose and may carry the same Markdown subset as the

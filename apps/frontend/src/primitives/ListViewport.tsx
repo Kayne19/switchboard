@@ -7,10 +7,11 @@ import { PAGE_SHARE, scrollMove } from './drawingScroll';
 import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
-// list, an inbox, an agenda, a forecast's days): the list scrolls inside
-// it, up and down only, and on each edge it continues past the viewport
-// draws the rim DrawingViewport draws for a drawing (ScrollRim), so the
-// two read as one instrument: a fade as the edge's rows run under it,
+// list, an inbox, an agenda, a forecast's days, a table's rows, source, a
+// document's body): the list scrolls inside it, up and down only (sideways
+// too where the content asks), and on each edge it continues past the
+// viewport draws the rim DrawingViewport draws for a drawing (ScrollRim),
+// so the two read as one instrument: a fade as the edge's rows run under it,
 // the dashed cut line, and a count of the items wholly past that edge with
 // a chevron pointing there (a tap turns a page that way). A list that fits
 // has none of them and does not scroll.
@@ -143,7 +144,8 @@ interface ListViewportProps {
   /**
    * The band at the top of the scroll that the rows pass under (a table's
    * sticky header), by a selector inside it: the counts, the top edge and a
-   * page start below it.
+   * page start below it. The lead (`lead`) does not reckon with it: no list
+   * with a band has a lead.
    */
   pinned?: string;
   /**
@@ -260,7 +262,6 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
         text={count > 0 ? rimCount(count, noun) : 'MORE'}
         onPage={() => page(side === 'top' ? -1 : 1)}
         inset={pinned ? pinnedDepth : undefined}
-        count={count}
       />
     ) : null;
 

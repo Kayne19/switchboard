@@ -548,7 +548,7 @@ function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: b
       // calendar here); a key the hours took already is left to them.
       tabIndex={0}
       role="group"
-      aria-label={`Days shown: ${shown}. ${[before ? `Earlier: ${before}` : '', after ? `Later: ${after}` : ''].filter(Boolean).join('. ')}. Left and right arrow keys turn the days.`}
+      aria-label={`Days shown: ${shown}. ${[before ? `Earlier: ${before}` : '', after ? `Later: ${after}` : ''].filter(Boolean).join('. ')}. The arrow, Space and page keys turn the days; Home and End go to the first and last.`}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
         if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
         const move = scrollMove(event.key, event.shiftKey, true);
