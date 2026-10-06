@@ -36,8 +36,8 @@ import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
 import { Chevron } from '../primitives/ScrollRim';
 import { TablePrimitive } from '../primitives/TablePrimitive';
-import { TasksPrimitive, taskCounts } from '../primitives/TasksPrimitive';
-import { InboxPrimitive, inboxCounts } from '../primitives/InboxPrimitive';
+import { TasksPrimitive } from '../primitives/TasksPrimitive';
+import { InboxPrimitive } from '../primitives/InboxPrimitive';
 import { TimerPrimitive } from '../primitives/TimerPrimitive';
 import { WeatherPrimitive } from '../primitives/WeatherPrimitive';
 import { FocusableSurface } from '../primitives/FocusableSurface';
@@ -551,7 +551,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
       return {
         ...rail,
         title: data.title ?? 'DATA / TABLE',
-        subtitle: data.subtitle ?? `${data.rows.length} ROWS / ${data.columns.length} COLUMNS`,
+        subtitle: data.subtitle ?? 'ROWS / COLUMNS',
         context: data.context ?? 'TABLE',
         footer: 'FRAME / INTERRUPTED RAILS',
         caption: sceneCaption(primary, 'DISPLAY / TABLE'),
@@ -583,29 +583,28 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
       };
     }
     case 'tasks': {
-      // A to-do list heads the scene with its own words, else what it holds.
+      // A to-do list heads the scene with its own words, else its kind: the
+      // list's meta line and its sections' heads say what it holds.
       const { data } = cast.tasks(primary);
-      const counts = taskCounts(data);
       return {
         ...rail,
         title: data.title ?? 'TASKS / TO DO',
-        subtitle: data.subtitle ?? `${counts.open} OPEN / ${counts.done} DONE`,
+        subtitle: data.subtitle ?? 'CHECKLIST',
         context: data.context ?? 'TASKS',
         footer: 'DISPLAY / TASKS',
-        caption: sceneCaption(primary, `TASKS / ${countText(data.items.length, ['ITEM', 'ITEMS'])}`),
+        caption: sceneCaption(primary, 'TASKS / TO DO'),
         main: slot('tasks-object', <TasksPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
     case 'inbox': {
       const { data } = cast.inbox(primary);
-      const counts = inboxCounts(data);
       return {
         ...rail,
         title: data.title ?? 'INBOX / MESSAGES',
-        subtitle: data.subtitle ?? `${countText(counts.messages, ['MESSAGE', 'MESSAGES'])} / ${counts.unread} UNREAD`,
+        subtitle: data.subtitle ?? 'MESSAGES / AS SENT',
         context: data.context ?? 'INBOX',
         footer: 'DISPLAY / INBOX',
-        caption: sceneCaption(primary, `INBOX / ${countText(counts.messages, ['MESSAGE', 'MESSAGES'])}`),
+        caption: sceneCaption(primary, 'INBOX / AS SENT'),
         main: slot('inbox-object', <InboxPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }

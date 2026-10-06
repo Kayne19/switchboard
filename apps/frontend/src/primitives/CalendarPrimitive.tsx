@@ -928,12 +928,11 @@ function AgendaRow({ item, day, model, marked, overlaps = false }: { item: Agend
 
 const VIEW_NAMES = { day: 'DAY', week: 'WEEK', month: 'MONTH', agenda: 'AGENDA' } as const;
 
-/** The scene frame's words for a calendar holding the main slot, where it sent none. */
+/** The scene frame's words for a calendar holding the main slot, where it sent none: the dates it covers, never its count (the meta line counts). */
 export function calendarFrame(data: CalendarData): { title: string; subtitle: string; context: string } {
-  const count = data.events.length;
   return {
     title: data.title ?? `CALENDAR / ${VIEW_NAMES[data.view]}`,
-    subtitle: data.subtitle ?? `${rangeText(data)} / ${count} ${count === 1 ? 'EVENT' : 'EVENTS'}`,
+    subtitle: data.subtitle ?? rangeText(data),
     context: data.context ?? 'CALENDAR',
   };
 }

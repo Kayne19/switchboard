@@ -46,3 +46,17 @@ describe('an object names itself on its meta line only where nothing else does',
     expect(ownTitles(page.querySelector('.focus-layer'), type)).toEqual([objects[type].title]);
   });
 });
+
+// Counts are said once, by the object's meta line (or a list's section
+// heads): the scene frame's subtitle and caption, where the agent sent
+// none, name what the object is, never how much it holds. Before, an inbox
+// said '50 MESSAGES' in its subtitle, its meta line and its caption.
+describe('the scene frame never repeats what the object counts', () => {
+  const counted = /\d+ (ROWS?|COLUMNS?|COLS|EVENTS?|OPEN|DONE|OVERDUE|ITEMS?|MESSAGES?|UNREAD|FLAGGED)\b/;
+  it.each(types)('the %s in the main slot', (type) => {
+    renderScene([show(type, 'primary')]);
+    const scene = lastScene();
+    const frame = [scene.querySelector('.scene-heading__sub')?.textContent, ...[...scene.querySelectorAll('.scene-footer span')].map((span) => span.textContent)];
+    expect(frame.filter((text) => counted.test(text ?? ''))).toEqual([]);
+  });
+});

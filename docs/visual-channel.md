@@ -411,7 +411,13 @@ the panel frame's steps, so nothing it draws crosses the frame. The wire rules a
 **The to-do list and the inbox are read as the table and the rail's plan
 module are read**: rows between thin rules under a meta line that names
 the list and counts what it holds, the prose face for what a person wrote,
-the tech face for states, days and counts, no cards.
+the tech face for states, days and counts, no cards. A count is said once
+on screen: the meta line (or a section's head) says it, and the scene
+frame's subtitle and caption, where the agent sent none, name what the
+object is (`CHECKLIST`, `MESSAGES / AS SENT`, a table's `ROWS / COLUMNS`,
+a calendar's dates), never how much it holds. A to-do list in sections
+counts each at its head (`2 OPEN / 1 DONE / 1 OVERDUE`) and gives no total
+over them; one with no sections counts the whole list on its meta line.
 
 - A to-do list stands in sections, in the order their groups are first met
   (a section is its heading over its rows). A task's state is the plan's
