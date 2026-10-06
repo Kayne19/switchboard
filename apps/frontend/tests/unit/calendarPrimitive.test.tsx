@@ -354,3 +354,31 @@ describe('the time grid\u2019s fold', () => {
     expect(declared('.calendar-grid__hour::after', 'left')).toEqual(declared('.calendar-grid__fold', 'left'));
   });
 });
+
+describe('the now and today marks', () => {
+  it('marks the now on a grid with its time on a tag in the gutter and a thin rule across today only, under the events', () => {
+    const calendar = render(assistantWeek);
+    const now = calendar.querySelector('.calendar-grid__now') as HTMLElement;
+    expect([...now.children].map((part) => part.className)).toEqual(['calendar-grid__now-text tech micro', 'calendar-grid__now-line']);
+    // No line across the other days, and nothing lifting the mark over the events (each event slot has a z-index).
+    expect(rulesFor('.calendar-grid__now::before')).toEqual([]);
+    expect(rulesFor('.calendar-grid__now::after')).toEqual([]);
+    expect(declared('.calendar-grid__now', 'z-index')).toEqual([]);
+    expect(declared('.calendar-grid__now-line', 'z-index')).toEqual([]);
+    expect(Number((boxes(calendar, 'standup-wed')[0] as HTMLElement).style.zIndex)).toBeGreaterThan(0);
+    // A thin solid rule, no glow; the time's tag pointed at the grid.
+    expect(declared('.calendar-grid__now-line', 'height')).toEqual(['1px']);
+    expect(declared('.calendar-grid__now-line', 'box-shadow')).toEqual([]);
+    expect(declared('.calendar-grid__now-text', 'clip-path')).toEqual(['var(--now-point)']);
+  });
+
+  it('draws the agenda\u2019s now in the same mark, and today the same way in every view', () => {
+    // The agenda's NOW row: the pointed tag along the same thin rule.
+    expect(declared('.calendar-agenda__now-text', 'clip-path')).toEqual(['var(--now-point)']);
+    expect(declared('.calendar-agenda__now-line', 'height')).toEqual(['1px']);
+    expect(declared('.calendar-agenda__now-line', 'box-shadow')).toEqual([]);
+    // Today: an orange rule along the top of its column head and its month cell, never a box round it.
+    expect(declared('.calendar-month__cell--today', 'box-shadow')).toEqual(['inset 0 1px 0 var(--orange)']);
+    expect(declared('.calendar-grid__day--today', 'box-shadow')).toEqual(['inset 0 1px 0 var(--orange)']);
+  });
+});

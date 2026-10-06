@@ -262,3 +262,27 @@ for (const geometry of frameGeometries) {
     }
   });
 }
+
+test('the now: its time on a tag in the gutter, and a rule across today\u2019s column only, under the events', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page, 'calendar');
+  // Hit-testing finds what is painted on top; the mark takes no pointer, so let it for the question.
+  await page.addStyleTag({ content: '.calendar-grid__now, .calendar-grid__now * { pointer-events: auto !important; }' });
+  const placed = await page.evaluate(() => {
+    const scope = document.querySelector('.scene [data-testid="calendar"]')!;
+    const rule = scope.querySelector('.calendar-grid__now-line')!.getBoundingClientRect();
+    const tag = scope.querySelector('.calendar-grid__now-text')!.getBoundingClientRect();
+    const today = scope.querySelector('.calendar-grid__column--today')!.getBoundingClientRect();
+    const first = scope.querySelector('.calendar-grid__column')!.getBoundingClientRect();
+    // The standup under way covers the now: the event is drawn over the rule.
+    const standup = scope.querySelector('[data-item="standup-wed"]')!.getBoundingClientRect();
+    const top = document.elementFromPoint(standup.left + standup.width / 2, rule.top + 0.5);
+    return {
+      spansToday: Math.abs(rule.left - today.left) <= 1 && Math.abs(rule.right - today.right) <= 1,
+      thin: rule.height <= 1.01,
+      tagInGutter: tag.left >= first.left - 60 && tag.right <= first.left + 0.5,
+      eventOnTop: top?.closest('[data-item="standup-wed"]') !== null,
+    };
+  });
+  expect(placed).toEqual({ spansToday: true, thin: true, tagInGutter: true, eventOnTop: true });
+});

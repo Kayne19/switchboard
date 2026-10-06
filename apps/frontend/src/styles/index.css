@@ -4366,6 +4366,9 @@ button {
   padding-block: max(clamp(12px, 1.4cqw, 22px), calc(var(--panel-step-share) * 40cqh + 4px));
 }
 .calendar {
+  /* The now's tag, pointed at what it reads (the grid's gutter tag, the
+     agenda's NOW row): a date's tag is square, a time's points. */
+  --now-point: polygon(0 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 0 100%);
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -4474,6 +4477,7 @@ button {
 }
 .calendar-grid__day--today {
   background: rgba(var(--orange-rgb), 0.07);
+  box-shadow: inset 0 1px 0 var(--orange);
   color: var(--orange);
 }
 .calendar-grid__day--today .calendar-grid__date {
@@ -4595,29 +4599,25 @@ button {
   color: rgba(232, 230, 223, 0.36);
   text-align: center;
 }
-/* The agent's now: its time in the gutter, a line across today, and a
-   faint one across the other days. */
+/* The agent's now, one mark in every view (the agenda's NOW row is the
+   same): its time on an orange tag pointed at what it reads, here from the
+   gutter at the grid, and a thin solid rule where the time is today --
+   across today's column only, under the events, so a box the now lies in
+   reads whole and the rule shows in the free time around it. The other
+   days of a week carry nothing: they are not now. */
 .calendar-grid__now {
   position: absolute;
-  z-index: 8;
   left: 0;
   right: 0;
   height: 0;
   pointer-events: none;
 }
-.calendar-grid__now::before {
-  content: "";
-  position: absolute;
-  left: var(--grid-lead, var(--calendar-gutter));
-  right: var(--grid-trail, 0px);
-  border-top: 1px dashed rgba(var(--orange-rgb), 0.28);
-}
 .calendar-grid__now-text {
   position: absolute;
   left: 0;
   top: 0;
-  width: calc(var(--calendar-gutter) - 3px);
-  padding: 0 2px;
+  width: calc(var(--calendar-gutter) - 2px);
+  padding: 0 5px 0 1px;
   translate: 0 -50%;
   background: var(--orange);
   color: #000;
@@ -4625,15 +4625,15 @@ button {
   letter-spacing: 0.04em;
   line-height: 1.5;
   text-align: center;
+  clip-path: var(--now-point);
 }
 .calendar-grid__now-line {
   position: absolute;
-  top: -1px;
+  top: 0;
   left: calc(var(--grid-lead) + (100% - var(--grid-lead) - var(--grid-trail)) * var(--now-column) / var(--columns));
   width: calc((100% - var(--grid-lead) - var(--grid-trail)) / var(--columns));
-  height: 2px;
+  height: 1px;
   background: var(--orange);
-  box-shadow: 0 0 8px rgba(var(--orange-rgb), 0.55);
 }
 
 /* An event in the grid: a slot of its place and size, and the box in it. */
@@ -4933,9 +4933,12 @@ button {
 .calendar-month__cell--past .calendar-month__number {
   color: rgba(232, 230, 223, 0.42);
 }
+/* Today is the same mark in every view: its date on a square orange tag,
+   an orange rule along the top of its column or cell (the now's rule, for
+   the day), and a faint tint; never a box round it. */
 .calendar-month__cell--today {
-  background: rgba(var(--orange-rgb), 0.07);
-  box-shadow: inset 0 0 0 1px rgba(var(--orange-rgb), 0.5);
+  background: rgba(var(--orange-rgb), 0.06);
+  box-shadow: inset 0 1px 0 var(--orange);
 }
 .calendar-month__cell--today .calendar-month__number {
   padding: 0 4px;
@@ -5176,25 +5179,26 @@ button {
 .calendar-agenda__item--again .calendar-agenda__title {
   color: rgba(232, 230, 223, 0.7);
 }
+/* The now between the rows: the grid's mark laid down the list, its tag
+   pointed along the rule. */
 .calendar-agenda__now {
   display: flex;
   align-items: center;
-  gap: 8px;
   padding: 3px 0;
   color: var(--orange);
 }
 .calendar-agenda__now-text {
   flex: none;
-  padding: 0 4px;
+  padding: 0 8px 0 4px;
   background: var(--orange);
   color: #000;
   font-weight: 700;
+  clip-path: var(--now-point);
 }
 .calendar-agenda__now-line {
   flex: 1 1 auto;
-  height: 2px;
+  height: 1px;
   background: var(--orange);
-  box-shadow: 0 0 8px rgba(var(--orange-rgb), 0.5);
 }
 .calendar-agenda__empty {
   display: flex;

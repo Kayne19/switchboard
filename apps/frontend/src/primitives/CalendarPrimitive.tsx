@@ -386,7 +386,7 @@ function AxisRules({ axis }: { axis: TimeAxis }) {
   return <div className="calendar-grid__rules" aria-hidden="true">{rules}</div>;
 }
 
-/** The agent's now: a line across today's column, its time in the gutter. The grid opens on it. */
+/** The agent's now: its time on a tag in the gutter pointed at the grid, and a rule across today's column under the events. The grid opens on it. */
 function NowLine({ axis, minute, column, columns }: { axis: TimeAxis; minute: number; column: number; columns: number }) {
   const top = axisY(axis, minute);
   return (
@@ -430,8 +430,9 @@ function EventBox({ segment, axis, model, day, width, marked, first }: {
   // The box sits in a slot of its place and size; the NOTE badge rides the
   // slot's top edge, outside the box's clip, so it never takes a title's room.
   // One stacking order, set here: a later step over an earlier one, the
-  // active event over its neighbours, the marked one over all; the now line
-  // (z 8 in styles/index.css) over every event.
+  // active event over its neighbours, the marked one over all; every event
+  // over the now line (no z-index in styles/index.css), so a box the now
+  // lies in reads whole.
   const zIndex = isMarked ? 7 : Math.min(6, (segment.stepped ? 1 + segment.column : 1) + (placed.event.active ? 1 : 0));
   const place: CSSProperties = segment.stepped
     ? { top: `${top}px`, height: `${height}px`, left: `${1 + segment.column * STEP_INSET_PX}px`, right: '2px', zIndex }
