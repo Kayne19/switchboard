@@ -189,6 +189,7 @@ button {
 .focusable-content:focus-visible,
 .damocles-presence__button:focus-visible,
 .annotation-card__history:focus-visible,
+.live-chat-card__history:focus-visible,
 .transcript-toggle:focus-visible {
   outline: 1px solid var(--orange);
   outline-offset: 4px;
@@ -2309,6 +2310,26 @@ button {
   width: 100%;
   min-width: 0;
   min-height: 0;
+  /* It asks a box sized by its content (an aux cell) for --timer-ask, set
+     by TimerPrimitive from its width alone: never for what it drew, which
+     the box's height chose (a grid drew a little less than its box, and in
+     an aux cell, as tall as its cells ask, cells and rows took turns every
+     frame). A definite box (the main slot, focus) sizes it as before. */
+  contain: size;
+  contain-intrinsic-height: var(--timer-ask, 0px);
+}
+/* The rows as the list draws them, laid out unseen for their height. */
+.timer-primitive__measure {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+/* Its own block, so the first row's margin is in its height, as it is in
+   the list's scroll. */
+.timer-primitive__measure > ol {
+  display: flow-root;
 }
 .timer-primitive ol {
   margin: 0;
@@ -3480,17 +3501,22 @@ button {
 /* Code */
 /* The table viewport shares this mask: it sits in the same frame, and the
    clip is that frame's inside. Each stands its scroll between the frame's
-   steps in rows of the mask's grid. The lower row is the frame's lower step (the
-   clip's 4.6% at the bottom left; a share of the content box, so a little
-   less under the table's top padding) with a gap that covers that, so no
-   row or line ever runs under that corner and the rims sit clear of it;
-   above, the source has a row of its own (below), the table its padding and
-   meta line. */
+   steps, in the middle row of the mask's grid, by one rule. The top row is
+   the top-right step (the clip's 5.7%) with a gap, or the pane's own top
+   padding (--mask-top) where that is deeper, or what the row holds where
+   that is deeper still (a table's meta line, left-set beside the step). The
+   lower row is the lower step (the clip's 4.6% at the bottom left) with the
+   same gap. So no row or line ever runs under a step, at rest or scrolled,
+   and the rims sit clear of them. The rows span the mask: a CSS rule cannot
+   know which lines are long enough to reach the step. */
 .code-viewport__mask,
 .table-viewport__mask {
+  --mask-top: clamp(20px, 3cqh, 34px);
+  --mask-gap: clamp(6px, 0.9cqh, 12px);
   position: absolute;
   z-index: 1;
   display: grid;
+  grid-template-rows: minmax(max(var(--mask-top), calc(5.7% + var(--mask-gap))), auto) minmax(0, 1fr) calc(4.6% + var(--mask-gap));
   inset: clamp(8px, 1.1cqh, 16px) clamp(8px, 1cqw, 16px);
   /* The inside of the approved code frame (TechFrame "code"), so source
      never crosses the rails as it scrolls. */
@@ -3507,18 +3533,8 @@ button {
   background: #000;
   overflow: hidden;
 }
-/* Source stands below the frame's top-right step as it stands above the
-   lower one: the scroll's top row is the step (the clip's 5.7%) with the
-   same gap, or the source's own top padding (--code-top) where that is
-   deeper. A long first line ran under the step (in focus on a phone), and a
-   line scrolled up passed under it. The row spans the mask, as the lower
-   one does: a CSS rule cannot know which lines are long enough to reach
-   the step. */
-.code-viewport__mask {
-  --code-top: clamp(20px, 3cqh, 34px);
-  grid-template-rows: max(var(--code-top), calc(5.7% + clamp(6px, 0.9cqh, 12px))) minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
-}
-.code-viewport__mask > .list-viewport {
+.code-viewport__mask > .list-viewport,
+.table-viewport__mask > .list-viewport {
   grid-row: 2;
 }
 /* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
@@ -3578,25 +3594,21 @@ button {
    only when they overflow. Thin rules, not cards; the header in the tech
    face; quantities in mono, set to the end so digits line up; a highlighted
    row carries the hot-line accent. */
-/* The mask's top padding and the meta line stand above the scroll, so the
-   sticky header is the scroll's top edge: a row scrolling up passes under it,
-   never into a band above it, and the header stays below the frame's
-   top-right cut. */
-.table-viewport__mask {
-  grid-template-rows: minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
-  padding-top: clamp(20px, 3cqh, 34px);
-}
 /* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
 .table-viewport__scroll {
   overflow: auto;
   padding: 0 clamp(28px, 3cqw, 52px) clamp(14px, 2cqh, 24px);
 }
-/* Left-set, clear of the frame's top-right cut. */
+/* The meta line stands in the mask's top row at the pane's top padding,
+   left-set beside the frame's top-right cut, above the scroll: the sticky
+   header is the scroll's top edge, so a row scrolling up passes under it,
+   never into a band above it. */
 .table-viewport__meta {
+  grid-row: 1;
   display: flex;
   gap: clamp(18px, 2.4cqw, 36px);
   margin-bottom: clamp(10px, 1.6cqh, 18px);
-  padding: 0 clamp(28px, 3cqw, 52px);
+  padding: var(--mask-top) clamp(28px, 3cqw, 52px) 0;
   color: rgba(232, 230, 223, 0.37);
 }
 .table-grid {
@@ -3666,7 +3678,7 @@ button {
 /* In the aux row the panel is short: the header and the first rows are
    the point, so the meta line goes and the padding tightens. */
 .composed-aux-object--table .table-viewport__mask {
-  padding-top: clamp(12px, 1.8cqh, 18px);
+  --mask-top: clamp(12px, 1.8cqh, 18px);
 }
 .composed-aux-object--table .table-viewport__scroll {
   padding: 0 clamp(16px, 1.8cqw, 28px) clamp(8px, 1.2cqh, 14px);
@@ -5796,8 +5808,9 @@ button {
     line-height: 1.56;
   }
 
-  .code-viewport__mask {
-    --code-top: 24px;
+  .code-viewport__mask,
+  .table-viewport__mask {
+    --mask-top: 24px;
     inset: 7px;
   }
   .code-viewport__scroll {
@@ -5821,12 +5834,8 @@ button {
     font-size: clamp(7px, 1.08cqw, 9px);
   }
 
-  .table-viewport__mask {
-    inset: 7px;
-    padding-top: 24px;
-  }
   .table-viewport__meta {
-    padding: 0 18px;
+    padding-inline: 18px;
   }
   .table-viewport__scroll {
     padding: 0 18px 16px;
@@ -5922,14 +5931,12 @@ button {
     font-size: clamp(13px, 1.05cqw, 19px);
     line-height: 1.45;
   }
-  .code-viewport__mask {
-    --code-top: 18px;
+  .code-viewport__mask,
+  .table-viewport__mask {
+    --mask-top: 18px;
   }
   .code-viewport__scroll {
     padding-bottom: 16px;
-  }
-  .table-viewport__mask {
-    padding-top: 18px;
   }
   .table-viewport__scroll {
     padding-bottom: 16px;

@@ -413,10 +413,11 @@ share of its height, so a slot keeps clear of them by a row of its own grid
 in that share (`--panel-inset` for the panel frame), never by a padding in
 stage units, which falls short on a tall slot. The calendar, the to-do
 list, the inbox and a figure stand in the panel's inner box; a table's and
-a source's rows stop above the code frame's lower step (their rims at the
-foot with them), and a source's lines, at rest or scrolled, stand below
-its top-right step; a document's meta line stands under its frame's top
-line; a portrait chart's foot clears the panel's lower step.
+a source's scroll stands between the code frame's steps by one rule, a gap
+from each, so their rows and lines, at rest or scrolled, and their rims
+never run under a step (a table's meta line stands beside the top-right
+step, above its scroll); a document's meta line stands under its frame's
+top line; a portrait chart's foot clears the panel's lower step.
 `frame.spec.ts` checks every primitive, as the primary, in focus and in
 the aux row, at every geometry the visual suites use, and a long source
 scrolled to its middle: each part that draws something must stand inside
@@ -496,7 +497,13 @@ A set of timers is laid out for its box: a grid whose columns give the
 largest countdown digits (no cell beside another narrower than its label
 needs), each countdown as large as its cell allows, up to 200px; where no
 grid gives readable digits (five timers on a phone, several in an aux
-cell) they are rows of a list that scrolls inside its frame.
+cell) they are rows of a list that scrolls inside its frame. A box that
+takes its height from them (an aux cell) is asked for the least they read
+whole in, from its width alone: their rows' height, or the least grid of
+readable cells at that width where that is less. They never ask what they
+drew for the height they were given: a grid draws a little less than its
+box, so the row shrank, a list was drawn, the row grew, and round again
+every frame.
 
 A forecast is laid out for its box too (`weatherLayout`): on a wide box
 the conditions now stand beside the days and the hours run across the
@@ -601,7 +608,8 @@ readable floor in its cell (the head of a table and its first rows, a chart's
 plot, a figure and its caption). A drawing that scrolls in its cell (a
 dense graph, a long sequence) asks for no more than that floor: it is laid
 out for the height it is given, so a cell as tall as the drawing would lay
-it out again, and the row would never settle. When the row has no room for
+it out again, and the row would never settle. Timers ask for the least they
+read whole in at their width, for the same reason. When the row has no room for
 every cell at its floor, it scrolls inside itself; it never shrinks a visual to nothing. A figure in a short cell is
 drawn smaller, never cropped, and a table in a narrow cell scrolls sideways
 rather than breaking a word. The cells sit side by side when the column is

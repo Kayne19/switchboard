@@ -9,6 +9,7 @@ import {
   MIN_CELL_DIGITS,
   MIN_CELL_WIDTH,
   readTimer,
+  timerGridLeast,
   timerLayout,
 } from '../../src/primitives/timerReading';
 
@@ -147,5 +148,54 @@ describe('timerLayout', () => {
         }
       }
     }
+  });
+});
+
+// The height the timers ask of a box sized by what they ask (an aux cell)
+// where a grid of readable cells needs less than their rows: a function of
+// the width alone, and one at which timerLayout surely draws that grid.
+describe('timerGridLeast', () => {
+  // The least whole height timerLayout draws a grid in, by search.
+  const threshold = (width: number, count: number, chars: number) => {
+    for (let height = 1; height <= 4000; height += 1) if (timerLayout(width, height, count, chars).kind === 'grid') return height;
+    return null;
+  };
+
+  it('is a height timerLayout draws a grid in, even read a pixel short, and every height above it', () => {
+    for (let width = 120; width <= 2600; width += 37) {
+      for (let count = 1; count <= 8; count += 1) {
+        for (const chars of [5, 7, 11]) {
+          const least = timerGridLeast(width, count, chars);
+          if (least === null) continue;
+          for (let height = least - 1; height <= least + 400; height += 7) {
+            expect(timerLayout(width, height, count, chars).kind, `${width} ${count} ${chars} at ${height}`).toBe('grid');
+          }
+        }
+      }
+    }
+  });
+
+  it('is no more than a few pixels above the least height that draws a grid', () => {
+    for (let width = 120; width <= 2600; width += 113) {
+      for (let count = 1; count <= 8; count += 1) {
+        for (const chars of [5, 7, 11]) {
+          const least = timerGridLeast(width, count, chars);
+          const found = threshold(width, count, chars);
+          if (least === null) continue;
+          // Half a pixel of digits a row of cells (0.55 px of height), rounded up, and one to spare.
+          expect(least - found!, `${width} ${count} ${chars}`).toBeGreaterThanOrEqual(1);
+          expect(least - found!, `${width} ${count} ${chars}`).toBeLessThanOrEqual(Math.ceil(count * 0.55) + 2);
+        }
+      }
+    }
+  });
+
+  it('is null only where no height gives the width a grid', () => {
+    expect(timerGridLeast(200, 2, 11)).toBeNull();
+    expect(timerLayout(200, 4000, 2, 11)).toEqual({ kind: 'list' });
+    expect(timerGridLeast(0, 3, 5)).toBeNull();
+    expect(timerGridLeast(730, 0, 5)).toBeNull();
+    // Five MM:SS timers at 730 px: three across, two rows of the least cells.
+    expect(timerGridLeast(730, 5, 5)).toBe(Math.ceil(2 * (78 + 1.1 * (MIN_CELL_DIGITS + 0.5)) + CELL_GAP) + 1);
   });
 });

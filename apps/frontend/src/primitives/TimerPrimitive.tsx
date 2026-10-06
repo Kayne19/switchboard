@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Timer, TimerData } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
 import { MeasuredStageDemand } from '../hooks/useStageDemand';
@@ -7,7 +7,7 @@ import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
 import type { Slot } from './slot';
-import { CELL_GAP, formatCountdown, instantClock, readTimer, timerLayout, type TimerReading } from './timerReading';
+import { CELL_GAP, formatCountdown, instantClock, readTimer, timerGridLeast, timerLayout, type TimerReading } from './timerReading';
 
 // Countdowns and reminders (docs/display-tool.md, "timer"). Every timer is
 // read against the page's one clock (usePageClock), which runs only while a
@@ -23,6 +23,14 @@ import { CELL_GAP, formatCountdown, instantClock, readTimer, timerLayout, type T
 // digits are as large as the box allows, or, where no grid gives readable
 // digits (an aux cell holding several), a list of rows that scrolls inside
 // its frame like any list.
+//
+// A box that takes its height from what the timers ask (an aux cell, whose
+// row is as tall as its cells ask) is asked for the least height they read
+// whole in: their rows' height, or the least grid of readable cells at its
+// width where that is less (timerGridLeast). Neither depends on the height
+// the box gave them. The field asked what it drew, and a grid laid out for
+// its box draws a little less than its box: cells and rows took turns every
+// frame (282.8 -> 356.2 -> 310.1 px beside a source at 820x1180).
 
 const PHASE_TEXT: Record<TimerReading['phase'], string> = { running: 'RUNNING', paused: 'PAUSED', done: 'DONE' };
 
@@ -45,10 +53,12 @@ function PhaseGlyph({ phase }: { phase: TimerReading['phase'] }) {
   );
 }
 
-function TimerItem({ timer, reading, marked, as }: { timer: Timer; reading: TimerReading; marked: boolean; as: 'cell' | 'row' }) {
+// A row in the measure (`measure`) is the row the list draws, unseen
+// (and hidden from assistive technology): it names no item.
+function TimerItem({ timer, reading, marked, as, measure = false }: { timer: Timer; reading: TimerReading; marked: boolean; as: 'cell' | 'row'; measure?: boolean }) {
   const digits = formatCountdown(reading.phase === 'done' ? 0 : reading.seconds);
   return (
-    <li className={`timer-${as} timer-${as}--${reading.phase}${marked ? ` timer-${as}--marked` : ''}`} data-item={timer.id} data-phase={reading.phase}>
+    <li className={`timer-${as} timer-${as}--${reading.phase}${marked ? ` timer-${as}--marked` : ''}`} data-item={measure ? undefined : timer.id} data-phase={reading.phase}>
       {/* The body carries the rule and its tab, so in a tall cell they stand
           over the countdown rather than at the cell's far top. */}
       <div className="timer__body">
@@ -90,6 +100,12 @@ export function TimerPrimitive({ data, marked, slot = 'primary' }: { data: Timer
   const items = data.timers.map((timer, index) => (
     <TimerItem key={timer.id} timer={timer} reading={readings[index]} marked={timer.id === marked} as={layout.kind === 'grid' ? 'cell' : 'row'} />
   ));
+  // What the field asks of a box sized by its content: the rows' height,
+  // or the least grid at its width where that is less.
+  const measureRef = useRef<HTMLOListElement>(null);
+  const rowsHeight = useLaidOutHeight(measureRef);
+  const gridLeast = timerGridLeast(size.width, data.timers.length, chars);
+  const ask = gridLeast === null ? rowsHeight : Math.min(rowsHeight, gridLeast);
   return (
     <div
       className="timer-primitive"
@@ -99,7 +115,7 @@ export function TimerPrimitive({ data, marked, slot = 'primary' }: { data: Timer
     >
       <MetaTitle title={data.title ?? 'TIMERS'} slot={slot} className="timer__title tech micro" />
       {/* The box the timers are laid out for: the primitive's own, inside any padding its slot gives it. */}
-      <div ref={hostRef} className="timer-primitive__field">
+      <div ref={hostRef} className="timer-primitive__field" style={{ ['--timer-ask' as string]: `${ask}px` }}>
         {layout.kind === 'grid' ? (
           <ol className="timer-grid">{items}</ol>
         ) : (
@@ -110,7 +126,32 @@ export function TimerPrimitive({ data, marked, slot = 'primary' }: { data: Timer
             </ListViewport>
           </MeasuredStageDemand>
         )}
+        {/* The rows as the list draws them, unseen, in either layout: their height is the field's ask.
+            Unmarked: a note's badge changes no row's height, and a note finds its timer once. */}
+        <div className="timer-primitive__measure" aria-hidden="true">
+          <ol ref={measureRef} className="timer-list__rows">
+            {data.timers.map((timer, index) => (
+              <TimerItem key={timer.id} timer={timer} reading={readings[index]} marked={false} as="row" measure />
+            ))}
+          </ol>
+        </div>
       </div>
     </div>
   );
+}
+
+// The height an element is laid out at, to the layout's own fraction of a
+// pixel (offsetHeight rounds it). A ResizeObserver reads layout sizes, which
+// a transform leaves alone: a cell scaled while the aux row settles is
+// measured at rest.
+function useLaidOutHeight<T extends Element>(ref: RefObject<T | null>): number {
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setHeight(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref]);
+  return height;
 }

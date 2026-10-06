@@ -100,6 +100,14 @@ describe('the aux row', () => {
     expect(topLevel('.drawing-viewport--scrolling .drawing-viewport__view', 'contain')).toBe('size');
   });
 
+  it('takes from timers the height they ask by their width, not what they drew for the height they were given', () => {
+    // A grid laid out for its box draws a little less than its box; asked
+    // for that, a row as tall as its cells ask went round every frame.
+    // TimerPrimitive sets --timer-ask (timerReading.ts timerGridLeast).
+    expect(topLevel('.timer-primitive__field', 'contain')).toBe('size');
+    expect(topLevel('.timer-primitive__field', 'contain-intrinsic-height')).toBe('var(--timer-ask, 0px)');
+  });
+
   it('contains an image in its cell instead of cropping it', () => {
     expect(topLevel('.composed-aux-object--image .image-primitive__field', 'height')).toBe('100%');
     expect(topLevel('.image-primitive__img', 'object-fit')).toBe('contain');
@@ -115,5 +123,17 @@ describe('a table', () => {
       && (rule.declarations.get('overflow-wrap') === 'anywhere' || /break-all|break-word/.test(rule.declarations.get('word-break') ?? '')));
     expect(breaking.map((rule) => rule.selectors.join(', '))).toEqual([]);
     expect(topLevel('.table-viewport__scroll', 'overflow')).toBe('auto');
+  });
+
+  it('stands its scroll between the code frame\'s steps by the source\'s rule', () => {
+    // One grid for both masks: the top-right step (5.7%) and the lower one
+    // (4.6%), each with the same gap; the scroll in the middle row. The table
+    // cleared the top step with its padding and meta line, short of the gap.
+    const rows = topLevel('.code-viewport__mask', 'grid-template-rows');
+    expect(rows).toMatch(/calc\(5\.7% \+ var\(--mask-gap\)\).*calc\(4\.6% \+ var\(--mask-gap\)\)$/);
+    expect(topLevel('.table-viewport__mask', 'grid-template-rows')).toBe(rows);
+    expect(topLevel('.table-viewport__mask > .list-viewport', 'grid-row')).toBe('2');
+    expect(topLevel('.code-viewport__mask > .list-viewport', 'grid-row')).toBe('2');
+    expect(topLevel('.table-viewport__mask', 'padding-top')).toBeUndefined();
   });
 });

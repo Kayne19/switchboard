@@ -94,7 +94,8 @@ describe('TablePrimitive', () => {
 
   it('keeps the meta line out of the scroll, so rows scroll only under the sticky header', () => {
     const view = render(results.data);
-    expect(view.querySelector('.table-viewport__mask .list-viewport__head > .table-viewport__meta')).not.toBeNull();
+    // In the mask's top row, beside the frame's top-right step; the scroll stands in the row under it.
+    expect(view.querySelector('.table-viewport__mask > .table-viewport__meta + .list-viewport')).not.toBeNull();
     expect(view.querySelector('.table-viewport__scroll .table-viewport__meta')).toBeNull();
     expect(view.querySelector('.table-viewport__scroll')?.firstElementChild?.tagName).toBe('TABLE');
   });

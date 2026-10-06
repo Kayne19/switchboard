@@ -166,6 +166,16 @@ test("explanations read Markdown, scroll, and open a history the caller can type
     }));
     expect(overflow).toEqual({ overflowY: "auto", scrollable: true });
 
+    // Reached from the keyboard it draws the page's focus ring, as a note's
+    // HISTORY button does; it drew the browser's own.
+    await page.keyboard.press("Shift");
+    const ring = await page.locator(".live-chat-card__history").evaluate((button) => {
+      (button as HTMLElement).focus();
+      const style = getComputedStyle(button);
+      return { focusVisible: button.matches(":focus-visible"), outline: `${style.outlineStyle} ${style.outlineWidth} ${style.outlineOffset}` };
+    });
+    expect(ring).toEqual({ focusVisible: true, outline: "solid 1px 4px" });
+
     await page.locator(".live-chat-card__history").click();
     const drawer = page.getByRole("dialog", { name: "Conversation history" });
     await expect(drawer).toBeVisible();

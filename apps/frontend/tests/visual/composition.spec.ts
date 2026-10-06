@@ -159,53 +159,60 @@ test('a table in a narrow aux cell breaks between words, never inside one', asyn
 // drew: in an aux cell, whose row is as tall as its cells ask, the two take
 // turns. The dense pipeline beside a source switched between a wide layout
 // (a short row) and a tall one (the row at its cap) every few frames, and a
-// screenshot caught either; timers switched between cells and rows. Every
-// visual a fixture shows, beside the code fixture's source: watched for a
-// second once it has settled, the row keeps one height and each cell one
-// drawing.
-//
-// Known and open: timers beside the code fixture's source at 820x1180 still
-// loop (cells ask one height, rows another; older than visual-palette's
-// last round). The case below fails once that is fixed, to be taken off
-// this list.
-const knownLoops = new Set(['timer portrait-tablet']);
+// screenshot caught either; timers switched between cells and rows (at
+// 820x1180 beside the source, 282.8 -> 356.2 -> 310.1 px every frame).
+// Every visual a fixture shows, beside the code fixture's source, and again
+// with the timer fixture's timers beside them: watched for a second once it
+// has settled, the row keeps one height and each cell one drawing.
 const auxScenes = ['pipeline', 'topology', 'plan', 'trace', 'architecture', 'training', 'comparison', 'results', 'email', 'figure', 'calendar', 'calendar-month', 'calendar-agenda', 'tasks', 'timer', 'weather', 'inbox'];
+const visualsOf = () => Object.values(window.SwitchboardController!.state().agentObjects)
+  .filter((object) => !['metric', 'note', 'progress'].includes(object.type))
+  .map((object) => ({ op: 'show', id: object.id, type: object.type, data: object.data }));
+
+// Every state the aux row is drawn in over 1.2 s: its height, and each cell's with what it drew.
+async function auxRowStates(page: Page): Promise<string[]> {
+  return page.evaluate(() => new Promise<string[]>((resolve) => {
+    const states = new Set<string>();
+    const start = performance.now();
+    const look = () => {
+      const row = document.querySelector('.composed-aux')!;
+      const cells = [...row.querySelectorAll('.composed-aux-object')].map((cell) => {
+        const drawn = cell.querySelector('[data-layout], .drawing-viewport');
+        return `${cell.getBoundingClientRect().height.toFixed(1)}:${drawn?.getAttribute('data-layout') ?? drawn?.className ?? ''}`;
+      });
+      states.add(`${row.getBoundingClientRect().height.toFixed(1)} ${cells.join(' ')}`);
+      if (performance.now() - start < 1200) requestAnimationFrame(look);
+      else resolve([...states]);
+    };
+    requestAnimationFrame(look);
+  }));
+}
+
 for (const scene of auxScenes) {
   for (const geometry of FRAME_GEOMETRIES) {
-    test(`a visual in an aux cell settles on one height / ${scene} ${geometry.name}`, async ({ page }) => {
-      await page.setViewportSize({ width: geometry.width, height: geometry.height });
-      const visualsOf = () => Object.values(window.SwitchboardController!.state().agentObjects)
-        .filter((object) => !['metric', 'note', 'progress'].includes(object.type))
-        .map((object) => ({ op: 'show', id: object.id, type: object.type, data: object.data }));
-      await openScene(page, 'code');
-      const [source] = await page.evaluate(visualsOf);
-      await openScene(page, scene);
-      const visuals = await page.evaluate(visualsOf);
-      expect(visuals.length).toBeGreaterThan(0);
-      await runActions(page, [
-        { op: 'clear' },
-        { ...source, id: 'aux-source', role: 'primary' },
-        ...visuals.map((visual) => ({ ...visual, role: 'secondary' })),
-      ]);
-      await expect(page.locator('.composed-aux')).toBeVisible();
-      await page.waitForTimeout(900);
-      const seen = await page.evaluate(() => new Promise<string[]>((resolve) => {
-        const states = new Set<string>();
-        const start = performance.now();
-        const look = () => {
-          const row = document.querySelector('.composed-aux')!;
-          const cells = [...row.querySelectorAll('.composed-aux-object')].map((cell) => {
-            const drawn = cell.querySelector('[data-layout], .drawing-viewport');
-            return `${cell.getBoundingClientRect().height.toFixed(1)}:${drawn?.getAttribute('data-layout') ?? drawn?.className ?? ''}`;
-          });
-          states.add(`${row.getBoundingClientRect().height.toFixed(1)} ${cells.join(' ')}`);
-          if (performance.now() - start < 1200) requestAnimationFrame(look);
-          else resolve([...states]);
-        };
-        requestAnimationFrame(look);
-      }));
-      if (knownLoops.has(`${scene} ${geometry.name}`)) expect(seen.length).toBeGreaterThan(1);
-      else expect(seen).toHaveLength(1);
-    });
+    for (const timers of [false, true]) {
+      const title = timers ? 'with timers beside it ' : '';
+      test(`a visual in an aux cell ${title}settles on one height / ${scene} ${geometry.name}`, async ({ page }) => {
+        await page.setViewportSize({ width: geometry.width, height: geometry.height });
+        await openScene(page, 'code');
+        const [source] = await page.evaluate(visualsOf);
+        const beside = [];
+        if (timers) {
+          await openScene(page, 'timer');
+          beside.push({ ...(await page.evaluate(visualsOf))[0], id: 'aux-timers' });
+        }
+        await openScene(page, scene);
+        const visuals = await page.evaluate(visualsOf);
+        expect(visuals.length).toBeGreaterThan(0);
+        await runActions(page, [
+          { op: 'clear' },
+          { ...source, id: 'aux-source', role: 'primary' },
+          ...[...visuals, ...beside].map((visual) => ({ ...visual, role: 'secondary' })),
+        ]);
+        await expect(page.locator('.composed-aux')).toBeVisible();
+        await page.waitForTimeout(900);
+        expect(await auxRowStates(page)).toHaveLength(1);
+      });
+    }
   }
 }

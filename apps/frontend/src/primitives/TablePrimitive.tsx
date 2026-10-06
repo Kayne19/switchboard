@@ -64,8 +64,9 @@ const ROW: Noun = ['ROW', 'ROWS'];
 // Rows of named columns inside the interrupted-rails frame, scrolling only
 // when they overflow it and clipped to its inside (the same mask the code
 // viewport uses). Thin rules separate rows; a highlighted row carries the
-// orange accent the code viewport gives a hot line. The meta line stays
-// above the scroll, so the sticky header is the scroll's top edge and a row
+// orange accent the code viewport gives a hot line. The meta line stands
+// in the mask's top row, beside the frame's top-right step, above the
+// scroll, so the sticky header is the scroll's top edge and a row
 // scrolling up passes under it rather than showing above it. A table that
 // scrolls does so in the list viewport, which counts its rows past each edge
 // below the header and pages it by the keys every scroller takes. In the
@@ -83,7 +84,8 @@ export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; sl
     <div className={`table-viewport${slot === 'focus' ? ' table-viewport--focused' : ''}`} data-testid="table">
       <TechFrame variant="code" />
       <div className="table-viewport__mask">
-        <ListViewport noun={ROW} countSelector="tr[data-row]" pinned="thead" head={meta} scrollClassName="table-viewport__scroll" label={data.title ?? 'Table'}>
+        {meta}
+        <ListViewport noun={ROW} countSelector="tr[data-row]" pinned="thead" scrollClassName="table-viewport__scroll" label={data.title ?? 'Table'}>
           <table className="table-grid">
             <thead>
               <tr>

@@ -116,3 +116,31 @@ export function timerLayout(width: number, height: number, count: number, chars:
   if (!best || best.digits < MIN_CELL_DIGITS) return { kind: 'list' };
   return { kind: 'grid', columns: best.columns, rows: best.rows, digits: Math.floor(best.digits) };
 }
+
+/**
+ * The least height at which `timerLayout` draws `count` timers whose
+ * longest countdown is `chars` characters as a grid at `width`, in whole
+ * pixels; null where no height does (the width gives no cell readable
+ * digits). It counts digits half a pixel past MIN_CELL_DIGITS, as
+ * `timerLayout` lets one column count beat another only by half a pixel,
+ * and a pixel to spare, as the page reads a box's height in whole pixels:
+ * a box this tall is drawn as a grid however it is read.
+ *
+ * It depends on the width alone, so a box that takes its height from what
+ * the timers ask (an aux cell) is asked for the same height whatever it
+ * gave them before (TimerPrimitive).
+ */
+export function timerGridLeast(width: number, count: number, chars: number): number | null {
+  if (width <= 0 || count <= 0) return null;
+  const digits = MIN_CELL_DIGITS + 0.5;
+  let least: number | null = null;
+  for (let columns = 1; columns <= count; columns += 1) {
+    const cellWidth = (width - CELL_GAP * (columns - 1)) / columns;
+    if (columns > 1 && cellWidth < MIN_CELL_WIDTH) break;
+    if (Math.min(MAX_CELL_DIGITS, cellWidth / (Math.max(1, chars) * DIGIT_ADVANCE)) < digits) break;
+    const rows = Math.ceil(count / columns);
+    const height = rows * (CELL_CHROME + 1.1 * digits) + CELL_GAP * (rows - 1);
+    if (least === null || height < least) least = height;
+  }
+  return least === null ? null : Math.ceil(least) + 1;
+}
