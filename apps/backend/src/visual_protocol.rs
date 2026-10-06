@@ -850,13 +850,7 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
         "document data",
     )?;
 
-    let subject = data
-        .get("subject")
-        .and_then(Value::as_str)
-        .ok_or("document.subject must be a string")?;
-    if utf16_len(subject) > 256 {
-        return Err("document.subject exceeds maximum length of 256 UTF-16 code units".into());
-    }
+    let subject = required_string(data, "subject", 256, "document.subject")?;
 
     let paras = data
         .get("paragraphs")
@@ -878,30 +872,15 @@ fn validate_document_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("paragraphs".into(), Value::Array(clean_paras));
 
     copy_optional_name(data, &mut out, "kind", &DOCUMENT_KINDS, "document.kind")?;
-
-    for (k, max_len) in [("context", 256), ("source", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("document.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "document.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
+    for (k, max_len) in [
+        ("context", 256),
+        ("source", 256),
+        ("from", 128),
+        ("timestamp", 128),
+        ("caption", 128),
+    ] {
+        copy_optional_string(data, &mut out, k, max_len, &format!("document.{k}"))?;
     }
-    for (k, max_len) in [("from", 128), ("timestamp", 128)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("document.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "document.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "document.caption")?;
 
     Ok(Value::Object(out))
 }
@@ -922,28 +901,16 @@ fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
         "code.source",
     )?;
 
-    let text = source_obj
-        .get("text")
-        .and_then(Value::as_str)
-        .ok_or("code.source.text must be a string")?;
-    if utf16_len(text) > 50_000 {
-        return Err("code.source.text exceeds maximum length of 50000 UTF-16 code units".into());
-    }
-
+    let text = required_string(source_obj, "text", 50_000, "code.source.text")?;
     let mut clean_source = Map::new();
     clean_source.insert("text".into(), text.into());
-
-    if let Some(lang) = source_obj.get("language") {
-        let l = lang
-            .as_str()
-            .ok_or("code.source.language must be a string")?;
-        if utf16_len(l) > 64 {
-            return Err(
-                "code.source.language exceeds maximum length of 64 UTF-16 code units".into(),
-            );
-        }
-        clean_source.insert("language".into(), l.into());
-    }
+    copy_optional_string(
+        source_obj,
+        &mut clean_source,
+        "language",
+        64,
+        "code.source.language",
+    )?;
     if let Some(hl) = source_obj.get("highlight") {
         let arr = hl
             .as_array()
@@ -958,19 +925,16 @@ fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
 
     let mut out = Map::new();
     out.insert("source".into(), Value::Object(clean_source));
-
-    for (k, max_len) in [("title", 256), ("file", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("code.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "code.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
+    // Not copy_frame_text: code has `file` where the others have
+    // `subtitle`, and checks it between title and context.
+    for (k, max_len) in [
+        ("title", 256),
+        ("file", 256),
+        ("context", 256),
+        ("caption", 128),
+    ] {
+        copy_optional_string(data, &mut out, k, max_len, &format!("code.{k}"))?;
     }
-    copy_optional_string(data, &mut out, "caption", 128, "code.caption")?;
 
     Ok(Value::Object(out))
 }
@@ -993,22 +957,11 @@ fn validate_table_cell(cell: &Value) -> Result<Value, String> {
         }
         Value::Object(cm) => {
             check_unknown_keys(cm, &["text", "semantic", "bold"], "table cell")?;
-            let text = cm
-                .get("text")
-                .and_then(Value::as_str)
-                .ok_or("table cell.text must be a string")?;
-            if utf16_len(text) > MAX_TABLE_CELL_UTF16 {
-                return Err(format!(
-                    "table cell.text exceeds maximum length of {MAX_TABLE_CELL_UTF16} UTF-16 code units"
-                ));
-            }
+            let text = required_string(cm, "text", MAX_TABLE_CELL_UTF16, "table cell.text")?;
             let mut cell_out = Map::new();
             cell_out.insert("text".into(), text.into());
             copy_optional_semantic(cm, &mut cell_out, "table cell.semantic")?;
-            if let Some(bold) = cm.get("bold") {
-                let b = bold.as_bool().ok_or("table cell.bold must be boolean")?;
-                cell_out.insert("bold".into(), b.into());
-            }
+            copy_optional_bool(cm, &mut cell_out, "bold", "table cell.bold")?;
             Ok(Value::Object(cell_out))
         }
         _ => Err("table cell must be a string, a number or an object".into()),
@@ -1042,15 +995,12 @@ fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
     for c in columns_arr {
         let cm = c.as_object().ok_or("table column must be an object")?;
         check_unknown_keys(cm, &["label", "semantic"], "table column")?;
-        let label = cm
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("table column.label must be a string")?;
-        if utf16_len(label) > MAX_TABLE_COLUMN_LABEL_UTF16 {
-            return Err(format!(
-                "table column.label exceeds maximum length of {MAX_TABLE_COLUMN_LABEL_UTF16} UTF-16 code units"
-            ));
-        }
+        let label = required_string(
+            cm,
+            "label",
+            MAX_TABLE_COLUMN_LABEL_UTF16,
+            "table column.label",
+        )?;
         let mut column_out = Map::new();
         column_out.insert("label".into(), label.into());
         copy_optional_semantic(cm, &mut column_out, "table column.semantic")?;
@@ -1103,19 +1053,7 @@ fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
         }
         out.insert("highlight".into(), Value::Array(arr.clone()));
     }
-
-    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("table.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "table.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "table.caption")?;
+    copy_frame_text(data, &mut out, "table")?;
 
     Ok(Value::Object(out))
 }
@@ -1258,13 +1196,7 @@ fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
         ));
     }
 
-    let alt = data
-        .get("alt")
-        .and_then(Value::as_str)
-        .ok_or("image.alt must be a string")?;
-    if utf16_len(alt) > 256 {
-        return Err("image.alt exceeds maximum length of 256 UTF-16 code units".into());
-    }
+    let alt = required_string(data, "alt", 256, "image.alt")?;
     if is_blank(alt) {
         return Err("image.alt must not be empty".into());
     }
@@ -1273,10 +1205,7 @@ fn validate_image_data(data: &Map<String, Value>) -> Result<Value, String> {
     out.insert("format".into(), format.into());
     out.insert("bytes".into(), bytes.into());
     out.insert("alt".into(), alt.into());
-    for k in ["title", "subtitle", "context"] {
-        copy_optional_string(data, &mut out, k, 256, &format!("image.{k}"))?;
-    }
-    copy_optional_string(data, &mut out, "caption", 128, "image.caption")?;
+    copy_frame_text(data, &mut out, "image")?;
     Ok(Value::Object(out))
 }
 
