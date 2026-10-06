@@ -14,6 +14,8 @@
 //   its own beside the drawing, which is laid out for the rest of the
 //   viewport, so the map covers none of it (`mapStrip`, `viewWithMap`).
 
+import type { Noun } from './countText';
+
 export interface Point {
   x: number;
   y: number;
@@ -35,7 +37,7 @@ export interface DrawingMap {
   /** What a reader counts past each edge, and what a view at rest keeps whole at the edge it is read from: a graph's nodes, a sequence's messages. */
   parts: Array<{ box: Region; label: string }>;
   /** What one part, and several, are called in those counts. */
-  noun: { one: string; many: string };
+  noun: Noun;
   /** Regions a view at rest does not cut either, where it can help it, and whose cut it fades, but does not count: a graph's edge labels. */
   marks: Region[];
   /** Lines from one part to another (a graph's edges, by index into `parts`): where one leaves the view, the rim names the part at its far end. */

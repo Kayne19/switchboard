@@ -3,6 +3,7 @@ import { useElementSize } from '../hooks/useElementSize';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { useLeastHeight } from '../hooks/useStageDemand';
 import { SLIVER, type DrawingFit, type Size } from './drawingFit';
+import { countText } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import {
   EXIT_CHARS,
@@ -153,7 +154,6 @@ function mapFrame(width: number, height: number): string {
   return `M ${points.map(([x, y]) => `${x} ${y}`).join(' L ')} Z`;
 }
 
-const pad2 = (count: number) => String(count).padStart(2, '0');
 const cut = (label: string) => (label.length > EXIT_CHARS ? `${label.slice(0, EXIT_CHARS - 1)}\u2026` : label);
 
 /**
@@ -509,7 +509,7 @@ export function DrawingViewport({
   const rimTexts = useMemo(() => {
     const text = (side: Side) => {
       const count = rim?.[side]?.beyond ?? 0;
-      return count > 0 ? `${pad2(count)} ${count === 1 ? map.noun.one : map.noun.many}` : '';
+      return count > 0 ? countText(count, map.noun, { pad: true }) : '';
     };
     return { left: text('left'), right: text('right'), top: text('top'), bottom: text('bottom') };
   }, [rim, map]);

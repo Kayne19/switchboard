@@ -82,7 +82,7 @@ export function SequencePrimitive({
     });
     return {
       parts,
-      noun: { one: 'MESSAGE', many: 'MESSAGES' },
+      noun: ['MESSAGE', 'MESSAGES'],
       marks: [],
       links: [],
       sketch: {

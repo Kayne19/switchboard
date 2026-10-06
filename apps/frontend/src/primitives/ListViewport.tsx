@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
+import { countText, type Noun } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
 
@@ -90,14 +91,6 @@ export function fadeDepth(viewHeight: number): number {
   return Math.round(Math.max(FADE_MIN, Math.min(FADE_MAX, viewHeight * FADE_SHARE)));
 }
 
-/** How a count names its items: a singular and a plural, or a function of the count. */
-export type ListNoun = readonly [string, string] | ((count: number) => string);
-
-function nounFor(noun: ListNoun, count: number): string {
-  if (typeof noun === 'function') return noun(count);
-  return count === 1 ? noun[0] : noun[1];
-}
-
 // The deepest a fade reaches, as a share of the view, and its least depth.
 const FADE_SHARE = 0.18;
 const FADE_MAX = 36;
@@ -126,8 +119,8 @@ function cssEscape(value: string): string {
 
 interface ListViewportProps {
   children: ReactNode;
-  /** How the counts name the items: `['TASK', 'TASKS']`, or `(n) => ...`. */
-  noun: ListNoun;
+  /** How the counts name the items: `['TASK', 'TASKS']`. */
+  noun: Noun;
   /** The `data-item` of the item to open on; absent, an element marked `data-lead`, if any. */
   lead?: string;
   /** Which items the counts count, when not every `data-item` is one (a forecast counts its days, not its hours). */
@@ -245,7 +238,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
         <div className={`drawing-viewport__more drawing-viewport__more--${side}`} style={{ height: `${fade}px` }} aria-hidden="true" />
         <div className={`drawing-viewport__rail drawing-viewport__rail--${side}`} aria-hidden="true" />
         <div className={`drawing-viewport__rim drawing-viewport__rim--${side} list-viewport__rim`} onClick={page(side === 'top' ? -1 : 1)} aria-hidden="true" data-count={count}>
-          <span className="drawing-viewport__rim-text">{count > 0 ? `${count} ${nounFor(noun, count)}` : 'MORE'}</span>
+          <span className="drawing-viewport__rim-text">{count > 0 ? countText(count, noun) : 'MORE'}</span>
           <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
             <path d="M 4 0 L 8 6 L 0 6 Z" />
           </svg>
