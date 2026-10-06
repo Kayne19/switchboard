@@ -5,7 +5,8 @@ import { cornerTagBoxes } from '../../src/primitives/diagramLayout';
 import { SLIVER } from '../../src/primitives/drawingFit';
 import { NOTE_MARKER } from '../../src/primitives/NoteMarker';
 import { viewWithMap } from '../../src/primitives/drawingScroll';
-import { headerReading, layoutSequence, pinnedDepth, sequenceMinScale, viewSequence, type Box, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
+import type { Box } from '../../src/primitives/geometry';
+import { headerReading, layoutSequence, pinnedDepth, sequenceMinScale, viewSequence, type SequenceOrientation } from '../../src/primitives/sequenceLayout';
 import { overlaps } from './drawingGeometry';
 
 const handoffDiagram = (fixtures.handoff[0] as { data: SequenceDiagramData }).data;

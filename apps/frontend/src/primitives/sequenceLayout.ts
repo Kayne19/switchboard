@@ -17,23 +17,13 @@
 // and scrolls down (drawingFit.ts).
 
 import type { SequenceActor, SequenceDiagramData, SequenceMessage } from '../controller/types';
+import { monoAdvance } from '../design/tokens';
 import { LABEL_ADVANCE, LABEL_BACKING, LABEL_HEIGHT, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, type DrawingFit, type Viewport } from './drawingFit';
+import type { Box, Point } from './geometry';
 import { NOTE_MARKER } from './NoteMarker';
 
 export type SequenceOrientation = 'landscape' | 'portrait';
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-export interface Box {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 export interface LaidOutActor {
   actor: SequenceActor;
@@ -132,9 +122,10 @@ const GEOMETRY = {
 
 const PAD_BOTTOM = 28;
 // Actor labels are set in the monospace face with 0.1em tracking
-// (.sequence-actor-label), subs with 0.09em: 0.6em advance plus the tracking.
-const actorAdvance = (size: number) => size * 0.7;
-const actorSubAdvance = (size: number) => size * 0.69;
+// (.sequence-actor-label), subs with 0.09em (.sequence-actor-sub), at the
+// sizes the layout sets them at.
+export const actorAdvance = (size: number) => monoAdvance(size, 0.1);
+export const actorSubAdvance = (size: number) => monoAdvance(size, 0.09);
 // A header with a sub: the label sits higher and each sub line adds a row.
 const HEADER_HEIGHT_WITH_SUB = 52;
 export const SUB_LINE_HEIGHT = 11;

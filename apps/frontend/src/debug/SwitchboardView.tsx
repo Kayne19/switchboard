@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { LABEL_ADVANCE } from '../primitives/drawingKit';
 import { TechFrame } from '../primitives/TechFrame';
 import { AgentPane, type PaneSelect } from './AgentPane';
 import { clockTime, decisionSummary, formatMs } from './explain';
@@ -459,7 +460,7 @@ function floorRoute(floor: FloorTrace, g: Geometry, lane: number): DrawnRoute | 
 
 /** An edge label as the main page's diagram draws one: mono text on a black backing. */
 function WireLabel({ at, text }: { at: Point; text: string }) {
-  const width = text.length * 7.3 + 12;
+  const width = text.length * LABEL_ADVANCE + 12;
   return (
     <g className="wire-label diagram-edge-label-group" transform={`translate(${at.x.toFixed(1)},${at.y.toFixed(1)})`}>
       <rect className="diagram-edge-label__backing" x={-width / 2} y={-9} width={width} height={18} />

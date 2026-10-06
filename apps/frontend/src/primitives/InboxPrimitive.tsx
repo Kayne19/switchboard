@@ -4,7 +4,7 @@ import { parseTimeValue, type TimeValue } from '../controller/validation';
 import { countText, type Noun } from './countText';
 import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
-import { clockText, dayText, daysFrom, readToday } from './timeLabels';
+import { dayText, daysFrom, readToday, timeOfDay } from './timeLabels';
 import { MetaTitle } from './MetaTitle';
 import type { Slot } from './slot';
 
@@ -47,7 +47,7 @@ export function inboxLayout(slot: Slot, width: number, em: number): InboxLayout 
 export function messageTime(message: InboxMessage, today: TimeValue | null): { text: string; today: boolean } {
   const time = parseTimeValue(message.time);
   if (!time) return { text: message.time, today: false };
-  if (today && time.form === 'wall' && daysFrom(today, time) === 0) return { text: clockText(time), today: true };
+  if (today && time.form === 'wall' && daysFrom(today, time) === 0) return { text: timeOfDay(time), today: true };
   return { text: dayText(time, today), today: false };
 }
 

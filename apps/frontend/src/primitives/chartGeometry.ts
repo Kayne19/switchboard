@@ -1,5 +1,7 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
+import { monoAdvance } from '../design/tokens';
 import { readableScale, type DrawingText } from './drawingFit';
+import { intersection, type Point, type Rect, type Size } from './geometry';
 
 // The chart draws in a viewBox -- its frame -- and the notes laid over a
 // chart map their points and the drawn marks through the same frame, so both
@@ -10,10 +12,7 @@ export const CHART_VIEW_WIDTH = 1000;
 export const CHART_VIEW_HEIGHT = 500;
 
 /** The chart's viewBox, in its own units. */
-export interface ChartFrame {
-  width: number;
-  height: number;
-}
+export type ChartFrame = Size;
 
 /** The approved canvas: the frame every chart is drawn in where it reads. */
 export const CHART_FRAME: ChartFrame = { width: CHART_VIEW_WIDTH, height: CHART_VIEW_HEIGHT };
@@ -57,7 +56,7 @@ export interface ChartFit extends ChartFrame {
  * hold even the least frame (`CHART_MIN_FRAME`) at that scale. A slot not
  * yet measured gets the approved canvas.
  */
-export function chartFrame(slot: { width: number; height: number }): ChartFit {
+export function chartFrame(slot: Size): ChartFit {
   if (!(slot.width > 0) || !(slot.height > 0)) return { ...CHART_FRAME, scale: 1 };
   const fit = Math.min(slot.width / CHART_VIEW_WIDTH, slot.height / CHART_VIEW_HEIGHT);
   if (fit >= CHART_READABLE_SCALE && slot.height <= CHART_VIEW_HEIGHT * fit * CHART_TALL_SLACK) return { ...CHART_FRAME, scale: fit };
@@ -86,18 +85,17 @@ export const CHART_LEGEND_TEXT_X = 34;
 export const CHART_LEGEND_GAP = 32;
 // The vertical advance from one wrapped legend row to the next.
 export const CHART_LEGEND_ROW_HEIGHT = 20;
-// The legend text is `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-// monospace` at 11px with 0.08em letter-spacing (see index.css). jsdom (where
-// the unit tests run) cannot measure SVG text, but a monospace font makes the
-// measurement unnecessary: every glyph advances the same amount, so a
-// label's width is exactly its character count times that advance. Measured
-// against the same font stack in the Chromium the visual suite renders with
-// (getComputedTextLength), the advance is 7.5 viewBox units per character.
-export const CHART_LEGEND_CHAR_ADVANCE = 7.5;
+// The legend text is the monospace face at 11px with 0.08em letter-spacing
+// (.chart-legend text in index.css). jsdom (where the unit tests run) cannot
+// measure SVG text, but in a monospace face every glyph advances the same
+// amount, so a label's width is its character count times that advance
+// (monoAdvance, rounded up: 7.5 viewBox units, what the Chromium the visual
+// suite renders with measures too, by getComputedTextLength).
+export const CHART_LEGEND_CHAR_ADVANCE = monoAdvance(11, 0.08, { roundUp: true });
 const CHART_ELLIPSIS = '…';
 // The grid's tick text is the same monospace stack at 13px, so a category
 // label's width is its character count times the legend's advance scaled
-// to that size.
+// to that size (8.86, a little over its face's 8.84).
 export const CHART_TICK_CHAR_ADVANCE = (CHART_LEGEND_CHAR_ADVANCE * 13) / 11;
 // Clear space between two neighbouring category labels along the x axis.
 export const CHART_TICK_GAP = 14;
@@ -119,18 +117,6 @@ function categoryPadMax(frame: ChartFrame): number {
 }
 // The share of a bar chart's band its group of bars fills.
 const CHART_BAR_GROUP_SHARE = 0.72;
-
-export interface ViewPoint {
-  x: number;
-  y: number;
-}
-
-export interface ViewRect {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-}
 
 export interface ChartPad {
   left: number;
@@ -580,11 +566,11 @@ export interface ChartScales {
   /** Where a value sits along the value axis. */
   valueAt: (value: number) => number;
   /** The point for a domain x and a value, whichever way the chart runs. */
-  pointAt: (x: number, value: number) => ViewPoint;
+  pointAt: (x: number, value: number) => Point;
   /** The domain x of a series' `index`-th sample. */
   sampleX: (series: ChartSeries, index: number) => number;
   /** The plot's grid for this data, accounting for a wrapped legend and the labels. */
-  plot: ViewRect;
+  plot: Rect;
 }
 
 export function chartScales(data: ChartData, frame: ChartFrame = CHART_FRAME): ChartScales {
@@ -642,9 +628,9 @@ export interface ChartBar {
   /** Which category. */
   index: number;
   value: number;
-  rect: ViewRect;
+  rect: Rect;
   /** The bar's far end, mid-width, held inside the plot: the point a marker or a note's leader reaches. */
-  end: ViewPoint;
+  end: Point;
 }
 
 /**
@@ -697,9 +683,9 @@ export interface ChartBarCallout {
   /** The value printed past the bar's end; inside its end where the plot has no room past it. */
   value: { text: string; x: number; y: number; anchor: 'start' | 'middle' | 'end'; inside: boolean };
   /** The printed value's box. */
-  label: ViewRect;
+  label: Rect;
   /** Where a leader to the bar lands. */
-  point: ViewPoint;
+  point: Point;
   /** The side of `point` a leader comes from: past the bar's end. */
   from: ChartSide;
 }
@@ -739,7 +725,7 @@ export function chartBarCallout(data: ChartData, anchor: ChartAnchor, scales: Ch
   // Along the value axis (y upright, x across) the way the bar grows, and
   // across it the category axis.
   const grows = horizontal ? (positive ? 1 : -1) : positive ? -1 : 1;
-  const valueOf = (point: ViewPoint) => (horizontal ? point.x : point.y);
+  const valueOf = (point: Point) => (horizontal ? point.x : point.y);
   const mid = horizontal ? bar.end.y : bar.end.x;
   const span: [number, number] = horizontal ? [mid - 6, mid + 5] : [mid - width / 2, mid + width / 2];
   const size = horizontal ? width : CALLOUT_ASCENT + CALLOUT_DESCENT;
@@ -765,7 +751,7 @@ export function chartBarCallout(data: ChartData, anchor: ChartAnchor, scales: Ch
   const near = inside ? end - grows * CALLOUT_GAP : outsideNear;
   const away = inside ? -grows : grows;
   const [from, to] = [Math.min(near, near + away * size), Math.max(near, near + away * size)];
-  const label: ViewRect = horizontal ? { left: from, right: to, top: span[0], bottom: span[1] } : { left: span[0], right: span[1], top: from, bottom: to };
+  const label: Rect = horizontal ? { left: from, right: to, top: span[0], bottom: span[1] } : { left: span[0], right: span[1], top: from, bottom: to };
   const tip = (inside ? end : near + away * size) + grows * CALLOUT_LANDING;
   if (horizontal) {
     return {
@@ -806,7 +792,7 @@ export function chartNoteTarget(
   data: ChartData,
   anchor: ChartAnchor,
   scales: ChartScales = chartScales(data),
-): { point: ViewPoint; from?: ChartSide; bar?: ViewRect; value?: ViewRect } | undefined {
+): { point: Point; from?: ChartSide; bar?: Rect; value?: Rect } | undefined {
   if (scales.kind === 'bar') {
     const callout = chartBarCallout(data, anchor, scales);
     return callout ? { point: callout.point, from: callout.from, bar: callout.bar.rect, value: callout.label } : undefined;
@@ -830,12 +816,12 @@ export function chartRings(
   named: ChartAnchor[],
   led: ChartAnchor[],
   scales: ChartScales = chartScales(data),
-): { marker?: ViewPoint; named: ViewPoint[] } {
+): { marker?: Point; named: Point[] } {
   if (scales.kind === 'bar') return { named: [] };
   const marker = data.marker ? chartSeriesPoint(data, data.marker.x, data.marker.series, scales) : undefined;
-  const same = (a: ViewPoint, b: ViewPoint) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
+  const same = (a: Point, b: Point) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
   const reached = led.flatMap((anchor) => chartSeriesPoint(data, anchor.x, anchor.series, scales) ?? []);
-  const rings: ViewPoint[] = [];
+  const rings: Point[] = [];
   for (const anchor of named) {
     const point = chartSeriesPoint(data, anchor.x, anchor.series, scales);
     if (!point || (marker && same(point, marker)) || reached.some((each) => same(point, each)) || rings.some((each) => same(point, each))) continue;
@@ -857,32 +843,22 @@ export interface ChartObstacles {
    * plot as its clip cuts them; a marked bar's printed value; and the rings
    * (`chartRings`), drawn whole past the plot's edge.
    */
-  marks: ViewRect[];
+  marks: Rect[];
   /** The line through each series of a line or an area chart; the plot's clip cuts what runs past it. */
-  lines: ViewPoint[][];
+  lines: Point[][];
   /**
    * An area chart's fill between each line and its baseline, as convex
    * pieces: one per segment, or two triangles where the segment crosses the
    * baseline. The plot's clip cuts what runs past it.
    */
-  fills: ViewPoint[][];
+  fills: Point[][];
   /** The legend, and the strips the axes' labels sit in. */
-  labels: ViewRect[];
-}
-
-function cut(rect: ViewRect, clip: ViewRect): ViewRect | undefined {
-  const inside = {
-    left: Math.max(rect.left, clip.left),
-    top: Math.max(rect.top, clip.top),
-    right: Math.min(rect.right, clip.right),
-    bottom: Math.min(rect.bottom, clip.bottom),
-  };
-  return inside.right > inside.left && inside.bottom > inside.top ? inside : undefined;
+  labels: Rect[];
 }
 
 // The fill between a line and the baseline at `base`, segment by segment.
-function areaPieces(line: ViewPoint[], base: number): ViewPoint[][] {
-  const pieces: ViewPoint[][] = [];
+function areaPieces(line: Point[], base: number): Point[][] {
+  const pieces: Point[][] = [];
   for (let index = 1; index < line.length; index += 1) {
     const a = line[index - 1];
     const b = line[index];
@@ -903,7 +879,7 @@ function areaPieces(line: ViewPoint[], base: number): ViewPoint[][] {
  * for a scatter chart by a point's radius and a unit, so a point on the
  * plot's edge is drawn whole.
  */
-export function chartClip(scales: ChartScales): ViewRect {
+export function chartClip(scales: ChartScales): Rect {
   const reach = scales.kind === 'scatter' ? CHART_POINT_RADIUS + 1 : 0;
   const { plot } = scales;
   return { left: plot.left - reach, top: plot.top - reach, right: plot.right + reach, bottom: plot.bottom + reach };
@@ -926,12 +902,12 @@ export function chartObstacles(
   // What the chart's clip lets through: the bars, the points and the ring
   // are drawn inside it.
   const clip = chartClip(scales);
-  const marks: ViewRect[] = [];
-  const lines: ViewPoint[][] = [];
-  const fills: ViewPoint[][] = [];
+  const marks: Rect[] = [];
+  const lines: Point[][] = [];
+  const fills: Point[][] = [];
   if (kind === 'bar') {
     for (const bar of chartBars(data, scales)) {
-      const rect = cut(bar.rect, clip);
+      const rect = intersection(bar.rect, clip);
       if (rect) marks.push(rect);
     }
   } else {
@@ -939,7 +915,7 @@ export function chartObstacles(
     if (kind === 'scatter') {
       for (const point of traces.flat()) {
         const r = CHART_POINT_RADIUS;
-        const rect = cut({ left: point.x - r, top: point.y - r, right: point.x + r, bottom: point.y + r }, clip);
+        const rect = intersection({ left: point.x - r, top: point.y - r, right: point.x + r, bottom: point.y + r }, clip);
         if (rect) marks.push(rect);
       }
     } else {
@@ -1007,7 +983,7 @@ export function chartSeriesPoint(
   x: number,
   seriesName?: string,
   scales: ChartScales = chartScales(data),
-): ViewPoint | undefined {
+): Point | undefined {
   if (scales.kind === 'bar') {
     const sample = seriesSample(data, x, seriesName, scales);
     if (!sample) return undefined;
@@ -1021,7 +997,7 @@ export function chartSeriesPoint(
 
 /** The legend's own box, across the top of the plot, in viewBox units: every
  * row its items wrap onto, each as wide as its longest item's real content. */
-export function chartLegendBox(data: ChartData, frame: ChartFrame = CHART_FRAME): ViewRect {
+export function chartLegendBox(data: ChartData, frame: ChartFrame = CHART_FRAME): Rect {
   const pad = chartPad(data, frame);
   const layout = chartLegendLayout(data, frame.width - pad.left - pad.right);
   // Its keys sit on this line, its 11-unit labels across it.
@@ -1036,7 +1012,7 @@ export function chartLegendBox(data: ChartData, frame: ChartFrame = CHART_FRAME)
 }
 
 /** The axis labels' strips beside and beneath a chart's plot, in viewBox units. */
-export function chartAxisBoxes(plot: ViewRect, frame: ChartFrame = CHART_FRAME): ViewRect[] {
+export function chartAxisBoxes(plot: Rect, frame: ChartFrame = CHART_FRAME): Rect[] {
   return [
     { left: 0, top: plot.top - 8, right: plot.left, bottom: plot.bottom + 8 },
     { left: plot.left - 20, top: plot.bottom, right: frame.width, bottom: frame.height },
@@ -1055,7 +1031,7 @@ export function chartAxisBoxes(plot: ViewRect, frame: ChartFrame = CHART_FRAME):
  * few. A wide slot stands them upright, thinned, the whole chart in view;
  * a chart whose labels all show upright (staggered, say) is drawn as it is.
  */
-export function chartScrollHeight(data: ChartData, slot: { width: number; height: number }): number | null {
+export function chartScrollHeight(data: ChartData, slot: Size): number | null {
   if (!(slot.width > 0) || !(slot.height > 0)) return null;
   const least = chartLeastHeight(data, slot.width);
   if (least === null || least <= slot.height) return null;

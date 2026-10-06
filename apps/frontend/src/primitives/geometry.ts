@@ -1,5 +1,9 @@
-// Straight segments against rects and against each other, in one plane:
-// the maths the notes laid over a chart place their cards and leaders by
+// The plane the page's drawings are laid out in, said once: a point, a box
+// (by its corner and size: a node, an actor's header, a label's backing, a
+// part of a drawing), a rect (by its four edges: a chart's plot, a note's
+// card, the part of a scroll in view) and a size; the maths of rects
+// against each other; and of straight segments against rects and each
+// other, which the notes laid over a chart place their cards and leaders by
 // (notePlacement) and draw their leaders with (ChartNotes).
 
 export interface Point {
@@ -7,11 +11,38 @@ export interface Point {
   y: number;
 }
 
+/** A box by its top-left corner and its size. */
+export interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A rect by its four edges. */
 export interface Rect {
   left: number;
   top: number;
   right: number;
   bottom: number;
+}
+
+export interface Size {
+  width: number;
+  height: number;
+}
+
+/** The area two rects share, 0 where they do not meet. */
+export function overlapArea(a: Rect, b: Rect): number {
+  const width = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+  const height = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+  return width > 0 && height > 0 ? width * height : 0;
+}
+
+/** The rect two rects share, or undefined where they share no area. */
+export function intersection(a: Rect, b: Rect): Rect | undefined {
+  const rect = { left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) };
+  return rect.right > rect.left && rect.bottom > rect.top ? rect : undefined;
 }
 
 // The share of the segment from `a` to `b` that falls inside `rect`, as the

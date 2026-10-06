@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useElementSize } from '../hooks/useElementSize';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { useLeastHeight } from '../hooks/useStageDemand';
-import { SLIVER, type DrawingFit, type Size, type Viewport } from './drawingFit';
+import { SLIVER, type DrawingFit, type Viewport } from './drawingFit';
+import type { Box, Size } from './geometry';
 import { rimCount } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import { ScrollRim } from './ScrollRim';
@@ -84,14 +85,6 @@ export function useDrawingView<V extends { layout: Size; fit: DrawingFit }>(
     [view, width, scrollbar],
   );
   return { ...shown, hostRef, laidOutFor };
-}
-
-/** A region of a drawing, in its user units. */
-export interface DrawingRegion {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
 }
 
 /** Where the scroller stands and how large its box is, CSS pixels. */
@@ -199,7 +192,8 @@ export function DrawingViewport({
   fit: DrawingFit;
   /** The drawing and its fit as the primitive would lay it out for a viewport `height` tall at its width now: a drawing is laid out again for its viewport, so this is what it would ask of a box of another height (the stage's shared layout). */
   laidOutFor: (height: number) => { drawing: Size; fit: DrawingFit };
-  lead?: DrawingRegion | null;
+  /** The part of the drawing it opens on, in the drawing's user units (what its note names, or where it begins). */
+  lead?: Box | null;
   /** A band at the drawing's top (its headers, `height` user units deep) that stays in view while the rest scrolls under it. */
   pinned?: { height: number; content: ReactNode } | null;
   /** What the viewport tells its reader about the drawing when it scrolls. */
@@ -227,7 +221,7 @@ export function DrawingViewport({
   useLeastHeight(
     viewportRef,
     useCallback(
-      (box: { width: number; height: number }) =>
+      (box: Size) =>
         (fit.scrollX || fit.width <= box.width + 1) && (fit.scrollY || fit.height <= box.height + 1) ? least : undefined,
       [fit.scrollX, fit.scrollY, fit.width, fit.height, least],
     ),

@@ -14,20 +14,9 @@
 //   its own beside the drawing, which is laid out for the rest of the
 //   viewport, so the map covers none of it (`mapStrip`, `viewWithMap`).
 
+import { monoAdvance } from '../design/tokens';
 import type { Noun } from './countText';
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-/** A region of a drawing, in its user units. */
-export interface Region {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+import type { Box, Point, Rect, Size } from './geometry';
 
 /**
  * What a scrolling drawing's viewport needs to know about it, in its user
@@ -35,15 +24,15 @@ export interface Region {
  */
 export interface DrawingMap {
   /** What a reader counts past each edge, and what a view at rest keeps whole at the edge it is read from: a graph's nodes, a sequence's messages. */
-  parts: Array<{ box: Region; label: string }>;
+  parts: Array<{ box: Box; label: string }>;
   /** What one part, and several, are called in those counts. */
   noun: Noun;
   /** Regions a view at rest does not cut either, where it can help it, and whose cut it fades, but does not count: a graph's edge labels. */
-  marks: Region[];
+  marks: Box[];
   /** Lines from one part to another (a graph's edges, by index into `parts`): where one leaves the view, the rim names the part at its far end. */
   links: Array<{ points: Point[]; from: number; to: number; tone: string }>;
   /** The map's sketch of the drawing. */
-  sketch: { boxes: Array<{ box: Region; tone: string }>; lines: Array<{ points: Point[]; tone: string }> };
+  sketch: { boxes: Array<{ box: Box; tone: string }>; lines: Array<{ points: Point[]; tone: string }> };
 }
 
 export type Side = 'left' | 'right' | 'top' | 'bottom';
@@ -60,12 +49,7 @@ export interface Placement {
 export type Span = readonly [number, number];
 
 /** The part of the content in view, CSS pixels: the scroller's box at its scroll position, less what a pinned band covers at its top. */
-export interface View {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-}
+export type View = Rect;
 
 const EPSILON = 0.5;
 
@@ -77,7 +61,7 @@ const EPSILON = 0.5;
 export const RAIL = 18;
 
 /** A region of the drawing in content pixels. */
-export function placed(box: Region, place: Placement): View {
+export function placed(box: Box, place: Placement): View {
   return {
     left: place.offsetX + box.x * place.scale,
     top: place.offsetY + box.y * place.scale,
@@ -438,11 +422,11 @@ export function findExits(parts: readonly View[], links: DrawingMap['links'], la
 // The rails
 
 
-/** The length, in CSS pixels, a tag takes along its rail for `chars` characters of the rail face (the mono face at 9px, 0.08em tracking: 0.6em advance plus the tracking), its chevron and padding. */
+/** The length, in CSS pixels, a tag takes along its rail for `chars` characters of the rail face (the mono face at 9px, 0.08em tracking), its chevron and padding. */
 export function tagLength(chars: number): number {
   return (chars + 2) * TAG_ADVANCE + 2 * TAG_PAD;
 }
-const TAG_ADVANCE = 6.12;
+export const TAG_ADVANCE = monoAdvance(9, 0.08);
 const TAG_PAD = 5;
 /** A tag's depth across its rail, CSS pixels. */
 const TAG_DEPTH = 15;
@@ -452,12 +436,7 @@ export const EXIT_CHARS = 22;
 const TAG_GAP = 3;
 
 /** An exit's tag placed on its rail: its box in the viewport, CSS pixels. */
-export interface PlacedExit extends Exit {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+export interface PlacedExit extends Exit, Box {}
 
 /**
  * Places each exit's tag on its rail, as near where its line crosses as
@@ -470,7 +449,7 @@ export interface PlacedExit extends Exit {
 export function placeExits(
   exits: readonly Exit[],
   scroll: { left: number; top: number },
-  viewport: { width: number; height: number },
+  viewport: Size,
   avoid: Record<Side, ReadonlyArray<Span>>,
   inset = 0,
 ): PlacedExit[] {
@@ -534,12 +513,12 @@ export const MAP_MARGIN = 6;
 const MAP_THIN = 40;
 
 /** Whether a drawing `fitted` (its size on screen, CSS pixels) in `viewport` scrolls far enough, in room enough, to carry a map. */
-export function wantsMap(fitted: { width: number; height: number }, viewport: { width: number; height: number }): boolean {
+export function wantsMap(fitted: Size, viewport: Size): boolean {
   return Math.min(viewport.width, viewport.height) >= MAP_ROOM && Math.max(fitted.width / viewport.width, fitted.height / viewport.height) >= MAP_FROM;
 }
 
 /** The size, in CSS pixels, of the map of a drawing (`drawing`, user units) in a viewport (CSS pixels). */
-export function mapSize(drawing: { width: number; height: number }, viewport: { width: number; height: number }): { width: number; height: number } {
+export function mapSize(drawing: Size, viewport: Size): Size {
   const aspect = drawing.width / drawing.height;
   let width = Math.sqrt(MAP_AREA * viewport.width * viewport.height * aspect);
   let height = width / aspect;
@@ -569,7 +548,7 @@ export interface MapStrip {
 }
 
 /** The strip the map of a drawing (`drawing`, user units, fitted as `fit`) takes in `viewport`, or null for one that carries no map. */
-export function mapStrip(drawing: { width: number; height: number }, fit: { width: number; height: number; scrollX: boolean; scrollY: boolean }, viewport: { width: number; height: number }): MapStrip | null {
+export function mapStrip(drawing: Size, fit: Size & { scrollX: boolean; scrollY: boolean }, viewport: Size): MapStrip | null {
   if (!(fit.scrollX || fit.scrollY) || !wantsMap(fit, viewport)) return null;
   const across = fit.scrollX && (!fit.scrollY || fit.width / viewport.width >= fit.height / viewport.height);
   const map = mapSize(drawing, viewport);
@@ -577,7 +556,7 @@ export function mapStrip(drawing: { width: number; height: number }, fit: { widt
 }
 
 /** The viewport a drawing is laid out and scrolled in beside its map's strip. */
-function besideStrip<V extends { width: number; height: number }>(viewport: V, strip: MapStrip | null): V {
+function besideStrip<V extends Size>(viewport: V, strip: MapStrip | null): V {
   if (!strip) return viewport;
   return strip.side === 'bottom' ? { ...viewport, height: Math.max(1, viewport.height - strip.depth) } : { ...viewport, width: Math.max(1, viewport.width - strip.depth) };
 }
@@ -594,7 +573,7 @@ function besideStrip<V extends { width: number; height: number }>(viewport: V, s
  * graph's orientation, a sequence's header rows). Elsewhere the drawing
  * has its rails and no map.
  */
-export function viewWithMap<V extends { layout: { width: number; height: number }; fit: { width: number; height: number; scrollX: boolean; scrollY: boolean } }, P extends { width: number; height: number }>(
+export function viewWithMap<V extends { layout: Size; fit: Size & { scrollX: boolean; scrollY: boolean } }, P extends Size>(
   viewport: P,
   view: (viewport: P) => V,
   reading: (view: V) => string = () => '',
@@ -612,7 +591,7 @@ export function viewWithMap<V extends { layout: { width: number; height: number 
  * long as the drawing's shape makes it, no longer than MAP_LONG of the
  * strip's length nor MAP_MAX (then shallower, keeping the shape).
  */
-export function mapInStrip(drawing: { width: number; height: number }, strip: MapStrip, length: number): { width: number; height: number } {
+export function mapInStrip(drawing: Size, strip: MapStrip, length: number): Size {
   const aspect = drawing.width / drawing.height;
   const depth = Math.max(1, strip.depth - 2 * MAP_PAD - 2 * MAP_MARGIN);
   const longest = Math.max(1, Math.min(MAP_MAX, length * MAP_LONG));

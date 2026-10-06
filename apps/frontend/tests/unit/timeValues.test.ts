@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compareTimeValues, parseTimeValue, type TimeValue } from '../../src/controller/validation';
+import { weekdayOf } from '../../src/primitives/timeLabels';
 
 // The page's one time parser (docs/display-tool.md, "Time values"). The
 // shared corpus pins which texts both validators accept; this pins what the
@@ -16,7 +17,7 @@ describe('parseTimeValue', () => {
     expect(parseTimeValue('2026-10-06T07:12:00+05:30')).toMatchObject({ offset: 330 });
   });
 
-  it('counts days from 1970-01-01, so a weekday is (dayNumber + 4) mod 7 from Sunday', () => {
+  it('counts days from 1970-01-01, so the weekday the page names (weekdayOf) falls right', () => {
     const days: Array<[string, number, number]> = [
       ['1970-01-01', 0, 4],
       ['2000-02-29', 11016, 2],
@@ -27,7 +28,7 @@ describe('parseTimeValue', () => {
     for (const [text, dayNumber, weekday] of days) {
       const time = parseTimeValue(text) as TimeValue;
       expect(time.dayNumber, text).toBe(dayNumber);
-      expect((time.dayNumber + 4) % 7, text).toBe(weekday);
+      expect(weekdayOf(time.dayNumber), text).toBe(weekday);
     }
   });
 

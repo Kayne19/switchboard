@@ -1,5 +1,6 @@
 import { createContext, createElement, useContext, useEffect, useId, useRef, type ReactElement, type ReactNode, type RefObject } from 'react';
 import type { StageNeed } from '../app/stageFold';
+import type { Size } from '../primitives/geometry';
 
 // What a primary's content asks of the stage (docs/visual-channel.md, "A
 // primary that outgrows its slot"). A primitive whose content may outgrow
@@ -73,7 +74,7 @@ export function watchElement(element: Element, measure: () => void, { children =
  */
 export function useLeastHeight(
   ref: RefObject<HTMLElement | null>,
-  least: number | ((box: { width: number; height: number }) => number | null | undefined) | null,
+  least: number | ((box: Size) => number | null | undefined) | null,
   relaid?: (height: number) => number,
 ): void {
   const listener = useContext(StageDemandContext);
