@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
-import { useLeastHeight, useScrollDemand } from '../hooks/useStageDemand';
+import { useOncePerFrame } from '../hooks/useOncePerFrame';
+import { countText, type Noun } from './countText';
+import { prefersReducedMotion } from './reducedMotion';
+import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
 // list, an inbox, an agenda, a forecast's days): the list scrolls inside
@@ -88,24 +91,6 @@ export function fadeDepth(viewHeight: number): number {
   return Math.round(Math.max(FADE_MIN, Math.min(FADE_MAX, viewHeight * FADE_SHARE)));
 }
 
-/**
- * How much a box is drawn scaled on screen: a shared-layout animation (focus
- * opening) scales the box it moves, and its rects with it, while its layout
- * sizes (clientHeight, offsetHeight) stay as laid out. Measures from the two
- * are brought to one scale by it.
- */
-export function drawnScale(rectHeight: number, offsetHeight: number): number {
-  return offsetHeight > 0 && rectHeight > 0 ? rectHeight / offsetHeight : 1;
-}
-
-/** How a count names its items: a singular and a plural, or a function of the count. */
-export type ListNoun = readonly [string, string] | ((count: number) => string);
-
-function nounFor(noun: ListNoun, count: number): string {
-  if (typeof noun === 'function') return noun(count);
-  return count === 1 ? noun[0] : noun[1];
-}
-
 // The deepest a fade reaches, as a share of the view, and its least depth.
 const FADE_SHARE = 0.18;
 const FADE_MAX = 36;
@@ -128,18 +113,14 @@ export function keyScrollTop(key: string, shift: boolean, scrollTop: number, vie
   return Math.max(0, Math.min(max, scrollTop + moves[key]));
 }
 
-function reducedMotion(): boolean {
-  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
-
 function cssEscape(value: string): string {
   return typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
 }
 
 interface ListViewportProps {
   children: ReactNode;
-  /** How the counts name the items: `['TASK', 'TASKS']`, or `(n) => ...`. */
-  noun: ListNoun;
+  /** How the counts name the items: `['TASK', 'TASKS']`. */
+  noun: Noun;
   /** The `data-item` of the item to open on; absent, an element marked `data-lead`, if any. */
   lead?: string;
   /** Which items the counts count, when not every `data-item` is one (a forecast counts its days, not its hours). */
@@ -178,7 +159,6 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
 
   // What the edges say, from where the reader stands. Read on scroll at
   // most once a frame, and whenever the list or its box changes.
-  const frame = useRef(0);
   const measure = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
@@ -201,32 +181,11 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     setScrolls(element.scrollHeight > element.clientHeight + 1);
     setViewHeight(element.clientHeight);
   }, [scrollRef, countSelector]);
-  const onScroll = () => {
-    if (frame.current) return;
-    frame.current = requestAnimationFrame(() => {
-      frame.current = 0;
-      measure();
-    });
-  };
-  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  const onScroll = useOncePerFrame(measure);
 
   useEffect(() => {
     const element = scrollRef.current;
-    if (!element) return undefined;
-    const resized = new ResizeObserver(() => measure());
-    const watch = () => {
-      resized.disconnect();
-      resized.observe(element);
-      for (const child of Array.from(element.children)) resized.observe(child);
-      measure();
-    };
-    const changed = new MutationObserver(watch);
-    changed.observe(element, { childList: true, subtree: true, characterData: true });
-    watch();
-    return () => {
-      resized.disconnect();
-      changed.disconnect();
-    };
+    return element ? watchElement(element, measure, { children: true, changes: true }) : undefined;
   }, [scrollRef, measure]);
 
   // Opens on the lead, once per shape.
@@ -259,7 +218,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     const top = keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight);
     if (top === null) return;
     event.preventDefault();
-    element.scrollTo({ top, behavior: reducedMotion() ? 'auto' : 'smooth' });
+    element.scrollTo({ top, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
   // A tap on an edge's count turns a page that way. The tap is marked
   // handled, so the surface around the list does not expand the object.
@@ -267,7 +226,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     event.preventDefault();
     const element = scrollRef.current;
     if (!element) return;
-    element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: reducedMotion() ? 'auto' : 'smooth' });
+    element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
 
   const fade = fadeDepth(viewHeight);
@@ -279,7 +238,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
         <div className={`drawing-viewport__more drawing-viewport__more--${side}`} style={{ height: `${fade}px` }} aria-hidden="true" />
         <div className={`drawing-viewport__rail drawing-viewport__rail--${side}`} aria-hidden="true" />
         <div className={`drawing-viewport__rim drawing-viewport__rim--${side} list-viewport__rim`} onClick={page(side === 'top' ? -1 : 1)} aria-hidden="true" data-count={count}>
-          <span className="drawing-viewport__rim-text">{count > 0 ? `${count} ${nounFor(noun, count)}` : 'MORE'}</span>
+          <span className="drawing-viewport__rim-text">{count > 0 ? countText(count, noun) : 'MORE'}</span>
           <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
             <path d="M 4 0 L 8 6 L 0 6 Z" />
           </svg>

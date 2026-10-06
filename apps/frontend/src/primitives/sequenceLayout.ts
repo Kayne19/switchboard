@@ -17,6 +17,7 @@
 // and scrolls down (drawingFit.ts).
 
 import type { SequenceActor, SequenceDiagramData, SequenceMessage } from '../controller/types';
+import { LABEL_ADVANCE, LABEL_BACKING, LABEL_HEIGHT, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, type DrawingFit, type Viewport } from './drawingFit';
 import { NOTE_MARKER } from './NoteMarker';
 
@@ -137,13 +138,8 @@ const actorSubAdvance = (size: number) => size * 0.69;
 // A header with a sub: the label sits higher and each sub line adds a row.
 const HEADER_HEIGHT_WITH_SUB = 52;
 export const SUB_LINE_HEIGHT = 11;
-// Message labels are set in the monospace face at 11 user units with 0.06em
-// tracking (.sequence-message-label), so a label's width is known before it
-// is drawn: 0.6em advance plus the tracking, rounded up.
+// The size a message label is set at (labelBox measures it).
 const MESSAGE_LABEL_SIZE = 11;
-const LABEL_ADVANCE = 7.3;
-export const LABEL_HEIGHT = 14;
-const LABEL_BACKING = 4;
 // Space kept clear between a label's backing and a lifeline.
 const CLEARANCE = 8;
 // A label sits this far above its arrow.
@@ -183,8 +179,7 @@ const HEADERS = {
 
 /** The outline of an actor's header, `width` by `height`, its corners stepped for its style. */
 export function actorFramePath(width: number, height: number, style: HeaderStyle): string {
-  const { topLeft, topRight, bottomLeft } = HEADERS[style].cut;
-  return `M 0 ${topLeft} L ${topLeft} 0 H ${width - topRight} L ${width} ${topRight} V ${height} H ${bottomLeft} L 0 ${height - bottomLeft} Z`;
+  return steppedFrame(width, height, HEADERS[style].cut);
 }
 // Recomposed narrow, the drawing keeps this little room at its sides, and
 // two staggered headers this much between them.
@@ -207,13 +202,6 @@ const MARKER_SIDE = 8;
 // there is none.
 const LIFELINE_TAIL = 36;
 const EMPTY_LIFELINE = 80;
-
-function labelBacking(lines: string[]) {
-  return {
-    width: Math.max(...lines.map((line) => line.length)) * LABEL_ADVANCE + 2 * LABEL_BACKING,
-    height: lines.length * LABEL_HEIGHT + 2 * LABEL_BACKING,
-  };
-}
 
 // Words onto lines of at most `chars` characters; a word longer than that
 // takes a line of its own and the caller widens the box to fit it. A bare
@@ -350,7 +338,7 @@ function layoutNatural(data: SequenceDiagramData, orientation: SequenceOrientati
   for (const entry of spans) {
     const low = Math.min(entry.from, entry.to);
     const high = Math.max(entry.from, entry.to);
-    const needed = labelBacking(entry.lines).width + 2 * CLEARANCE;
+    const needed = labelBox(entry.lines).width + 2 * CLEARANCE;
     const have = gaps.slice(low, high).reduce((sum, gap) => sum + gap, 0);
     if (have < needed) {
       const share = (needed - have) / (high - low);
@@ -359,7 +347,7 @@ function layoutNatural(data: SequenceDiagramData, orientation: SequenceOrientati
   }
   for (const entry of resolved) {
     if (entry.from !== entry.to) continue;
-    const needed = LOOP_WIDTH + LOOP_LABEL_GAP + labelBacking(entry.lines).width + CLEARANCE;
+    const needed = LOOP_WIDTH + LOOP_LABEL_GAP + labelBox(entry.lines).width + CLEARANCE;
     if (entry.from < actors.length - 1) {
       gaps[entry.from] = Math.max(gaps[entry.from], needed);
     } else {
@@ -451,7 +439,7 @@ function layRows(entries: RowEntry[], xs: number[], headerBottom: number, width:
     const { message, index, from, to, lines, over } = entry;
     const self = from === to;
     const kind = message.kind ?? 'call';
-    const backing = labelBacking(lines);
+    const backing = labelBox(lines);
     if (self) {
       const x = xs[from];
       if (over) {
@@ -716,7 +704,7 @@ export function viewSequence(data: SequenceDiagramData, viewport: Viewport, anch
 }
 
 function viewWith(data: SequenceDiagramData, viewport: Viewport, anchor: string | undefined, headers: HeaderStyle): SequenceView {
-  const orientation: SequenceOrientation = viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
+  const orientation: SequenceOrientation = drawingOrientation(viewport);
   const natural = layoutSequence(data, orientation, undefined, anchor, headers);
   const minScale = sequenceMinScale(natural);
   const fit = fitDrawing(natural, viewport, minScale);
