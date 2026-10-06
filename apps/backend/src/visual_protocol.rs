@@ -231,6 +231,13 @@ fn check_unknown_keys(
     Ok(())
 }
 
+// ---- field helpers ---------------------------------------------------------
+//
+// The checks the type validators share: each reads one field, copies it into
+// the result when it passes, and otherwise returns its error text. The
+// browser's validators have their own set (`copyOptionalString` and the
+// rest).
+
 fn copy_optional_string(
     data: &Map<String, Value>,
     out: &mut Map<String, Value>,
@@ -263,6 +270,124 @@ fn copy_optional_semantic(
     field_name: &str,
 ) -> Result<(), String> {
     copy_optional_name(data, out, "semantic", &SEMANTICS, field_name)
+}
+
+/// The scene-frame text every type may carry, checked last.
+fn copy_frame_text(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    kind: &str,
+) -> Result<(), String> {
+    for key in ["title", "subtitle", "context"] {
+        copy_optional_string(data, out, key, 256, &format!("{kind}.{key}"))?;
+    }
+    copy_optional_string(data, out, "caption", 128, &format!("{kind}.caption"))
+}
+
+fn required_string<'a>(
+    data: &'a Map<String, Value>,
+    key: &str,
+    max_len: usize,
+    field: &str,
+) -> Result<&'a str, String> {
+    let text = data
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{field} must be a string"))?;
+    if utf16_len(text) > max_len {
+        return Err(format!(
+            "{field} exceeds maximum length of {max_len} UTF-16 code units"
+        ));
+    }
+    Ok(text)
+}
+
+fn copy_optional_bool(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    field: &str,
+) -> Result<(), String> {
+    if let Some(value) = data.get(key) {
+        let b = value
+            .as_bool()
+            .ok_or_else(|| format!("{field} must be boolean"))?;
+        out.insert(key.into(), b.into());
+    }
+    Ok(())
+}
+
+/// An optional name from `allowed`; anything else, `null` included, is
+/// `invalid_name`'s refusal.
+fn copy_optional_name(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    allowed: &[&str],
+    field: &str,
+) -> Result<(), String> {
+    if let Some(value) = data.get(key) {
+        let name = read_name(Some(value), allowed, field)?;
+        out.insert(key.into(), name.into());
+    }
+    Ok(())
+}
+
+fn copy_number(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    field: &str,
+    required: bool,
+) -> Result<(), String> {
+    match data.get(key) {
+        None if !required => Ok(()),
+        value => {
+            let number = value
+                .filter(|v| v.as_f64().is_some_and(f64::is_finite))
+                .ok_or_else(|| format!("{field} must be a finite number"))?;
+            out.insert(key.into(), number.clone());
+            Ok(())
+        }
+    }
+}
+
+fn copy_optional_percent(
+    data: &Map<String, Value>,
+    out: &mut Map<String, Value>,
+    key: &str,
+    field: &str,
+) -> Result<(), String> {
+    if let Some(value) = data.get(key) {
+        if !value
+            .as_f64()
+            .is_some_and(|v| v.is_finite() && (0.0..=100.0).contains(&v))
+        {
+            return Err(format!("{field} must be a number from 0 to 100"));
+        }
+        out.insert(key.into(), value.clone());
+    }
+    Ok(())
+}
+
+/// An item's id: non-blank, within the id cap, and the first of its name in
+/// `seen`.
+fn check_item_id<'a>(
+    item: &'a Map<String, Value>,
+    seen: &mut HashSet<String>,
+    context: &str,
+) -> Result<&'a str, String> {
+    let id = item
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !is_blank(id) && utf16_len(id) <= MAX_ID_UTF16)
+        .ok_or_else(|| {
+            format!("{context} id must be non-empty and <= {MAX_ID_UTF16} UTF-16 code units")
+        })?;
+    if !seen.insert(id.to_string()) {
+        return Err(format!("duplicate {context} id: {id}"));
+    }
+    Ok(id)
 }
 
 fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
@@ -1492,124 +1617,6 @@ fn read_time(value: Option<&Value>, forms: &[TimeForm], field: &str) -> Result<T
 // "Personal-assistant types"). Each item id is checked as a diagram node id
 // is (non-blank, <= 128 UTF-16 units) and is unique in its list; the
 // browser's validators hold the same rules in the same order.
-
-/// The scene-frame text every type may carry, checked last.
-fn copy_frame_text(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    kind: &str,
-) -> Result<(), String> {
-    for key in ["title", "subtitle", "context"] {
-        copy_optional_string(data, out, key, 256, &format!("{kind}.{key}"))?;
-    }
-    copy_optional_string(data, out, "caption", 128, &format!("{kind}.caption"))
-}
-
-fn required_string<'a>(
-    data: &'a Map<String, Value>,
-    key: &str,
-    max_len: usize,
-    field: &str,
-) -> Result<&'a str, String> {
-    let text = data
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("{field} must be a string"))?;
-    if utf16_len(text) > max_len {
-        return Err(format!(
-            "{field} exceeds maximum length of {max_len} UTF-16 code units"
-        ));
-    }
-    Ok(text)
-}
-
-fn copy_optional_bool(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    key: &str,
-    field: &str,
-) -> Result<(), String> {
-    if let Some(value) = data.get(key) {
-        let b = value
-            .as_bool()
-            .ok_or_else(|| format!("{field} must be boolean"))?;
-        out.insert(key.into(), b.into());
-    }
-    Ok(())
-}
-
-/// An optional name from `allowed`; anything else, `null` included, is
-/// `invalid_name`'s refusal.
-fn copy_optional_name(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    key: &str,
-    allowed: &[&str],
-    field: &str,
-) -> Result<(), String> {
-    if let Some(value) = data.get(key) {
-        let name = read_name(Some(value), allowed, field)?;
-        out.insert(key.into(), name.into());
-    }
-    Ok(())
-}
-
-fn copy_number(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    key: &str,
-    field: &str,
-    required: bool,
-) -> Result<(), String> {
-    match data.get(key) {
-        None if !required => Ok(()),
-        value => {
-            let number = value
-                .filter(|v| v.as_f64().is_some_and(f64::is_finite))
-                .ok_or_else(|| format!("{field} must be a finite number"))?;
-            out.insert(key.into(), number.clone());
-            Ok(())
-        }
-    }
-}
-
-fn copy_optional_percent(
-    data: &Map<String, Value>,
-    out: &mut Map<String, Value>,
-    key: &str,
-    field: &str,
-) -> Result<(), String> {
-    if let Some(value) = data.get(key) {
-        if !value
-            .as_f64()
-            .is_some_and(|v| v.is_finite() && (0.0..=100.0).contains(&v))
-        {
-            return Err(format!("{field} must be a number from 0 to 100"));
-        }
-        out.insert(key.into(), value.clone());
-    }
-    Ok(())
-}
-
-/// An item's id: non-blank, within the id cap, and the first of its name in
-/// `seen`.
-fn check_item_id<'a>(
-    item: &'a Map<String, Value>,
-    seen: &mut HashSet<String>,
-    context: &str,
-) -> Result<&'a str, String> {
-    let id = item
-        .get("id")
-        .and_then(Value::as_str)
-        .filter(|id| !is_blank(id) && utf16_len(id) <= MAX_ID_UTF16)
-        .ok_or_else(|| {
-            format!("{context} id must be non-empty and <= {MAX_ID_UTF16} UTF-16 code units")
-        })?;
-    if !seen.insert(id.to_string()) {
-        return Err(format!("duplicate {context} id: {id}"));
-    }
-    Ok(id)
-}
 
 const CALENDAR_VIEWS: [&str; 4] = ["day", "week", "month", "agenda"];
 const MAX_CALENDAR_EVENTS: usize = 200;

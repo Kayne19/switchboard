@@ -287,6 +287,76 @@ function checkString(val: unknown, maxLen: number, name: string): string | null 
   return null;
 }
 
+// ---- field helpers ---------------------------------------------------------
+//
+// The checks the type validators share: each reads one field, copies it into
+// the result when it passes, and otherwise returns its error text. The
+// backend's validators have their own set (`copy_optional_string` and the
+// rest).
+
+type Fields = Record<string, unknown>;
+
+/** The scene-frame text every type may carry, checked last. */
+function copyFrameText(data: Fields, out: Fields, kind: string): string | null {
+  for (const key of ['title', 'subtitle', 'context'] as const) {
+    const err = copyOptionalString(data, out, key, 256, `${kind}.${key}`);
+    if (err) return err;
+  }
+  return copyOptionalString(data, out, 'caption', 128, `${kind}.caption`);
+}
+
+function copyOptionalString(data: Fields, out: Fields, key: string, maxLen: number, field: string): string | null {
+  if (data[key] === undefined) return null;
+  const err = checkString(data[key], maxLen, field);
+  if (err) return err;
+  out[key] = data[key];
+  return null;
+}
+
+function copyOptionalBoolean(data: Fields, out: Fields, key: string, field: string): string | null {
+  if (data[key] === undefined) return null;
+  if (typeof data[key] !== 'boolean') return `${field} must be boolean`;
+  out[key] = data[key];
+  return null;
+}
+
+/** An optional name from `allowed`; anything else, `null` included, is `invalidName`'s refusal. */
+function copyOptionalName(data: Fields, out: Fields, key: string, allowed: readonly string[], field: string): string | null {
+  const value = data[key];
+  if (value === undefined) return null;
+  if (!isName(value, allowed)) return invalidName(field, allowed);
+  out[key] = value;
+  return null;
+}
+
+function copyNumber(data: Fields, out: Fields, key: string, field: string, required: boolean): string | null {
+  const value = data[key];
+  if (value === undefined && !required) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return `${field} must be a finite number`;
+  out[key] = value;
+  return null;
+}
+
+function copyOptionalPercent(data: Fields, out: Fields, key: string, field: string): string | null {
+  const value = data[key];
+  if (value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
+    return `${field} must be a number from 0 to 100`;
+  }
+  out[key] = value;
+  return null;
+}
+
+/** An item's id: non-blank, within the id cap, and the first of its name in `seen`. */
+function checkItemId(value: unknown, seen: Set<string>, context: string): { ok: true; id: string } | { ok: false; error: string } {
+  if (typeof value !== 'string' || isBlank(value) || value.length > MAX_ID_UTF16) {
+    return { ok: false, error: `${context} id must be non-empty and <= ${MAX_ID_UTF16} UTF-16 code units` };
+  }
+  if (seen.has(value)) return { ok: false, error: `duplicate ${context} id: ${value}` };
+  seen.add(value);
+  return { ok: true, id: value };
+}
+
 function validateChartData(data: Record<string, unknown>): { ok: true; data: ChartData } | { ok: false; error: string } {
   const allowed = new Set(['title', 'subtitle', 'context', 'caption', 'kind', 'labels', 'xLabel', 'yLabel', 'xMax', 'yMin', 'yMax', 'series', 'marker', 'compareLabel']);
   const unknownKey = checkUnknownKeys(data, allowed, 'chart data');
@@ -1201,69 +1271,6 @@ function readTime(value: unknown, forms: TimeForm[], field: string): { ok: true;
 // "Personal-assistant types"). Each item id is checked as a diagram node id
 // is (non-blank, <= 128 UTF-16 units) and is unique in its list; the
 // backend's validators hold the same rules in the same order.
-
-type Fields = Record<string, unknown>;
-
-/** The scene-frame text every type may carry, checked last. */
-function copyFrameText(data: Fields, out: Fields, kind: string): string | null {
-  for (const key of ['title', 'subtitle', 'context'] as const) {
-    const err = copyOptionalString(data, out, key, 256, `${kind}.${key}`);
-    if (err) return err;
-  }
-  return copyOptionalString(data, out, 'caption', 128, `${kind}.caption`);
-}
-
-function copyOptionalString(data: Fields, out: Fields, key: string, maxLen: number, field: string): string | null {
-  if (data[key] === undefined) return null;
-  const err = checkString(data[key], maxLen, field);
-  if (err) return err;
-  out[key] = data[key];
-  return null;
-}
-
-function copyOptionalBoolean(data: Fields, out: Fields, key: string, field: string): string | null {
-  if (data[key] === undefined) return null;
-  if (typeof data[key] !== 'boolean') return `${field} must be boolean`;
-  out[key] = data[key];
-  return null;
-}
-
-/** An optional name from `allowed`; anything else, `null` included, is `invalidName`'s refusal. */
-function copyOptionalName(data: Fields, out: Fields, key: string, allowed: readonly string[], field: string): string | null {
-  const value = data[key];
-  if (value === undefined) return null;
-  if (!isName(value, allowed)) return invalidName(field, allowed);
-  out[key] = value;
-  return null;
-}
-
-function copyNumber(data: Fields, out: Fields, key: string, field: string, required: boolean): string | null {
-  const value = data[key];
-  if (value === undefined && !required) return null;
-  if (typeof value !== 'number' || !Number.isFinite(value)) return `${field} must be a finite number`;
-  out[key] = value;
-  return null;
-}
-
-function copyOptionalPercent(data: Fields, out: Fields, key: string, field: string): string | null {
-  const value = data[key];
-  if (value === undefined) return null;
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
-    return `${field} must be a number from 0 to 100`;
-  }
-  out[key] = value;
-  return null;
-}
-
-/** An item's id: non-blank, within the id cap, and the first of its name in `seen`. */
-function checkItemId(value: unknown, seen: Set<string>, context: string): { ok: true; id: string } | { ok: false; error: string } {
-  if (typeof value !== 'string' || isBlank(value) || value.length > MAX_ID_UTF16) {
-    return { ok: false, error: `${context} id must be non-empty and <= ${MAX_ID_UTF16} UTF-16 code units` };
-  }
-  if (seen.has(value)) return { ok: false, error: `duplicate ${context} id: ${value}` };
-  seen.add(value);
-  return { ok: true, id: value };
-}
 
 const CALENDAR_VIEWS = ['day', 'week', 'month', 'agenda'];
 /** The most days a view may show; the day and month views take no `days`. */
