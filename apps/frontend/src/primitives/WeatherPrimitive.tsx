@@ -9,10 +9,10 @@ import { conditionText, WeatherGlyph } from './WeatherGlyph';
 import {
   COMPACT_FIGURE_GAP,
   CONDITION_GAP,
-  dayLabel,
   dayLong,
   dayRange,
   dayScale,
+  dayShort,
   formatTemp,
   heroTempFit,
   hourLabel,
@@ -182,7 +182,7 @@ function OutlookDay({ day, marked }: { day: WeatherDay; marked: boolean }) {
   return (
     <li className={`weather-outlook__day${marked ? ' weather-outlook__day--marked' : ''}`} data-item={day.date}>
       {marked ? <NoteBadge className="weather-outlook__badge" /> : null}
-      <span className="weather-outlook__name tech micro">{dayLabel(day.date)}</span>
+      <span className="weather-outlook__name tech micro">{dayShort(day.date)}</span>
       <WeatherGlyph condition={day.condition} className="weather-outlook__glyph" />
       <span className="weather-outlook__high">{formatTemp(day.high)}°</span>
       <span className="weather-outlook__low">{formatTemp(day.low)}°</span>
@@ -311,7 +311,7 @@ function Day({ day, scale, marked }: { day: WeatherDay; scale: { min: number; ma
   return (
     <li className={`weather-day${marked ? ' weather-day--marked' : ''}`} data-item={day.date}>
       <span className="weather-day__name tech">
-        {dayLabel(day.date)}
+        {dayShort(day.date)}
         {marked ? <NoteBadge /> : null}
       </span>
       <WeatherGlyph condition={day.condition} className="weather-day__glyph" />

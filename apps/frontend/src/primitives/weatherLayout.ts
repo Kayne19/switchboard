@@ -1,5 +1,6 @@
 import type { WeatherData, WeatherHour } from '../controller/types';
 import { parseTimeValue } from '../controller/validation';
+import { dayText, timeOfDay, two, weekdayName } from './timeLabels';
 
 // How a forecast is laid out for the box it is drawn in, and how its times
 // and temperatures are written. Pure, so the arrangements, the thinning of
@@ -7,41 +8,35 @@ import { parseTimeValue } from '../controller/validation';
 // without a browser. Times are drawn as the agent wrote them (one parser,
 // `parseTimeValue`; no zone is converted).
 
-const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
-
 /** A temperature as the page writes it: to a tenth at most, no `-0`. */
 export function formatTemp(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return String(rounded === 0 ? 0 : rounded);
 }
 
-/** A weekday from a day number (days from 1970-01-01, a Thursday). */
-const weekday = (dayNumber: number) => WEEKDAYS[(((dayNumber + 4) % 7) + 7) % 7];
-
-/** A forecast day as a row names it: `WED 7`. */
-export function dayLabel(date: string): string {
+/** A forecast day as a row names it, short: `WED 7`. */
+export function dayShort(date: string): string {
   const time = parseTimeValue(date);
-  return time ? `${weekday(time.dayNumber)} ${time.day}` : date;
+  return time ? `${weekdayName(time.dayNumber)} ${time.day}` : date;
 }
 
-/** A forecast day in full: `THU OCT 8`. */
+/** A forecast day in full, as the page names a day (`dayText`): `THU OCT 8`. */
 export function dayLong(date: string): string {
   const time = parseTimeValue(date);
-  return time ? `${weekday(time.dayNumber)} ${MONTHS[time.month - 1]} ${time.day}` : date;
+  return time ? dayText(time) : date;
 }
 
 /** A forecast hour on the strip: `14`; its day's name at midnight. */
 export function hourLabel(time: string): string {
   const value = parseTimeValue(time);
   if (!value) return time;
-  return value.hour === 0 && value.minute === 0 ? weekday(value.dayNumber) : String(value.hour).padStart(2, '0');
+  return value.hour === 0 && value.minute === 0 ? weekdayName(value.dayNumber) : two(value.hour);
 }
 
 /** A forecast hour in full: `THU 14:00`. */
 export function hourLong(time: string): string {
   const value = parseTimeValue(time);
-  return value ? `${weekday(value.dayNumber)} ${String(value.hour).padStart(2, '0')}:${String(value.minute).padStart(2, '0')}` : time;
+  return value ? `${weekdayName(value.dayNumber)} ${timeOfDay(value)}` : time;
 }
 
 /**

@@ -9,10 +9,10 @@ import {
   COMPACT_LIST_HEIGHT,
   COMPACT_STRIP_HEIGHT,
   COMPACT_WIDTH,
-  dayLabel,
   dayLong,
   dayRange,
   dayScale,
+  dayShort,
   formatTemp,
   heroEms,
   heroTempFit,
@@ -56,7 +56,7 @@ describe('words', () => {
   });
 
   it('names days and hours as written, on the weekday their date falls on', () => {
-    expect(dayLabel('2026-10-07')).toBe('WED 7');
+    expect(dayShort('2026-10-07')).toBe('WED 7');
     expect(dayLong('2026-10-08')).toBe('THU OCT 8');
     expect(dayLong('2024-02-29')).toBe('THU FEB 29');
     expect(hourLabel('2026-10-07T09:00')).toBe('09');
