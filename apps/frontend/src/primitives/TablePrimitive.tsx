@@ -75,7 +75,7 @@ export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; sl
       <TechFrame variant="code" />
       <div className="table-viewport__mask">
         <div className="table-viewport__meta tech micro">
-          <MetaTitle title={data.title ?? 'TABLE'} framed={slot === 'primary'} />
+          <MetaTitle title={data.title ?? 'TABLE'} slot={slot} />
           <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
         </div>
         <div ref={scrollRef} className="table-viewport__scroll" tabIndex={0}>

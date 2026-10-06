@@ -131,7 +131,7 @@ function Now({ data, compact, temp, slot, spot, outlook, figure, inline, alertLi
           leads the head (MetaTitle), and the place it is for takes the
           place of NOW: what of the place the title does not name already. */}
       <div className="weather-now__head tech micro">
-        <MetaTitle title={data.title ?? 'WEATHER'} framed={framed} className="weather-now__title" />
+        <MetaTitle title={data.title ?? 'WEATHER'} slot={slot} className="weather-now__title" />
         {data.alert && !alertLine ? <AlertTag text={data.alert} /> : null}
         {place ? <span className="weather-now__location">{place}</span> : null}
         {framed ? <span>NOW</span> : null}

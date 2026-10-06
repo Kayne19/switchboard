@@ -53,7 +53,7 @@ it('says nothing for its stand-in, and keeps its hours viewport when its days tu
   document.body.append(host);
   const root = createRoot(host);
   const draw = (data: CalendarData) =>
-    act(() => root.render(<StageDemandContext.Provider value={listen}><CalendarPrimitive data={data} framed /></StageDemandContext.Provider>));
+    act(() => root.render(<StageDemandContext.Provider value={listen}><CalendarPrimitive data={data} slot="primary" /></StageDemandContext.Provider>));
   const resized = () => act(() => {
     for (const fire of [...observers]) fire();
   });

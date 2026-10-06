@@ -191,7 +191,7 @@ export function TasksPrimitive({ data, slot = 'primary', marked }: { data: Tasks
   const compact = slot === 'aux';
   const head = (
     <div className="tasks-primitive__meta tech micro">
-      <MetaTitle title={data.title ?? 'TASKS'} framed={slot === 'primary'} className="tasks-primitive__title" />
+      <MetaTitle title={data.title ?? 'TASKS'} slot={slot} className="tasks-primitive__title" />
       {/* Each count whole: a narrow list wraps between them. */}
       <span className="tasks-primitive__counts">
         <span className="meta-count">{counts.open} OPEN</span>

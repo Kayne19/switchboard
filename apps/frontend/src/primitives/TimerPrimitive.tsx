@@ -97,7 +97,7 @@ export function TimerPrimitive({ data, marked, slot = 'primary' }: { data: Timer
       data-layout={layout.kind === 'grid' ? `grid-${layout.columns}x${layout.rows}` : 'list'}
       style={layout.kind === 'grid' ? { ['--timer-digits' as string]: `${layout.digits}px`, ['--timer-columns' as string]: layout.columns, ['--timer-rows' as string]: layout.rows, ['--timer-gap' as string]: `${CELL_GAP}px` } : undefined}
     >
-      <MetaTitle title={data.title ?? 'TIMERS'} framed={slot === 'primary'} className="timer__title tech micro" />
+      <MetaTitle title={data.title ?? 'TIMERS'} slot={slot} className="timer__title tech micro" />
       {/* The box the timers are laid out for: the primitive's own, inside any padding its slot gives it. */}
       <div ref={hostRef} className="timer-primitive__field">
         {layout.kind === 'grid' ? (

@@ -69,7 +69,7 @@ export function renderObject(object: SceneObject, slot: Slot, { onStage, notes, 
     case 'note':
       return <AnnotationCard data={cast.note(object).data} named={standingNoteTarget(onStage, cast.note(object).data)} />;
     case 'calendar':
-      return <CalendarPrimitive data={cast.calendar(object).data} marked={marked} focused={slot === 'focus'} framed={slot === 'primary'} />;
+      return <CalendarPrimitive data={cast.calendar(object).data} slot={slot} marked={marked} />;
     case 'tasks':
       return <TasksPrimitive data={cast.tasks(object).data} slot={slot} marked={marked} />;
     case 'inbox':
