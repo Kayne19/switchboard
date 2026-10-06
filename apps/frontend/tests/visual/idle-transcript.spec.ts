@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
+import { GEOMETRIES } from './helpers';
 
 // The idle stage keeps a voice-free way onto the line: the conversation
 // page's transcript toggle, in the same place, out of sight until the pointer
@@ -7,12 +8,6 @@ import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs'
 // can hover (the idle goldens depend on it), and must rest in view where
 // nothing can.
 
-const geometries = [
-  { name: 'portrait-phone', width: 390, height: 844 },
-  { name: 'portrait-tablet', width: 820, height: 1180 },
-  { name: 'landscape', width: 1440, height: 900 },
-  { name: 'ultrawide', width: 2560, height: 1080 },
-] as const;
 
 const idleToggle = '.scene--idle .transcript-reveal .transcript-toggle';
 
@@ -28,7 +23,7 @@ async function openIdle(page: Page, query = '?scene=idle&chrome=0') {
   await expect(page.locator(idleToggle)).toHaveCount(1);
 }
 
-for (const geometry of geometries) {
+for (const geometry of GEOMETRIES) {
   test(`the idle toggle rests hidden where the conversation shows it / ${geometry.name}`, async ({ page }) => {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
     await openIdle(page);

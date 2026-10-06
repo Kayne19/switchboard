@@ -1,15 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
+import { GEOMETRIES } from './helpers';
 
 // The listening signal below the glyph is wider than the presence on narrow
 // geometries. It must overflow around the presence's centre, never widen the
 // column the glyph is sized from: that is what made the glyph grow and drift
 // off-centre each time listening started or stopped.
-const geometries = [
-  { name: 'portrait-phone', width: 390, height: 844 },
-  { name: 'portrait-tablet', width: 820, height: 1180 },
-  { name: 'landscape', width: 1440, height: 900 },
-  { name: 'ultrawide', width: 2560, height: 1080 },
-] as const;
 
 async function glyphGeometry(page: Page) {
   return page.evaluate(() => {
@@ -27,7 +22,7 @@ async function glyphGeometry(page: Page) {
   });
 }
 
-for (const geometry of geometries) {
+for (const geometry of GEOMETRIES) {
   test(`presence keeps its glyph geometry across listening / ${geometry.name}`, async ({ page }) => {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
     await page.goto('/?scene=architecture&chrome=0');

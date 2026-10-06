@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { GEOMETRIES, openScene, runActions } from './helpers';
 
 // A note's card names what it is about in its object's words (noteTarget,
 // apps/frontend/src/app/noteItems.ts), and the words are its point: where
@@ -9,10 +10,7 @@ import { expect, test, type Page } from '@playwright/test';
 // jsdom does not draw.
 
 const geometries = [
-  { name: 'portrait-phone', width: 390, height: 844 },
-  { name: 'portrait-tablet', width: 820, height: 1180 },
-  { name: 'landscape', width: 1440, height: 900 },
-  { name: 'ultrawide', width: 2560, height: 1080 },
+  ...GEOMETRIES,
   { name: 'short', width: 844, height: 390 },
   { name: 'hd', width: 1280, height: 720 },
 ] as const;
@@ -22,9 +20,8 @@ const aboutTable = [
 ];
 
 async function open(page: Page, scene: string, actions: unknown[] = []) {
-  await page.goto(`/?scene=${scene}&chrome=0`);
-  await expect(page.locator('.stage')).toBeVisible();
-  if (actions.length > 0) await page.evaluate((list) => window.SwitchboardController!.run(list), actions);
+  await openScene(page, scene);
+  if (actions.length > 0) await runActions(page, actions);
   await page.waitForTimeout(700);
 }
 

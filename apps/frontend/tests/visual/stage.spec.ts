@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
 import { transcriptEntry } from '../fixtures/serverMessages';
+import { openScene, runActions } from './helpers';
 
 // A primary that outgrows the column it shares with a rail standing under it
 // takes the stage's height; the rail folds to a strip of its note and
@@ -82,15 +83,8 @@ async function tallFigure(page: Page) {
 }
 
 async function open(page: Page, scene: string, actions: unknown[] = []) {
-  await page.goto(`/?scene=${scene}&chrome=0`);
-  await expect(page.locator('.stage')).toBeVisible();
-  if (actions.length > 0) {
-    await page.evaluate((list) => {
-      const controller = window.SwitchboardController;
-      if (!controller) throw new Error('controller unavailable');
-      controller.run(list);
-    }, actions);
-  }
+  await openScene(page, scene);
+  if (actions.length > 0) await runActions(page, actions);
   await expect(page.locator('.content-grid')).toBeVisible();
   // Long enough for every primitive to have said what it needs.
   await page.waitForTimeout(700);

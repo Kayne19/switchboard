@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { GEOMETRIES, runActions } from './helpers';
 
 // The timer and the forecast where jsdom cannot see them: the browser's
 // clock, reduced motion, and boxes at every canonical geometry. The page
@@ -8,19 +9,8 @@ const T0 = Date.parse('2026-10-07T16:40:00Z');
 // An instant `seconds` from T0, written on the caller's Pacific clock.
 const at = (seconds: number) => new Date(T0 + seconds * 1000 - 7 * 3_600_000).toISOString().replace(/\.\d{3}Z$/, '-07:00');
 
-const geometries = [
-  { name: 'portrait-phone', width: 390, height: 844 },
-  { name: 'portrait-tablet', width: 820, height: 1180 },
-  { name: 'landscape', width: 1440, height: 900 },
-  { name: 'ultrawide', width: 2560, height: 1080 },
-] as const;
-
 async function show(page: Page, actions: unknown[]) {
-  await page.evaluate((list) => {
-    const controller = window.SwitchboardController;
-    if (!controller) throw new Error('controller unavailable');
-    controller.run([{ op: 'clear' }, ...list]);
-  }, actions);
+  await runActions(page, [{ op: 'clear' }, ...actions]);
 }
 
 // What a reader would call broken, inside one primitive's box: text under
@@ -121,7 +111,7 @@ test.describe('the page clock', () => {
   });
 });
 
-for (const geometry of geometries) {
+for (const geometry of GEOMETRIES) {
   test.describe(geometry.name, () => {
     test.use({ viewport: { width: geometry.width, height: geometry.height } });
 

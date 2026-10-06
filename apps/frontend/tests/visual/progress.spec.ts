@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { openScene, runActions } from './helpers';
 
 // A stepped progress where the unit tests cannot see it: jsdom draws no
 // boxes. As the primary it is framed to its own height; in the rail it reads
@@ -11,13 +12,8 @@ const steps = (count: number, firstOpen: number) => Array.from({ length: count }
 }));
 
 async function show(page: Page, actions: unknown[]) {
-  await page.goto('/?scene=architecture&chrome=0');
-  await expect(page.locator('.stage')).toBeVisible();
-  await page.evaluate((list) => {
-    const controller = window.SwitchboardController;
-    if (!controller) throw new Error('controller unavailable');
-    controller.run([{ op: 'clear' }, ...list]);
-  }, actions);
+  await openScene(page, 'architecture');
+  await runActions(page, [{ op: 'clear' }, ...actions]);
   await page.waitForTimeout(600);
 }
 
