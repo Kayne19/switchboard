@@ -4646,10 +4646,13 @@ button {
   background: var(--orange);
 }
 
-/* An event in the grid: a slot of its place and size, and the box in it. */
+/* An event in the grid: a slot of its place and size, and the box in it.
+   The slot is opaque, so the now rule under it never shows through a box
+   drawn receded (past, or cancelled and see-through) as a strike. */
 .calendar-event-slot {
   position: absolute;
   z-index: 1;
+  background: #000;
 }
 .calendar-event {
   position: relative;

@@ -403,6 +403,8 @@ describe('the now and today marks', () => {
     expect(declared('.calendar-grid__now', 'z-index')).toEqual([]);
     expect(declared('.calendar-grid__now-line', 'z-index')).toEqual([]);
     expect(Number((boxes(calendar, 'standup-wed')[0] as HTMLElement).style.zIndex)).toBeGreaterThan(0);
+    // Every box hides it: a receded box (past at half strength, cancelled with no fill) stands on an opaque slot.
+    expect(declared('.calendar-event-slot', 'background')).toEqual(['#000']);
     // A thin solid rule, no glow; the time's tag pointed at the grid.
     expect(declared('.calendar-grid__now-line', 'height')).toEqual(['1px']);
     expect(declared('.calendar-grid__now-line', 'box-shadow')).toEqual([]);
