@@ -6,6 +6,7 @@ import { act } from 'react';
 import { describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { drawnScale } from '../../src/hooks/useStageDemand';
+import { keyStop } from '../../src/primitives/drawingScroll';
 import { continuesPast, countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 import { mount, rerender, stubResizeObserver } from './sceneHarness';
 
@@ -241,7 +242,7 @@ describe('ListViewport', () => {
     document.addEventListener('click', hear);
     act(() => page().querySelector<HTMLElement>('.scroll-rim__count--bottom')!.click());
     document.removeEventListener('click', hear);
-    expect(calls).toEqual([{ top: 85, behavior: expect.any(String) }]);
+    expect(calls).toEqual([{ top: 88, behavior: expect.any(String) }]);
     expect(surfaceClicks).toBe(0);
     expect(heard).toBe(1);
   });
@@ -258,7 +259,7 @@ describe('ListViewport', () => {
     const press = (key: string) => act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));
     press(' ');
     press('End');
-    expect(calls.map((call) => call.top)).toEqual([85, 200]);
+    expect(calls.map((call) => call.top)).toEqual([88, 200]);
     expect(surfaceClicks).toBe(0);
     press('Enter');
     expect(surfaceClicks).toBe(1);
@@ -266,11 +267,17 @@ describe('ListViewport', () => {
 });
 
 describe('keyScrollTop', () => {
+  it('takes the keys a drawing takes, by the one rule (scrollMove)', () => {
+    for (const key of [' ', 'PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter', 'Tab', 'a']) {
+      expect(keyScrollTop(key, false, 0, 200, 600) === null, key).toBe(keyStop(key, false, false, [0, 300], 0, 200) === null);
+    }
+  });
+
   it('moves a line, a page, or to either end, and no further', () => {
     expect(keyScrollTop('ArrowDown', false, 0, 100, 400)).toBe(40);
     expect(keyScrollTop('ArrowUp', false, 10, 100, 400)).toBe(0);
     expect(keyScrollTop('PageDown', false, 250, 100, 400)).toBe(300);
-    expect(keyScrollTop(' ', true, 200, 100, 400)).toBe(115);
+    expect(keyScrollTop(' ', true, 200, 100, 400)).toBe(112);
     expect(keyScrollTop('Home', false, 200, 100, 400)).toBe(0);
     expect(keyScrollTop('End', false, 0, 100, 400)).toBe(300);
     expect(keyScrollTop('Enter', false, 0, 100, 400)).toBeNull();

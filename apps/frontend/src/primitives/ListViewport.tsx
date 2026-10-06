@@ -3,6 +3,7 @@ import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { rimCount, type Noun } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import { ScrollRim } from './ScrollRim';
+import { PAGE_SHARE, scrollMove } from './drawingScroll';
 import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
@@ -96,22 +97,23 @@ export function fadeDepth(viewHeight: number): number {
 const FADE_SHARE = 0.18;
 const FADE_MAX = 36;
 const FADE_MIN = 18;
-// A page is the view less a row's worth, so the row at the edge stays in
-// sight; an arrow moves a line.
-const PAGE_SHARE = 0.85;
+// An arrow moves a list a line.
 const LINE = 40;
 
+/** A page of a list whose view is `viewHeight` tall: the drawing's page (PAGE_SHARE). */
 const pageLength = (viewHeight: number) => Math.max(1, Math.round(viewHeight * PAGE_SHARE));
 
-/** Where a scroll key moves a list's scroll to, or null for a key the list does not take. */
+/**
+ * Where a scroll key (drawingScroll `scrollMove`, the rule every scroller
+ * keeps) moves a list's scroll to: a page, a line, or an end, no further
+ * than either end; null for a key the list does not take.
+ */
 export function keyScrollTop(key: string, shift: boolean, scrollTop: number, viewHeight: number, contentHeight: number): number | null {
+  const move = scrollMove(key, shift, false);
+  if (!move) return null;
   const max = Math.max(0, contentHeight - viewHeight);
-  const page = pageLength(viewHeight);
-  const moves: Record<string, number> = { ArrowDown: LINE, ArrowUp: -LINE, PageDown: page, PageUp: -page, ' ': shift ? -page : page };
-  if (key === 'Home') return 0;
-  if (key === 'End') return max;
-  if (!(key in moves)) return null;
-  return Math.max(0, Math.min(max, scrollTop + moves[key]));
+  const by = move.kind === 'page' ? pageLength(viewHeight) : move.kind === 'step' ? LINE : max;
+  return Math.max(0, Math.min(max, scrollTop + move.direction * by));
 }
 
 function cssEscape(value: string): string {

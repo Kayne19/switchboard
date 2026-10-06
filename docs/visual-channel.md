@@ -142,7 +142,8 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   Touch settles there through the browser's scroll snapping; the keys
   that scroll a focused drawing move it from one such place to the next
   (an arrow to the next, Space or Page Down a page on, Home and End to
-  the ends); a wheel or a trackpad moves freely and settles when it
+  the ends: the keys every scroller takes, `drawingScroll.scrollMove`,
+  and a page that keeps the last eighth of the view in sight); a wheel or a trackpad moves freely and settles when it
   pauses, a single notch on to the next place; a mouse wheel over a
   drawing that scrolls only across scrolls it across. It opens on its
   lead at such a place.
@@ -530,8 +531,11 @@ continues past it draws the same fade, dashed cut line and tag (one
 at least, as every rim counts ("06 TASKS", a week's hidden days "MON-TUE /
 07 EVENTS"); a row of which no more than a sliver shows counts as past
 the edge; it says MORE where none does. A
-tap on the tag turns a page and does not expand the object; the keys that
-scroll a focused list scroll it. It opens on the item a note names, never
+tap on the tag turns a page and does not expand the object. A focused
+list takes the keys a drawing takes (an arrow moves it a line, Space and
+Page Down a page on, Shift+Space and Page Up a page back, Home and End to
+the ends), each marked handled so Space never expands the object; Enter
+still does. It opens on the item a note names, never
 under the fade, and keeps the reader's place through an update. Focus
 gives the list the whole stage.
 
