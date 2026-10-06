@@ -619,12 +619,12 @@ function AuxRow({
   );
 }
 
-// A column of a scene's main slot that moves and resizes with the stage's
-// layout, as the main column does (`useLayoutMotion`).
-function StageColumn({ className, children }: { className: string; children: ReactNode }) {
+// A column of the stage that moves and resizes with its layout: the main
+// column, and a scene's own column in its main slot (`useLayoutMotion`).
+function StageColumn({ className, ref, children }: { className: string; ref?: RefObject<HTMLDivElement | null>; children: ReactNode }) {
   const layoutMotion = useLayoutMotion({ layout: true });
   return (
-    <motion.div className={className} {...layoutMotion}>
+    <motion.div ref={ref} className={className} {...layoutMotion}>
       {children}
     </motion.div>
   );
@@ -653,12 +653,11 @@ function MainWithAux({
   ref?: RefObject<HTMLDivElement | null>;
   children: ReactNode;
 }) {
-  const layoutMotion = useLayoutMotion({ layout: true });
   return (
-    <motion.div ref={ref} className={`content-main composed-main${variant ? ` ${variant}` : ''}`} {...layoutMotion}>
+    <StageColumn ref={ref} className={`content-main composed-main${variant ? ` ${variant}` : ''}`}>
       {children}
       {aux.length > 0 ? <AuxRow objects={aux} onStage={onStage} onFocus={onFocus} drawn={drawn} /> : null}
-    </motion.div>
+    </StageColumn>
   );
 }
 

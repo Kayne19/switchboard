@@ -10,14 +10,18 @@ export type LayoutMotion = Pick<MotionProps, 'layout' | 'layoutId'>;
  * Under reduced motion motion still runs a layout animation, as an instant
  * one: it draws the element at its old box (the animation's first frame) in
  * the flush after the commit, and at its new box in the next frame. A
- * render is asked once per timestamp, and the flush stamps the frame with
- * the time of the commit, so a next frame that comes within the same tick
- * of the clock (a commit that ends as a frame is due) asks again and is
- * not drawn: the element keeps its old box for good, scaled to it (the
- * main column at scaleY(0.9825) on a phone, its rail and Damocles with it).
+ * render is asked once per timestamp (motion-dom 12.43 and 14.0,
+ * `VisualElement.scheduleRender`), and the flush stamps the frame with the
+ * time of the commit, so a next frame that comes within the same tick of
+ * the clock (a commit that ends as a frame is due) asks again and is not
+ * drawn: the element keeps its old box for good, scaled to it (the main
+ * column at scaleY(0.9825) on a phone, its rail and Damocles with it). The
+ * tick is what makes it likely: Firefox and Safari read the clock in whole
+ * milliseconds, as Playwright's pinned clock does (one load in four of a
+ * phone source with timers beside it); Chrome's 0.1 ms tick made it rare.
  * With no layout props there is no projection to leave behind, and nothing
  * moved either way. Motion reads the setting once, when an element mounts,
- * and so does this.
+ * and so does this (a list's rows take the list's).
  */
 export function useLayoutMotion(motion: LayoutMotion): LayoutMotion {
   return useReducedMotionConfig() ? {} : motion;

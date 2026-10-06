@@ -43,7 +43,8 @@ function MetricTrend({ data }: { data: MetricData }) {
 }
 
 export function MetricsPrimitive({ metrics, slot = 'primary', onFocus }: MetricsPrimitiveProps) {
-  // The list and each row move and resize with the layout, one rule for both.
+  // The list and each row move and resize with the layout, one rule for
+  // both: read as the list mounts, so a row that comes later takes it too.
   const layoutMotion = useLayoutMotion({ layout: true });
   if (slot === 'rail' && metrics.length === 0) {
     return null;

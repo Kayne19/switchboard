@@ -32,7 +32,10 @@ for (const geometry of GEOMETRIES) {
 // tick of the clock was never drawn, and the box kept its old size for good:
 // beside timers, on a phone, the main column stood at scaleY(0.9825), the
 // rail and Damocles with it, in about one load in four. The page now hands
-// motion no layout under reduced motion (hooks/useLayoutMotion.ts).
+// motion no layout under reduced motion (hooks/useLayoutMotion.ts). The
+// clock is pinned: Playwright's then reads whole milliseconds, as Firefox's
+// and Safari's do, which is what makes the race likely (Chrome's own 0.1 ms
+// tick made it rare, so without the pin this test could not fail).
 const T0 = Date.parse('2026-10-07T16:40:00Z');
 const at = (minutes: number) => new Date(T0 + minutes * 60_000 - 7 * 3_600_000).toISOString().replace(/\.\d{3}Z$/, '-07:00');
 const timers = {
