@@ -6,6 +6,7 @@
 // still to come -- are pinned as the page draws them.
 import { act } from 'react';
 import { flushSync } from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TimerData } from '../../src/controller/types';
 import { TimerPrimitive } from '../../src/primitives/TimerPrimitive';
@@ -116,6 +117,35 @@ describe('the page clock', () => {
     const host = render({ timers: [{ id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:03.250Z' }] });
     // 2650 ms to go.
     expect(digits(host, 'tea')).toBe('00:03');
+  });
+
+  // A view of timers joins or leaves the page in a task of its own (a new
+  // display's commit, focus opening, an exit animation ending). A browser
+  // may run that task after a turn is due but before the clock's timeout:
+  // the turn must still reach every view, not be cancelled for the next.
+  it('a view that leaves in the task before a turn does not hold the others back', () => {
+    const eggs = render({ timers: [kitchen.timers[2]] });
+    const tea = render({ timers: [{ id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:09.250Z' }] });
+    // Due at the eggs' end, and queued before the clock's own timeout for it.
+    setTimeout(() => unmount(tea), 3000);
+    tick(3000);
+    expect(item(eggs, 'eggs').dataset.phase).toBe('done');
+  });
+
+  it('a view that joins in the task before a turn does not hold the others back', () => {
+    // Committed in the task itself, as the page commits a new display (in
+    // act() a render would wait for the end of the whole tick).
+    const tea = document.createElement('div');
+    document.body.append(tea);
+    const root = createRoot(tea);
+    // Queued before the clock's timeout for the eggs' turn at one second.
+    setTimeout(() => flushSync(() => root.render(<TimerPrimitive data={{ timers: [{ id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:09.250Z' }] }} slot="aux" />)), 1000);
+    const eggs = render({ timers: [kitchen.timers[2]] });
+    tick(1000);
+    expect(digits(tea, 'tea')).toBe('00:09');
+    expect(digits(eggs, 'eggs')).toBe('00:02');
+    act(() => root.unmount());
+    tea.remove();
   });
 
   it('turns every countdown over on the same whole second', () => {

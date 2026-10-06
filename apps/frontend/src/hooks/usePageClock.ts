@@ -24,6 +24,8 @@ const SECOND = 1000;
 const listeners = new Map<Listener, readonly number[]>();
 let current = 0;
 let pending: ReturnType<typeof setTimeout> | null = null;
+// When the pending timeout is due: the soonest turn after it was set.
+let pendingAt = 0;
 
 /** Milliseconds from `now` to the next moment after it on one of the readers' phases: 1 to 1000. */
 function untilNextTurn(now: number): number {
@@ -38,10 +40,25 @@ function untilNextTurn(now: number): number {
   return soonest;
 }
 
-// The one timeout, set again for the readers there are now.
+// The one timeout, set again for the readers there are now. A timeout
+// already due is left to run, whoever joins or leaves: it is some
+// reader's turn, and only a reader that joins reads the time now. A reader
+// may join or leave in a task that runs after a turn is due and before
+// the timeout (a display committed across it, focus opening, an exit
+// animation ending); cancelled there, the turn would be lost, and the
+// others would read a digit high, or be done late, until the next.
 function schedule(): void {
+  if (listeners.size === 0) {
+    if (pending !== null) clearTimeout(pending);
+    pending = null;
+    return;
+  }
+  const now = Date.now();
+  if (pending !== null && pendingAt <= now) return;
   if (pending !== null) clearTimeout(pending);
-  pending = listeners.size > 0 ? setTimeout(tick, untilNextTurn(Date.now())) : null;
+  const wait = untilNextTurn(now);
+  pendingAt = now + wait;
+  pending = setTimeout(tick, wait);
 }
 
 function tick(): void {
