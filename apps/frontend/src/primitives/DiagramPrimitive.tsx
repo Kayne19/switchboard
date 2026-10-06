@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
-import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
+import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, wrapGreedy, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
 import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
@@ -18,24 +18,6 @@ const SEMANTICS = Object.keys(SEMANTIC_COLOR) as Semantic[];
 // 32 characters of its 11-unit body face, or 34 of its 9-unit tracked tag.
 const CALLOUT_LINE_CHARS = 32;
 const CALLOUT_TAG_CHARS = 34;
-
-function wrapText(text: string, maxCharsPerLine = CALLOUT_LINE_CHARS): string[] {
-  const words = text.split(/\s+/);
-  const lines: string[] = [];
-  let current = '';
-  for (const word of words) {
-    if (!current) {
-      current = word;
-    } else if (current.length + 1 + word.length <= maxCharsPerLine) {
-      current += ' ' + word;
-    } else {
-      lines.push(current);
-      current = word;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
-}
 
 /**
  * An edge's label, or a stub's names, on a backing of its own. A stub's
@@ -153,7 +135,7 @@ export function DiagramPrimitive({
   // stays in the rail with the matching badge and nothing is silently lost.
   const calloutLines =
     hasAnchoredNode && note
-      ? wrapText(note.segments.map((segment) => segment.text).join(''), CALLOUT_LINE_CHARS)
+      ? wrapGreedy(note.segments.map((segment) => segment.text).join('').split(/\s+/), CALLOUT_LINE_CHARS)
       : [];
   const calloutFits =
     calloutLines.length > 0 &&

@@ -291,7 +291,8 @@ const EPSILON = 0.5;
 
 // --- Text ------------------------------------------------------------------
 
-function wrapGreedy(words: string[], wrapAt: number): string[] {
+/** Words onto lines of at most `wrapAt` characters, each line as full as it goes; a word longer than that takes a line of its own. */
+export function wrapGreedy(words: string[], wrapAt: number): string[] {
   const lines: string[] = [];
   let current = '';
   for (const word of words) {
