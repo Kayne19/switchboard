@@ -345,3 +345,12 @@ describe('the panel frame round a calendar', () => {
     expect(declared('.composed-aux-object--calendar > .focusable-content', 'grid-template-rows')).toEqual([]);
   });
 });
+
+describe('the time grid\u2019s fold', () => {
+  it('spans the days as the hour rules do, never the gutter', () => {
+    // A band out to the calendar's edge ran under the hours' scale and reached for the frame.
+    expect(declared('.calendar-grid__fold', 'left')).toEqual(['var(--grid-lead, var(--calendar-gutter))']);
+    expect(declared('.calendar-grid__fold', 'right')).toEqual(['var(--grid-trail, 0px)']);
+    expect(declared('.calendar-grid__hour::after', 'left')).toEqual(declared('.calendar-grid__fold', 'left'));
+  });
+});

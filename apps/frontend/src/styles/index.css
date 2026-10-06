@@ -4544,11 +4544,13 @@ button {
   letter-spacing: 0.06em;
 }
 /* A run of empty hours folded: hatched, its hours named, so the grid
-   reads as cut there rather than as hours missing. */
+   reads as cut there rather than as hours missing. It spans the days as
+   the hour rules do, never the gutter: the scale has no hours to show
+   there, and a band out to the calendar's edge reached for the frame. */
 .calendar-grid__fold {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: var(--grid-lead, var(--calendar-gutter));
+  right: var(--grid-trail, 0px);
   display: flex;
   align-items: center;
   border-top: 1px dashed rgba(232, 230, 223, 0.18);
@@ -4556,7 +4558,7 @@ button {
   background: repeating-linear-gradient(-45deg, rgba(232, 230, 223, 0.06) 0 1px, transparent 1px 6px);
 }
 .calendar-grid__fold-text {
-  margin-left: calc(var(--calendar-gutter) + 8px);
+  margin-left: 8px;
   padding: 0 5px;
   background: #000;
   color: rgba(232, 230, 223, 0.42);
