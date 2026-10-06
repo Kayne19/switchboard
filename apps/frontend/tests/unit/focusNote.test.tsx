@@ -11,8 +11,9 @@ import { focusNotes } from '../../src/components/FocusLayer';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
-import type { ControllerAction } from '../../src/controller/types';
+import type { ChartData, ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
+import { chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 
 let host: HTMLDivElement;
 let root: Root;
@@ -172,8 +173,16 @@ describe('any object in focus keeps the notes about it', () => {
     ]);
     expect(cards[0].textContent).toContain('Validation loss turns upward here');
     expect(layer.querySelector('.focus-layer__content--noted')).not.toBeNull();
-    const marked = [...layer.querySelectorAll('.chart-marker')].map((group) => `${group.getAttribute('data-x')} ${group.getAttribute('data-series')}`);
-    expect(marked.sort()).toEqual(['32 VAL LOSS', '6 TRAIN LOSS']);
+    // No leader reaches a point in focus: the marker's ring marks epoch 32,
+    // which the first note names, and a hollow ring the second's.
+    const data = fixtures.training[0].op === 'show' ? (fixtures.training[0].data as ChartData) : undefined;
+    const scales = chartScales(data!);
+    const marker = layer.querySelector('.chart-marker__point')!;
+    expect(Number(marker.getAttribute('cx'))).toBeCloseTo(chartSeriesPoint(data!, 32, 'VAL LOSS', scales)!.x, 3);
+    const rings = [...layer.querySelectorAll('.chart-note-ring')];
+    expect(rings).toHaveLength(1);
+    expect(Number(rings[0].getAttribute('cx'))).toBeCloseTo(chartSeriesPoint(data!, 6, 'TRAIN LOSS', scales)!.x, 3);
+    expect(layer.querySelector('.chart-marker__value')).toBeNull();
   });
 
   it("keeps the note about a bar chart beside it, its bar outlined and its value printed", () => {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The notes over a chart were placed again on every frame of a resize: a
-// placement costs up to tens of milliseconds (60-80 ms for a line chart of
-// four series with three notes and the rail), so a resize dropped frames
+// placement costs up to 200-250 ms on a dense bar chart (four series of 40
+// with five notes and the rail), so a resize dropped frames
 // (polish row 14). They are placed once a step of the size, as a graph is
 // laid out once a step; within a step the cards follow their points, and
 // where the size comes to rest they are placed for it.
@@ -17,7 +17,7 @@ vi.mock('../../src/primitives/notePlacement', async (importOriginal) => {
 import { ChartNotes, chartNoteAnchors, type ChartNote } from '../../src/components/ChartNotes';
 import type { ChartData, SceneObject } from '../../src/controller/types';
 import { ChartPrimitive } from '../../src/primitives/ChartPrimitive';
-import { chartFrame, chartPointCallouts, chartScales } from '../../src/primitives/chartGeometry';
+import { chartFrame, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 import { layoutNotes } from '../../src/primitives/notePlacement';
 
 const data: ChartData = {
@@ -115,7 +115,7 @@ afterEach(() => {
 function view(shown: ChartNote[] = notes) {
   return (
     <div className="chart-object">
-      <ChartPrimitive data={data} named={named} />
+      <ChartPrimitive data={data} named={named} led={chartNoteAnchors(chart, shown)} />
       <ChartNotes chart={chart} objects={{ [chart.id]: chart }} notes={shown} onFocus={() => {}} named={named} />
     </div>
   );
@@ -154,11 +154,11 @@ function drawn() {
 function landing(width: number) {
   const slot = { width, height: width * size.tall };
   const fit = size.slot ? chartFrame({ width: slot.width, height: Math.round(slot.height) }) : { ...chartFrame({ width: 0, height: 0 }) };
-  const [callout] = chartPointCallouts(data, named, chartScales(data, fit));
+  const point = chartSeriesPoint(data, 30, 'VAL', chartScales(data, fit))!;
   const scale = Math.min(slot.width / fit.width, slot.height / fit.height);
   const left = (slot.width - fit.width * scale) / 2;
   const top = SVG_TOP + (slot.height - fit.height * scale) / 2;
-  return { x: left + callout.point.x * scale, y: top + callout.point.y * scale };
+  return { x: left + point.x * scale, y: top + point.y * scale };
 }
 
 describe('chart notes through a resize', () => {
@@ -172,7 +172,7 @@ describe('chart notes through a resize', () => {
     // A resize from 1000 to 1160 px, a frame for every pixel.
     for (let width = 1001; width <= 1160; width += 1) {
       resize(width);
-      // The leader still lands by the named point's value, however the card got there.
+      // The leader still lands on the named point, however the card got there.
       const end = drawn().ends.turn;
       const at = landing(width);
       expect(Math.abs(end.x - at.x)).toBeLessThanOrEqual(1);
@@ -230,7 +230,7 @@ describe('chart notes through a resize', () => {
       resize(width);
       const end = drawn().ends.turn;
       const at = landing(width);
-      // Followed through a stretched frame between steps: near the value, not on it.
+      // Followed through a stretched frame between steps: near the point, not on it.
       expect(Math.abs(end.x - at.x)).toBeLessThanOrEqual(3);
       expect(Math.abs(end.y - at.y)).toBeLessThanOrEqual(3);
     }

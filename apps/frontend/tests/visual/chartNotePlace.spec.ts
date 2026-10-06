@@ -134,7 +134,7 @@ test('a card on the chart keeps clear of the value printed for the note in the b
     };
     return {
       cards: [...document.querySelectorAll('.chart-note:not(.chart-note--away)')].map(box),
-      values: [...document.querySelectorAll('.chart-object :is(.chart-marker__value, .chart-callout__value)')].map(box),
+      values: [...document.querySelectorAll('.chart-object .chart-callout__value')].map(box),
     };
   });
   // Both notes' points print their values: the one on the chart and the one in the band.

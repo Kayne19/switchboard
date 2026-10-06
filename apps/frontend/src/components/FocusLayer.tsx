@@ -45,7 +45,7 @@ import { SurfaceBoundary } from './SurfaceBoundary';
  * shows when the object is the primary). Focus gives the
  * object the stage and the rail goes, so the notes come with it, in a panel
  * of their own beside or under it, and what they name stays marked in it:
- * a chart's point its ring or outline and printed value, a diagram's node
+ * a chart's bar its outline and printed value, a point its ring, a diagram's node
  * or actor, a list's item, its NOTE marker, the view opening on it. A
  * focused note has none: it is the note.
  */
