@@ -1024,12 +1024,12 @@ export function chartAxisBoxes(plot: Rect, frame: ChartFrame = CHART_FRAME): Rec
  * its slot, or `null` where it is drawn in the slot. A bar chart is read by
  * its category names: one whose labels do not fit under its bars lies on
  * its side with a row per category, and where the slot is too short for
- * the rows (the stage was asked for its height, and it was not enough) it
- * still lies on its side, at its least height (`chartLeastHeight`), and
- * scrolls -- in a slot taller than it is wide, where its bars standing
- * upright would be too many for the width and their labels thinned to a
- * few. A wide slot stands them upright, thinned, the whole chart in view;
- * a chart whose labels all show upright (staggered, say) is drawn as it is.
+ * the rows it still lies on its side, at its least height
+ * (`chartLeastHeight`), and scrolls -- in a slot taller than it is wide,
+ * where its bars standing upright would be too many for the width and
+ * their labels thinned to a few. A wide slot stands them upright,
+ * thinned, the whole chart in view; a chart whose labels all show upright
+ * (staggered, say) is drawn as it is.
  */
 export function chartScrollHeight(data: ChartData, slot: Size): number | null {
   if (!(slot.width > 0) || !(slot.height > 0)) return null;
@@ -1046,9 +1046,8 @@ export function chartScrollHeight(data: ChartData, slot: Size): number | null {
  * chart gives every category a labelled row of its own -- on its side, as
  * it is drawn when its labels do not fit under its bars -- at the readable
  * scale; `null` for a chart that never asks for more (not bars, no labels,
- * or labels that fit under the bars). A slot shorter than that thins the
- * labels; on a portrait stage the chart then asks for the stage's height
- * (useStageDemand).
+ * or labels that fit under the bars). A wide slot shorter than that thins
+ * the labels; a tall one scrolls the rows (`chartScrollHeight`).
  */
 export function chartLeastHeight(data: ChartData, width: number): number | null {
   const categories = chartCategories(data);

@@ -13,9 +13,8 @@
 //   its controller, as the agent's display calls reach it; `runActions`
 //   runs more, `lastScene` is the scene just drawn, `controllerState` what
 //   the controller holds.
-// - `stubResizeObserver` is opt-in, not in setupFiles: stageDemand.test.tsx
-//   asserts that jsdom has no ResizeObserver, and other files install one
-//   that reports.
+// - `stubResizeObserver` is opt-in, not in setupFiles: some files install
+//   one that reports (railFit.test.tsx, calendarPaging.test.tsx).
 //
 // The act-environment flag every file used to set is in setup.ts.
 import { act, useEffect, type ReactNode } from 'react';

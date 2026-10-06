@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import { useElementSize } from '../hooks/useElementSize';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
-import { useLeastHeight } from '../hooks/useStageDemand';
-import { SLIVER, type DrawingFit, type Viewport } from './drawingFit';
+import type { DrawingFit, Viewport } from './drawingFit';
 import type { Box, Size } from './geometry';
 import { rimCount } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
@@ -51,10 +50,6 @@ function measureScrollbar(): number {
   return scrollbarThickness;
 }
 
-// The height a drawing is read whole in at its least readable scale, less
-// the sliver it would be contained over.
-const leastHeight = (drawing: Size, fit: DrawingFit) => drawing.height * fit.minScale * (1 - SLIVER);
-
 // An offset size is rounded to the pixel and may be up to half a pixel over
 // the box's own; a drawing sized to it would overflow by that much and
 // bring on a scroll bar. The viewport is taken a pixel short of its box.
@@ -64,12 +59,11 @@ const inBox = (length: number) => Math.max(1, Math.floor(length - 1));
  * A drawing as `view` lays it out and fits it for the viewport it is read
  * in, in CSS pixels: the host's layout size once measured. Until then the
  * first frame falls back to the screen's, so a tall screen never flashes a
- * wide drawing before the observer reports. With it, `laidOutFor`: the
- * drawing it would lay out for a viewport of another height at this width.
+ * wide drawing before the observer reports.
  */
 export function useDrawingView<V extends { layout: Size; fit: DrawingFit }>(
   view: (viewport: Viewport) => V,
-): V & { hostRef: RefObject<HTMLDivElement | null>; laidOutFor: (height: number) => { drawing: Size; fit: DrawingFit } } {
+): V & { hostRef: RefObject<HTMLDivElement | null> } {
   const hostRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(hostRef);
   const measured = size.width > 0 && size.height > 0;
@@ -77,14 +71,7 @@ export function useDrawingView<V extends { layout: Size; fit: DrawingFit }>(
   const width = measured ? inBox(size.width) : Math.max(1, Math.floor(window.innerWidth));
   const height = measured ? inBox(size.height) : Math.max(1, Math.floor(window.innerHeight));
   const shown = useMemo(() => view({ width, height, scrollbar }), [view, width, height, scrollbar]);
-  const laidOutFor = useCallback(
-    (at: number) => {
-      const other = view({ width, height: at, scrollbar });
-      return { drawing: other.layout, fit: other.fit };
-    },
-    [view, width, scrollbar],
-  );
-  return { ...shown, hostRef, laidOutFor };
+  return { ...shown, hostRef };
 }
 
 /** Where the scroller stands and how large its box is, CSS pixels. */
@@ -180,7 +167,6 @@ const cut = (label: string) => (label.length > EXIT_CHARS ? `${label.slice(0, EX
 export function DrawingViewport({
   drawing,
   fit,
-  laidOutFor,
   lead,
   pinned,
   map,
@@ -190,8 +176,6 @@ export function DrawingViewport({
 }: {
   drawing: Size;
   fit: DrawingFit;
-  /** The drawing and its fit as the primitive would lay it out for a viewport `height` tall at its width now: a drawing is laid out again for its viewport, so this is what it would ask of a box of another height (the stage's shared layout). */
-  laidOutFor: (height: number) => { drawing: Size; fit: DrawingFit };
   /** The part of the drawing it opens on, in the drawing's user units (what its note names, or where it begins). */
   lead?: Box | null;
   /** A band at the drawing's top (its headers, `height` user units deep) that stays in view while the rest scrolls under it. */
@@ -207,39 +191,6 @@ export function DrawingViewport({
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef<HTMLDivElement>(null);
   const [reading, setReading] = useState<Reading | null>(null);
-  // What the drawing asks of the stage: the height it is read whole in at
-  // its least readable scale, less the sliver it would be contained over.
-  // Only a fit made for this viewport speaks for it: before its host is
-  // measured a drawing is laid out for the screen, and a contained drawing
-  // larger than its box, or a scrolling one wider or taller than it across
-  // the axis it does not scroll, was fitted to another (or the box has
-  // just changed and the fit not yet followed). Until it is, what it said
-  // last stands. With it goes what the drawing laid out again for a box of
-  // another height would ask: the shell weighs a drawing on the stage by
-  // what it would ask in the shared layout (stageFold.ts `sharedExcess`).
-  const least = leastHeight(drawing, fit);
-  useLeastHeight(
-    viewportRef,
-    useCallback(
-      (box: Size) =>
-        (fit.scrollX || fit.width <= box.width + 1) && (fit.scrollY || fit.height <= box.height + 1) ? least : undefined,
-      [fit.scrollX, fit.scrollY, fit.width, fit.height, least],
-    ),
-    useMemo(() => {
-      // The shell asks again whenever the stage moves: a height asked once is kept.
-      const known = new Map<number, number>();
-      return (box: number) => {
-        let asked = known.get(box);
-        if (asked === undefined) {
-          const other = laidOutFor(inBox(box));
-          asked = leastHeight(other.drawing, other.fit);
-          if (known.size >= 8) known.clear();
-          known.set(box, asked);
-        }
-        return asked;
-      };
-    }, [laidOutFor]),
-  );
   const scrolling = fit.scrollX || fit.scrollY;
   const axis = fit.scrollX && fit.scrollY ? 'both' : fit.scrollX ? 'x' : fit.scrollY ? 'y' : 'none';
   const pinnedDepth = pinned && fit.scrollY ? pinned.height * fit.scale : 0;

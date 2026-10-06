@@ -4,7 +4,7 @@ import { rimCount, type Noun } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import { ScrollRim } from './ScrollRim';
 import { PAGE_SHARE, scrollMove } from './drawingScroll';
-import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
+import { drawnScale, watchElement } from '../hooks/watchElement';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
 // list, an inbox, an agenda, a forecast's days, a table's rows, source, a
@@ -148,24 +148,11 @@ interface ListViewportProps {
    * with a band has a lead.
    */
   pinned?: string;
-  /**
-   * The least height (CSS px) the content reads whole in, for content that
-   * grows to fill whatever view it is given (a calendar's hour grid): the
-   * stage is asked for that, not for what the content happens to measure.
-   * Absent, the stage is asked for the scroll content's own height.
-   */
-  least?: number | null;
 }
 
-export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label, least, pinned }: ListViewportProps) {
+export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label, pinned }: ListViewportProps) {
   const ownRef = useRef<HTMLDivElement>(null);
   const scrollRef = givenRef ?? ownRef;
-  // A primary list that outgrows its slot says how much height it lacks,
-  // and a stage whose rail stands under the slot gives it the height
-  // (useStageDemand): by its scroll content, or by its least height.
-  const noRef = useRef<HTMLDivElement>(null);
-  useScrollDemand(least === undefined ? scrollRef : noRef);
-  useLeastHeight(least === undefined ? noRef : scrollRef, least ?? null);
   const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
   // A pane may overflow only sideways (source with long lines, a wide

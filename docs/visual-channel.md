@@ -269,92 +269,51 @@ it are (its label and share done on one row, the steps still to do under
 the bar). Shown as the primary, its frame fits the plan and sits in the
 middle of the column, and only a plan longer than the column fills it.
 
-### A primary that outgrows its slot
+### The rail under the column
 
 On a portrait stage the rail -- metrics, progress, the live response, the
 note, tool activity and Damocles -- stands under the main column, and the
-column keeps 59% of the stage. A primary that reads whole there keeps that
-layout. One whose content asks for more gets the stage's height:
+column keeps 59% of the stage. The rail is Damocles beside the note, as
+Kayne approved the portrait goldens:
 
-- **What counts as more is the content's own word, never its type or the
-  screen's size.** Each primitive that can outgrow its viewport says how
-  much taller than the viewport it would have to be to be read whole
-  (`hooks/useStageDemand.ts`): a drawing the height it reads in at its
-  least readable scale (a fit made for another viewport, as before its
-  host is measured, says nothing); a table, code pane, document or plan
-  the height of what it scrolls through; a figure its height drawn across
-  its field's width, never past its own size; a bar chart whose labels do
-  not fit under its bars the height in which it lies on its side with a
-  labelled row per category; a calendar's hour grid and a forecast laid
-  down the box, which grow to fill whatever view they get, the height
-  their parts read whole in. A primitive laid out for its box (a
-  calendar, a forecast, timers) says nothing until it has measured the
-  box: the stand-in it draws before then is not what will stand. Only the
-  primary speaks: a plan under a chart or a table in the aux row never
-  folds the rail.
-- **The shell decides** (`app/stageFold.ts`): where the rail stands under
-  the column (measured, not a media query), a primary whose content is
-  more than a line of text past its viewport in the layout it shares with
-  the rail takes the stage. On the stage a content is weighed against the
-  viewport it had in that shared layout, never against a model of the
-  frame round it (a table's head, a document's heading, an aux row are
-  fixed; a diagram's rails grow with it, up to a cap on the stage). Folded, it gives the stage back
-  only once it would be within a few pixels of reading whole there, so a
-  need on the line does not fold and unfold as it redraws. So a primary
-  sent again with less in it (a week with one appointment left) gives the
-  stage back: a viewport that stays the same drawing stays mounted across
-  the fold, and keeps what it measured in the shared layout. A graph or
-  a sequence is laid out again for its viewport's height, so what it asks
-  on the stage is the stage's drawing; it is weighed instead by what it
-  would ask laid out for the viewport it had in the shared layout (a
-  drawing says, beside what it asks, what it would ask in a viewport of
-  any height at its width). That is the word the shared layout then
-  gives, so a graph sent again small enough for its share gives the
-  stage back once, and the share does not take it again. A drawing the
-  stage's height turns into another cannot say so: a calendar too short
-  for its grid in its share draws its agenda there and the grid on the
-  stage (on portrait screens under some 600 px tall), and what the
-  agenda would ask is the height of its rows as the browser lays out
-  their wrapped words, which the page does not know without drawing the
-  agenda. Its grid, a viewport mounted on the stage with no measure from
-  the shared layout, says nothing of the share unless it overflows even
-  the stage, so such a calendar keeps the stage until another primary
-  takes its place: given back on a guess, it would fold again whenever
-  the guess fell short. A primitive that cannot tell yet (a drawing whose
-  fit has not followed its box) leaves the layout as it is. A new primary
-  is measured first in the shared layout.
-  Opening the rail changes nothing of this. A landscape stage, the rail
-  beside the primary, never folds.
-- **The rail folds to a strip under the primary, down to the footer's
-  band.** The strip shows the note (held to three lines, its target line
-  naming what it is about, and on a diagram the NOTE marker on the node or
-  actor it names), or the live response where there is no note, beside a
-  smaller Damocles whose caption still names the tool at work. A tap on
-  the note expands it in focus. A live response streams at its newest
-  three lines. Its top rule is a handle, a finger's reach tall round the
-  thin rule: it names what the rail keeps folded (the rest of a cut note,
-  the metrics, progress, the live response, activity) and opens the rail
-  as it was, the primary back in its share; from there it folds again.
-  Its accessible name holds the words it shows. What it folds is set
-  aside by the stylesheet, not taken out of the page, so folding draws
-  nothing afresh. The caller's choice holds for that primary.
-- **What earns nothing while the primary has the stage gives its room
-  back.** The frame's subtitle runs after its title on one line (each cut
-  at the stage's edge, the title last), and the primary starts a line
-  higher. A diagram's rails keep their lower steps at most 40px in from
-  the slot's edges, as in a slot of some 400px, rather than a tenth of the
-  stage's height (on a stage over some 870px a little more, so each rail
-  stays wholly inside the slot), the drawing taking the rest. Opened, the
-  rail and the frame are as they were.
+- **Damocles keeps its size on every stage.** Nothing in the rail shrinks
+  it.
+- **The note reads whole.** It keeps its own height, and the rail is at
+  least that tall (measured, `useRailFit` in `components/Scenes.tsx`): the
+  main column gives up what the note needs past the rail's share, and
+  keeps the larger share. A note longer than half the content grid (about
+  two fifths of the stage) scrolls in the rail, its foot fading; a tap on
+  a note object expands it in focus.
+- **What else the rail carries does not size it.** Where the metrics,
+  progress or live response and the note do not all fit (each at its own
+  height and margins), the note leads the column, whole, and the rest
+  follows in its scroll. An edge the column continues past fades as every
+  scroller's does (`ScrollRim`'s fade, with no tag: what lies past is the
+  rail's own). The activity panel stands at the column's foot only where
+  it fits there whole; where it does not, it is set aside, unseen but
+  still read by assistive technology, and Damocles's caption, which names
+  the tool at work wherever the rail stands, is what the caller sees of
+  it. What the rail decides is committed before the frame is painted, so
+  a rotation or a new note never shows a rail half decided.
+- **A primary that outgrows its share scrolls in it or is drawn smaller;
+  it never takes the rail's room.** A drawing past its least readable
+  scale, a table, code, a document, a list or a long plan scrolls inside
+  its frame with its rims; a figure is drawn smaller, never cropped; a bar
+  chart too long for its rows lies on its side and scrolls; a calendar too
+  short for its hour grid draws its agenda. Decided by what the slot
+  holds and how tall it is, never by the object's type.
 
-At 390x844 a diagram's viewport grows from 374 px to some 518 px, a 40-row
-table's from 436 to 556, and a bar chart of 45 categories names every one
-instead of every eighth. Why fold the rail rather than scroll the page or
-shrink the primary: the page never scrolls as a whole (its frame and
-Damocles stay put), and a primary drawn smaller is the squeeze this
-answers. The note is what the caller most needs from the rail while they
-read a large primary, so it stays, and stays linked to its item; the
-metrics are a tap away.
+A landscape stage, the rail beside the primary, is laid out as before.
+
+Why not give a large primary the stage's height: round 4 did, folding the
+rail to a strip under the primary, Damocles at about a third of its size
+and the note cut to three lines behind a handle. Kayne rejected it on the
+portrait-phone architecture golden. With Damocles at its size a strip is
+no shorter than the rail's share on a phone's or a tablet's portrait
+stage (at 390x844 Damocles is 156 px of a 172 px rail; at 820x1180 it is
+taller than the rail), so a fold buys the primary nothing there. Only a
+tall portrait monitor (1080x1920) would gain some 100 px, where the main
+column already has over 1100.
 
 ### Personal-assistant views: time is data
 

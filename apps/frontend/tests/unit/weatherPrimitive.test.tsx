@@ -9,9 +9,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { WeatherData } from '../../src/controller/types';
 import { WeatherPrimitive } from '../../src/primitives/WeatherPrimitive';
 import type { Slot } from '../../src/primitives/slot';
-import { heroEms, STRIP_LEAST } from '../../src/primitives/weatherLayout';
-import type { StageNeed } from '../../src/app/stageFold';
-import { StageDemandContext } from '../../src/hooks/useStageDemand';
+import { heroEms } from '../../src/primitives/weatherLayout';
 import { mount, stubResizeObserver, unmount } from './sceneHarness';
 
 const forecast: WeatherData = {
@@ -33,15 +31,13 @@ let host: HTMLElement | undefined;
 // `condition`: the widths the condition line's parts are drawn at (the
 // condition, the high and low), which jsdom does not lay out; the rest of
 // the box measures as the box.
-// `spot`: the spot line's room across and its parts' widths; `parts`: the
-// heights of a forecast's parts down the box, by class.
-interface Box { width: number; height: number; condition?: number[]; spot?: { room: number; parts: number[] }; parts?: Record<string, number> }
+// `spot`: the spot line's room across and its parts' widths.
+interface Box { width: number; height: number; condition?: number[]; spot?: { room: number; parts: number[] } }
 const box: Box = { width: 0, height: 0 };
 
 function render(data: WeatherData, marked?: string, size: Box = { width: 0, height: 0 }): HTMLElement {
   box.condition = undefined;
   box.spot = undefined;
-  box.parts = undefined;
   Object.assign(box, size);
   // In an aux cell, where no frame names the forecast and it leads with its title.
   host = mount(<WeatherPrimitive data={data} slot="aux" marked={marked} />);
@@ -69,13 +65,7 @@ beforeAll(() => {
       return this.classList.contains('weather-spot') ? (box.spot?.room ?? 0) : 0;
     },
   });
-  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
-    configurable: true,
-    get(this: HTMLElement) {
-      const part = Object.entries(box.parts ?? {}).find(([name]) => this.classList.contains(name));
-      return part ? part[1] : box.height;
-    },
-  });
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => box.height });
 });
 
 describe('the conditions now', () => {
@@ -327,25 +317,5 @@ describe('the hours', () => {
     expect(readings).toHaveLength(24);
     expect(readings[1]).toBe('WED 11:00, 61°, clear, 4% precipitation');
     expect(page.querySelector('.weather-hour__time')!.getAttribute('aria-hidden')).toBe('true');
-  });
-});
-
-describe('down the box', () => {
-  it('asks the stage for the height its parts read whole in, the hourly strip at its least', () => {
-    // The field fills its view (the strip grows into a tall box's room), so
-    // its scroll content measured the view: on the stage it read as needing
-    // all of it, and a forecast sent again shorter kept the stage.
-    const heard: Array<number | null> = [];
-    box.width = 340;
-    box.height = 600;
-    box.parts = { 'weather-now': 150, 'weather-daily': 300 };
-    const element = mount(
-      <StageDemandContext.Provider value={(_key: string, need: StageNeed | null) => heard.push(need?.excess ?? null)}>
-        <WeatherPrimitive data={forecast} slot="primary" />
-      </StageDemandContext.Provider>,
-    );
-    expect(element.querySelector('[data-testid="weather"]')!.getAttribute('data-layout')).toBe('tall');
-    // The conditions, the strip at its least and the days, against a 600px view.
-    expect(heard.filter((excess) => excess !== null).at(-1)).toBe(150 + STRIP_LEAST + 300 - 600);
   });
 });
