@@ -150,9 +150,32 @@ describe('ListViewport', () => {
     expect(scroll.tabIndex).toBe(-1);
   });
 
+  // A list clips what sticks out sideways (.list-viewport__scroll is
+  // overflow-x: hidden), and scrollWidth still counts it. Taken as a pane
+  // that scrolls across, it was an empty tab stop, and its keys slid the
+  // clipped rows sideways with nothing to slide them back; in a paged week
+  // the hours took the keys that turn the days.
+  it('a list that clips what sticks out sideways is no tab stop, and leaves its keys to what is around it', async () => {
+    const scroll = render(rows(3));
+    layOut(scroll, 0);
+    scroll.style.overflowX = 'hidden';
+    Object.defineProperty(scroll, 'clientWidth', { configurable: true, value: 200 });
+    Object.defineProperty(scroll, 'scrollWidth', { configurable: true, value: 600 });
+    await measured(scroll);
+    expect(scroll.tabIndex).toBe(-1);
+    const calls: ScrollToOptions[] = [];
+    scroll.scrollTo = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollTo;
+    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true })));
+    expect(calls).toEqual([]);
+    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })));
+    expect(surfaceClicks).toBe(1);
+  });
+
   it('stays a tab stop when it overflows only sideways, and takes the keys across; Space does not expand the object', async () => {
     const scroll = render(rows(3));
     layOut(scroll, 0);
+    // A pane that scrolls across (a table's, source's or document's).
+    scroll.style.overflowX = 'auto';
     Object.defineProperty(scroll, 'clientWidth', { configurable: true, value: 200 });
     Object.defineProperty(scroll, 'scrollWidth', { configurable: true, value: 600 });
     await measured(scroll);

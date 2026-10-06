@@ -190,10 +190,11 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   const scrollRef = givenRef ?? ownRef;
   const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
-  // A pane may overflow only sideways (source with long lines, a wide
-  // table on a phone): it is a tab stop too, and takes the scroll keys
-  // across, so a reader without a pointer can scroll it, and Space pages
-  // it rather than reaching the surface.
+  // A pane that scrolls across (a table's, source's or document's) may
+  // overflow only sideways (long lines, a wide table on a phone): it is a
+  // tab stop too, and takes the scroll keys across, so a reader without a
+  // pointer can scroll it, and Space pages it rather than reaching the
+  // surface.
   const [across, setAcross] = useState(false);
   const [viewHeight, setViewHeight] = useState(0);
   const [pinnedDepth, setPinnedDepth] = useState(0);
@@ -224,7 +225,9 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
       current.above === next.above && current.below === next.below && current.top === next.top && current.bottom === next.bottom ? current : next,
     );
     setScrolls(element.scrollHeight > element.clientHeight + 1);
-    setAcross(element.scrollWidth > element.clientWidth + 1);
+    // Across only where the pane can scroll that way: a list clips what
+    // sticks out sideways (overflow-x: hidden), which scrollWidth still counts.
+    setAcross(element.scrollWidth > element.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(element).overflowX));
     setViewHeight(element.clientHeight);
     setPinnedDepth(depth);
   }, [scrollRef, countSelector, pinned]);

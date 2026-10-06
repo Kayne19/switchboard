@@ -37,6 +37,8 @@ describe('a table, code or document pane that scrolls only sideways', () => {
     for (const [name, value] of [['clientHeight', 200], ['offsetHeight', 200], ['scrollHeight', 200], ['clientWidth', 200], ['offsetWidth', 200], ['scrollWidth', 1000]] as const) {
       Object.defineProperty(scroll, name, { configurable: true, value });
     }
+    // Its stylesheet lets it scroll across (jsdom loads none).
+    scroll.style.overflowX = 'auto';
     const moves: ScrollToOptions[] = [];
     scroll.scrollTo = ((options: ScrollToOptions) => moves.push(options)) as typeof scroll.scrollTo;
     await act(async () => {
