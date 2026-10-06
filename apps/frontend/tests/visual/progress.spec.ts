@@ -63,16 +63,12 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   test(`the plan in the rail reads as the metrics above it / ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto('/?scene=architecture&chrome=0');
-    await page.evaluate((plan) => {
-      const controller = window.SwitchboardController;
-      if (!controller) throw new Error('controller unavailable');
-      controller.run([
-        { op: 'clear' },
-        { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] } },
-        { op: 'show', id: 'tests', type: 'metric', data: { label: 'TESTS PASSING', value: '418', trend: 'up', delta: '+31' } },
-        { op: 'show', id: 'plan', type: 'progress', data: { label: 'SHIP', steps: plan } },
-      ]);
-    }, railSteps);
+    await runActions(page, [
+      { op: 'clear' },
+      { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] } },
+      { op: 'show', id: 'tests', type: 'metric', data: { label: 'TESTS PASSING', value: '418', trend: 'up', delta: '+31' } },
+      { op: 'show', id: 'plan', type: 'progress', data: { label: 'SHIP', steps: railSteps } },
+    ]);
     await expect(page.locator('.rail-progress .progress-primitive--rail')).toBeVisible();
     const rows = await page.evaluate(() => {
       const metric = document.querySelector<HTMLElement>('.metrics--rail .metric-row')!;

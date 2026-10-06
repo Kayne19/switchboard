@@ -236,10 +236,10 @@ test('a forecast cell too short for the outlook\'s columns keeps the conditions 
 async function coldToday(page: Page, note?: string, alert = 'Gale warning on the coast until 21:00', current: Record<string, unknown> = { temp: -12.5, condition: 'partly-cloudy', high: -8.5, low: -17.5 }) {
   await page.goto('/?scene=today&chrome=0');
   const daily = Array.from({ length: 6 }, (_, index) => ({ date: `2026-10-${String(7 + index).padStart(2, '0')}`, high: -8.5 - index, low: -17.5 - index, condition: 'partly-cloudy', precip: 20 }));
-  await page.evaluate(([days, item, warning, now]) => window.SwitchboardController!.run([
-    { op: 'show', id: 'weather', type: 'weather', role: 'secondary', data: { location: 'Tromsø', units: 'C', current: now, daily: days, ...(warning ? { alert: warning } : {}) } },
-    ...(item ? [{ op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'COLD', anchor: { target: 'weather', item }, segments: [{ text: 'Coldest on Thursday.' }] } }] : []),
-  ]), [daily, note, alert, current] as const);
+  await runActions(page, [
+    { op: 'show', id: 'weather', type: 'weather', role: 'secondary', data: { location: 'Tromsø', units: 'C', current, daily, ...(alert ? { alert } : {}) } },
+    ...(note ? [{ op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'COLD', anchor: { target: 'weather', item: note }, segments: [{ text: 'Coldest on Thursday.' }] } }] : []),
+  ]);
 }
 
 test('beside the outlook the figure keeps its size: it is fitted to the cell, not to itself', async ({ page }) => {
@@ -284,9 +284,9 @@ test('at 844x390 the forecast cell gives the alert\'s line to the hour a note na
   await page.setViewportSize({ width: 844, height: 390 });
   await page.clock.setFixedTime(T0);
   await page.goto('/?scene=today&chrome=0');
-  await page.evaluate(() => window.SwitchboardController!.run([
+  await runActions(page, [
     { op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'RAIN', anchor: { target: 'weather', item: '2026-10-08T03:00' }, segments: [{ text: 'Heaviest at 3 am.' }] } },
-  ]));
+  ]);
   const weather = page.locator('.composed-aux [data-testid="weather"]');
   await expect(weather.locator('[data-item="2026-10-08T03:00"] .note-badge')).toBeVisible();
   await expect(weather.locator('.weather-alert')).toHaveCount(0);
@@ -294,7 +294,7 @@ test('at 844x390 the forecast cell gives the alert\'s line to the hour a note na
   await expect(weather.locator('.weather-now__head .weather-now__alert-tag')).toBeVisible();
   expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
   // In focus the forecast has the room: the alert stands on its line there.
-  await page.evaluate(() => window.SwitchboardController!.run([{ op: 'focus', id: 'weather' }]));
+  await runActions(page, [{ op: 'focus', id: 'weather' }]);
   await expect(page.locator('.focus-layer [data-testid="weather"] .weather-alert')).toBeVisible();
 });
 
@@ -304,10 +304,10 @@ test('a narrow forecast cell\'s spot line drops the chance of rain whole before 
   await page.setViewportSize({ width: 820, height: 1180 });
   await page.clock.setFixedTime(T0);
   await page.goto('/?scene=today&chrome=0');
-  await page.evaluate(() => window.SwitchboardController!.run([
+  await runActions(page, [
     { op: 'show', id: 'kitchen', type: 'timer', role: 'secondary', data: { timers: [{ id: 'pasta', label: 'Pasta', endsAt: '2026-10-07T23:00:00-07:00' }] } },
     { op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'RAIN', anchor: { target: 'weather', item: '2026-10-09' }, segments: [{ text: 'Friday stays dry for the flight.' }] } },
-  ]));
+  ]);
   const spot = page.locator('.composed-aux [data-testid="weather"] .weather-spot');
   await expect(spot.locator('.note-badge')).toBeVisible();
   const readings = await spot.evaluate((line) => {

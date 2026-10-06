@@ -8,7 +8,6 @@ import { GEOMETRIES } from './helpers';
 // can hover (the idle goldens depend on it), and must rest in view where
 // nothing can.
 
-
 const idleToggle = '.scene--idle .transcript-reveal .transcript-toggle';
 
 async function box(page: Page, selector: string) {

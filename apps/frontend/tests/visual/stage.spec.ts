@@ -412,7 +412,7 @@ test('a calendar week takes the stage at 390x844, and a small primary in its pla
   const staged = await boxes(page);
   expect(staged.main.height).toBeGreaterThan(staged.stage.height * 0.69);
   expect(staged.rail.height).toBeLessThan(staged.stage.height / 6);
-  await page.evaluate((list) => window.SwitchboardController!.run(list), smallMetric);
+  await runActions(page, smallMetric);
   await expect(page.locator('.content-rail--folded')).toHaveCount(0);
   await page.waitForTimeout(700);
   const shared = await boxes(page);
@@ -439,7 +439,7 @@ test('a long calendar day takes the stage at 390x844, and gives it back once the
   await open(page, 'calendar-day');
   await expect(page.locator('.content-rail--folded')).toBeVisible();
   await expect(page.locator('[data-testid="calendar"]')).toHaveAttribute('data-layout', 'grid');
-  await page.evaluate((list) => window.SwitchboardController!.run(list), quietDay);
+  await runActions(page, quietDay);
   await expect(page.locator('.content-rail--folded')).toHaveCount(0);
   await page.waitForTimeout(700);
   const shared = await boxes(page);
@@ -466,7 +466,7 @@ test('a calendar week that takes the stage at 390x844 gives it back once it quie
   await open(page, 'calendar');
   await expect(page.locator('.content-rail--folded')).toBeVisible();
   await expect(page.locator('[data-testid="calendar"]')).toHaveAttribute('data-layout', 'grid');
-  await page.evaluate((list) => window.SwitchboardController!.run(list), quietWeek);
+  await runActions(page, quietWeek);
   await expect(page.locator('.content-rail--folded')).toHaveCount(0);
   await page.waitForTimeout(700);
   const shared = await boxes(page);
@@ -540,7 +540,7 @@ for (const [scene, small] of [['topology', smallTopology], ['trace', smallTrace]
         for (const record of records) seen.push(String((record.target as Element).getAttribute('data-stage')));
       }).observe(document, { subtree: true, attributes: true, attributeFilter: ['data-stage'] });
     });
-    await page.evaluate((list) => window.SwitchboardController!.run(list), small);
+    await runActions(page, small);
     await expect(page.locator('.content-rail--folded')).toHaveCount(0);
     await page.waitForTimeout(700);
     const shared = await boxes(page);
@@ -557,7 +557,7 @@ test('a topology sent again still too large for its share at 390x844 keeps the s
   await expect(page.locator('.content-rail--folded')).toBeVisible();
   // Nine of its parts, chained: still taller than its share at a readable scale.
   const chain = Array.from({ length: 9 }, (_, index) => ({ id: `n${index}`, label: `PART ${index}`, sub: 'one of nine' }));
-  await page.evaluate((list) => window.SwitchboardController!.run(list), [
+  await runActions(page, [
     { op: 'show', id: 'topology', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: chain, edges: chain.slice(1).map((node, index) => ({ from: chain[index].id, to: node.id })) } },
   ]);
   await page.waitForTimeout(700);
@@ -585,7 +585,7 @@ test('a forecast that takes the stage at 390x844 gives it back once it is short'
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, 'weather');
   await expect(page.locator('.content-rail--folded')).toBeVisible();
-  await page.evaluate((list) => window.SwitchboardController!.run(list), quietForecast);
+  await runActions(page, quietForecast);
   await expect(page.locator('.content-rail--folded')).toHaveCount(0);
   await page.waitForTimeout(700);
   const shared = await boxes(page);
