@@ -837,7 +837,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
   ];
 
   return {
-    // The name the agent's view reports (`nameFields`).
+    // Named by the same fields, in the same order, as the agent's view (`nameFields`).
     title: nameFields(primary.data)[0] ?? 'COMPOSED WORKSPACE',
     subtitle: frameText(primary.data, 'subtitle') ?? 'STRUCTURED SCENE',
     context: frameText(primary.data, 'context') ?? 'COMPOSED',
@@ -876,6 +876,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
                   onFocus={onFocus}
                 />
               ) : (
+                // A progress or a note: sceneKind gives every visual primary a scene of its own.
                 <StageDemandContext.Provider value={onDemand}>{renderObject(primary, 'primary', { onStage: state.agentObjects, notes: note ? [note] : [] })}</StageDemandContext.Provider>
               )}
             </FocusableSurface>

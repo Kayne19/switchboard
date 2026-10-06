@@ -61,7 +61,7 @@ Additional metrics, progress, notes, comparisons, and speech modify that composi
 
 A visual primary's composition is named for its type (`sceneKind`, from `VISUAL_TYPES`), but a chart's, `training`, and a diagram's, `architecture`.
 
-Wherever an object is drawn, `renderObject(object, slot, ...)` (`src/components/renderObject.tsx`) draws it: the main slot of its own scene, the composed workspace's primary, a cell in the aux row, and focus. A primitive takes one `slot` prop for where it is (`primary`, `aux` or `focus`, `src/primitives/slot.ts`; metrics and progress also `rail`) and draws what that place has room for. A chart's own page draws its charts itself, with the notes laid over them.
+`renderObject(object, slot, ...)` (`src/components/renderObject.tsx`) draws an object in the main slot of its own scene, as the composed workspace's primary, in a cell of the aux row, and in focus. The shell draws a few things itself: the rail's metrics and progress, the composed workspace's metric primary or cluster, and a chart's own page (its charts, with the notes laid over them, and its progress). Every primitive that draws differently by place takes one `slot` prop for where it is (`primary`, `aux` or `focus`, `src/primitives/slot.ts`; metrics and progress also `rail`) and draws what that place has room for.
 
 ## Scene shell
 

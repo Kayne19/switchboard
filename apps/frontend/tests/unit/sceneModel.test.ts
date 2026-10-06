@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
 import { fixtures } from '../../src/fixtures/scenes';
-import { besideVisuals, buildCompositionModel, deriveScreenState, sceneKind } from '../../src/app/sceneModel';
+import { besideVisuals, buildCompositionModel, deriveScreenState, sceneKind, VISUAL_TYPES } from '../../src/app/sceneModel';
 import type { ControllerAction, SceneObjectType } from '../../src/controller/types';
 
 const expected = {
@@ -31,6 +31,18 @@ describe('scene classification', () => {
       expect(sceneKind(state)).toBe(kind);
     });
   }
+
+  // renderObject draws the composed workspace's primary as it draws a main
+  // slot's object; that holds because no visual is ever that primary.
+  it('gives every visual primary a scene of its own: the composed primary is a metric, a progress or a note', () => {
+    const types: SceneObjectType[] = [...VISUAL_TYPES, 'metric', 'progress', 'note'];
+    const composed = types.filter((type) =>
+      sceneKind(reduceActions(createInitialState(), [
+        { op: 'show', id: 'x', type, role: 'primary', data: {} },
+        { op: 'show', id: 'y', type: 'code', data: {} },
+      ])) === 'composed');
+    expect(composed).toEqual(['metric', 'progress', 'note']);
+  });
 });
 
 const show = (id: string, type: 'chart' | 'table' | 'image' | 'code' | 'metric' | 'note' | 'progress', role?: 'primary' | 'compare' | 'secondary' | 'ambient'): ControllerAction => ({

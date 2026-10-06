@@ -178,7 +178,7 @@ export function besideVisuals(comp: CompositionModel): SceneObject[] {
   return [...comp.compare, ...comp.secondary, ...comp.ambient].filter((object) => VISUAL_TYPES.has(object.type));
 }
 
-/** The composition a scene is drawn as: one per visual type that can be the primary, named for its type but for the two the page drew first (a chart's training run, a diagram's architecture), and the four that are not a visual's. */
+/** The composition a scene is drawn as: one per visual type that can be the primary, named for its type but for the two the page drew first (a chart's training run, a diagram's architecture), and the three that are not a visual's. */
 export type SceneKind = 'idle' | 'conversation' | 'composed' | 'training' | 'architecture' | Exclude<VisualType, 'chart' | 'diagram'>;
 
 export function sceneKind(state: ControllerState): SceneKind {

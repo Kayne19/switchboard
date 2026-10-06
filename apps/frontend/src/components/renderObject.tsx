@@ -36,11 +36,14 @@ export interface ObjectContext {
 }
 
 /**
- * One object drawn for its slot. Every place the page draws an object
- * comes here (the main slot of an object's scene, the composed workspace's
- * primary, a cell in the aux row, focus), so a type is drawn in one place.
- * A chart's own page (`trainingContent`) draws its charts itself, with the
- * notes laid over them. A message is no object of this kind: it draws
+ * One object drawn for its slot: in the main slot of its own scene, as the
+ * composed workspace's primary, in a cell of the aux row, and in focus, so
+ * a type is drawn in one place for all four. The page draws a few things
+ * itself, each with its own primitive's slot: the rail's metrics and
+ * progress (`'rail'`), the composed workspace's metric primary or cluster
+ * (`'primary'`, each metric expanding on a tap), and a chart's own page
+ * (`trainingContent`), its charts with the notes laid over them and its
+ * progress under them. A message is no object of this kind: it draws
  * nothing.
  */
 export function renderObject(object: SceneObject, slot: Slot, { onStage, notes, onCalloutChange }: ObjectContext): ReactNode {
