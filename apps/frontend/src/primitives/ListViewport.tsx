@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
+import { prefersReducedMotion } from './reducedMotion';
 import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
@@ -119,10 +120,6 @@ export function keyScrollTop(key: string, shift: boolean, scrollTop: number, vie
   return Math.max(0, Math.min(max, scrollTop + moves[key]));
 }
 
-function reducedMotion(): boolean {
-  return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-}
-
 function cssEscape(value: string): string {
   return typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(value) : value.replace(/["\\]/g, '\\$&');
 }
@@ -228,7 +225,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     const top = keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight);
     if (top === null) return;
     event.preventDefault();
-    element.scrollTo({ top, behavior: reducedMotion() ? 'auto' : 'smooth' });
+    element.scrollTo({ top, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
   // A tap on an edge's count turns a page that way. The tap is marked
   // handled, so the surface around the list does not expand the object.
@@ -236,7 +233,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     event.preventDefault();
     const element = scrollRef.current;
     if (!element) return;
-    element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: reducedMotion() ? 'auto' : 'smooth' });
+    element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
 
   const fade = fadeDepth(viewHeight);

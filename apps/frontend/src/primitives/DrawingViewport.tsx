@@ -3,6 +3,7 @@ import { useElementSize } from '../hooks/useElementSize';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { useLeastHeight } from '../hooks/useStageDemand';
 import { SLIVER, type DrawingFit, type Size } from './drawingFit';
+import { prefersReducedMotion } from './reducedMotion';
 import {
   EXIT_CHARS,
   clearOf,
@@ -152,7 +153,6 @@ function mapFrame(width: number, height: number): string {
   return `M ${points.map(([x, y]) => `${x} ${y}`).join(' L ')} Z`;
 }
 
-const reducedMotion = () => typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const pad2 = (count: number) => String(count).padStart(2, '0');
 const cut = (label: string) => (label.length > EXIT_CHARS ? `${label.slice(0, EXIT_CHARS - 1)}\u2026` : label);
 
@@ -356,7 +356,7 @@ export function DrawingViewport({
         const sizes = { width: element.clientWidth, height: element.clientHeight };
         const now: Placement = { scale: fit.scale, offsetX: Math.max(0, (sizes.width - fit.width) / 2), offsetY: Math.max(0, (sizes.height - fit.height) / 2) };
         const resting = stopsFor(sizes, map.parts.map((part) => placed(part.box, now)), map.marks.map((mark) => placed(mark, now)));
-        const smooth = !reducedMotion();
+        const smooth = !prefersReducedMotion();
         element.scrollTo({
           left: settleStop(resting.x, from.left, element.scrollLeft),
           top: settleStop(resting.y, from.top, element.scrollTop),
@@ -427,7 +427,7 @@ export function DrawingViewport({
   const gliding = useRef<{ left: number | null; top: number | null; stop: (() => void) | null }>({ left: null, top: null, stop: null });
   const standing = (element: HTMLElement, across: boolean) => (across ? (gliding.current.left ?? element.scrollLeft) : (gliding.current.top ?? element.scrollTop));
   const glide = (element: HTMLElement, across: boolean, target: number) => {
-    const smooth = !reducedMotion();
+    const smooth = !prefersReducedMotion();
     element.scrollTo({ [across ? 'left' : 'top']: target, behavior: smooth ? 'smooth' : 'auto' });
     if (!smooth) return;
     gliding.current.stop?.();
