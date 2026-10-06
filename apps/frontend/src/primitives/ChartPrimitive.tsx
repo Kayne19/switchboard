@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'motion/react';
-import { useCallback, useId, useMemo, useRef } from 'react';
+import { useId, useMemo, useRef } from 'react';
 import type { ChartData, ChartKind, ChartSeries, Semantic } from '../controller/types';
 import {
   CHART_LEGEND_KEY_WIDTH,
@@ -16,7 +16,6 @@ import {
   chartCategoryLabelX,
   chartClip,
   chartFrame,
-  chartLeastHeight,
   chartLegendLayout,
   chartRings,
   chartScales,
@@ -26,7 +25,6 @@ import {
 } from './chartGeometry';
 import { SEMANTIC_COLOR } from '../design/tokens';
 import { useElementSize } from '../hooks/useElementSize';
-import { useLeastHeight } from '../hooks/useStageDemand';
 import type { Point } from './geometry';
 import { ListViewport } from './ListViewport';
 import type { Slot } from './slot';
@@ -178,8 +176,6 @@ export function ChartPrimitive({
   // else one of the box's own shape (`chartFrame`).
   const hostRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(hostRef);
-  // A bar chart whose categories want a row each asks for the height.
-  useLeastHeight(hostRef, useCallback((box: { width: number }) => chartLeastHeight(data, box.width), [data]));
   // A bar chart too long for its box on its side, in a box taller than
   // it is wide, is drawn at its least height in a canvas that scrolls in
   // the box (`chartScrollHeight`); its frame is the canvas's, as the notes
@@ -298,7 +294,6 @@ export function ChartPrimitive({
         countSelector=".chart-grid__category"
         lead={lead ? String(Math.round(lead.x)) : undefined}
         head={<ValueAxisHead scales={scales} width={width} scale={drawnScale}/>}
-        least={null}
         className="chart-primitive__viewport"
         scrollClassName="chart-primitive__scroll"
         label={`${data.title ?? 'Chart'}: rows`}

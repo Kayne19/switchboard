@@ -62,7 +62,7 @@ export function SequencePrimitive({
     (viewport: Viewport) => viewWithMap(viewport, (each) => viewSequence(data, each, anchoredActorId, focused), headerReading),
     [data, anchoredActorId, focused],
   );
-  const { hostRef, layout, fit, strip, laidOutFor } = useDrawingView(view);
+  const { hostRef, layout, fit, strip } = useDrawingView(view);
   // What the viewport tells a reader of an exchange that scrolls: its
   // messages, counted past each edge and kept whole at rest, and the
   // sketch its map draws (headers, lifelines, the arrows).
@@ -156,7 +156,7 @@ export function SequencePrimitive({
 
   return (
     <div ref={hostRef} className={`sequence-primitive${focused ? ' sequence-primitive--focused' : ''}`} data-testid="sequence">
-      <DrawingViewport drawing={layout} fit={fit} laidOutFor={laidOutFor} pinned={{ height: pinnedDepth(layout), content: actors }} map={map} strip={strip} ariaLabel={data.title ?? 'Sequence diagram'}>
+      <DrawingViewport drawing={layout} fit={fit} pinned={{ height: pinnedDepth(layout), content: actors }} map={map} strip={strip} ariaLabel={data.title ?? 'Sequence diagram'}>
         <defs>
           <GlowFilters line="sequence-active-glow" frame="sequence-anchor-glow" />
         </defs>

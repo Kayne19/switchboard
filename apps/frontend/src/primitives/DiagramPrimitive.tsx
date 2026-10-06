@@ -75,7 +75,7 @@ export function DiagramPrimitive({
     (viewport: Viewport) => viewWithMap(viewport, (each) => viewDiagram(data, each, anchor, layouts), (each) => each.orientation),
     [data, anchor, layouts],
   );
-  const { hostRef, layout, fit, orientation, strip, laidOutFor } = useDrawingView(view);
+  const { hostRef, layout, fit, orientation, strip } = useDrawingView(view);
   const portrait = orientation === 'portrait';
   // A drawing that scrolls opens on the node its note names, or else on
   // where it begins: its first layer.
@@ -167,7 +167,7 @@ export function DiagramPrimitive({
 
   return (
     <div ref={hostRef} className={`diagram-primitive${slot === 'focus' ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
-      <DrawingViewport drawing={layout} fit={fit} laidOutFor={laidOutFor} lead={lead} map={map} strip={strip} ariaLabel={data.title ?? 'System diagram'}>
+      <DrawingViewport drawing={layout} fit={fit} lead={lead} map={map} strip={strip} ariaLabel={data.title ?? 'System diagram'}>
         <defs>
           <GlowFilters line="active-edge-glow" frame="diagram-node-glow" />
           {/* One arrowhead per colour: a marker cannot take its fill from the

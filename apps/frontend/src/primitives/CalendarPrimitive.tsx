@@ -2,7 +2,6 @@ import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type
 import type { CalendarData } from '../controller/types';
 import { parseTimeValue } from '../controller/validation';
 import { useElementSize } from '../hooks/useElementSize';
-import { MeasuredStageDemand } from '../hooks/useStageDemand';
 import {
   agendaEntries,
   agendaLead,
@@ -326,10 +325,6 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
     <ListViewport
       noun={['EVENT', 'EVENTS']}
       lead={markedInHours ? marked : undefined}
-      // The hours grow to fill whatever view they get, so their scroll
-      // content always measures the view: ask the stage by the grid's least
-      // readable height instead, or the fold never gives the stage back.
-      least={Math.floor(timeAxis(segments, nowMinute, 0, MIN_BOX_MINUTES).height)}
       head={head}
       className="calendar-grid__viewport"
       scrollClassName="calendar-grid__scroll"
@@ -380,8 +375,7 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
 
   // The hours stand in the same place whether or not the days are paged,
   // so a grid that turns to pages (on its first measure, or sent again with
-  // fewer days) keeps its viewport, and with it what the viewport has told
-  // the stage (useStageDemand).
+  // fewer days) keeps its viewport, and with it the reader's place.
   return (
     <PagedDays
       paged={pages}
@@ -980,8 +974,7 @@ export function CalendarPrimitive({ data, marked, slot = 'primary' }: { data: Ca
     >
       {meta}
       <div className="calendar__body" ref={bodyRef}>
-        {/* Before the body is measured the view is drawn whole, as a stand-in: it says nothing to the stage. */}
-        <MeasuredStageDemand measured={size.width > 0 && size.height > 0}>{body}</MeasuredStageDemand>
+        {body}
       </div>
     </div>
   );

@@ -1,9 +1,9 @@
 // A bar chart whose labels do not fit under its bars is laid on its side,
 // a labelled row per category, as long as its rows fit the plot; a phone's
 // slot fits some thirty. Past that the labels were thinned to every n-th
-// and the bars could not be named. Such a chart now says the height it
-// would give every category a row in (chartLeastHeight), and on a portrait
-// stage takes the stage's height for it (stageFold.ts).
+// and the bars could not be named. Such a chart knows the height it would
+// give every category a row in (chartLeastHeight), and in a slot taller
+// than it is wide is drawn at that height, to scroll (chartScrollHeight).
 import { describe, expect, it } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { CHART_PAD, CHART_READABLE_SCALE, CHART_TICK_ROW_HEIGHT, chartCategoryLayout, chartFrame, chartLeastHeight, chartScrollHeight } from '../../src/primitives/chartGeometry';
@@ -45,13 +45,12 @@ describe('the height a bar chart asks for a row per category', () => {
   });
 });
 
-// Past the stage, the rows did not fit even the stage's height, and on a
-// phone the bars stood upright again, a few of sixty names under bars a few
-// pixels wide. In a slot taller than it is wide such a chart is drawn on
-// its side at its least height, and scrolls in the slot.
+// Past its slot's height the bars stood upright again, a few of sixty names
+// under bars a few pixels wide. In a slot taller than it is wide such a
+// chart is drawn on its side at its least height, and scrolls in the slot.
 describe('a bar chart too long for its slot', () => {
   it('is drawn at its least height, to scroll, in a slot taller than it is wide', () => {
-    // A phone's stage: 358 px across, some 560 tall.
+    // A tall slot: 358 px across, some 560 tall.
     const data = services(60);
     expect(chartScrollHeight(data, { width: 358, height: 560 })).toBe(Math.ceil(chartLeastHeight(data, 358)!));
     // On its canvas the chart lies on its side, every category a row.

@@ -1,7 +1,5 @@
 import { motion } from 'motion/react';
-import { useRef } from 'react';
 import type { ProgressData, ProgressStep, ProgressStepState } from '../controller/types';
-import { useScrollDemand } from '../hooks/useStageDemand';
 import type { Slot } from './slot';
 
 /** How many steps a compact slot (the rail, an aux cell) lists before it
@@ -61,11 +59,8 @@ export function StepGlyph({ state, className = 'progress-step__glyph', decorativ
 function StepList({ steps, window }: { steps: ProgressStep[]; window: 'all' | 'around' | 'ahead' }) {
   const { start, end } = window === 'around' ? compactStepWindow(steps) : window === 'ahead' ? aheadStepWindow(steps) : { start: 0, end: steps.length };
   const after = steps.length - end;
-  // A plan that outgrows the primary slot says so (useStageDemand).
-  const listRef = useRef<HTMLOListElement>(null);
-  useScrollDemand(listRef);
   return (
-    <ol ref={listRef} className="progress-primitive__steps tech" data-testid="progress-steps" aria-label="Steps">
+    <ol className="progress-primitive__steps tech" data-testid="progress-steps" aria-label="Steps">
       {start > 0 ? <li className="progress-step progress-step--elided">{start} DONE</li> : null}
       {steps.slice(start, end).map((step, offset) => {
         const state: ProgressStepState = step.state ?? 'todo';
