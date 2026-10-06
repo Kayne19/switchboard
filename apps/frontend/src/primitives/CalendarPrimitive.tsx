@@ -89,6 +89,25 @@ const MONTH_LINE_PX = 16;
 const MONTH_NUMBER_PX = 20;
 const MONTH_WEEKDAY_PX = 18;
 const MIN_MONTH_CELL_PX = 84;
+/** A month too small for titles (styles/index.css, .calendar-month--marks).
+ * Its rows are drawn at most MARKS_ROW_MAX_PX tall, the rest of the box
+ * listing the days under the grid when that leaves MONTH_LIST_MIN_PX. A
+ * row holds the cell's top padding, the number's line, a gap, the line of
+ * marks (a fixed height that holds the NOTE badge, the `+N` count and the
+ * marks) and the week's rule: shorter, it would cut them off, and the month
+ * is the agenda of its days. */
+const MARKS_ROW_MAX_PX = 46;
+const MONTH_LIST_MIN_PX = 96;
+const MARKS_LINE_PX = 14;
+const MARKS_ROW_PX = 2 + 16 + 3 + MARKS_LINE_PX + 1;
+/** A cell's line of marks, across: the cell's padding and rule; the gap
+ * between items, and each item with its gap after it: a mark, the NOTE
+ * badge, a character of the `+N` count (the micro face at its largest). */
+const MONTH_CELL_PAD_PX = 9;
+const MARK_GAP_PX = 3;
+const MARK_STEP_PX = 7 + MARK_GAP_PX;
+const MARK_BADGE_PX = 37 + MARK_GAP_PX;
+const COUNT_CHAR_PX = 6.5;
 
 type Layout = 'grid' | 'agenda' | 'month' | 'month-marks';
 
@@ -105,8 +124,8 @@ function gridHeadPx(lanes: number): number {
   return DAY_ROW_PX + 1 + (rows > 0 ? rows * LANE_PX + 6 + 1 : 0);
 }
 
-/** The layout a view takes in a body of `size` (its grid's head `headPx` tall); an unmeasured body draws the view whole. */
-export function chooseLayout(data: CalendarData, size: ElementSize, dayCount: number, headPx = gridHeadPx(0)): LayoutChoice {
+/** The layout a view takes in a body of `size` (its grid's head `headPx` tall); an unmeasured body draws the view whole. `noted`: a note names an event the view shows. */
+export function chooseLayout(data: CalendarData, size: ElementSize, dayCount: number, headPx = gridHeadPx(0), noted = false): LayoutChoice {
   const measured = size.width > 0 && size.height > 0;
   if (data.view === 'agenda') return { layout: 'agenda', columns: dayCount };
   if (data.view === 'month') {
@@ -114,7 +133,13 @@ export function chooseLayout(data: CalendarData, size: ElementSize, dayCount: nu
     const rows = monthGrid(parseTimeValue(data.start)?.dayNumber ?? 0).weeks.length;
     const cellHeight = (size.height - MONTH_WEEKDAY_PX) / rows;
     const roomy = size.width / 7 >= MIN_MONTH_CELL_PX && cellHeight - MONTH_NUMBER_PX >= 2 * MONTH_LINE_PX;
-    return { layout: roomy ? 'month' : 'month-marks', columns: 7 };
+    if (roomy) return { layout: 'month', columns: 7 };
+    // Too small even for a line of marks, or (where the note's badge goes in
+    // the grid, with no list under it) for the badge across a cell: the
+    // agenda of the days the month draws.
+    const listed = size.height - (MONTH_WEEKDAY_PX + rows * MARKS_ROW_MAX_PX) >= MONTH_LIST_MIN_PX;
+    const badgeFits = !noted || listed || size.width / 7 - MONTH_CELL_PAD_PX + MARK_GAP_PX >= MARK_BADGE_PX;
+    return { layout: cellHeight >= MARKS_ROW_PX && badgeFits ? 'month-marks' : 'agenda', columns: 7 };
   }
   if (!measured) return { layout: 'grid', columns: dayCount };
   if (size.height - headPx < MIN_GRID_HOURS * AXIS.minHourPx) return { layout: 'agenda', columns: dayCount };
@@ -176,13 +201,18 @@ interface GridProps {
   columns: number;
 }
 
-/** The column the grid opens on: the day of the marked event, else today, else the active event's, else the first. */
-function leadDay(model: CalendarModel, marked: string | undefined): number | undefined {
+/** The event a note names, where the view's days reach it: the one its badge marks and the view opens on. */
+function markedInView(model: CalendarModel, marked: string | undefined): PlacedEvent | undefined {
   const first = model.days[0];
   const last = model.days[model.days.length - 1];
-  const named = marked === undefined ? undefined : model.placed.find((item) => item.event.id === marked && item.lastDay >= first && item.firstDay <= last);
+  return marked === undefined ? undefined : model.placed.find((item) => item.event.id === marked && item.lastDay >= first && item.firstDay <= last);
+}
+
+/** The column the grid opens on: the day of the marked event, else today, else the active event's, else the first. */
+function leadDay(model: CalendarModel, marked: string | undefined): number | undefined {
+  const named = markedInView(model, marked);
   // An event that began before the view leads from the view's first day.
-  if (named) return Math.max(named.firstDay, first);
+  if (named) return Math.max(named.firstDay, model.days[0]);
   if (model.today !== undefined) return model.today;
   return model.placed.find((item) => item.event.active)?.firstDay;
 }
@@ -386,7 +416,7 @@ function AxisRules({ axis }: { axis: TimeAxis }) {
   return <div className="calendar-grid__rules" aria-hidden="true">{rules}</div>;
 }
 
-/** The agent's now: a line across today's column, its time in the gutter. The grid opens on it. */
+/** The agent's now: its time on a tag in the gutter pointed at the grid, and a rule across today's column under the events. The grid opens on it. */
 function NowLine({ axis, minute, column, columns }: { axis: TimeAxis; minute: number; column: number; columns: number }) {
   const top = axisY(axis, minute);
   return (
@@ -430,8 +460,9 @@ function EventBox({ segment, axis, model, day, width, marked, first }: {
   // The box sits in a slot of its place and size; the NOTE badge rides the
   // slot's top edge, outside the box's clip, so it never takes a title's room.
   // One stacking order, set here: a later step over an earlier one, the
-  // active event over its neighbours, the marked one over all; the now line
-  // (z 8 in styles/index.css) over every event.
+  // active event over its neighbours, the marked one over all; every event
+  // over the now line (no z-index in styles/index.css), so a box the now
+  // lies in reads whole.
   const zIndex = isMarked ? 7 : Math.min(6, (segment.stepped ? 1 + segment.column : 1) + (placed.event.active ? 1 : 0));
   const place: CSSProperties = segment.stepped
     ? { top: `${top}px`, height: `${height}px`, left: `${1 + segment.column * STEP_INSET_PX}px`, right: '2px', zIndex }
@@ -615,7 +646,8 @@ function countedInMore(cell: WeekPlan['cells'][number]): PlacedEvent[] {
 
 /** Where each event is first drawn in a month, by a key of its place: the
  * one its NOTE badge goes on. An event a row has no room for is "drawn" by
- * the count that holds it, so the badge goes there. */
+ * the count that holds it, so the badge goes there; in a month of marks the
+ * badge leads the line of the first day the event is on (`DayMarks`). */
 function firstPlaces(plans: WeekPlan[], marks: boolean): Map<string, string> {
   const first = new Map<string, string>();
   const see = (id: string, place: string) => {
@@ -623,12 +655,7 @@ function firstPlaces(plans: WeekPlan[], marks: boolean): Map<string, string> {
   };
   plans.forEach((plan, row) => {
     if (marks) {
-      for (const cell of plan.cells) {
-        const order = markedOrder(cell);
-        const shown = order.length > MAX_MARKS ? MAX_MARKS - 1 : MAX_MARKS;
-        order.slice(0, shown).forEach((item) => see(item.event.id, `mark-${cell.day}-${item.order}`));
-        order.slice(shown).forEach((item) => see(item.event.id, `marks-more-${cell.day}`));
-      }
+      for (const cell of plan.cells) for (const item of markedOrder(cell)) see(item.event.id, `mark-${cell.day}-${item.order}`);
       return;
     }
     for (const bar of plan.bars) if (bar.lane < plan.lanes) see(bar.placed.event.id, `bar-${row}-${bar.placed.order}`);
@@ -643,7 +670,7 @@ function MonthView({ data, model, marked, size, marks }: { data: CalendarData; m
   const rows = grid.weeks.length;
   // A month too small for titles marks each day's events and lists them
   // under the grid, from today when today is in the month, if there is room.
-  const gridHeight = marks ? Math.min(size.height > 0 ? size.height : 260, MONTH_WEEKDAY_PX + rows * 46) : size.height;
+  const gridHeight = marks ? Math.min(size.height > 0 ? size.height : 260, MONTH_WEEKDAY_PX + rows * MARKS_ROW_MAX_PX) : size.height;
   const listRoom = marks && size.height > 0 ? size.height - gridHeight : 0;
   const cellHeight = gridHeight > 0 ? (gridHeight - MONTH_WEEKDAY_PX) / rows : 96;
   const capacity = marks ? 0 : Math.max(1, Math.floor((cellHeight - MONTH_NUMBER_PX) / MONTH_LINE_PX));
@@ -653,7 +680,7 @@ function MonthView({ data, model, marked, size, marks }: { data: CalendarData; m
   const monthDays = grid.weeks.flat().filter((day) => calendarDay(day).month === grid.month);
   const listFrom = model.today !== undefined && monthDays.includes(model.today) ? model.today : monthDays[0];
   const listDays = monthDays.filter((day) => day >= listFrom);
-  const listed = marks && listRoom >= 96;
+  const listed = marks && listRoom >= MONTH_LIST_MIN_PX;
   // The NOTE badge goes on one drawing of the event: its row in the list
   // under the grid, which names it, when the list holds it; else its mark.
   const inList = listed && marked !== undefined && model.placed.some((item) => item.event.id === marked && item.lastDay >= listDays[0] && item.firstDay <= listDays[listDays.length - 1]);
@@ -667,11 +694,12 @@ function MonthView({ data, model, marked, size, marks }: { data: CalendarData; m
         <div className="calendar-month__weeks" style={{ gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))` }}>
           {plans.every((plan) => plan.cells.every((cell) => cell.touching.length === 0)) ? <div className="calendar-grid__nothing tech micro">NOTHING SCHEDULED</div> : null}
           {plans.map((plan, row) => (
-            <MonthWeek key={plan.week[0]} plan={plan} row={row} month={grid.month} model={model} marked={gridMarked} capacity={capacity} marks={marks} isFirst={isFirst} />
+            <MonthWeek key={plan.week[0]} plan={plan} row={row} month={grid.month} model={model} marked={gridMarked} capacity={capacity} marks={marks} isFirst={isFirst} room={size.width > 0 ? size.width / 7 - MONTH_CELL_PAD_PX : 0} />
           ))}
         </div>
       </div>
       {listed ? (
+        // The room under the grid, its gap to the grid inside it (a margin outside ran it past the calendar's foot), asked for so a cell sized by what it holds keeps it.
         <div className="calendar-month__list" style={{ height: `${listRoom}px` }}>
           <AgendaList model={model} days={listDays} marked={inList ? marked : undefined} compact />
         </div>
@@ -680,7 +708,7 @@ function MonthView({ data, model, marked, size, marks }: { data: CalendarData; m
   );
 }
 
-function MonthWeek({ plan, row, month, model, marked, capacity, marks, isFirst }: {
+function MonthWeek({ plan, row, month, model, marked, capacity, marks, isFirst, room }: {
   plan: WeekPlan;
   row: number;
   month: number;
@@ -689,6 +717,8 @@ function MonthWeek({ plan, row, month, model, marked, capacity, marks, isFirst }
   capacity: number;
   marks: boolean;
   isFirst: (id: string, place: string) => boolean;
+  /** A cell's line of marks, across (0: unmeasured). */
+  room: number;
 }) {
   const rows = marks ? 'minmax(0, 1fr)' : `${MONTH_NUMBER_PX}px repeat(${capacity}, ${MONTH_LINE_PX}px) minmax(0, 1fr)`;
   return (
@@ -707,7 +737,7 @@ function MonthWeek({ plan, row, month, model, marked, capacity, marks, isFirst }
             style={{ gridColumn: index + 1 }}
           >
             <span className="calendar-month__number">{info.day}</span>
-            {marks && cell.touching.length > 0 ? <DayMarks cell={cell} model={model} marked={marked} isFirst={isFirst} /> : null}
+            {marks && cell.touching.length > 0 ? <DayMarks cell={cell} model={model} marked={marked} isFirst={isFirst} room={room} /> : null}
           </div>
         );
       })}
@@ -775,26 +805,47 @@ function MoreLine({ cell, column, row, marked, isFirst }: { cell: WeekPlan['cell
   );
 }
 
-/** A day's events in a month too small for titles: a short bar each, in its colour. */
-function DayMarks({ cell, model, marked, isFirst }: { cell: WeekPlan['cells'][number]; model: CalendarModel; marked?: string; isFirst: (id: string, place: string) => boolean }) {
+/**
+ * What a line of marks `room` px wide (0: unmeasured) draws of a day's
+ * `others` events, after the NOTE badge where it has one: as many marks as
+ * fit, four at most, and a count of the rest where the count fits after
+ * them. A line the badge leaves no room on drops the count; the cell's
+ * label still says how many.
+ */
+function marksLine(others: number, room: number, badge: boolean): { shown: number; counted: boolean } {
+  // Each item takes its width and the gap after it; the last gap is free.
+  const budget = (room > 0 ? room + MARK_GAP_PX : Infinity) - (badge ? MARK_BADGE_PX : 0);
+  const countPx = (hidden: number) => (String(hidden).length + 1) * COUNT_CHAR_PX + MARK_GAP_PX;
+  if (others <= MAX_MARKS && others * MARK_STEP_PX <= budget) return { shown: others, counted: false };
+  for (let shown = Math.min(others, MAX_MARKS - 1); shown >= 0; shown -= 1) {
+    if (shown * MARK_STEP_PX + countPx(others - shown) <= budget) return { shown, counted: true };
+  }
+  return { shown: 0, counted: false };
+}
+
+/**
+ * A day's events in a month too small for titles: a short bar each, in its
+ * colour, on one line of the cell (`room` px across, 0 unmeasured). The
+ * NOTE badge leads the line, standing for the event the note names, and the
+ * other marks take what it leaves: a badge after them was pushed onto a
+ * second line the cell has no room for, and cut off. The line never wraps.
+ */
+function DayMarks({ cell, model, marked, isFirst, room }: { cell: WeekPlan['cells'][number]; model: CalendarModel; marked?: string; isFirst: (id: string, place: string) => boolean; room: number }) {
   const ordered = markedOrder(cell);
-  const shown = ordered.slice(0, ordered.length > MAX_MARKS ? MAX_MARKS - 1 : MAX_MARKS);
+  const noted = marked === undefined ? undefined : ordered.find((placed) => placed.event.id === marked && isFirst(marked, `mark-${cell.day}-${placed.order}`));
+  const others = noted ? ordered.filter((placed) => placed !== noted) : ordered;
+  const { shown, counted } = marksLine(others.length, room, noted !== undefined);
   return (
     <span className="calendar-marks" aria-label={`${ordered.length} ${ordered.length === 1 ? 'event' : 'events'}`}>
-      {shown.map((placed) => {
-        const first = isFirst(placed.event.id, `mark-${cell.day}-${placed.order}`);
-        return (
-          <span key={placed.order} className={eventClasses('calendar-mark', placed, model)} data-item={placed.event.id} title={placed.event.title}>
-            {first && marked === placed.event.id ? <NoteBadge className="calendar-mark__note" /> : null}
-          </span>
-        );
-      })}
-      {ordered.length > shown.length ? (
-        <span className="calendar-marks__more tech micro" data-item={marked !== undefined && isFirst(marked, `marks-more-${cell.day}`) ? marked : undefined}>
-          +{ordered.length - shown.length}
-          {marked !== undefined && isFirst(marked, `marks-more-${cell.day}`) ? <NoteBadge className="calendar-mark__note" /> : null}
+      {noted ? (
+        <span className={eventClasses('calendar-mark', noted, model)} data-item={noted.event.id} title={noted.event.title}>
+          <NoteBadge className="calendar-mark__note" />
         </span>
       ) : null}
+      {others.slice(0, shown).map((placed) => (
+        <span key={placed.order} className={eventClasses('calendar-mark', placed, model)} data-item={placed.event.id} title={placed.event.title} />
+      ))}
+      {counted ? <span className="calendar-marks__more tech micro">+{others.length - shown}</span> : null}
     </span>
   );
 }
@@ -909,7 +960,8 @@ export function CalendarPrimitive({ data, marked, focused = false, framed = fals
   // The head is sized from the bars over every day the view has, not the
   // page a narrow week shows: the choice of grid or agenda must not change
   // as the reader turns the days.
-  const choice = chooseLayout(data, size, model.days.length, gridHeadPx(laneCount(dayBars(model.placed, model.days))));
+  const noted = markedInView(model, marked) !== undefined;
+  const choice = chooseLayout(data, size, model.days.length, gridHeadPx(laneCount(dayBars(model.placed, model.days))), noted);
   const count = data.events.length;
   // The meta line: what is shown and how much, led by the title only where
   // no scene frame shows it already (MetaTitle).

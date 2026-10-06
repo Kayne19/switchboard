@@ -16,6 +16,15 @@
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     monospace;
   --font-prose: "Helvetica Neue", Arial, sans-serif;
+  /* The panel frame's steps (TechFrame "panel": 24 of its 620 units, in at
+     its top right and its bottom left): a share of the frame's height. The
+     inset keeps content that fills a panel clear of both with a gap. Its
+     percentage resolves where it is used, and means the frame's height
+     only in a row track (or a top or bottom offset) of the box the frame
+     is drawn over: in a padding it would be a share of the width. */
+  --panel-step-share: calc(24 / 620);
+  --panel-step: calc(var(--panel-step-share) * 100%);
+  --panel-inset: calc(var(--panel-step) + clamp(6px, 0.9cqh, 12px));
   color: var(--paper);
   background: var(--black);
   font-family:
@@ -4339,9 +4348,39 @@ button {
 .calendar-object .focusable-content {
   position: relative;
   z-index: 1;
-  padding: clamp(18px, 3cqh, 36px) clamp(18px, 2.2cqw, 38px) clamp(14px, 2.4cqh, 28px);
+  padding: 0 clamp(18px, 2.2cqw, 38px);
+}
+/* A calendar fills its box to the edges (the grid's foot, the month's last
+   row, the agenda's cut line), so the box is the panel frame's inner box:
+   inside both of its steps (--panel-step), with a gap. The step is a share
+   of the frame's height, and the main slot's height is the frame's and is
+   set by the layout, so there the inset is a row of the slot's own grid,
+   exact at any height. A padding in stage units fell short of the step on
+   every slot taller than it assumed, and the grid ran over the lower step. */
+.calendar-object > .focusable-content {
+  display: grid;
+  grid-template-rows: var(--panel-inset) minmax(0, 1fr) var(--panel-inset);
+}
+.calendar-object > .focusable-content > * {
+  grid-row: 2;
+  min-height: 0;
+}
+/* An aux cell is as tall as what it holds asks, so a share of the cell
+   cannot be its inset: a track in percent asks for nothing while the row
+   is sized, and a calendar that fills its box then shrank the cell a step
+   at a time to its floor. The inset is a padding, asked for, as large as
+   the step of the tallest cell there can be, with a gap: the aux row is at
+   most two fifths of the column (`.composed-main`), so a cell held by the
+   row has a step under the panel's share of 40cqh; one taller than that is
+   held by a floor (the row's least, 210 px at most, or a visual's, 200 px),
+   whose step is under 9 px, within the 12 px the clamp keeps. */
+.composed-aux-object--calendar > .focusable-content {
+  padding-block: max(clamp(12px, 1.4cqw, 22px), calc(var(--panel-step-share) * 40cqh + 4px));
 }
 .calendar {
+  /* The now's tag, pointed at what it reads (the grid's gutter tag, the
+     agenda's NOW row): a date's tag is square, a time's points. */
+  --now-point: polygon(0 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 0 100%);
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -4450,6 +4489,7 @@ button {
 }
 .calendar-grid__day--today {
   background: rgba(var(--orange-rgb), 0.07);
+  box-shadow: inset 0 1px 0 var(--orange);
   color: var(--orange);
 }
 .calendar-grid__day--today .calendar-grid__date {
@@ -4520,11 +4560,13 @@ button {
   letter-spacing: 0.06em;
 }
 /* A run of empty hours folded: hatched, its hours named, so the grid
-   reads as cut there rather than as hours missing. */
+   reads as cut there rather than as hours missing. It spans the days as
+   the hour rules do, never the gutter: the scale has no hours to show
+   there, and a band out to the calendar's edge reached for the frame. */
 .calendar-grid__fold {
   position: absolute;
-  left: 0;
-  right: 0;
+  left: var(--grid-lead, var(--calendar-gutter));
+  right: var(--grid-trail, 0px);
   display: flex;
   align-items: center;
   border-top: 1px dashed rgba(232, 230, 223, 0.18);
@@ -4532,7 +4574,7 @@ button {
   background: repeating-linear-gradient(-45deg, rgba(232, 230, 223, 0.06) 0 1px, transparent 1px 6px);
 }
 .calendar-grid__fold-text {
-  margin-left: calc(var(--calendar-gutter) + 8px);
+  margin-left: 8px;
   padding: 0 5px;
   background: #000;
   color: rgba(232, 230, 223, 0.42);
@@ -4569,29 +4611,25 @@ button {
   color: rgba(232, 230, 223, 0.36);
   text-align: center;
 }
-/* The agent's now: its time in the gutter, a line across today, and a
-   faint one across the other days. */
+/* The agent's now, one mark in every view (the agenda's NOW row is the
+   same): its time on an orange tag pointed at what it reads, here from the
+   gutter at the grid, and a thin solid rule where the time is today --
+   across today's column only, under the events, so a box the now lies in
+   reads whole and the rule shows in the free time around it. The other
+   days of a week carry nothing: they are not now. */
 .calendar-grid__now {
   position: absolute;
-  z-index: 8;
   left: 0;
   right: 0;
   height: 0;
   pointer-events: none;
 }
-.calendar-grid__now::before {
-  content: "";
-  position: absolute;
-  left: var(--grid-lead, var(--calendar-gutter));
-  right: var(--grid-trail, 0px);
-  border-top: 1px dashed rgba(var(--orange-rgb), 0.28);
-}
 .calendar-grid__now-text {
   position: absolute;
   left: 0;
   top: 0;
-  width: calc(var(--calendar-gutter) - 3px);
-  padding: 0 2px;
+  width: calc(var(--calendar-gutter) - 2px);
+  padding: 0 5px 0 1px;
   translate: 0 -50%;
   background: var(--orange);
   color: #000;
@@ -4599,21 +4637,24 @@ button {
   letter-spacing: 0.04em;
   line-height: 1.5;
   text-align: center;
+  clip-path: var(--now-point);
 }
 .calendar-grid__now-line {
   position: absolute;
-  top: -1px;
+  top: 0;
   left: calc(var(--grid-lead) + (100% - var(--grid-lead) - var(--grid-trail)) * var(--now-column) / var(--columns));
   width: calc((100% - var(--grid-lead) - var(--grid-trail)) / var(--columns));
-  height: 2px;
+  height: 1px;
   background: var(--orange);
-  box-shadow: 0 0 8px rgba(var(--orange-rgb), 0.55);
 }
 
-/* An event in the grid: a slot of its place and size, and the box in it. */
+/* An event in the grid: a slot of its place and size, and the box in it.
+   The slot is opaque, so the now rule under it never shows through a box
+   drawn receded (past, or cancelled and see-through) as a strike. */
 .calendar-event-slot {
   position: absolute;
   z-index: 1;
+  background: #000;
 }
 .calendar-event {
   position: relative;
@@ -4907,9 +4948,14 @@ button {
 .calendar-month__cell--past .calendar-month__number {
   color: rgba(232, 230, 223, 0.42);
 }
+/* Today is one mark in the grid and the month: its date on a square
+   orange tag, an orange rule along the top of its column head or cell (the
+   now's rule, for the day), and a faint tint; never a box round it. The
+   agenda names it TODAY on the same square tag, over its head's orange
+   rule. */
 .calendar-month__cell--today {
-  background: rgba(var(--orange-rgb), 0.07);
-  box-shadow: inset 0 0 0 1px rgba(var(--orange-rgb), 0.5);
+  background: rgba(var(--orange-rgb), 0.06);
+  box-shadow: inset 0 1px 0 var(--orange);
 }
 .calendar-month__cell--today .calendar-month__number {
   padding: 0 4px;
@@ -4965,12 +5011,20 @@ button {
   align-items: flex-start;
   gap: 3px;
 }
+/* One line, never wrapped: a second line has no room in the row and was
+   cut off. Its height holds the NOTE badge, the count and the marks; the
+   layout reckons with it and with these widths (CalendarPrimitive.tsx,
+   MARKS_LINE_PX, MARK_STEP_PX, MARK_BADGE_PX, COUNT_CHAR_PX). */
 .calendar-marks {
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 2px 3px;
+  gap: 3px;
+  max-width: 100%;
+  height: 14px;
   min-width: 0;
+  overflow: hidden;
 }
 .calendar-mark {
   flex: none;
@@ -4985,7 +5039,10 @@ button {
 .calendar-mark--cancelled {
   opacity: 0.35;
 }
+/* The mark the NOTE badge stands for hugs the badge (a block would take the
+   root's line and push the badge down out of the line). */
 .calendar-mark:has(.note-badge) {
+  display: flex;
   width: auto;
   height: auto;
   background: transparent;
@@ -4993,10 +5050,11 @@ button {
 .calendar-marks__more {
   color: rgba(var(--orange-rgb), 0.85);
   letter-spacing: 0.04em;
+  line-height: 1;
 }
 .calendar-month__list {
   flex: none;
-  margin-top: clamp(8px, 1.4cqh, 14px);
+  padding-top: clamp(8px, 1.4cqh, 14px);
 }
 
 /* The agenda: a day's head, then a row per event: its time, its stripe,
@@ -5149,25 +5207,26 @@ button {
 .calendar-agenda__item--again .calendar-agenda__title {
   color: rgba(232, 230, 223, 0.7);
 }
+/* The now between the rows: the grid's mark laid down the list, its tag
+   pointed along the rule. */
 .calendar-agenda__now {
   display: flex;
   align-items: center;
-  gap: 8px;
   padding: 3px 0;
   color: var(--orange);
 }
 .calendar-agenda__now-text {
   flex: none;
-  padding: 0 4px;
+  padding: 0 8px 0 4px;
   background: var(--orange);
   color: #000;
   font-weight: 700;
+  clip-path: var(--now-point);
 }
 .calendar-agenda__now-line {
   flex: 1 1 auto;
-  height: 2px;
+  height: 1px;
   background: var(--orange);
-  box-shadow: 0 0 8px rgba(var(--orange-rgb), 0.5);
 }
 .calendar-agenda__empty {
   display: flex;
