@@ -47,7 +47,10 @@ export async function runActions(page: Page, actions: unknown[]): Promise<void> 
  * when it draws something (text, a border, a fill or a shadow, an image, an
  * SVG shape), not when it is only a box around other parts (an SVG's own
  * margin, a padding). A box clipped to the frame's outline (the code
- * frame's mask) is the frame's own inside, not a part. A part may reach a
+ * frame's mask, a child of the viewport the frame is drawn in) is the
+ * frame's own inside, not a part. The frame's runs are checked where they
+ * are drawn: a part that lies wholly in a gap of an interrupted rail is not
+ * held by that side. A part may reach a
  * pixel past an edge: a text's box holds its font's descent below the
  * letters, and a layout rounds to the pixel (a chart's axis title in focus
  * stands 0.6 to 0.9 px past the focus box, its letters clear of it).
@@ -124,7 +127,8 @@ export function frameCrossings(selector: string): string[] {
     for (const part of [object, ...object.querySelectorAll('*')]) {
       if (part === owner || part.closest('svg.tech-frame') || part.getClientRects().length === 0) continue;
       const style = getComputedStyle(part);
-      if (style.visibility === 'hidden' || style.clipPath !== 'none' || !drawn(part)) continue;
+      // The code frame's mask (clipped to the outline) is the frame's own inside; any other clipped part is checked.
+      if (style.visibility === 'hidden' || (part.parentElement === owner && style.clipPath !== 'none') || !drawn(part)) continue;
       const rect = part.getBoundingClientRect();
       const shown = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
       for (let clip = part.parentElement; clip && clip !== owner.parentElement; clip = clip.parentElement) {
