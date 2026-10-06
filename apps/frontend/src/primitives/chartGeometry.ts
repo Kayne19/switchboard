@@ -1027,8 +1027,9 @@ export function chartAxisBoxes(plot: Rect, frame: ChartFrame = CHART_FRAME): Rec
  * the rows it still lies on its side, at its least height
  * (`chartLeastHeight`), and scrolls -- in a slot taller than it is wide,
  * where its bars standing upright would be too many for the width and
- * their labels thinned to a few. A wide slot stands them upright, thinned, the whole chart in view;
- * a chart whose labels all show upright (staggered, say) is drawn as it is.
+ * their labels thinned to a few. A wide slot stands them upright,
+ * thinned, the whole chart in view; a chart whose labels all show upright
+ * (staggered, say) is drawn as it is.
  */
 export function chartScrollHeight(data: ChartData, slot: Size): number | null {
   if (!(slot.width > 0) || !(slot.height > 0)) return null;
