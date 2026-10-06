@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { InboxData, InboxMessage } from '../controller/types';
 import { parseTimeValue, type TimeValue } from '../controller/validation';
+import { countText, type Noun } from './countText';
 import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
 import { clockText, dayText, daysFrom, readToday } from './timeLabels';
@@ -47,6 +48,9 @@ export function messageTime(message: InboxMessage, today: TimeValue | null): { t
   if (today && time.form === 'wall' && daysFrom(today, time) === 0) return { text: clockText(time), today: true };
   return { text: dayText(time, today), today: false };
 }
+
+// What the inbox's counts call a message.
+const MESSAGE: Noun = ['MESSAGE', 'MESSAGES'];
 
 /** What an inbox holds: its messages, unread and flagged. */
 export function inboxCounts(data: InboxData): { messages: number; unread: number; flagged: number } {
@@ -145,7 +149,7 @@ export function InboxPrimitive({ data, variant = 'full', marked, framed = false 
       <MetaTitle title={data.title ?? 'INBOX'} framed={framed} className="inbox-primitive__title" />
       {/* Each count whole: a narrow list wraps between them. */}
       <span className="inbox-primitive__counts">
-        <span className="meta-count">{counts.messages} {counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}</span>
+        <span className="meta-count">{countText(counts.messages, MESSAGE)}</span>
         {counts.unread > 0 ? <>{' '}<span className="meta-count inbox-primitive__unread">/ {counts.unread} UNREAD</span></> : null}
         {counts.flagged > 0 ? <>{' '}<span className="meta-count">/ {counts.flagged} FLAGGED</span></> : null}
       </span>
@@ -157,7 +161,7 @@ export function InboxPrimitive({ data, variant = 'full', marked, framed = false 
           message a note names, at its place in the rows now drawn. */}
       <ListViewport
         key={layout}
-        noun={['MESSAGE', 'MESSAGES']}
+        noun={MESSAGE}
         lead={marked}
         head={head}
         scrollClassName="inbox-primitive__scroll"

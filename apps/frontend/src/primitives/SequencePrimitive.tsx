@@ -1,23 +1,12 @@
 import { useCallback, useMemo } from 'react';
-import type { NoteData, Semantic, SequenceDiagramData } from '../controller/types';
-import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
+import type { NoteData, SequenceDiagramData } from '../controller/types';
+import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
+import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
-import { NoteMarker } from './NoteMarker';
-import { LABEL_HEIGHT, SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage, type Point } from './sequenceLayout';
-
-const colors: Record<Semantic, string> = {
-  red: 'var(--red)',
-  orange: 'var(--orange)',
-  green: 'var(--green)',
-  cyan: 'var(--cyan)',
-  amber: 'var(--amber)',
-  paper: 'var(--paper)',
-  muted: 'var(--muted)',
-};
-
-const pathThrough = (points: Point[]) =>
-  points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+import { NoteMarker, markedPart } from './NoteMarker';
+import { SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage } from './sequenceLayout';
+import { SEMANTIC_COLOR } from '../design/tokens';
 
 const ARROW_LENGTH = 10;
 const ARROW_HALF = 4.5;
@@ -61,27 +50,16 @@ export function SequencePrimitive({
   id: string;
   note?: NoteData | null;
 }) {
-  const { hostRef, width, height, scrollbar } = useDrawingViewport();
-  // The anchor's target is part of the protocol: a note aimed at another
-  // object that happens to name one of these actors is not ours. The note
-  // itself stays in the rail; the actor it names carries the NOTE marker,
-  // the rail badge's twin, in its header.
-  const anchoredActorId = note?.anchor && note.anchor.target === id ? note.anchor.node : undefined;
+  // The note itself stays in the rail; the actor it names carries the NOTE
+  // marker, the rail badge's twin, in its header.
+  const anchoredActorId = markedPart(note, id).node;
   // The geometry follows the viewport's shape, and the drawing is fitted to
   // it, or scrolled in it once fitting would make it too small to read.
   const view = useCallback(
     (viewport: Viewport) => viewWithMap(viewport, (each) => viewSequence(data, each, anchoredActorId, focused), headerReading),
     [data, anchoredActorId, focused],
   );
-  const { layout, fit, strip } = useMemo(() => view({ width, height, scrollbar }), [view, width, height, scrollbar]);
-  // The exchange it would lay out for a viewport of another height, at this width.
-  const laidOutFor = useCallback(
-    (at: number) => {
-      const other = view({ width, height: at, scrollbar });
-      return { drawing: other.layout, fit: other.fit };
-    },
-    [view, width, scrollbar],
-  );
+  const { hostRef, layout, fit, strip, laidOutFor } = useDrawingView(view);
   // What the viewport tells a reader of an exchange that scrolls: its
   // messages, counted past each edge and kept whole at rest, and the
   // sketch its map draws (headers, lifelines, the arrows).
@@ -95,13 +73,13 @@ export function SequencePrimitive({
     });
     return {
       parts,
-      noun: { one: 'MESSAGE', many: 'MESSAGES' },
+      noun: ['MESSAGE', 'MESSAGES'],
       marks: [],
       links: [],
       sketch: {
-        boxes: layout.actors.map(({ actor, box }) => ({ box, tone: actor.id === anchoredActorId ? 'var(--orange)' : colors[actor.semantic ?? 'paper'] })),
+        boxes: layout.actors.map(({ actor, box }) => ({ box, tone: actor.id === anchoredActorId ? 'var(--orange)' : SEMANTIC_COLOR[actor.semantic ?? 'paper'] })),
         lines: [
-          ...layout.actors.map(({ actor, x, box, lifelineEnd }) => ({ points: [{ x, y: box.y + box.height }, { x, y: lifelineEnd }], tone: colors[actor.semantic ?? 'paper'] })),
+          ...layout.actors.map(({ actor, x, box, lifelineEnd }) => ({ points: [{ x, y: box.y + box.height }, { x, y: lifelineEnd }], tone: SEMANTIC_COLOR[actor.semantic ?? 'paper'] })),
           ...layout.messages.map((item) => ({ points: item.points, tone: item.message.active ? 'var(--orange)' : 'var(--paper)' })),
         ],
       },
@@ -117,7 +95,7 @@ export function SequencePrimitive({
     <g className="sequence-actors">
       {layout.actors.map(({ actor, box, labelLines, labelX, labelY, subY, subLines, marker }, index) => {
         const isAnchored = anchoredActorId !== undefined && actor.id === anchoredActorId;
-        const color = isAnchored ? 'var(--orange)' : colors[actor.semantic ?? 'paper'];
+        const color = isAnchored ? 'var(--orange)' : SEMANTIC_COLOR[actor.semantic ?? 'paper'];
         const { width, height } = box;
         return (
           <g key={actor.id} transform={`translate(${box.x} ${box.y})`}>
@@ -177,28 +155,7 @@ export function SequencePrimitive({
     <div ref={hostRef} className={`sequence-primitive${focused ? ' sequence-primitive--focused' : ''}`} data-testid="sequence">
       <DrawingViewport drawing={layout} fit={fit} laidOutFor={laidOutFor} pinned={{ height: pinnedDepth(layout), content: actors }} map={map} strip={strip} ariaLabel={data.title ?? 'Sequence diagram'}>
         <defs>
-          {/* The region is the whole drawing, not each message's bounding box:
-              a straight message has a zero-height box, and a filter region
-              derived from it would erase the message entirely. */}
-          <filter id="sequence-active-glow" filterUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%">
-            <feGaussianBlur stdDeviation="2.2" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
-          {/* An anchored actor's frame is drawn inside its header's
-              translated group, where the drawing-wide region above would
-              begin at the frame's own corner and cut the glow, and half the
-              stroke, off its top and left edges. A frame has a real box, so
-              this region is that box with room on every side. */}
-          <filter id="sequence-anchor-glow" x="-25%" y="-50%" width="150%" height="200%">
-            <feGaussianBlur stdDeviation="2.2" result="blur" />
-            <feMerge>
-              <feMergeNode in="blur" />
-              <feMergeNode in="SourceGraphic" />
-            </feMerge>
-          </filter>
+          <GlowFilters line="sequence-active-glow" frame="sequence-anchor-glow" />
         </defs>
         <g className="sequence-lifelines">
           {layout.actors.map(({ actor, x, box, lifelineEnd }) => (
@@ -209,7 +166,7 @@ export function SequencePrimitive({
               y1={box.y + box.height}
               x2={x}
               y2={lifelineEnd}
-              stroke={colors[actor.semantic ?? 'paper']}
+              stroke={SEMANTIC_COLOR[actor.semantic ?? 'paper']}
               strokeOpacity="0.28"
               strokeDasharray="4 6"
               vectorEffect="non-scaling-stroke"

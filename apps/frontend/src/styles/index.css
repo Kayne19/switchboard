@@ -3217,8 +3217,9 @@ button {
 .diagram-edge-label-group {
   animation: diagram-edge-resolve 0.24s ease-out backwards;
 }
-/* The layout measures labels in this face at this size before drawing them
-   (diagramLayout.ts); change one and the other must follow. */
+/* The layouts measure labels in this face at this size before drawing them
+   (drawingKit.tsx `labelBox`, which .sequence-message-label shares); change
+   one and the other must follow. */
 .diagram-edge-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;

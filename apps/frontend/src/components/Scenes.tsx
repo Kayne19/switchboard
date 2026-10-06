@@ -24,6 +24,7 @@ import { CalendarPrimitive, calendarFrame } from '../primitives/CalendarPrimitiv
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
 import { CodeViewport } from '../primitives/CodeViewport';
+import { countText } from '../primitives/countText';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { DocumentViewport } from '../primitives/DocumentViewport';
 import { ImagePrimitive } from '../primitives/ImagePrimitive';
@@ -590,7 +591,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
         subtitle: data.subtitle ?? `${counts.open} OPEN / ${counts.done} DONE`,
         context: data.context ?? 'TASKS',
         footer: 'DISPLAY / TASKS',
-        caption: sceneCaption(primary, `TASKS / ${data.items.length} ${data.items.length === 1 ? 'ITEM' : 'ITEMS'}`),
+        caption: sceneCaption(primary, `TASKS / ${countText(data.items.length, ['ITEM', 'ITEMS'])}`),
         main: slot('tasks-object', <TasksPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
@@ -600,10 +601,10 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
       return {
         ...rail,
         title: data.title ?? 'INBOX / MESSAGES',
-        subtitle: data.subtitle ?? `${counts.messages} ${counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'} / ${counts.unread} UNREAD`,
+        subtitle: data.subtitle ?? `${countText(counts.messages, ['MESSAGE', 'MESSAGES'])} / ${counts.unread} UNREAD`,
         context: data.context ?? 'INBOX',
         footer: 'DISPLAY / INBOX',
-        caption: sceneCaption(primary, `INBOX / ${counts.messages} ${counts.messages === 1 ? 'MESSAGE' : 'MESSAGES'}`),
+        caption: sceneCaption(primary, `INBOX / ${countText(counts.messages, ['MESSAGE', 'MESSAGES'])}`),
         main: slot('inbox-object', <InboxPrimitive data={data} marked={markedItem(note, primary.id)} framed />, <TechFrame variant="panel" />),
       };
     }
@@ -613,7 +614,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
       return {
         ...rail,
         title: data.title ?? (data.timers.length === 1 ? data.timers[0].label : 'TIMERS'),
-        subtitle: data.subtitle ?? [`${data.timers.length} ${data.timers.length === 1 ? 'TIMER' : 'TIMERS'}`, paused > 0 ? `${paused} PAUSED` : null].filter(Boolean).join(' / '),
+        subtitle: data.subtitle ?? [countText(data.timers.length, ['TIMER', 'TIMERS']), paused > 0 ? `${paused} PAUSED` : null].filter(Boolean).join(' / '),
         context: data.context ?? 'TIMERS',
         footer: 'DISPLAY / TIMERS',
         caption: sceneCaption(primary, 'TIMERS / PAGE CLOCK'),
@@ -711,15 +712,13 @@ function MainWithAux({
 
 // ---- The rail folded under a primary that takes the stage's height ----
 
-const pad2 = (count: number) => String(count).padStart(2, '0');
-
 // What a folded rail keeps behind its handle, in the handle's words: the
 // strip itself shows the note (or the live response) and Damocles, and the
 // rest of a note held to its first lines.
 function foldedItems(state: ControllerState, content: SceneContent, note: NoteData | null, cut: boolean): string[] {
   const items: string[] = [];
   if (cut) items.push(note ? 'NOTE' : 'LIVE');
-  if (content.metrics.length > 0) items.push(`${pad2(content.metrics.length)} ${content.metrics.length === 1 ? 'METRIC' : 'METRICS'}`);
+  if (content.metrics.length > 0) items.push(countText(content.metrics.length, ['METRIC', 'METRICS'], { pad: true }));
   if (content.progressList.length > 0) items.push('PROGRESS');
   if (note && liveChatMessage(state)) items.push('LIVE');
   if (state.activity) items.push('ACTIVITY');
