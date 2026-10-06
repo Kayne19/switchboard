@@ -4,14 +4,13 @@
 // scene can leave it out; a composed scene (a metric with a note) once did,
 // and its bars fell back to the canned loop.
 import { act, useEffect } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { SceneRenderer } from '../../src/components/SceneRenderer';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sceneKind, type SceneKind } from '../../src/app/sceneModel';
-import { ControllerProvider, useController } from '../../src/controller/context';
+import { useController } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { mapVoiceLevelToBar } from '../../src/primitives/VoiceIndicator';
+import { controllerState, renderScene, stubResizeObserver } from './sceneHarness';
 
 const composed: ControllerAction[] = [
   { op: 'show', id: 'latency', type: 'metric', role: 'primary', data: { label: 'P95 LATENCY', value: '182 ms' } },
@@ -30,30 +29,19 @@ const scenes: Array<[SceneKind, ControllerAction[]]> = [
   ['composed', composed],
 ];
 
-let host: HTMLDivElement;
-let root: Root;
 let frames: FrameRequestCallback[];
 
-function Scene({ actions }: { actions: ControllerAction[] }) {
-  const { run, registerVoiceRuntime, state } = useController();
-  useEffect(() => {
-    registerVoiceRuntime({ toggleTurn: () => {}, sendText: () => true, getVoiceLevel: () => 1 });
-    run([...actions, { op: 'listen', on: true }]);
-  }, [actions, run, registerVoiceRuntime]);
-  return <div data-kind={sceneKind(state)} />;
+// A voice runtime whose level is always 1, registered before the scene's
+// actions run.
+function Voice() {
+  const { registerVoiceRuntime } = useController();
+  useEffect(() => registerVoiceRuntime({ toggleTurn: () => {}, sendText: () => true, getVoiceLevel: () => 1 }), [registerVoiceRuntime]);
+  return null;
 }
 
-beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
+stubResizeObserver();
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
   vi.unstubAllGlobals();
 });
 
@@ -62,16 +50,8 @@ describe('the presence on every scene', () => {
     frames = [];
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
     vi.stubGlobal('cancelAnimationFrame', () => {});
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root.render(
-      <ControllerProvider>
-        <Scene actions={actions} />
-        <SceneRenderer />
-      </ControllerProvider>,
-    ));
-    expect(host.querySelector('[data-kind]')?.getAttribute('data-kind')).toBe(kind);
+    const host = renderScene([...actions, { op: 'listen', on: true }], <Voice />);
+    expect(sceneKind(controllerState())).toBe(kind);
     // The bars settle on the scale the live level maps to; the canned loop
     // they fall back to without a level never reaches it.
     act(() => {

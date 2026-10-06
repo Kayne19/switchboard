@@ -4,14 +4,11 @@
 // never drawn. Every content scene now draws each visual on stage once: in
 // its own main slot when it has a place for it (a chart beside a chart
 // primary), and otherwise in the aux row under the primary.
-import { act, useEffect } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { SceneRenderer } from '../../src/components/SceneRenderer';
-import { ControllerProvider, useController } from '../../src/controller/context';
+import { describe, expect, it } from 'vitest';
 import type { ControllerAction, SceneObjectRole, SceneObjectType } from '../../src/controller/types';
 import { validateControllerAction } from '../../src/controller/validation';
 import { fixtures } from '../../src/fixtures/scenes';
+import { lastScene, renderScene, runActions, stubResizeObserver } from './sceneHarness';
 
 // A 1x1 PNG: the smallest picture both validators accept.
 const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -46,47 +43,16 @@ function show(id: string, sample: Sample, role?: SceneObjectRole): ControllerAct
   return { op: 'show', id, type: type as SceneObjectType, ...(role ? { role } : {}), data };
 }
 
-let host: HTMLDivElement;
-let root: Root;
-let runActions: (actions: ControllerAction[]) => void = () => {};
-
-function Scene({ actions }: { actions: ControllerAction[] }) {
-  const { run } = useController();
-  runActions = (more) => run(more);
-  useEffect(() => run(actions), [actions, run]);
-  return null;
-}
-
+// The scene just drawn for `actions`.
 function render(actions: ControllerAction[]): Element {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(
-    <ControllerProvider>
-      <Scene actions={actions} />
-      <SceneRenderer />
-    </ControllerProvider>,
-  ));
-  // A scene that is leaving stays in the page until its exit ends; the one
-  // just drawn is the last.
-  return [...host.querySelectorAll('[data-scene]')].at(-1)!;
+  renderScene(actions);
+  return lastScene();
 }
 
 const drawn = (page: Element, testId: string) => page.querySelectorAll(`[data-testid="${testId}"]`).length;
 const inAux = (page: Element, testId: string) => page.querySelectorAll(`.composed-aux [data-testid="${testId}"]`).length;
 
-beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
+stubResizeObserver();
 
 describe('a visual beside the primary', () => {
   it('a diagram primary with a secondary table renders the table', () => {
@@ -140,7 +106,7 @@ describe('a visual beside the primary', () => {
   it('a chart primary keeps its progress under the charts until a visual stands beside it', () => {
     const alone = render([show('loss', 'chart', 'primary'), show('deploy', 'progress')]);
     expect(alone.querySelectorAll('.training-progress [data-testid="progress"]')).toHaveLength(1);
-    act(() => runActions([show('matrix', 'table')]));
+    runActions([show('matrix', 'table')]);
     // Then it joins the table in the aux row, so the charts keep their share.
     expect(alone.querySelector('.training-progress')).toBeNull();
     expect([...alone.querySelectorAll('.composed-aux [data-testid]')].map((node) => node.getAttribute('data-testid')))
@@ -201,7 +167,7 @@ describe('a primary alone', () => {
     const page = render(fixtures.architecture);
     const diagram = page.querySelector('[data-testid="diagram"]');
     expect(diagram).not.toBeNull();
-    act(() => runActions([show('matrix', 'table', 'secondary')]));
+    runActions([show('matrix', 'table', 'secondary')]);
     expect(page.querySelector('.composed-aux [data-testid="table"]')).not.toBeNull();
     expect(page.querySelector('[data-testid="diagram"]')).toBe(diagram);
   });

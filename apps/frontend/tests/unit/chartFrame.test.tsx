@@ -3,48 +3,15 @@
 // frame text out -- a bar chart of test durations, a scatter of latency --
 // is framed by its kind, not as a training run's loss trace, which is what
 // every chart was called before the chart had kinds.
-import { act, useEffect } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { SceneRenderer } from '../../src/components/SceneRenderer';
-import { ControllerProvider, useController } from '../../src/controller/context';
-import type { ChartData, ControllerAction } from '../../src/controller/types';
+import { describe, expect, it } from 'vitest';
+import type { ChartData } from '../../src/controller/types';
+import { renderScene, stubResizeObserver } from './sceneHarness';
 
-let host: HTMLDivElement;
-let root: Root;
-
-function Scene({ actions }: { actions: ControllerAction[] }) {
-  const { run } = useController();
-  useEffect(() => run(actions), [actions, run]);
-  return null;
-}
+stubResizeObserver();
 
 function renderChart(data: ChartData) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  const actions: ControllerAction[] = [{ op: 'show', id: 'chart', type: 'chart', role: 'primary', data }];
-  act(() => root.render(
-    <ControllerProvider>
-      <Scene actions={actions} />
-      <SceneRenderer />
-    </ControllerProvider>,
-  ));
-  return host.querySelector('[data-scene="training"]')!;
+  return renderScene([{ op: 'show', id: 'chart', type: 'chart', role: 'primary', data }]).querySelector('[data-scene="training"]')!;
 }
-
-beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
 
 describe('a chart page frame', () => {
   it.each([
