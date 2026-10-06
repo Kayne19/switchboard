@@ -230,13 +230,14 @@ describe('the month', () => {
 });
 
 describe('a month too small for titles', () => {
-  it('lists the days under a small month in the room the grid leaves, less the list\u2019s own margin', () => {
+  it('lists the days under a small month in the room the grid leaves, its gap to the grid inside that room', () => {
+    // 440 px: the grid's five rows at 46 px under its weekday row, and the rest for the list.
     const calendar = render(assistantMonth, 'dentist', { width: 330, height: 440 });
     const list = calendar.querySelector('.calendar-month__list') as HTMLElement;
-    // A height set from the measured room ran the list past the calendar's foot by its margin.
-    expect(list.style.height).toBe('');
-    expect(declared('.calendar-month__list', 'flex')).toEqual(['1 1 0']);
-    expect(declared('.calendar-month__list', 'min-height')).toEqual(['0']);
+    expect(list.style.height).toBe(`${440 - (18 + 5 * 46)}px`);
+    // A margin over that height ran the list past the calendar's foot by the margin.
+    expect(declared('.calendar-month__list', 'margin-top')).toEqual([]);
+    expect(declared('.calendar-month__list', 'padding-top')).toHaveLength(1);
   });
 
   const marksOf = (calendar: HTMLElement, day: string) => {
