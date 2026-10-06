@@ -428,12 +428,12 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     const markerAllowed = new Set(['x', 'series']);
     const mUnknown = checkUnknownKeys(data.marker, markerAllowed, 'chart marker');
     if (mUnknown) return { ok: false, error: mUnknown };
-    const marker = {} as NonNullable<ChartData['marker']>;
+    const marker: Fields = {};
     const markerErr =
       copyNumber(data.marker, marker, 'x', 'chart.marker.x', true) ??
       copyOptionalString(data.marker, marker, 'series', 128, 'chart.marker.series');
     if (markerErr) return { ok: false, error: markerErr };
-    result.marker = marker;
+    result.marker = marker as NonNullable<ChartData['marker']>;
   }
 
   return { ok: true, data: result };
