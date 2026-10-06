@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
-import { GlowFilters, pathThrough } from './drawingKit';
+import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
@@ -13,8 +13,6 @@ const SEMANTICS = Object.keys(SEMANTIC_COLOR) as Semantic[];
 // The arrowhead at an edge's target is ARROW_LENGTH user units, which the
 // layout keeps labels clear of: it scales with the drawing, as the node
 // frames do, while the stroke itself does not.
-// Edge label line pitch, in user units (.diagram-edge-label is 11 units).
-const LABEL_LINE = 14;
 
 // The callout box is 240 units wide with 14 units of inset each side: about
 // 32 characters of its 11-unit body face, or 34 of its 9-unit tracked tag.
@@ -53,7 +51,7 @@ function EdgeLabelText({ label, color, align, delay, quiet }: { label: EdgeLabel
           <tspan
             key={lineIndex}
             x={x}
-            dy={lineIndex === 0 ? `${-(label.lines.length - 1) * 0.5 * LABEL_LINE}` : LABEL_LINE}
+            dy={lineIndex === 0 ? `${-(label.lines.length - 1) * 0.5 * LABEL_HEIGHT}` : LABEL_HEIGHT}
             className={quiet?.[lineIndex] ? 'diagram-edge-label__note' : undefined}
           >
             {line}

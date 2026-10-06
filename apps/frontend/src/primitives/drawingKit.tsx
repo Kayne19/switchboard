@@ -1,11 +1,36 @@
 // The drawing kit: what a graph (DiagramPrimitive + diagramLayout) and a
-// sequence (SequencePrimitive + sequenceLayout) draw alike, said once so the
-// two read as one instrument. Each drawing keeps its own sizes; the kit
-// holds the rules they share.
+// sequence (SequencePrimitive + sequenceLayout) draw alike, said once. Each
+// drawing keeps its own sizes (its frames' cuts, its arrowheads).
 
 /** An SVG path through `points`, straight from each to the next. */
 export const pathThrough = (points: ReadonlyArray<{ x: number; y: number }>) =>
   points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
+
+/** A frame's outline, `width` by `height` (a node, an actor's header): its top corners cut across, its bottom left stepped. */
+export function steppedFrame(width: number, height: number, { topLeft, topRight, bottomLeft }: { topLeft: number; topRight: number; bottomLeft: number }): string {
+  return `M 0 ${topLeft} L ${topLeft} 0 H ${width - topRight} L ${width} ${topRight} V ${height} H ${bottomLeft} L 0 ${height - bottomLeft} Z`;
+}
+
+// A label on a line (.diagram-edge-label, .sequence-message-label) is set in
+// the monospace face at 11 units with 0.06em tracking, so it is measured
+// before it is drawn: 0.6em advance plus the tracking, rounded up; its lines
+// LABEL_HEIGHT apart, on a backing LABEL_BACKING past them each side.
+export const LABEL_ADVANCE = 7.3;
+export const LABEL_HEIGHT = 14;
+export const LABEL_BACKING = 4;
+
+/** The backing a label drawn on `lines` paints over. */
+export function labelBox(lines: readonly string[]): { width: number; height: number } {
+  return {
+    width: Math.max(...lines.map((line) => line.length)) * LABEL_ADVANCE + 2 * LABEL_BACKING,
+    height: lines.length * LABEL_HEIGHT + 2 * LABEL_BACKING,
+  };
+}
+
+/** A drawing is composed in portrait once its viewport is a little taller than wide. */
+export function drawingOrientation(viewport: { width: number; height: number }): 'landscape' | 'portrait' {
+  return viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
+}
 
 /** The glows a drawing's lit parts carry, by id: a lit `line` (an edge, a message) and a lit `frame` (a node, a header). */
 export function GlowFilters({ line, frame }: { line: string; frame: string }) {

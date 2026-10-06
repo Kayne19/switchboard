@@ -33,6 +33,7 @@
 // drawn as a stub pair naming its far ends (`chooseStubs`, `bundledEdges`).
 
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
+import { LABEL_BACKING, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
 import { NOTE_MARKER } from './NoteMarker';
 
@@ -156,8 +157,7 @@ const NODE_PAD_BOTTOM = 12;
 const FRAME_CUT = { topLeft: 14, topRight: 22, bottomLeft: 18 } as const;
 
 export function nodeFramePath(width: number, height: number): string {
-  const { topLeft, topRight, bottomLeft } = FRAME_CUT;
-  return `M 0 ${topLeft} L ${topLeft} 0 H ${width - topRight} L ${width} ${topRight} V ${height} H ${bottomLeft} L 0 ${height - bottomLeft} Z`;
+  return steppedFrame(width, height, FRAME_CUT);
 }
 
 // The tags in a node's top-right corner: the state glyph of a done or
@@ -204,13 +204,7 @@ function tagRoom(tags: CornerTags): number {
   return -left + TAG_GAP - NODE_PAD_SIDE;
 }
 
-// Edge labels are set in the monospace face at 11 user units with 0.06em
-// tracking (.diagram-edge-label), so a label's width is known before it is
-// drawn: 0.6em advance plus the tracking, rounded up. A long label wraps to
-// two lines so it costs its gap less room.
-const LABEL_ADVANCE = 7.3;
-const LABEL_HEIGHT = 14;
-const LABEL_BACKING = 4;
+// A long edge label wraps to two lines so it costs its gap less room.
 /** Where a label's text starts inside its backing, for text lined up on one side. */
 export const LABEL_INSET = LABEL_BACKING;
 const LABEL_WRAP_AT = 14;
@@ -409,13 +403,7 @@ export function wrapEdgeLabel(text: string): string[] {
   return wrapLine(text, LABEL_WRAP_AT, LABEL_MAX_LINES);
 }
 
-function labelBacking(text: string) {
-  const lines = wrapEdgeLabel(text);
-  return {
-    width: Math.max(...lines.map((line) => line.length)) * LABEL_ADVANCE + 2 * LABEL_BACKING,
-    height: lines.length * LABEL_HEIGHT + 2 * LABEL_BACKING,
-  };
-}
+const labelBacking = (text: string) => labelBox(wrapEdgeLabel(text));
 
 // --- Lit edges ---------------------------------------------------------------
 
@@ -1431,8 +1419,7 @@ function arrange(
       }
       links.splice(0, links.length, ...directed.filter((entry) => !stubbed.has(entry)));
       for (const [id, entry] of entries) {
-        const width = Math.max(...entry.texts.map((line) => line.length)) * LABEL_ADVANCE + 2 * LABEL_BACKING;
-        const height = entry.texts.length * LABEL_HEIGHT + 2 * LABEL_BACKING;
+        const { width, height } = labelBox(entry.texts);
         terminals.set(id, { text: entry.texts.join(' '), lines: entry.texts, quiet: entry.quiet, width, height, side: entry.side });
         layerOf.set(id, (layerOf.get(entry.node) ?? 0) + (entry.side === 'out' ? 1 : -1));
         links.push(entry.side === 'out' ? { from: entry.node, to: id, reversed: entry.reversed } : { from: id, to: entry.node, reversed: entry.reversed });
@@ -2042,7 +2029,7 @@ export function viewDiagram(data: DiagramData, viewport: Viewport, anchorNodeId?
     layouts.set(key, made);
     return made;
   };
-  const preferred: DiagramOrientation = viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
+  const preferred: DiagramOrientation = drawingOrientation(viewport);
   const approved = remembered(`approved/${preferred}`, () => layoutDiagram(data, preferred, anchorNodeId));
   const fit = fitDrawing(approved, viewport, GRAPH_MIN_SCALE);
   if (!fit.scrollX && !fit.scrollY) return { orientation: preferred, layout: approved, fit };

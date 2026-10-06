@@ -1,11 +1,11 @@
 import { useCallback, useMemo } from 'react';
 import type { NoteData, SequenceDiagramData } from '../controller/types';
-import { GlowFilters, pathThrough } from './drawingKit';
+import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
 import { NoteMarker } from './NoteMarker';
-import { LABEL_HEIGHT, SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage } from './sequenceLayout';
+import { SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage } from './sequenceLayout';
 import { SEMANTIC_COLOR } from '../design/tokens';
 
 const ARROW_LENGTH = 10;
