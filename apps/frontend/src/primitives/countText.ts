@@ -8,3 +8,8 @@ export type Noun = readonly [one: string, many: string];
 export function countText(count: number, [one, many]: Noun, { pad = false }: { pad?: boolean } = {}): string {
   return `${pad ? two(count) : count} ${count === 1 ? one : many}`;
 }
+
+/** A count on a scroller's rim, two digits at least wherever a rim counts ('07 NODES', '06 TASKS', 'MON-TUE / 07 EVENTS'), as the folded rail counts its modules ('02 METRICS'). */
+export function rimCount(count: number, noun: Noun): string {
+  return countText(count, noun, { pad: true });
+}

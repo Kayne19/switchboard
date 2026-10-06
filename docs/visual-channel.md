@@ -142,7 +142,8 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   Touch settles there through the browser's scroll snapping; the keys
   that scroll a focused drawing move it from one such place to the next
   (an arrow to the next, Space or Page Down a page on, Home and End to
-  the ends); a wheel or a trackpad moves freely and settles when it
+  the ends: the keys every scroller takes, `drawingScroll.scrollMove`,
+  and a page that keeps the last eighth of the view in sight); a wheel or a trackpad moves freely and settles when it
   pauses, a single notch on to the next place; a mouse wheel over a
   drawing that scrolls only across scrolls it across. It opens on its
   lead at such a place.
@@ -407,10 +408,33 @@ its days, and one too small for those marks lists them). It stands inside
 the panel frame's steps, so nothing it draws crosses the frame. The wire rules and the drawing rules are in
 `docs/display-tool.md` ("calendar").
 
+**Nothing a primitive draws crosses its frame.** A frame's steps are a
+share of its height, so a slot keeps clear of them by a row of its own grid
+in that share (`--panel-inset` for the panel frame), never by a padding in
+stage units, which falls short on a tall slot. The calendar, the to-do
+list, the inbox and a figure stand in the panel's inner box; a table's and
+a source's rows stop above the code frame's lower step (their rims at the
+foot with them); a document's meta line stands under its frame's top
+line; a portrait chart's foot clears the panel's lower step.
+`frame.spec.ts` checks every primitive, as the primary, in focus and in
+the aux row, at every geometry the visual suites use: each part that draws
+something must stand inside the frame over its own span. One case is
+open: on a phone, focus draws a long first line of source under the code
+frame's top-right step.
+
 **The to-do list and the inbox are read as the table and the rail's plan
 module are read**: rows between thin rules under a meta line that names
 the list and counts what it holds, the prose face for what a person wrote,
-the tech face for states, days and counts, no cards.
+the tech face for states, days and counts, no cards. A count is said once
+on screen: for an object whose meta line counts (a table, a calendar, a
+to-do list, an inbox), the meta line (or a section's head) says it, and
+the scene frame's subtitle and caption, where the agent sent none, name
+what the object is (`CHECKLIST`, `MESSAGES / AS SENT`, a table's `ROWS /
+COLUMNS`, a calendar's dates), never how much it holds. Timers and a
+forecast have no meta line that counts, so their frame subtitle does
+(`3 TIMERS / 1 PAUSED`, `NOW + 24 H + 7 DAYS`). A to-do list in sections
+counts each at its head (`2 OPEN / 1 DONE / 1 OVERDUE`) and gives no total
+over them; one with no sections counts the whole list on its meta line.
 
 - A to-do list stands in sections, in the order their groups are first met
   (a section is its heading over its rows). A task's state is the plan's
@@ -434,9 +458,9 @@ the tech face for states, days and counts, no cards.
   task (its day on one line, done tasks counted, no detail or tags), a
   message as its sender and subject.
 - A list that outgrows its slot scrolls inside its frame in the list
-  viewport (`ListViewport`): the drawing viewport's fade, cut line and
-  count of the items past each edge, and it opens on the item a note
-  names. Focus gives it the stage, and keeps that note beside it.
+  viewport (`ListViewport`): the scroll rim a drawing has (`ScrollRim`:
+  the fade, the cut line and the count of the items past each edge), and
+  it opens on the item a note names. Focus gives it the stage, and keeps that note beside it.
 
 **A note on one item** (`anchor.item`) marks that item wherever its object
 is drawn, as a diagram marks the node a note names, while that note is the
@@ -523,15 +547,22 @@ over their field. The forecast's head names its place in every role.
 ### Lists that outgrow the frame
 
 A list longer than its slot (a forecast's days, timers in a small slot,
-and the other assistant lists) scrolls up and down inside its frame in a
-`ListViewport`, the HTML twin of a drawing's viewport: on each edge it
-continues past it draws the same fade, dashed cut line and tag, the tag
-counting the items that lie that way (a row of which no more than a
-sliver shows counts as past the edge), or saying MORE where none does. A
-tap on the tag turns a page and does not expand the object; the keys that
-scroll a focused list scroll it. It opens on the item a note names, never
-under the fade, and keeps the reader's place through an update. Focus
-gives the list the whole stage.
+and the other assistant lists), and a table, source or document longer
+than its frame, scrolls up and down inside its frame in a `ListViewport`,
+the HTML twin of a drawing's viewport: on each edge it continues past it
+draws the same fade, dashed cut line and tag (one `ScrollRim`), the tag
+counting the items that lie that way in two digits at least, as every rim
+counts ("06 TASKS", "33 ROWS", "54 LINES", "04 PARAGRAPHS", a week's
+hidden days "MON-TUE / 07 EVENTS"); a row of which no more than a sliver
+shows counts as past the edge; it says MORE where none does. A table's
+rows pass under its header: they are counted, and its top edge drawn,
+below the header. A tap on the tag turns a page and does not expand the
+object. A focused list takes the keys a drawing takes (an arrow moves it
+a line, Space and Page Down a page on, Shift+Space and Page Up a page
+back, Home and End to the ends), each marked handled so Space never
+expands the object; Enter still does. It opens on the item a note names,
+never under the fade, and keeps the reader's place through an update.
+Focus gives the list the whole stage.
 
 ### Composition & focus
 

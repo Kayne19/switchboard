@@ -93,7 +93,16 @@ describe('TasksPrimitive', () => {
     expect(review.querySelector('.task-row__glyph')?.getAttribute('aria-label')).toBe('active');
     expect(review.querySelector('.task-row__priority')?.getAttribute('aria-label')).toBe('high priority');
     expect([...review.querySelectorAll('.task-tag')].map((tag) => tag.textContent)).toEqual(['switchboard', 'review']);
-    expect(list.querySelector('.tasks-primitive__meta')?.textContent).toBe('TO DO / THIS WEEK10 OPEN / 3 DONE / 2 OVERDUE');
+    // Its sections say what each holds at their heads: the meta line adds no total over them.
+    expect(list.querySelector('.tasks-primitive__meta')?.textContent).toBe('TO DO / THIS WEEK');
+  });
+
+  it('says its total on the meta line only where it has no sections, and under a scene frame has no meta line where that leaves none', () => {
+    const plain: TasksData = { ...week, items: week.items.map((item) => ({ ...item, group: undefined })) };
+    expect(render(plain, 'focus').querySelector('.tasks-primitive__meta')?.textContent).toBe('TO DO / THIS WEEK10 OPEN / 3 DONE / 2 OVERDUE');
+    // In the main slot, under the scene frame that names it.
+    expect(render(week).querySelector('.tasks-primitive__meta')).toBeNull();
+    expect(render(plain).querySelector('.tasks-primitive__meta')?.textContent).toBe('10 OPEN / 3 DONE / 2 OVERDUE');
   });
 
   it('marks an overdue task red and one due today in the time of day', () => {

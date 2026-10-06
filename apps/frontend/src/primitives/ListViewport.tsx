@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
-import { countText, type Noun } from './countText';
+import { rimCount, type Noun } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
+import { ScrollRim } from './ScrollRim';
+import { PAGE_SHARE, scrollMove } from './drawingScroll';
 import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
-// list, an inbox, an agenda, a forecast's days): the list scrolls inside
-// it, up and down only, and on each edge it continues past the viewport
-// draws what DrawingViewport draws for a drawing, in the same classes so
-// the two read as one instrument: a fade as the edge's rows run under it,
+// list, an inbox, an agenda, a forecast's days, a table's rows, source, a
+// document's body): the list scrolls inside it, up and down only (sideways
+// too where the content asks), and on each edge it continues past the
+// viewport draws the rim DrawingViewport draws for a drawing (ScrollRim),
+// so the two read as one instrument: a fade as the edge's rows run under it,
 // the dashed cut line, and a count of the items wholly past that edge with
 // a chevron pointing there (a tap turns a page that way). A list that fits
 // has none of them and does not scroll.
@@ -95,22 +98,25 @@ export function fadeDepth(viewHeight: number): number {
 const FADE_SHARE = 0.18;
 const FADE_MAX = 36;
 const FADE_MIN = 18;
-// A page is the view less a row's worth, so the row at the edge stays in
-// sight; an arrow moves a line.
-const PAGE_SHARE = 0.85;
+// An arrow moves a list a line.
 const LINE = 40;
 
+/** A page of a list whose view is `viewHeight` tall: the drawing's page (PAGE_SHARE). */
 const pageLength = (viewHeight: number) => Math.max(1, Math.round(viewHeight * PAGE_SHARE));
 
-/** Where a scroll key moves a list's scroll to, or null for a key the list does not take. */
-export function keyScrollTop(key: string, shift: boolean, scrollTop: number, viewHeight: number, contentHeight: number): number | null {
+/**
+ * Where a scroll key (drawingScroll `scrollMove`, the rule every scroller
+ * keeps) moves a list's scroll to: a page, a line, or an end, no further
+ * than either end; null for a key the list does not take. `pinned` is the
+ * band at the view's top the rows pass under (a table's header): a page is
+ * a page of what shows below it.
+ */
+export function keyScrollTop(key: string, shift: boolean, scrollTop: number, viewHeight: number, contentHeight: number, pinned = 0): number | null {
+  const move = scrollMove(key, shift, false);
+  if (!move) return null;
   const max = Math.max(0, contentHeight - viewHeight);
-  const page = pageLength(viewHeight);
-  const moves: Record<string, number> = { ArrowDown: LINE, ArrowUp: -LINE, PageDown: page, PageUp: -page, ' ': shift ? -page : page };
-  if (key === 'Home') return 0;
-  if (key === 'End') return max;
-  if (!(key in moves)) return null;
-  return Math.max(0, Math.min(max, scrollTop + moves[key]));
+  const by = move.kind === 'page' ? pageLength(viewHeight - pinned) : move.kind === 'step' ? LINE : max;
+  return Math.max(0, Math.min(max, scrollTop + move.direction * by));
 }
 
 function cssEscape(value: string): string {
@@ -136,6 +142,13 @@ interface ListViewportProps {
   /** The accessible name of the scroll region. */
   label?: string;
   /**
+   * The band at the top of the scroll that the rows pass under (a table's
+   * sticky header), by a selector inside it: the counts, the top edge and a
+   * page start below it. The lead (`lead`) does not reckon with it: no list
+   * with a band has a lead.
+   */
+  pinned?: string;
+  /**
    * The least height (CSS px) the content reads whole in, for content that
    * grows to fill whatever view it is given (a calendar's hour grid): the
    * stage is asked for that, not for what the content happens to measure.
@@ -144,7 +157,7 @@ interface ListViewportProps {
   least?: number | null;
 }
 
-export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label, least }: ListViewportProps) {
+export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label, least, pinned }: ListViewportProps) {
   const ownRef = useRef<HTMLDivElement>(null);
   const scrollRef = givenRef ?? ownRef;
   // A primary list that outgrows its slot says how much height it lacks,
@@ -155,7 +168,12 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   useLeastHeight(least === undefined ? noRef : scrollRef, least ?? null);
   const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
+  // A pane may overflow only sideways (source with long lines, a wide
+  // table on a phone): it takes no scroll keys, but it stays a tab stop,
+  // so a reader without a pointer can still scroll it across.
+  const [across, setAcross] = useState(false);
   const [viewHeight, setViewHeight] = useState(0);
+  const [pinnedDepth, setPinnedDepth] = useState(0);
 
   // What the edges say, from where the reader stands. Read on scroll at
   // most once a frame, and whenever the list or its box changes.
@@ -163,24 +181,30 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     const element = scrollRef.current;
     if (!element) return;
     // The rows' rects and the box's are on screen, scaled with it while a
-    // focus opens; the view's height is brought to that scale, so the
-    // counts are right mid-animation as at rest.
+    // focus opens or a cell of the aux row settles; they are brought back to
+    // the list's own pixels, in which a sliver is measured, so a count read
+    // mid-animation is the count at rest. Nothing reads them again when such
+    // an animation ends.
     const box = element.getBoundingClientRect();
     const k = drawnScale(box.height, element.offsetHeight);
     const items = Array.from(element.querySelectorAll<HTMLElement>(countSelector)).map((item) => {
       const rect = item.getBoundingClientRect();
-      return { top: rect.top, bottom: rect.bottom };
+      return { top: (rect.top - box.top) / k, bottom: (rect.bottom - box.top) / k };
     });
+    const band = pinned ? element.querySelector<HTMLElement>(pinned) : null;
+    const depth = band ? band.getBoundingClientRect().height / k : 0;
     const overflows = element.scrollHeight > element.clientHeight + 1;
-    const counts = overflows ? countPast(items, { top: box.top, bottom: box.top + element.clientHeight * k }) : { above: 0, below: 0 };
+    const counts = overflows ? countPast(items, { top: depth, bottom: element.clientHeight }) : { above: 0, below: 0 };
     const goes = overflows ? continuesPast(element.scrollTop, element.clientHeight, element.scrollHeight) : { top: false, bottom: false };
     const next = { ...counts, top: goes.top || counts.above > 0, bottom: goes.bottom || counts.below > 0 };
     setPast((current) =>
       current.above === next.above && current.below === next.below && current.top === next.top && current.bottom === next.bottom ? current : next,
     );
     setScrolls(element.scrollHeight > element.clientHeight + 1);
+    setAcross(element.scrollWidth > element.clientWidth + 1);
     setViewHeight(element.clientHeight);
-  }, [scrollRef, countSelector]);
+    setPinnedDepth(depth);
+  }, [scrollRef, countSelector, pinned]);
   const onScroll = useOncePerFrame(measure);
 
   useEffect(() => {
@@ -215,35 +239,30 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   const scrollKeys = (event: KeyboardEvent<HTMLDivElement>) => {
     const element = scrollRef.current;
     if (!element || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-    const top = keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight);
+    const top = keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight, pinnedDepth);
     if (top === null) return;
     event.preventDefault();
     element.scrollTo({ top, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
-  // A tap on an edge's count turns a page that way. The tap is marked
-  // handled, so the surface around the list does not expand the object.
-  const page = (direction: -1 | 1) => (event: MouseEvent<HTMLDivElement>) => {
-    event.preventDefault();
+  // A tap on an edge's count turns a page that way (ScrollRim marks it handled).
+  const page = (direction: -1 | 1) => {
     const element = scrollRef.current;
     if (!element) return;
-    element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    element.scrollBy({ top: direction * pageLength(element.clientHeight - pinnedDepth), behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
 
-  const fade = fadeDepth(viewHeight);
+  const fade = fadeDepth(viewHeight - pinnedDepth);
   // An edge the list continues past: the fade, the cut line, and the count
   // of the items that lie that way, or MORE where none of them does.
   const edge = (side: 'top' | 'bottom', continues: boolean, count: number) =>
     continues ? (
-      <>
-        <div className={`drawing-viewport__more drawing-viewport__more--${side}`} style={{ height: `${fade}px` }} aria-hidden="true" />
-        <div className={`drawing-viewport__rail drawing-viewport__rail--${side}`} aria-hidden="true" />
-        <div className={`drawing-viewport__rim drawing-viewport__rim--${side} list-viewport__rim`} onClick={page(side === 'top' ? -1 : 1)} aria-hidden="true" data-count={count}>
-          <span className="drawing-viewport__rim-text">{count > 0 ? countText(count, noun) : 'MORE'}</span>
-          <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
-            <path d="M 4 0 L 8 6 L 0 6 Z" />
-          </svg>
-        </div>
-      </>
+      <ScrollRim
+        side={side}
+        fade={fade}
+        text={count > 0 ? rimCount(count, noun) : 'MORE'}
+        onPage={() => page(side === 'top' ? -1 : 1)}
+        inset={pinned ? pinnedDepth : undefined}
+      />
     ) : null;
 
   return (
@@ -253,7 +272,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
         <div
           ref={scrollRef}
           className={`list-viewport__scroll${scrollClassName ? ` ${scrollClassName}` : ''}`}
-          tabIndex={scrolls ? 0 : undefined}
+          tabIndex={scrolls || across ? 0 : undefined}
           aria-label={label}
           role={label ? 'region' : undefined}
           onScroll={onScroll}

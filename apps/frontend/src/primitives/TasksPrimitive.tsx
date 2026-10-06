@@ -189,17 +189,25 @@ export function TasksPrimitive({ data, slot = 'primary', marked }: { data: Tasks
   const grouped = sections.some((section) => section.group !== undefined);
   const countDone = countsDone(slot, data.items.length);
   const compact = slot === 'aux';
-  const head = (
-    <div className="tasks-primitive__meta tech micro">
-      <MetaTitle title={data.title ?? 'TASKS'} slot={slot} className="tasks-primitive__title" />
-      {/* Each count whole: a narrow list wraps between them. */}
-      <span className="tasks-primitive__counts">
-        <span className="meta-count">{counts.open} OPEN</span>
-        {counts.done > 0 ? <>{' '}<span className="meta-count">/ {counts.done} DONE</span></> : null}
-        {counts.overdue > 0 ? <>{' '}<span className="meta-count tasks-primitive__overdue">/ {counts.overdue} OVERDUE</span></> : null}
-      </span>
-    </div>
+  // The meta line: the list's title where no scene frame shows it
+  // (MetaTitle), and what it holds. A list in sections says what each
+  // holds at its head, so the meta line says no total over them (counts
+  // are said once); where that leaves it nothing to say, there is none.
+  const counted = grouped ? null : (
+    // Each count whole: a narrow list wraps between them.
+    <span className="tasks-primitive__counts">
+      <span className="meta-count">{counts.open} OPEN</span>
+      {counts.done > 0 ? <>{' '}<span className="meta-count">/ {counts.done} DONE</span></> : null}
+      {counts.overdue > 0 ? <>{' '}<span className="meta-count tasks-primitive__overdue">/ {counts.overdue} OVERDUE</span></> : null}
+    </span>
   );
+  const head =
+    slot === 'primary' && !counted ? undefined : (
+      <div className="tasks-primitive__meta tech micro">
+        <MetaTitle title={data.title ?? 'TASKS'} slot={slot} className="tasks-primitive__title" />
+        {counted}
+      </div>
+    );
   return (
     <div className={`tasks-primitive tasks-primitive--${READING[slot]}`} data-testid="tasks">
       <ListViewport noun={['TASK', 'TASKS']} lead={marked} head={head} scrollClassName="tasks-primitive__scroll" label={data.title ?? 'Tasks'}>

@@ -36,11 +36,13 @@ import {
   type PlacedEvent,
   type TimeAxis,
 } from './calendarLayout';
-import { countText } from './countText';
+import { countText, rimCount } from './countText';
+import { scrollMove } from './drawingScroll';
 import type { Size } from './geometry';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
+import { ScrollRim } from './ScrollRim';
 import type { Slot } from './slot';
 import { clockText, monthName, weekdayName } from './timeLabels';
 
@@ -230,7 +232,7 @@ function runText(days: number[], placed: PlacedEvent[]): string {
   const last = days[days.length - 1];
   const count = placed.filter((item) => item.firstDay <= last && item.lastDay >= first).length;
   const name = days.length === 1 ? weekdayName(first) : `${weekdayName(first)}-${weekdayName(last)}`;
-  return `${name} / ${count} ${count === 1 ? 'EVENT' : 'EVENTS'}`;
+  return `${name} / ${rimCount(count, ['EVENT', 'EVENTS'])}`;
 }
 
 function TimeGrid({ data, model, marked, size, columns }: GridProps) {
@@ -386,7 +388,7 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
       before={first > 0 ? runText(model.days.slice(0, first), model.placed) : null}
       after={first + columns < model.days.length ? runText(model.days.slice(first + columns), model.placed) : null}
       shown={runText(days, model.placed)}
-      onTurn={(direction) => turn(first + direction * columns)}
+      onTurn={(direction, toEnd) => turn(toEnd ? direction * model.days.length : first + direction * columns)}
     >
       {grid}
     </PagedDays>
@@ -528,43 +530,31 @@ function DayBarBox({ bar, model, marked, first, column }: { bar: DayBar; model: 
  * A grid that holds all its days (`paged` false) stands in the same box,
  * with no rails and nothing to turn.
  */
-function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: boolean; before: string | null; after: string | null; shown: string; onTurn: (direction: -1 | 1) => void; children: ReactNode }) {
+function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: boolean; before: string | null; after: string | null; shown: string; onTurn: (direction: -1 | 1, toEnd?: boolean) => void; children: ReactNode }) {
   const start = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
   const tag = (side: 'left' | 'right', text: string) => (
-    <>
-      <div className={`drawing-viewport__rail drawing-viewport__rail--${side}`} aria-hidden="true" />
-      <div
-        className={`drawing-viewport__rim drawing-viewport__rim--${side} calendar-pages__rim`}
-        onClick={(event: MouseEvent<HTMLDivElement>) => {
-          // Handled, so the surface does not also expand the calendar; it bubbles on (FocusableSurface).
-          event.preventDefault();
-          onTurn(side === 'left' ? -1 : 1);
-        }}
-        aria-hidden="true"
-      >
-        <span className="drawing-viewport__rim-text">{text}</span>
-        <svg className="drawing-viewport__chevron" viewBox="0 0 8 6" aria-hidden="true">
-          <path d="M 4 0 L 8 6 L 0 6 Z" />
-        </svg>
-      </div>
-    </>
+    <ScrollRim side={side} text={text} onPage={() => onTurn(side === 'left' ? -1 : 1)} className="calendar-pages__rim" />
   );
   if (!paged) return <div className="calendar-grid">{children}</div>;
   return (
     <div
       className="calendar-grid calendar-pages"
-      // The arrow keys turn the days too, for a reader without a pointer;
-      // handled, so they reach nothing else (FocusableSurface's rule).
+      // The keys every scroller takes turn the days too, for a reader without
+      // a pointer (drawingScroll `scrollMove`, across): an arrow, Space or a
+      // page key a page of days, Home and End to the first and the last.
+      // Each is handled, even with no more days that way, so it reaches
+      // nothing else (FocusableSurface's rule: Space never expands the
+      // calendar here); a key the hours took already is left to them.
       tabIndex={0}
       role="group"
-      aria-label={`Days shown: ${shown}. ${[before ? `Earlier: ${before}` : '', after ? `Later: ${after}` : ''].filter(Boolean).join('. ')}. Left and right arrow keys turn the days.`}
+      aria-label={`Days shown: ${shown}. ${[before ? `Earlier: ${before}` : '', after ? `Later: ${after}` : ''].filter(Boolean).join('. ')}. The arrow, Space and page keys turn the days; Home and End go to the first and last.`}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-        if (event.altKey || event.ctrlKey || event.metaKey) return;
-        const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
-        if (direction === 0 || (direction < 0 && !before) || (direction > 0 && !after)) return;
+        if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+        const move = scrollMove(event.key, event.shiftKey, true);
+        if (!move) return;
         event.preventDefault();
-        onTurn(direction);
+        if ((move.direction < 0 && before) || (move.direction > 0 && after)) onTurn(move.direction, move.kind === 'end');
       }}
       onPointerDown={(event: PointerEvent<HTMLDivElement>) => {
         start.current = { x: event.clientX, y: event.clientY };
@@ -943,12 +933,11 @@ function AgendaRow({ item, day, model, marked, overlaps = false }: { item: Agend
 
 const VIEW_NAMES = { day: 'DAY', week: 'WEEK', month: 'MONTH', agenda: 'AGENDA' } as const;
 
-/** The scene frame's words for a calendar holding the main slot, where it sent none. */
+/** The scene frame's words for a calendar holding the main slot, where it sent none: the dates it covers, never its count (the meta line counts). */
 export function calendarFrame(data: CalendarData): { title: string; subtitle: string; context: string } {
-  const count = data.events.length;
   return {
     title: data.title ?? `CALENDAR / ${VIEW_NAMES[data.view]}`,
-    subtitle: data.subtitle ?? `${rangeText(data)} / ${count} ${count === 1 ? 'EVENT' : 'EVENTS'}`,
+    subtitle: data.subtitle ?? rangeText(data),
     context: data.context ?? 'CALENDAR',
   };
 }

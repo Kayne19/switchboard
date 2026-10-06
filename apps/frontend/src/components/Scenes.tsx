@@ -26,8 +26,7 @@ import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
-import { taskCounts } from '../primitives/TasksPrimitive';
-import { inboxCounts } from '../primitives/InboxPrimitive';
+import { Chevron } from '../primitives/ScrollRim';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame, type FrameVariant } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
@@ -498,7 +497,7 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
       const { data } = cast.table(primary);
       return {
         title: data.title ?? 'DATA / TABLE',
-        subtitle: data.subtitle ?? `${data.rows.length} ROWS / ${data.columns.length} COLUMNS`,
+        subtitle: data.subtitle ?? 'ROWS / COLUMNS',
         context: data.context ?? 'TABLE',
         footer: 'FRAME / INTERRUPTED RAILS',
         caption: sceneCaption(primary, 'DISPLAY / TABLE'),
@@ -527,27 +526,26 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
       };
     }
     case 'tasks': {
-      // A to-do list heads the scene with its own words, else what it holds.
+      // A to-do list heads the scene with its own words, else its kind: the
+      // list's meta line and its sections' heads say what it holds.
       const { data } = cast.tasks(primary);
-      const counts = taskCounts(data);
       return {
         title: data.title ?? 'TASKS / TO DO',
-        subtitle: data.subtitle ?? `${counts.open} OPEN / ${counts.done} DONE`,
+        subtitle: data.subtitle ?? 'CHECKLIST',
         context: data.context ?? 'TASKS',
         footer: 'DISPLAY / TASKS',
-        caption: sceneCaption(primary, `TASKS / ${countText(data.items.length, ['ITEM', 'ITEMS'])}`),
+        caption: sceneCaption(primary, 'TASKS / TO DO'),
         outline: 'panel',
       };
     }
     case 'inbox': {
       const { data } = cast.inbox(primary);
-      const counts = inboxCounts(data);
       return {
         title: data.title ?? 'INBOX / MESSAGES',
-        subtitle: data.subtitle ?? `${countText(counts.messages, ['MESSAGE', 'MESSAGES'])} / ${counts.unread} UNREAD`,
+        subtitle: data.subtitle ?? 'MESSAGES / AS SENT',
         context: data.context ?? 'INBOX',
         footer: 'DISPLAY / INBOX',
-        caption: sceneCaption(primary, `INBOX / ${countText(counts.messages, ['MESSAGE', 'MESSAGES'])}`),
+        caption: sceneCaption(primary, 'INBOX / AS SENT'),
         outline: 'panel',
       };
     }
@@ -715,9 +713,7 @@ function RailHandle({ open, items, controls, onToggle }: { open: boolean; items:
     >
       <span className="rail-handle__rule" aria-hidden="true" />
       <span className="rail-handle__label tech micro">{shown}</span>
-      <svg className="rail-handle__chevron" viewBox="0 0 8 6" aria-hidden="true">
-        <path d="M 4 0 L 8 6 L 0 6 Z" />
-      </svg>
+      <Chevron className="rail-handle__chevron" />
     </button>
   );
 }

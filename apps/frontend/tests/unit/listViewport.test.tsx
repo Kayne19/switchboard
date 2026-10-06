@@ -6,8 +6,9 @@ import { act } from 'react';
 import { describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { drawnScale } from '../../src/hooks/useStageDemand';
+import { keyStop } from '../../src/primitives/drawingScroll';
 import { continuesPast, countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
-import { mount, rerender, stubResizeObserver } from './sceneHarness';
+import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement | undefined;
 
@@ -127,9 +128,21 @@ describe('ListViewport', () => {
     const scroll = render(rows(3));
     layOut(scroll, 0);
     await measured(scroll);
-    expect(page().querySelector('.list-viewport__rim, .drawing-viewport__rail')).toBeNull();
+    expect(page().querySelector('.scroll-rim__count, .scroll-rim__rail')).toBeNull();
     expect(page().querySelector('.list-viewport--scrolling')).toBeNull();
     expect(scroll.tabIndex).toBe(-1);
+  });
+
+  it('stays a tab stop when it overflows only sideways, and leaves Space to the surface', async () => {
+    const scroll = render(rows(3));
+    layOut(scroll, 0);
+    Object.defineProperty(scroll, 'clientWidth', { configurable: true, value: 200 });
+    Object.defineProperty(scroll, 'scrollWidth', { configurable: true, value: 600 });
+    await measured(scroll);
+    expect(scroll.tabIndex).toBe(0);
+    expect(page().querySelector('.scroll-rim__count')).toBeNull();
+    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })));
+    expect(surfaceClicks).toBe(1);
   });
 
   it('counts the items past each edge in the noun given, and takes keys while it scrolls', async () => {
@@ -139,13 +152,13 @@ describe('ListViewport', () => {
       scroll.dispatchEvent(new Event('scroll'));
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
-    const rims = Array.from(page().querySelectorAll<HTMLElement>('.list-viewport__rim'));
+    const rims = Array.from(page().querySelectorAll<HTMLElement>('.list-viewport .scroll-rim__count'));
     expect(rims.map((rim) => [rim.className.includes('--top') ? 'top' : 'bottom', rim.textContent])).toEqual([
-      ['top', '3 TASKS'],
+      ['top', '03 TASKS'],
       // Rows 7-9, and row 6 of which 10px of 30 show.
-      ['bottom', '4 TASKS'],
+      ['bottom', '04 TASKS'],
     ]);
-    expect(page().querySelectorAll('.drawing-viewport__rail')).toHaveLength(2);
+    expect(page().querySelectorAll('.scroll-rim__rail')).toHaveLength(2);
     expect(scroll.tabIndex).toBe(0);
   });
 
@@ -153,7 +166,31 @@ describe('ListViewport', () => {
     const scroll = render(rows(10));
     layOut(scroll, 90, 0.5);
     await measured(scroll);
-    expect(Array.from(page().querySelectorAll('.list-viewport__rim')).map((rim) => rim.textContent)).toEqual(['3 TASKS', '4 TASKS']);
+    expect(Array.from(page().querySelectorAll('.list-viewport .scroll-rim__count')).map((rim) => rim.textContent)).toEqual(['03 TASKS', '04 TASKS']);
+  });
+
+  it('counts in its own pixels, so a count read while a cell settles scaled up is the count at rest', async () => {
+    // A row 50px tall of which 10px show at the foot is past the edge (under
+    // the 16px sliver). Drawn three times its size mid-animation, it shows
+    // 30px on screen: still the same 10px of the list. The aux row's
+    // inbox read '3 MESSAGES' or '4 MESSAGES' by which frame it was read
+    // in, and nothing reads it again once such an animation ends.
+    const counts: string[][] = [];
+    for (const scale of [1, 3]) {
+      const scroll = render(rows(6));
+      Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 110 });
+      Object.defineProperty(scroll, 'offsetHeight', { configurable: true, value: 110 });
+      Object.defineProperty(scroll, 'scrollHeight', { configurable: true, value: 300 });
+      const at = (top: number, height: number) => ({ top: 40 + top * scale, bottom: 40 + (top + height) * scale, left: 0, right: 200, width: 200, height: height * scale, x: 0, y: 40 + top * scale, toJSON() {} }) as DOMRect;
+      scroll.getBoundingClientRect = () => at(0, 110);
+      scroll.querySelectorAll<HTMLElement>('[data-item]').forEach((row, index) => {
+        row.getBoundingClientRect = () => at(index * 50, 50);
+      });
+      await measured(scroll);
+      counts.push(Array.from(page().querySelectorAll('.scroll-rim__count')).map((rim) => rim.textContent ?? ''));
+      unmountAll();
+    }
+    expect(counts).toEqual([['04 TASKS'], ['04 TASKS']]);
   });
 
   it('counts only what countSelector picks', async () => {
@@ -166,7 +203,7 @@ describe('ListViewport', () => {
     layOut(scroll, 0);
     await measured(scroll);
     // Rows 3-9 lie below (10px of row 3 shows); the days among them are 3, 5, 7, 9.
-    expect(element.querySelector('.list-viewport__rim')!.textContent).toBe('4 DAYS');
+    expect(element.querySelector('.list-viewport .scroll-rim__count')!.textContent).toBe('04 DAYS');
   });
 
   it('marks an edge it continues past where no item lies that way, as MORE', async () => {
@@ -181,9 +218,32 @@ describe('ListViewport', () => {
     const scroll = element.querySelector<HTMLElement>('.list-viewport__scroll')!;
     layOut(scroll, 90);
     await measured(scroll);
-    const rims = Array.from(element.querySelectorAll('.list-viewport__rim')).map((rim) => [rim.className.includes('--top') ? 'top' : 'bottom', rim.textContent]);
+    const rims = Array.from(element.querySelectorAll('.list-viewport .scroll-rim__count')).map((rim) => [rim.className.includes('--top') ? 'top' : 'bottom', rim.textContent]);
     // 210 tall: the view 90-190 shows the days at 90-180 and a sliver of the last.
-    expect(rims).toEqual([['top', 'MORE'], ['bottom', '1 DAY']]);
+    expect(rims).toEqual([['top', 'MORE'], ['bottom', '01 DAY']]);
+  });
+
+  it('counts, draws its top edge and pages below a band pinned at its top (a table header)', async () => {
+    const element = mount(
+      <ListViewport noun={['ROW', 'ROWS']} pinned=".band">
+        {[<div key="band" className="band">HEAD</div>, ...rows(10)]}
+      </ListViewport>,
+    );
+    const scroll = element.querySelector<HTMLElement>('.list-viewport__scroll')!;
+    layOut(scroll, 90);
+    // The band covers the view's top 30px (40-70 on screen).
+    element.querySelector<HTMLElement>('.band')!.getBoundingClientRect = () => ({ top: 40, bottom: 70, left: 0, right: 200, width: 200, height: 30, x: 0, y: 40, toJSON() {} }) as DOMRect;
+    await measured(scroll);
+    // Row 3 (40-70) lies under the band: past the top edge, with rows 0-2.
+    const rims = Array.from(element.querySelectorAll<HTMLElement>('.scroll-rim__count'));
+    expect(rims.map((rim) => rim.textContent)).toEqual(['04 ROWS', '04 ROWS']);
+    expect(rims[0].style.top).toBe('30px');
+    expect(element.querySelector<HTMLElement>('.scroll-rim__fade--top')!.style.top).toBe('30px');
+    const calls: ScrollToOptions[] = [];
+    scroll.scrollTo = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollTo;
+    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true })));
+    // A page of the 70px that show under the band.
+    expect(calls.map((call) => call.top)).toEqual([90 + 61]);
   });
 
   it('names one item in the singular', async () => {
@@ -193,7 +253,7 @@ describe('ListViewport', () => {
       scroll.dispatchEvent(new Event('scroll'));
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
-    expect(page().querySelector('.list-viewport__rim--bottom, .drawing-viewport__rim--bottom')!.textContent).toBe('1 TASK');
+    expect(page().querySelector('.scroll-rim__count--bottom')!.textContent).toBe('01 TASK');
   });
 
   it('does not count what is not an item: a group heading', async () => {
@@ -204,7 +264,7 @@ describe('ListViewport', () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
     // Row 3 shows 10px, the heading is 4, rows 5-8 below: five tasks, the heading not one.
-    expect(page().querySelector('.drawing-viewport__rim--bottom')!.textContent).toBe('5 TASKS');
+    expect(page().querySelector('.scroll-rim__count--bottom')!.textContent).toBe('05 TASKS');
   });
 
   it("opens on its lead once per shape, and keeps the reader's place after", () => {
@@ -239,9 +299,9 @@ describe('ListViewport', () => {
     let heard = 0;
     const hear = () => (heard += 1);
     document.addEventListener('click', hear);
-    act(() => page().querySelector<HTMLElement>('.drawing-viewport__rim--bottom')!.click());
+    act(() => page().querySelector<HTMLElement>('.scroll-rim__count--bottom')!.click());
     document.removeEventListener('click', hear);
-    expect(calls).toEqual([{ top: 85, behavior: expect.any(String) }]);
+    expect(calls).toEqual([{ top: 88, behavior: expect.any(String) }]);
     expect(surfaceClicks).toBe(0);
     expect(heard).toBe(1);
   });
@@ -258,7 +318,7 @@ describe('ListViewport', () => {
     const press = (key: string) => act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));
     press(' ');
     press('End');
-    expect(calls.map((call) => call.top)).toEqual([85, 200]);
+    expect(calls.map((call) => call.top)).toEqual([88, 200]);
     expect(surfaceClicks).toBe(0);
     press('Enter');
     expect(surfaceClicks).toBe(1);
@@ -266,11 +326,17 @@ describe('ListViewport', () => {
 });
 
 describe('keyScrollTop', () => {
+  it('takes the keys a drawing takes, by the one rule (scrollMove)', () => {
+    for (const key of [' ', 'PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter', 'Tab', 'a']) {
+      expect(keyScrollTop(key, false, 0, 200, 600) === null, key).toBe(keyStop(key, false, false, [0, 300], 0, 200) === null);
+    }
+  });
+
   it('moves a line, a page, or to either end, and no further', () => {
     expect(keyScrollTop('ArrowDown', false, 0, 100, 400)).toBe(40);
     expect(keyScrollTop('ArrowUp', false, 10, 100, 400)).toBe(0);
     expect(keyScrollTop('PageDown', false, 250, 100, 400)).toBe(300);
-    expect(keyScrollTop(' ', true, 200, 100, 400)).toBe(115);
+    expect(keyScrollTop(' ', true, 200, 100, 400)).toBe(112);
     expect(keyScrollTop('Home', false, 200, 100, 400)).toBe(0);
     expect(keyScrollTop('End', false, 0, 100, 400)).toBe(300);
     expect(keyScrollTop('Enter', false, 0, 100, 400)).toBeNull();

@@ -1,6 +1,6 @@
-import { useRef } from 'react';
 import type { TableCell, TableData } from '../controller/types';
-import { useScrollDemand } from '../hooks/useStageDemand';
+import type { Noun } from './countText';
+import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import type { Slot } from './slot';
 import { TechFrame } from './TechFrame';
@@ -58,27 +58,32 @@ function CellText({ cell }: { cell: TableCell }) {
   return <span className={className}>{cellText(cell)}</span>;
 }
 
+// What the rims count a table's rows as.
+const ROW: Noun = ['ROW', 'ROWS'];
+
 // Rows of named columns inside the interrupted-rails frame, scrolling only
 // when they overflow it and clipped to its inside (the same mask the code
 // viewport uses). Thin rules separate rows; a highlighted row carries the
 // orange accent the code viewport gives a hot line. The meta line stays
 // above the scroll, so the sticky header is the scroll's top edge and a row
-// scrolling up passes under it rather than showing above it. In the main
-// slot the scene frame above shows the title (MetaTitle).
+// scrolling up passes under it rather than showing above it. A table that
+// scrolls does so in the list viewport, which counts its rows past each edge
+// below the header and pages it by the keys every scroller takes. In the
+// main slot the scene frame above shows the title (MetaTitle).
 export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; slot?: Slot }) {
   const alignment = inferColumnAlignment(data);
   const highlighted = new Set(data.highlight ?? []);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useScrollDemand(scrollRef);
+  const meta = (
+    <div className="table-viewport__meta tech micro">
+      <MetaTitle title={data.title ?? 'TABLE'} slot={slot} />
+      <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
+    </div>
+  );
   return (
     <div className={`table-viewport${slot === 'focus' ? ' table-viewport--focused' : ''}`} data-testid="table">
       <TechFrame variant="code" />
       <div className="table-viewport__mask">
-        <div className="table-viewport__meta tech micro">
-          <MetaTitle title={data.title ?? 'TABLE'} slot={slot} />
-          <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
-        </div>
-        <div ref={scrollRef} className="table-viewport__scroll" tabIndex={0}>
+        <ListViewport noun={ROW} countSelector="tr[data-row]" pinned="thead" head={meta} scrollClassName="table-viewport__scroll" label={data.title ?? 'Table'}>
           <table className="table-grid">
             <thead>
               <tr>
@@ -110,7 +115,7 @@ export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; sl
             </tbody>
           </table>
           {data.rows.length === 0 ? <div className="table-grid__empty tech micro">NO ROWS</div> : null}
-        </div>
+        </ListViewport>
       </div>
     </div>
   );

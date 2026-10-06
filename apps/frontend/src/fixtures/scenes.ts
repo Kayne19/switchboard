@@ -191,7 +191,7 @@ const pipelineEdges: Array<[string, string, string?]> = [
   ['homelab-pr', 'pin', 'roll back'],
 ];
 export const pipelineDiagram: DiagramData = {
-  mode: 'graph', title: 'CI / BUILD + RELEASE PIPELINE', subtitle: 'SWITCHBOARD / 40 STEPS / RUN 4182', context: 'PIPELINE', caption: 'PIPELINE / 40 STEPS',
+  mode: 'graph', title: 'CI / BUILD + RELEASE PIPELINE', subtitle: 'SWITCHBOARD / 40 STEPS / RUN 4182', context: 'PIPELINE', caption: 'PIPELINE / MASTER',
   nodes: pipelineNodes.map(([id, label, sub, state, semantic]) => ({ id, label, sub, ...(state ? { state } : {}), ...(semantic ? { semantic } : {}) })),
   edges: pipelineEdges.map(([from, to, label]) => ({ from, to, ...(label ? { label } : {}) })),
 };
@@ -201,7 +201,7 @@ export const pipelineDiagram: DiagramData = {
 // one active. Long exchanges like this are what an agent sends when it
 // explains a call path, and where a drawing scaled to fit stops being read.
 export const traceDiagram: SequenceDiagramData = {
-  mode: 'sequence', title: 'CALL / TRANSFER + FIRST DISPLAY', subtitle: 'CALLER -> LLM-WIKI / 32 MESSAGES', context: 'CALL TRACE', caption: 'TRACE / 8 ACTORS / 32 MESSAGES',
+  mode: 'sequence', title: 'CALL / TRANSFER + FIRST DISPLAY', subtitle: 'CALLER -> LLM-WIKI / 32 MESSAGES', context: 'CALL TRACE', caption: 'TRACE / 8 ACTORS',
   actors: [
     { id: 'caller', label: 'CALLER', sub: 'browser page / mic', semantic: 'paper' },
     { id: 'ws', label: 'WEBSOCKET', sub: '/ws / browser.rs' },
@@ -354,7 +354,7 @@ export const assistantAgendaWeek: CalendarData = {
 };
 
 export const assistantTasks: TasksData = {
-  title: 'TO DO / THIS WEEK', subtitle: '10 OPEN / 3 DONE', context: 'TASKS', caption: 'TODOIST / PERSONAL + WORK',
+  title: 'TO DO / THIS WEEK', context: 'TASKS', caption: 'TODOIST / PERSONAL + WORK',
   today: ASSISTANT_TODAY,
   items: [
     { id: 'pr', text: 'Review the switchboard PR', state: 'active', due: '2026-10-07T17:00', priority: 'high', group: 'Work', tags: ['switchboard', 'review'] },
@@ -434,7 +434,7 @@ export const assistantWeather: WeatherData = {
 };
 
 export const assistantInbox: InboxData = {
-  title: 'INBOX / UNREAD FIRST', subtitle: '5 UNREAD / 4 FLAGGED', context: 'MAIL + CHAT', caption: 'GMAIL / SLACK / SMS',
+  title: 'INBOX / UNREAD FIRST', subtitle: 'SINCE SEP 28', context: 'MAIL + CHAT', caption: 'GMAIL / SLACK / SMS',
   today: ASSISTANT_TODAY,
   messages: [
     { id: 'dentist', from: "Dr. Okafor's office", subject: 'Appointment today', snippet: 'Reminder: today at 10:30. Reply C to confirm or call to reschedule.', time: '2026-10-07T08:12', channel: 'sms', unread: true, flagged: true, semantic: 'amber' },
@@ -589,7 +589,7 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
   ],
   results: [
     { op: 'show', id: 'test-matrix', type: 'table', role: 'primary', data: {
-      title: 'TESTS / MATRIX', subtitle: 'CI RUN 4182 / MASTER', context: 'TEST RESULTS', caption: 'RESULTS / 5 SUITES',
+      title: 'TESTS / MATRIX', subtitle: 'CI RUN 4182 / MASTER', context: 'TEST RESULTS', caption: 'RESULTS / BY SUITE',
       columns: [
         { label: 'SUITE' },
         { label: 'PASSED', semantic: 'green' },

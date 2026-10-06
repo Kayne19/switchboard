@@ -153,7 +153,7 @@ for (const viewport of [geometries[0], geometries[2]]) {
       const cell = document.querySelector<HTMLElement>('.composed-aux [data-testid="tasks"]')!;
       const scroll = cell.querySelector<HTMLElement>('.list-viewport__scroll')!.getBoundingClientRect();
       const row = cell.querySelector<HTMLElement>('[data-item="pack"]')!.getBoundingClientRect();
-      const fade = cell.querySelector<HTMLElement>('.drawing-viewport__more--bottom')?.getBoundingClientRect();
+      const fade = cell.querySelector<HTMLElement>('.scroll-rim__fade--bottom')?.getBoundingClientRect();
       return { rowTop: row.top, rowBottom: row.bottom, top: scroll.top, bottom: fade ? fade.top : scroll.bottom };
     });
     expect(box.rowTop).toBeGreaterThanOrEqual(box.top - 1);

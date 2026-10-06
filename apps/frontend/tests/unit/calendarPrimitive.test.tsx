@@ -11,6 +11,7 @@ import { act } from 'react';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { CalendarData } from '../../src/controller/types';
 import { CalendarPrimitive, chooseLayout } from '../../src/primitives/CalendarPrimitive';
+import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import type { Slot } from '../../src/primitives/slot';
 import { assistantAgenda, assistantAgendaWeek, assistantDay, assistantMonth, assistantWeek } from '../../src/fixtures/scenes';
 import { mount, stubResizeObserver, unmountAll } from './sceneHarness';
@@ -114,7 +115,7 @@ describe('the week', () => {
     const heads = () => [...calendar.querySelectorAll('.calendar-grid__weekday')].map((cell) => cell.textContent);
     expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
     const rims = () => [...calendar.querySelectorAll('.calendar-pages__rim')].map((rim) => rim.textContent);
-    expect(rims()).toEqual([expect.stringMatching(/^MON-THU \/ \d+ EVENTS$/)]);
+    expect(rims()).toEqual([expect.stringMatching(/^MON-THU \/ \d\d EVENTS$/)]);
     // A tap on the rail turns back a page, and is handled: the surface around it does not expand.
     const click = new MouseEvent('click', { bubbles: true, cancelable: true });
     act(() => {
@@ -137,12 +138,41 @@ describe('the week', () => {
     });
     expect(key.defaultPrevented).toBe(true);
     expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
-    // No later days: the key is left alone.
+    // No later days: the key is still taken, as a list at its end takes it, and the days stay.
     const again = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true });
     act(() => {
       pages.dispatchEvent(again);
     });
-    expect(again.defaultPrevented).toBe(false);
+    expect(again.defaultPrevented).toBe(true);
+    expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
+  });
+
+  it('turns the days by the keys every scroller takes: Space never expands the calendar', () => {
+    let expanded = 0;
+    bodySize = { width: 330, height: 480 };
+    const host = mount(
+      <FocusableSurface onActivate={() => (expanded += 1)} ariaLabel="Expand calendar">
+        <CalendarPrimitive data={assistantWeek} slot="aux" />
+      </FocusableSurface>,
+    );
+    const heads = () => [...host.querySelectorAll('.calendar-grid__weekday')].map((cell) => cell.textContent);
+    const pages = host.querySelector('.calendar-pages') as HTMLElement;
+    const press = (key: string, shiftKey = false) => act(() => {
+      pages.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
+    });
+    press(' ');
+    expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
+    press(' ', true);
+    expect(heads()).toEqual(['TUE', 'WED', 'THU']);
+    press('Home');
+    expect(heads()).toEqual(['MON', 'TUE', 'WED']);
+    press('End');
+    expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
+    // At the last days Space is still the calendar's, not the surface's.
+    press(' ');
+    expect(expanded).toBe(0);
+    press('Enter');
+    expect(expanded).toBe(1);
   });
 
   it('opens on today when the marked event is outside the week', () => {
@@ -352,8 +382,12 @@ describe('the panel frame round a calendar', () => {
     expect(declared(':root', '--panel-inset')[0]).toMatch(/^calc\(var\(--panel-step\) \+ /);
     // The main slot: the step is a row of the slot's own grid (a share of
     // its height, which the layout sets), not a padding in stage units.
+    // It is the panel rule, which a type keeping more room than the inset
+    // widens (--slot-top, --slot-bottom); the calendar keeps none.
     const slot = '.calendar-object > .focusable-content';
-    expect(declared(slot, 'grid-template-rows')).toEqual(['var(--panel-inset) minmax(0, 1fr) var(--panel-inset)']);
+    expect(declared(slot, 'grid-template-rows')).toEqual(['max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px))']);
+    expect(declared('.calendar-object .focusable-content', '--slot-top')).toEqual([]);
+    expect(declared('.calendar-object .focusable-content', '--slot-bottom')).toEqual([]);
     expect(declared('.calendar-object .focusable-content', 'padding')).toEqual(['0 clamp(18px, 2.2cqw, 38px)']);
     expect(declared(`${slot} > *`, 'grid-row')).toEqual(['2']);
   });

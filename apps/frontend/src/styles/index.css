@@ -25,6 +25,10 @@
   --panel-step-share: calc(24 / 620);
   --panel-step: calc(var(--panel-step-share) * 100%);
   --panel-inset: calc(var(--panel-step) + clamp(6px, 0.9cqh, 12px));
+  /* The document frame's top line steps down to 28 of its 800 units at its
+     right (TechFrame "document"); its inset clears that with a gap. A share
+     of the frame's height, so it means that only as a top offset. */
+  --document-inset: calc(28 / 800 * 100% + 4px);
   color: var(--paper);
   background: var(--black);
   font-family:
@@ -1959,78 +1963,80 @@ button {
   height: 100%;
   overflow: visible;
 }
-/* An edge the drawing continues past: a fade as deep as the part it cuts
-   reaches in (DrawingViewport sets the depth), darkest at the rim, so a
-   cut part reads as the next one coming rather than as broken. */
-.drawing-viewport__more {
+/* The edge a scroller continues past (primitives/ScrollRim.tsx), drawn alike
+   by a drawing, a list, a table, code, a document and a calendar's paged
+   days. First a fade as deep as the scroller sets (for a drawing, as deep as
+   the part it cuts reaches in), darkest at the rim, so a cut part reads as
+   the next one coming rather than as broken. */
+.scroll-rim__fade {
   position: absolute;
   z-index: 1;
   pointer-events: none;
 }
-.drawing-viewport__more--left,
-.drawing-viewport__more--right {
+.scroll-rim__fade--left,
+.scroll-rim__fade--right {
   top: 0;
   bottom: 0;
 }
-.drawing-viewport__more--top,
-.drawing-viewport__more--bottom {
+.scroll-rim__fade--top,
+.scroll-rim__fade--bottom {
   left: 0;
   right: 0;
 }
-.drawing-viewport__more--left {
+.scroll-rim__fade--left {
   left: 0;
   background: linear-gradient(to left, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
-.drawing-viewport__more--right {
+.scroll-rim__fade--right {
   right: 0;
   background: linear-gradient(to right, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
-.drawing-viewport__more--top {
+.scroll-rim__fade--top {
   top: 0;
   background: linear-gradient(to top, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
-.drawing-viewport__more--bottom {
+.scroll-rim__fade--bottom {
   bottom: 0;
   background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
 /* On the rim, the rail (drawingScroll.ts RAIL deep): the drawing's cut,
    a dashed orange line on the outside and a faint one within, holding the
    edge's count and the names of the lines that leave there. */
-.drawing-viewport__rail {
+.scroll-rim__rail {
   position: absolute;
   z-index: 2;
   pointer-events: none;
   --cut: rgba(var(--orange-rgb), 0.62);
   --within: rgba(var(--orange-rgb), 0.16);
 }
-.drawing-viewport__rail--left,
-.drawing-viewport__rail--right {
+.scroll-rim__rail--left,
+.scroll-rim__rail--right {
   top: 0;
   bottom: 0;
   width: 18px;
 }
-.drawing-viewport__rail--top,
-.drawing-viewport__rail--bottom {
+.scroll-rim__rail--top,
+.scroll-rim__rail--bottom {
   left: 0;
   right: 0;
   height: 18px;
 }
-.drawing-viewport__rail--left {
+.scroll-rim__rail--left {
   left: 0;
   border-left: 1px dashed var(--cut);
   box-shadow: inset -1px 0 var(--within);
 }
-.drawing-viewport__rail--right {
+.scroll-rim__rail--right {
   right: 0;
   border-right: 1px dashed var(--cut);
   box-shadow: inset 1px 0 var(--within);
 }
-.drawing-viewport__rail--top {
+.scroll-rim__rail--top {
   top: 0;
   border-top: 1px dashed var(--cut);
   box-shadow: inset 0 -1px var(--within);
 }
-.drawing-viewport__rail--bottom {
+.scroll-rim__rail--bottom {
   bottom: 0;
   border-bottom: 1px dashed var(--cut);
   box-shadow: inset 0 1px var(--within);
@@ -2040,7 +2046,7 @@ button {
    `tagLength`). A tap on it turns a page that way. On the left and right
    rails a tag is turned a quarter so it runs along the rail, its top (and
    its chevron) facing out: the left one reads up, as a spine does. */
-.drawing-viewport__rim {
+.scroll-rim__count {
   position: absolute;
   z-index: 3;
   display: flex;
@@ -2060,37 +2066,37 @@ button {
   white-space: nowrap;
   cursor: pointer;
 }
-.drawing-viewport__rim--left,
-.drawing-viewport__rim--right {
+.scroll-rim__count--left,
+.scroll-rim__count--right {
   top: 50%;
   translate: -50% -50%;
 }
-.drawing-viewport__rim--left {
+.scroll-rim__count--left {
   left: 9px;
   rotate: -90deg;
 }
-.drawing-viewport__rim--right {
+.scroll-rim__count--right {
   left: calc(100% - 9px);
   rotate: 90deg;
 }
-.drawing-viewport__rim--top,
-.drawing-viewport__rim--bottom {
+.scroll-rim__count--top,
+.scroll-rim__count--bottom {
   left: 50%;
   translate: -50% 0;
 }
-.drawing-viewport__rim--top {
+.scroll-rim__count--top {
   top: 0;
 }
-.drawing-viewport__rim--bottom {
+.scroll-rim__count--bottom {
   bottom: 0;
 }
-.drawing-viewport__chevron {
+.scroll-rim__chevron {
   flex: none;
   width: 8px;
   height: 6px;
   fill: currentColor;
 }
-.drawing-viewport__rim--bottom .drawing-viewport__chevron {
+.scroll-rim__count--bottom .scroll-rim__chevron {
   rotate: 180deg;
 }
 /* A line that leaves the view: on the rail where it leaves, the name of
@@ -2192,9 +2198,9 @@ button {
 
 /* A list that outgrows its slot (primitives/ListViewport.tsx): its head
    pinned, its rows scrolling under it inside the frame, and on each edge it
-   continues past the drawing viewport's own fade, cut line and count, by
-   the same classes, so a scrolled list and a scrolled drawing read alike.
-   The primitive gives the scroll its padding and type. */
+   continues past the scroll rim a drawing has, so a scrolled list and a
+   scrolled drawing read alike. The primitive gives the scroll its padding
+   and type. */
 .list-viewport {
   position: relative;
   display: flex;
@@ -3367,7 +3373,7 @@ button {
 .document-viewport__inner {
   position: absolute;
   z-index: 1;
-  inset: clamp(20px, 3.8cqh, 42px) clamp(20px, 3.5cqw, 48px)
+  inset: max(clamp(20px, 3.8cqh, 42px), var(--document-inset)) clamp(20px, 3.5cqw, 48px)
     clamp(20px, 3.8cqh, 42px);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -3389,17 +3395,18 @@ button {
   letter-spacing: -0.025em;
   font-weight: 500;
 }
-.document-viewport__body {
-  min-height: 0;
+/* The reader (a list viewport) is the text column: its rims span the
+   column, not the frame. */
+.document-viewport__reader {
   width: min(88%, 880px);
+}
+.document-viewport__body {
   overflow: auto;
-  overscroll-behavior: contain;
   padding-right: clamp(8px, 1cqw, 16px);
   color: #cfcbc4;
   font-family: "Helvetica Neue", Arial, sans-serif;
   font-size: clamp(15px, 1.28cqw, 22px);
   line-height: 1.62;
-  scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
 /* Paragraphs are read as Markdown (MarkdownBlocks). Lists and code blocks
@@ -3418,7 +3425,7 @@ button {
    the point, so the meta line goes, the subject drops to a reading size,
    and the body takes the rest of the panel and scrolls inside it. */
 .composed-aux-object--document .document-viewport__inner {
-  inset: clamp(12px, 1.8cqh, 18px) clamp(14px, 1.6cqw, 24px);
+  inset: max(clamp(12px, 1.8cqh, 18px), var(--document-inset)) clamp(14px, 1.6cqw, 24px) clamp(12px, 1.8cqh, 18px);
   grid-template-rows: auto minmax(0, 1fr);
 }
 .composed-aux-object--document .document-viewport__meta {
@@ -3429,8 +3436,10 @@ button {
   margin: 0 0 clamp(6px, 1cqh, 10px);
   font-size: clamp(15px, 1.25cqw, 20px);
 }
-.composed-aux-object--document .document-viewport__body {
+.composed-aux-object--document .document-viewport__reader {
   width: 100%;
+}
+.composed-aux-object--document .document-viewport__body {
   font-size: clamp(13px, 0.95cqw, 16px);
   line-height: 1.5;
 }
@@ -3456,9 +3465,11 @@ button {
 /* The panel frame is drawn behind the content, so the figure sits inside
    its outline rather than over it. */
 .image-object .focusable-content {
+  --slot-top: clamp(22px, 3.6cqh, 42px);
+  --slot-bottom: clamp(16px, 2.6cqh, 30px);
   position: relative;
   z-index: 1;
-  padding: clamp(22px, 3.6cqh, 42px) clamp(22px, 2.6cqw, 42px) clamp(16px, 2.6cqh, 30px);
+  padding: 0 clamp(22px, 2.6cqw, 42px);
 }
 .image-primitive__field {
   position: relative;
@@ -3532,11 +3543,17 @@ button {
   min-height: 0;
   background: #000;
 }
-/* The table viewport shares this mask: it sits in the same frame. */
+/* The table viewport shares this mask: it sits in the same frame. Its
+   lower row is the frame's lower step (the clip's 4.6% at the bottom left;
+   a share of the content box, so a little less under the table's top
+   padding) with a gap that covers that: the scroll stands above it, so no
+   row or line ever runs under that corner, and the rims sit clear of it. */
 .code-viewport__mask,
 .table-viewport__mask {
   position: absolute;
   z-index: 1;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
   inset: clamp(8px, 1.1cqh, 16px) clamp(8px, 1cqw, 16px);
   /* The inside of the approved code frame (TechFrame "code"), so source
      never crosses the rails as it scrolls. */
@@ -3553,15 +3570,11 @@ button {
   background: #000;
   overflow: hidden;
 }
+/* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
 .code-viewport__scroll {
-  width: 100%;
-  height: 100%;
   overflow: auto;
-  overscroll-behavior: contain;
   padding: clamp(20px, 3cqh, 34px) clamp(28px, 3cqw, 52px)
-    clamp(54px, 7cqh, 76px) clamp(52px, 4.7cqw, 78px);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
+    clamp(14px, 2cqh, 24px) clamp(52px, 4.7cqw, 78px);
 }
 .code-viewport pre {
   min-width: max-content;
@@ -3630,24 +3643,16 @@ button {
    never into a band above it, and the header stays below the frame's
    top-right cut. */
 .table-viewport__mask {
-  display: flex;
-  flex-direction: column;
   padding-top: clamp(20px, 3cqh, 34px);
 }
+/* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
 .table-viewport__scroll {
-  flex: 1 1 auto;
-  width: 100%;
-  min-height: 0;
   overflow: auto;
-  overscroll-behavior: contain;
-  padding: 0 clamp(28px, 3cqw, 52px) clamp(54px, 7cqh, 76px);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
+  padding: 0 clamp(28px, 3cqw, 52px) clamp(14px, 2cqh, 24px);
 }
 /* Left-set, clear of the frame's top-right cut. */
 .table-viewport__meta {
   display: flex;
-  flex: none;
   gap: clamp(18px, 2.4cqw, 36px);
   margin-bottom: clamp(10px, 1.6cqh, 18px);
   padding: 0 clamp(28px, 3cqw, 52px);
@@ -3723,7 +3728,7 @@ button {
   padding-top: clamp(12px, 1.8cqh, 18px);
 }
 .composed-aux-object--table .table-viewport__scroll {
-  padding: 0 clamp(16px, 1.8cqw, 28px) clamp(28px, 4cqh, 40px);
+  padding: 0 clamp(16px, 1.8cqw, 28px) clamp(8px, 1.2cqh, 14px);
 }
 .composed-aux-object--table .table-viewport__meta {
   display: none;
@@ -3752,9 +3757,11 @@ button {
    outline, clear of its cut corners. */
 .tasks-object .focusable-content,
 .inbox-object .focusable-content {
+  --slot-top: clamp(22px, 3.6cqh, 42px);
+  --slot-bottom: clamp(16px, 2.6cqh, 30px);
   position: relative;
   z-index: 1;
-  padding: clamp(22px, 3.6cqh, 42px) clamp(22px, 2.6cqw, 42px) clamp(16px, 2.6cqh, 30px);
+  padding: 0 clamp(22px, 2.6cqw, 42px);
 }
 
 .tasks-primitive,
@@ -4350,18 +4357,29 @@ button {
   z-index: 1;
   padding: 0 clamp(18px, 2.2cqw, 38px);
 }
-/* A calendar fills its box to the edges (the grid's foot, the month's last
-   row, the agenda's cut line), so the box is the panel frame's inner box:
-   inside both of its steps (--panel-step), with a gap. The step is a share
-   of the frame's height, and the main slot's height is the frame's and is
-   set by the layout, so there the inset is a row of the slot's own grid,
-   exact at any height. A padding in stage units fell short of the step on
-   every slot taller than it assumed, and the grid ran over the lower step. */
-.calendar-object > .focusable-content {
+/* A primary in the panel frame that reaches its edges stands in the
+   frame's inner box: inside both of its steps (--panel-step), with a gap.
+   A calendar fills its box to the edges (the grid's foot, the month's last
+   row, the agenda's cut line) and keeps no more room than that; a to-do
+   list, an inbox and a figure keep their own padding where it is deeper
+   (--slot-top, --slot-bottom). The step is a share of the frame's height,
+   and the main slot's height is the frame's and is set by the layout, so
+   the inset is a row of the slot's own grid, exact at any height. A padding
+   in stage units fell short of the step on every slot taller than it
+   assumed: a calendar's grid, a list's last rows and a figure's caption ran
+   over the lower step. Timers and a forecast keep their own padding, which
+   clears both steps (frame.spec.ts). */
+.calendar-object > .focusable-content,
+.tasks-object > .focusable-content,
+.inbox-object > .focusable-content,
+.image-object > .focusable-content {
   display: grid;
-  grid-template-rows: var(--panel-inset) minmax(0, 1fr) var(--panel-inset);
+  grid-template-rows: max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px));
 }
-.calendar-object > .focusable-content > * {
+.calendar-object > .focusable-content > *,
+.tasks-object > .focusable-content > *,
+.inbox-object > .focusable-content > *,
+.image-object > .focusable-content > * {
   grid-row: 2;
   min-height: 0;
 }
@@ -4877,7 +4895,7 @@ button {
   bottom: 0;
   pointer-events: none;
 }
-.calendar-pages__edges > .drawing-viewport__rail {
+.calendar-pages__edges > .scroll-rim__rail {
   width: 20px;
 }
 .calendar-pages__rim {
@@ -5817,8 +5835,17 @@ button {
   .training-charts--compare .chart-object {
     min-height: 38cqh;
   }
+  /* The plot's foot stands above the panel's lower step, with the panel's
+     gap: on a tall portrait slot the step outgrows the 8 px, and the first
+     tick sat on it. */
   .chart-object > .focusable-content {
-    padding: 14px 8px 8px;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) max(8px, var(--panel-inset));
+    padding: 14px 8px 0;
+  }
+  .chart-object > .focusable-content > * {
+    grid-row: 1;
+    min-height: 0;
   }
   .chart-notes {
     --note-width: min(78%, 460px);
@@ -5901,7 +5928,7 @@ button {
     --slot-pad: 14px;
   }
   .document-viewport__inner {
-    inset: 22px 20px 20px;
+    inset: max(22px, var(--document-inset)) 20px 20px;
   }
   .document-viewport__meta {
     grid-template-columns: 1fr auto;
@@ -5915,8 +5942,10 @@ button {
     margin: 16px 0 13px;
     font-size: clamp(21px, 4.8cqw, 34px);
   }
-  .document-viewport__body {
+  .document-viewport__reader {
     width: 100%;
+  }
+  .document-viewport__body {
     font-size: clamp(14px, 2.8cqw, 19px);
     line-height: 1.56;
   }
@@ -5925,7 +5954,7 @@ button {
     inset: 7px;
   }
   .code-viewport__scroll {
-    padding: 24px 34px 60px 55px;
+    padding: 24px 34px 16px 55px;
   }
   .code-viewport pre {
     font-size: clamp(12px, 2.45cqw, 17px);
@@ -5953,7 +5982,7 @@ button {
     padding: 0 18px;
   }
   .table-viewport__scroll {
-    padding: 0 18px 60px;
+    padding: 0 18px 16px;
   }
   .table-grid {
     font-size: clamp(12px, 3cqw, 16px);
@@ -6036,7 +6065,7 @@ button {
     --signal-height: clamp(30px, 6cqh, 42px);
   }
   .document-viewport__inner {
-    inset: 20px 30px;
+    inset: max(20px, var(--document-inset)) 30px 20px;
   }
   .document-viewport h1 {
     margin: 12px 0 10px;
@@ -6048,13 +6077,13 @@ button {
   }
   .code-viewport__scroll {
     padding-top: 18px;
-    padding-bottom: 48px;
+    padding-bottom: 16px;
   }
   .table-viewport__mask {
     padding-top: 18px;
   }
   .table-viewport__scroll {
-    padding-bottom: 48px;
+    padding-bottom: 16px;
   }
   /* A very wide stage draws the chart height-limited, with room beside
      it: a wider card keeps a note to fewer lines. */

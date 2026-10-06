@@ -232,43 +232,68 @@ export function settleStop(stops: readonly number[], from: number, position: num
 export function pageStop(stops: readonly number[], position: number, view: number, direction: -1 | 1): number {
   const ahead = stops.filter((stop) => (direction > 0 ? stop > position + EPSILON : stop < position - EPSILON));
   if (ahead.length === 0) return position;
-  const reach = position + direction * view * PAGE;
+  const reach = position + direction * view * PAGE_SHARE;
   const within = ahead.filter((stop) => (direction > 0 ? stop <= reach : stop >= reach));
   if (within.length === 0) return direction > 0 ? ahead[0] : ahead[ahead.length - 1];
   return direction > 0 ? within[within.length - 1] : within[0];
 }
-// A page keeps the last eighth of the view it leaves in sight.
-const PAGE = 0.875;
 
 /**
- * Where a key moves a drawing along one axis it scrolls (`stops` along it,
- * `position` where it stands, `view` the view's length there, less a pinned
- * band): Space and Page Down a page on, Shift+Space and Page Up a page back
- * (`pageStop`), the arrow that points along the axis (`across`: left and
- * right, else up and down) to the next stop that way, Home and End to the
- * first and the last. Null for a key that does not move it along the axis.
+ * How far a page reaches, as a share of the view, in every scroller (a
+ * drawing, a list, a table, code, a document): the last eighth of the view
+ * it leaves stays in sight.
  */
-export function keyStop(key: string, shift: boolean, across: boolean, stops: readonly number[], position: number, view: number): number | null {
-  const next = (direction: -1 | 1) =>
-    (direction > 0 ? stops.find((stop) => stop > position + EPSILON) : [...stops].reverse().find((stop) => stop < position - EPSILON)) ?? position;
+export const PAGE_SHARE = 0.875;
+
+/** What a scroll key asks of a scroller along one axis: a page, a step, or to go to an end, back (-1) or on (+1). */
+export interface ScrollMove {
+  kind: 'page' | 'step' | 'end';
+  direction: -1 | 1;
+}
+
+/**
+ * The one rule for the keys every scroller takes along an axis it scrolls
+ * (`across`: one it scrolls across): Space and Page Down a page on,
+ * Shift+Space and Page Up a page back, the arrow that points along the
+ * axis (left and right across, else up and down) a step that way, Home and
+ * End to either end. Null for a key it does not take there, which goes on
+ * to the surface around it (Enter expands the object). A drawing steps
+ * from stop to stop (`keyStop`), a list by a line (ListViewport).
+ */
+export function scrollMove(key: string, shift: boolean, across: boolean): ScrollMove | null {
   switch (key) {
     case ' ':
-      return pageStop(stops, position, view, shift ? -1 : 1);
+      return { kind: 'page', direction: shift ? -1 : 1 };
     case 'PageDown':
-      return pageStop(stops, position, view, 1);
+      return { kind: 'page', direction: 1 };
     case 'PageUp':
-      return pageStop(stops, position, view, -1);
+      return { kind: 'page', direction: -1 };
     case 'Home':
-      return stops[0] ?? 0;
+      return { kind: 'end', direction: -1 };
     case 'End':
-      return stops[stops.length - 1] ?? position;
+      return { kind: 'end', direction: 1 };
     case across ? 'ArrowRight' : 'ArrowDown':
-      return next(1);
+      return { kind: 'step', direction: 1 };
     case across ? 'ArrowLeft' : 'ArrowUp':
-      return next(-1);
+      return { kind: 'step', direction: -1 };
     default:
       return null;
   }
+}
+
+/**
+ * Where a key (`scrollMove`) moves a drawing along one axis it scrolls
+ * (`stops` along it, `position` where it stands, `view` the view's length
+ * there, less a pinned band): a page by `pageStop`, a step to the next
+ * stop that way, an end to the first or the last stop. Null for a key that
+ * does not move it along the axis.
+ */
+export function keyStop(key: string, shift: boolean, across: boolean, stops: readonly number[], position: number, view: number): number | null {
+  const move = scrollMove(key, shift, across);
+  if (!move) return null;
+  if (move.kind === 'page') return pageStop(stops, position, view, move.direction);
+  if (move.kind === 'end') return move.direction < 0 ? (stops[0] ?? 0) : (stops[stops.length - 1] ?? position);
+  return (move.direction > 0 ? stops.find((stop) => stop > position + EPSILON) : [...stops].reverse().find((stop) => stop < position - EPSILON)) ?? position;
 }
 
 // ---------------------------------------------------------------------------
