@@ -447,13 +447,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         let sm = s.as_object().ok_or("chart series item must be an object")?;
         check_unknown_keys(sm, &["name", "semantic", "values"], "chart series item")?;
 
-        let name = sm
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or("series.name must be a string")?;
-        if utf16_len(name) > 128 {
-            return Err("series.name exceeds maximum length of 128 UTF-16 code units".into());
-        }
+        let name = required_string(sm, "name", 128, "series.name")?;
 
         let values = sm
             .get("values")
@@ -484,40 +478,12 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         out.insert("labels".into(), Value::Array(labels.clone()));
     }
 
-    for (k, max_len) in [("title", 256), ("subtitle", 256), ("context", 256)] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("chart.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "chart.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
-    }
-    for (k, max_len) in [
-        ("caption", 128),
-        ("xLabel", 128),
-        ("yLabel", 128),
-        ("compareLabel", 128),
-    ] {
-        if let Some(v) = data.get(k) {
-            let s = v.as_str().ok_or(format!("chart.{k} must be a string"))?;
-            if utf16_len(s) > max_len {
-                return Err(format!(
-                    "chart.{k} exceeds maximum length of {max_len} UTF-16 code units"
-                ));
-            }
-            out.insert(k.into(), s.into());
-        }
+    copy_frame_text(data, &mut out, "chart")?;
+    for k in ["xLabel", "yLabel", "compareLabel"] {
+        copy_optional_string(data, &mut out, k, 128, &format!("chart.{k}"))?;
     }
     for k in ["xMax", "yMin", "yMax"] {
-        if let Some(v) = data.get(k) {
-            if !v.is_number() || !v.as_f64().is_some_and(f64::is_finite) {
-                return Err(format!("chart.{k} must be a finite number"));
-            }
-            out.insert(k.into(), v.clone());
-        }
+        copy_number(data, &mut out, k, &format!("chart.{k}"), false)?;
     }
 
     if let Some(marker_val) = data.get("marker") {
@@ -525,21 +491,9 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
             .as_object()
             .ok_or("chart.marker must be an object")?;
         check_unknown_keys(mm, &["x", "series"], "chart marker")?;
-        let x = mm
-            .get("x")
-            .filter(|v| v.is_number() && v.as_f64().is_some_and(f64::is_finite))
-            .ok_or("chart.marker.x must be a finite number")?;
         let mut marker_out = Map::new();
-        marker_out.insert("x".into(), x.clone());
-        if let Some(s) = mm.get("series") {
-            let series_str = s.as_str().ok_or("chart.marker.series must be a string")?;
-            if utf16_len(series_str) > 128 {
-                return Err(
-                    "chart.marker.series exceeds maximum length of 128 UTF-16 code units".into(),
-                );
-            }
-            marker_out.insert("series".into(), series_str.into());
-        }
+        copy_number(mm, &mut marker_out, "x", "chart.marker.x", true)?;
+        copy_optional_string(mm, &mut marker_out, "series", 128, "chart.marker.series")?;
         out.insert("marker".into(), Value::Object(marker_out));
     }
 
@@ -552,20 +506,8 @@ fn validate_metric_data(data: &Map<String, Value>) -> Result<Value, String> {
         &["label", "value", "semantic", "caption", "trend", "delta"],
         "metric data",
     )?;
-    let label = data
-        .get("label")
-        .and_then(Value::as_str)
-        .ok_or("metric.label must be a string")?;
-    if utf16_len(label) > 128 {
-        return Err("metric.label exceeds maximum length of 128 UTF-16 code units".into());
-    }
-    let value = data
-        .get("value")
-        .and_then(Value::as_str)
-        .ok_or("metric.value must be a string")?;
-    if utf16_len(value) > 128 {
-        return Err("metric.value exceeds maximum length of 128 UTF-16 code units".into());
-    }
+    let label = required_string(data, "label", 128, "metric.label")?;
+    let value = required_string(data, "value", 128, "metric.value")?;
 
     let mut out = Map::new();
     out.insert("label".into(), label.into());
@@ -617,15 +559,7 @@ fn validate_progress_steps(value: &Value) -> Result<Vec<Value>, String> {
     for step in steps {
         let sm = step.as_object().ok_or("progress step must be an object")?;
         check_unknown_keys(sm, &["label", "state", "detail"], "progress step")?;
-        let label = sm
-            .get("label")
-            .and_then(Value::as_str)
-            .ok_or("progress step.label must be a string")?;
-        if utf16_len(label) > 128 {
-            return Err(
-                "progress step.label exceeds maximum length of 128 UTF-16 code units".into(),
-            );
-        }
+        let label = required_string(sm, "label", 128, "progress step.label")?;
         let mut step_out = Map::new();
         step_out.insert("label".into(), label.into());
         copy_optional_name(
@@ -647,13 +581,7 @@ fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
         &["label", "detail", "value", "text", "caption", "steps"],
         "progress data",
     )?;
-    let label = data
-        .get("label")
-        .and_then(Value::as_str)
-        .ok_or("progress.label must be a string")?;
-    if utf16_len(label) > 128 {
-        return Err("progress.label exceeds maximum length of 128 UTF-16 code units".into());
-    }
+    let label = required_string(data, "label", 128, "progress.label")?;
 
     let steps = data.get("steps").map(validate_progress_steps).transpose()?;
 
@@ -680,20 +608,8 @@ fn validate_progress_data(data: &Map<String, Value>) -> Result<Value, String> {
         out.insert("steps".into(), Value::Array(steps));
     }
 
-    if let Some(detail) = data.get("detail") {
-        let d = detail.as_str().ok_or("progress.detail must be a string")?;
-        if utf16_len(d) > 256 {
-            return Err("progress.detail exceeds maximum length of 256 UTF-16 code units".into());
-        }
-        out.insert("detail".into(), d.into());
-    }
-    if let Some(text) = data.get("text") {
-        let t = text.as_str().ok_or("progress.text must be a string")?;
-        if utf16_len(t) > 128 {
-            return Err("progress.text exceeds maximum length of 128 UTF-16 code units".into());
-        }
-        out.insert("text".into(), t.into());
-    }
+    copy_optional_string(data, &mut out, "detail", 256, "progress.detail")?;
+    copy_optional_string(data, &mut out, "text", 128, "progress.text")?;
     copy_optional_string(data, &mut out, "caption", 128, "progress.caption")?;
     Ok(Value::Object(out))
 }
