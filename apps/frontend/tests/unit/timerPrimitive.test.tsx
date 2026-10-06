@@ -9,6 +9,7 @@ import { flushSync } from 'react-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TimerData } from '../../src/controller/types';
 import { TimerPrimitive } from '../../src/primitives/TimerPrimitive';
+import { timerGridLeast } from '../../src/primitives/timerReading';
 import { mount, rootOf, stubResizeObserver, unmount, unmountAll } from './sceneHarness';
 
 const NOW = Date.parse('2026-10-07T18:33:00-07:00');
@@ -149,5 +150,97 @@ describe('a timer', () => {
     const host = render(kitchen, 'bread');
     expect([...host.querySelectorAll('.note-badge')].map((badge) => badge.closest('[data-item]')!.getAttribute('data-item'))).toEqual(['bread']);
     expect(item(host, 'bread').className).toContain('--marked');
+  });
+});
+
+// What the field asks of a box that takes its height from it (an aux cell,
+// whose row is as tall as its cells ask). It asked what it drew, and a grid
+// laid out for its box draws a little less than its box: beside a source at
+// 820x1180 the row went 282.8 -> 356.2 -> 310.1 px and round again, cells,
+// rows, cells, every frame. jsdom lays nothing out, so the field's box and
+// the rows' height are given here; tests/visual/composition.spec.ts watches
+// the row in a browser.
+describe('the height the timers ask', () => {
+  let field = { width: 0, height: 0 };
+  let rows = 0;
+  const observers = new Map<Element, ResizeObserverCallback>();
+  const saved = (['offsetWidth', 'offsetHeight'] as const).map((key) => [key, Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)] as const);
+  const stub = globalThis.ResizeObserver;
+  const report = () => act(() => {
+    for (const [element, callback] of observers) {
+      const height = element.classList.contains('timer-list__rows') ? rows : field.height;
+      callback([{ target: element, borderBoxSize: [{ blockSize: height, inlineSize: field.width }], contentRect: { height, width: field.width } } as unknown as ResizeObserverEntry], {} as ResizeObserver);
+    }
+  });
+  const ask = (host: HTMLElement) => host.querySelector<HTMLElement>('.timer-primitive__field')!.style.getPropertyValue('--timer-ask');
+
+  beforeEach(() => {
+    observers.clear();
+    globalThis.ResizeObserver = class {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe(element: Element) {
+        observers.set(element, this.callback);
+      }
+      unobserve() {}
+      disconnect() {
+        for (const [element, callback] of observers) if (callback === this.callback) observers.delete(element);
+      }
+    } as unknown as typeof ResizeObserver;
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => field.width });
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => field.height });
+  });
+
+  afterEach(() => {
+    unmountAll();
+    globalThis.ResizeObserver = stub;
+    for (const [key, descriptor] of saved) if (descriptor) Object.defineProperty(HTMLElement.prototype, key, descriptor);
+  });
+
+  it('is the same whatever height the box gave them, cells or rows', () => {
+    // Four timers, MM:SS: at 730 px a grid of readable cells needs less than their rows.
+    const least = timerGridLeast(730, 4, 5)!;
+    field = { width: 730, height: 236 };
+    rows = 327;
+    const host = render(kitchen);
+    report();
+    expect(ask(host)).toBe(`${least}px`);
+    const seen = new Set<string>();
+    for (const height of [236, 309.4, 263.3, least, least - 2, 150]) {
+      field = { width: 730, height };
+      report();
+      seen.add(host.querySelector('[data-testid="timer"]')!.getAttribute('data-layout')!);
+      expect(ask(host), `given ${height}`).toBe(`${least}px`);
+    }
+    // The box chose what was drawn: cells in some heights, rows in others.
+    expect(seen).toEqual(new Set(['grid-2x2', 'list']));
+  });
+
+  it('is the rows\' height where a grid of readable cells would need more', () => {
+    field = { width: 730, height: 120 };
+    rows = 64.0625;
+    const host = render({ timers: [kitchen.timers[0]] });
+    report();
+    expect(timerGridLeast(730, 1, 5)).toBeGreaterThan(rows);
+    expect(ask(host)).toBe('64.0625px');
+    field = { width: 730, height: 400 };
+    report();
+    expect(ask(host)).toBe('64.0625px');
+  });
+
+  it('is the rows\' height where no grid reads at the width', () => {
+    // A day to go is eleven characters, too wide for readable digits in 200 px.
+    field = { width: 200, height: 600 };
+    rows = 130;
+    const host = render({ timers: [{ id: 'trip', label: 'Trip', endsAt: at(26 * 60) }, kitchen.timers[0]] });
+    report();
+    expect(timerGridLeast(200, 2, 11)).toBeNull();
+    expect(ask(host)).toBe('130px');
+  });
+
+  it('measures rows that name no item, so a note or a count finds each timer once', () => {
+    const host = render(kitchen, 'bread');
+    expect(host.querySelectorAll('[data-item]')).toHaveLength(kitchen.timers.length);
+    expect(host.querySelector('.timer-primitive__measure')!.getAttribute('aria-hidden')).toBe('true');
+    expect(host.querySelectorAll('.timer-primitive__measure .timer-row')).toHaveLength(kitchen.timers.length);
   });
 });

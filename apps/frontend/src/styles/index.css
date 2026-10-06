@@ -2309,6 +2309,26 @@ button {
   width: 100%;
   min-width: 0;
   min-height: 0;
+  /* It asks a box sized by its content (an aux cell) for --timer-ask, set
+     by TimerPrimitive from its width alone: never for what it drew, which
+     the box's height chose (a grid drew a little less than its box, and in
+     an aux cell, as tall as its cells ask, cells and rows took turns every
+     frame). A definite box (the main slot, focus) sizes it as before. */
+  contain: size;
+  contain-intrinsic-height: var(--timer-ask, 0px);
+}
+/* The rows as the list draws them, laid out unseen for their height. */
+.timer-primitive__measure {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+/* Its own block, so the first row's margin is in its height, as it is in
+   the list's scroll. */
+.timer-primitive__measure > ol {
+  display: flow-root;
 }
 .timer-primitive ol {
   margin: 0;

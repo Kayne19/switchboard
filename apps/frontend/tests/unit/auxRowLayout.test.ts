@@ -100,6 +100,14 @@ describe('the aux row', () => {
     expect(topLevel('.drawing-viewport--scrolling .drawing-viewport__view', 'contain')).toBe('size');
   });
 
+  it('takes from timers the height they ask by their width, not what they drew for the height they were given', () => {
+    // A grid laid out for its box draws a little less than its box; asked
+    // for that, a row as tall as its cells ask went round every frame.
+    // TimerPrimitive sets --timer-ask (timerReading.ts timerGridLeast).
+    expect(topLevel('.timer-primitive__field', 'contain')).toBe('size');
+    expect(topLevel('.timer-primitive__field', 'contain-intrinsic-height')).toBe('var(--timer-ask, 0px)');
+  });
+
   it('contains an image in its cell instead of cropping it', () => {
     expect(topLevel('.composed-aux-object--image .image-primitive__field', 'height')).toBe('100%');
     expect(topLevel('.image-primitive__img', 'object-fit')).toBe('contain');
