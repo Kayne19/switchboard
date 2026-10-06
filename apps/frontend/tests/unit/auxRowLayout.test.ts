@@ -124,4 +124,16 @@ describe('a table', () => {
     expect(breaking.map((rule) => rule.selectors.join(', '))).toEqual([]);
     expect(topLevel('.table-viewport__scroll', 'overflow')).toBe('auto');
   });
+
+  it('stands its scroll between the code frame\'s steps by the source\'s rule', () => {
+    // One grid for both masks: the top-right step (5.7%) and the lower one
+    // (4.6%), each with the same gap; the scroll in the middle row. The table
+    // cleared the top step with its padding and meta line, short of the gap.
+    const rows = topLevel('.code-viewport__mask', 'grid-template-rows');
+    expect(rows).toMatch(/calc\(5\.7% \+ var\(--mask-gap\)\).*calc\(4\.6% \+ var\(--mask-gap\)\)$/);
+    expect(topLevel('.table-viewport__mask', 'grid-template-rows')).toBe(rows);
+    expect(topLevel('.table-viewport__mask > .list-viewport', 'grid-row')).toBe('2');
+    expect(topLevel('.code-viewport__mask > .list-viewport', 'grid-row')).toBe('2');
+    expect(topLevel('.table-viewport__mask', 'padding-top')).toBeUndefined();
+  });
 });

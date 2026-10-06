@@ -91,6 +91,40 @@ for (const geometry of FRAME_GEOMETRIES) {
       });
     }
 
+    // A table and a source stand their scroll between the code frame's steps
+    // by one rule: the step (the clip's 5.7% at the top right, 4.6% at the
+    // bottom left) and the same gap from each. The table cleared the top
+    // step with its padding and meta line instead: its header ran 2 px under
+    // the step in focus at 820x1180, and short of the gap in several slots.
+    test('table and source: the scroll stands a step and a gap from each of the frame\'s steps, as the primary, in focus, and beside another primary', async ({ page }) => {
+      const clearance = (selector: string) => page.evaluate((root) => {
+        const pane = document.querySelector(root)!;
+        const mask = pane.querySelector('.code-viewport__mask, .table-viewport__mask')!.getBoundingClientRect();
+        const port = pane.querySelector('.list-viewport__port')!.getBoundingClientRect();
+        // The mask's gap: clamp(6px, 0.9cqh, 12px) of the stage.
+        const gap = Math.min(12, Math.max(6, 0.009 * document.querySelector('.stage')!.clientHeight));
+        return {
+          top: Math.round(port.top - mask.top - (0.057 * mask.height + gap)) >= 0,
+          bottom: Math.round(mask.bottom - port.bottom - (0.046 * mask.height + gap)) >= 0,
+        };
+      }, selector);
+      for (const name of ['table of 80 rows', 'source of 200 lines']) {
+        const item = cases.find((each) => each.name === name)!;
+        const selector = `[data-testid="${item.testId}"]`;
+        const id = await open(page, item);
+        expect(await clearance(`.scene ${selector}`), `${name} as the primary`).toEqual({ top: true, bottom: true });
+        await runActions(page, [{ op: 'focus', id }]);
+        await expect(page.locator(`.focus-layer ${selector}`)).toBeVisible();
+        await page.waitForTimeout(700);
+        expect(await clearance(`.focus-layer ${selector}`), `${name} in focus`).toEqual({ top: true, bottom: true });
+        const data = await page.evaluate((key) => window.SwitchboardController!.state().agentObjects[key].data, id);
+        await runActions(page, [{ op: 'clear' }, { op: 'show', id, type: item.type, role: 'secondary', data }, item.type === 'code' ? aside.code : aside.other]);
+        await expect(page.locator(`.composed-aux-object ${selector}`)).toBeVisible();
+        await page.waitForTimeout(500);
+        expect(await clearance(`.composed-aux-object ${selector}`), `${name} beside another primary`).toEqual({ top: true, bottom: true });
+      }
+    });
+
     // Scrolled to the middle, a line passes under neither of the source
     // frame's steps: the scroll stands between them (it passed under the
     // top-right one at every geometry).

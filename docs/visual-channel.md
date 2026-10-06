@@ -413,10 +413,11 @@ share of its height, so a slot keeps clear of them by a row of its own grid
 in that share (`--panel-inset` for the panel frame), never by a padding in
 stage units, which falls short on a tall slot. The calendar, the to-do
 list, the inbox and a figure stand in the panel's inner box; a table's and
-a source's rows stop above the code frame's lower step (their rims at the
-foot with them), and a source's lines, at rest or scrolled, stand below
-its top-right step; a document's meta line stands under its frame's top
-line; a portrait chart's foot clears the panel's lower step.
+a source's scroll stands between the code frame's steps by one rule, a gap
+from each, so their rows and lines, at rest or scrolled, and their rims
+never run under a step (a table's meta line stands beside the top-right
+step, above its scroll); a document's meta line stands under its frame's
+top line; a portrait chart's foot clears the panel's lower step.
 `frame.spec.ts` checks every primitive, as the primary, in focus and in
 the aux row, at every geometry the visual suites use, and a long source
 scrolled to its middle: each part that draws something must stand inside
