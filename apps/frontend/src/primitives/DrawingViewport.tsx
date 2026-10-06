@@ -3,7 +3,7 @@ import { useElementSize } from '../hooks/useElementSize';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { useLeastHeight } from '../hooks/useStageDemand';
 import { SLIVER, type DrawingFit, type Size, type Viewport } from './drawingFit';
-import { countText } from './countText';
+import { rimCount } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import { ScrollRim } from './ScrollRim';
 import {
@@ -517,7 +517,7 @@ export function DrawingViewport({
   const rimTexts = useMemo(() => {
     const text = (side: Side) => {
       const count = rim?.[side]?.beyond ?? 0;
-      return count > 0 ? countText(count, map.noun, { pad: true }) : '';
+      return count > 0 ? rimCount(count, map.noun) : '';
     };
     return { left: text('left'), right: text('right'), top: text('top'), bottom: text('bottom') };
   }, [rim, map]);

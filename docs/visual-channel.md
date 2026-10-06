@@ -525,9 +525,11 @@ over their field. The forecast's head names its place in every role.
 A list longer than its slot (a forecast's days, timers in a small slot,
 and the other assistant lists) scrolls up and down inside its frame in a
 `ListViewport`, the HTML twin of a drawing's viewport: on each edge it
-continues past it draws the same fade, dashed cut line and tag, the tag
-counting the items that lie that way (a row of which no more than a
-sliver shows counts as past the edge), or saying MORE where none does. A
+continues past it draws the same fade, dashed cut line and tag (one
+`ScrollRim`), the tag counting the items that lie that way in two digits
+at least, as every rim counts ("06 TASKS", a week's hidden days "MON-TUE /
+07 EVENTS"); a row of which no more than a sliver shows counts as past
+the edge; it says MORE where none does. A
 tap on the tag turns a page and does not expand the object; the keys that
 scroll a focused list scroll it. It opens on the item a note names, never
 under the fade, and keeps the reader's place through an update. Focus

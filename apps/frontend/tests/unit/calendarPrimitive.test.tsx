@@ -112,7 +112,7 @@ describe('the week', () => {
     const heads = () => [...calendar.querySelectorAll('.calendar-grid__weekday')].map((cell) => cell.textContent);
     expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
     const rims = () => [...calendar.querySelectorAll('.calendar-pages__rim')].map((rim) => rim.textContent);
-    expect(rims()).toEqual([expect.stringMatching(/^MON-THU \/ \d+ EVENTS$/)]);
+    expect(rims()).toEqual([expect.stringMatching(/^MON-THU \/ \d\d EVENTS$/)]);
     // A tap on the rail turns back a page, and is handled: the surface around it does not expand.
     const click = new MouseEvent('click', { bubbles: true, cancelable: true });
     act(() => {

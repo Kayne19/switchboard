@@ -39,6 +39,7 @@ import {
   type PlacedEvent,
   type TimeAxis,
 } from './calendarLayout';
+import { rimCount } from './countText';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
@@ -230,7 +231,7 @@ function runText(days: number[], placed: PlacedEvent[]): string {
   const last = days[days.length - 1];
   const count = placed.filter((item) => item.firstDay <= last && item.lastDay >= first).length;
   const name = days.length === 1 ? weekdayName(first) : `${weekdayName(first)}-${weekdayName(last)}`;
-  return `${name} / ${count} ${count === 1 ? 'EVENT' : 'EVENTS'}`;
+  return `${name} / ${rimCount(count, ['EVENT', 'EVENTS'])}`;
 }
 
 function TimeGrid({ data, model, marked, size, columns }: GridProps) {

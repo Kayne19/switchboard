@@ -141,9 +141,9 @@ describe('ListViewport', () => {
     });
     const rims = Array.from(page().querySelectorAll<HTMLElement>('.list-viewport .scroll-rim__count'));
     expect(rims.map((rim) => [rim.className.includes('--top') ? 'top' : 'bottom', rim.textContent])).toEqual([
-      ['top', '3 TASKS'],
+      ['top', '03 TASKS'],
       // Rows 7-9, and row 6 of which 10px of 30 show.
-      ['bottom', '4 TASKS'],
+      ['bottom', '04 TASKS'],
     ]);
     expect(page().querySelectorAll('.scroll-rim__rail')).toHaveLength(2);
     expect(scroll.tabIndex).toBe(0);
@@ -153,7 +153,7 @@ describe('ListViewport', () => {
     const scroll = render(rows(10));
     layOut(scroll, 90, 0.5);
     await measured(scroll);
-    expect(Array.from(page().querySelectorAll('.list-viewport .scroll-rim__count')).map((rim) => rim.textContent)).toEqual(['3 TASKS', '4 TASKS']);
+    expect(Array.from(page().querySelectorAll('.list-viewport .scroll-rim__count')).map((rim) => rim.textContent)).toEqual(['03 TASKS', '04 TASKS']);
   });
 
   it('counts only what countSelector picks', async () => {
@@ -166,7 +166,7 @@ describe('ListViewport', () => {
     layOut(scroll, 0);
     await measured(scroll);
     // Rows 3-9 lie below (10px of row 3 shows); the days among them are 3, 5, 7, 9.
-    expect(element.querySelector('.list-viewport .scroll-rim__count')!.textContent).toBe('4 DAYS');
+    expect(element.querySelector('.list-viewport .scroll-rim__count')!.textContent).toBe('04 DAYS');
   });
 
   it('marks an edge it continues past where no item lies that way, as MORE', async () => {
@@ -183,7 +183,7 @@ describe('ListViewport', () => {
     await measured(scroll);
     const rims = Array.from(element.querySelectorAll('.list-viewport .scroll-rim__count')).map((rim) => [rim.className.includes('--top') ? 'top' : 'bottom', rim.textContent]);
     // 210 tall: the view 90-190 shows the days at 90-180 and a sliver of the last.
-    expect(rims).toEqual([['top', 'MORE'], ['bottom', '1 DAY']]);
+    expect(rims).toEqual([['top', 'MORE'], ['bottom', '01 DAY']]);
   });
 
   it('names one item in the singular', async () => {
@@ -193,7 +193,7 @@ describe('ListViewport', () => {
       scroll.dispatchEvent(new Event('scroll'));
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
-    expect(page().querySelector('.scroll-rim__count--bottom')!.textContent).toBe('1 TASK');
+    expect(page().querySelector('.scroll-rim__count--bottom')!.textContent).toBe('01 TASK');
   });
 
   it('does not count what is not an item: a group heading', async () => {
@@ -204,7 +204,7 @@ describe('ListViewport', () => {
       await new Promise((resolve) => requestAnimationFrame(resolve));
     });
     // Row 3 shows 10px, the heading is 4, rows 5-8 below: five tasks, the heading not one.
-    expect(page().querySelector('.scroll-rim__count--bottom')!.textContent).toBe('5 TASKS');
+    expect(page().querySelector('.scroll-rim__count--bottom')!.textContent).toBe('05 TASKS');
   });
 
   it("opens on its lead once per shape, and keeps the reader's place after", () => {

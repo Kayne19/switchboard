@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
-import { countText, type Noun } from './countText';
+import { rimCount, type Noun } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import { ScrollRim } from './ScrollRim';
 import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
@@ -236,7 +236,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
       <ScrollRim
         side={side}
         fade={fade}
-        text={count > 0 ? countText(count, noun) : 'MORE'}
+        text={count > 0 ? rimCount(count, noun) : 'MORE'}
         onPage={() => page(side === 'top' ? -1 : 1)}
         count={count}
       />
