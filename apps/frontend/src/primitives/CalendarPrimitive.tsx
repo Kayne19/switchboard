@@ -201,13 +201,18 @@ interface GridProps {
   columns: number;
 }
 
-/** The column the grid opens on: the day of the marked event, else today, else the active event's, else the first. */
-function leadDay(model: CalendarModel, marked: string | undefined): number | undefined {
+/** The event a note names, where the view's days reach it: the one its badge marks and the view opens on. */
+function markedInView(model: CalendarModel, marked: string | undefined): PlacedEvent | undefined {
   const first = model.days[0];
   const last = model.days[model.days.length - 1];
-  const named = marked === undefined ? undefined : model.placed.find((item) => item.event.id === marked && item.lastDay >= first && item.firstDay <= last);
+  return marked === undefined ? undefined : model.placed.find((item) => item.event.id === marked && item.lastDay >= first && item.firstDay <= last);
+}
+
+/** The column the grid opens on: the day of the marked event, else today, else the active event's, else the first. */
+function leadDay(model: CalendarModel, marked: string | undefined): number | undefined {
+  const named = markedInView(model, marked);
   // An event that began before the view leads from the view's first day.
-  if (named) return Math.max(named.firstDay, first);
+  if (named) return Math.max(named.firstDay, model.days[0]);
   if (model.today !== undefined) return model.today;
   return model.placed.find((item) => item.event.active)?.firstDay;
 }
@@ -955,7 +960,7 @@ export function CalendarPrimitive({ data, marked, focused = false, framed = fals
   // The head is sized from the bars over every day the view has, not the
   // page a narrow week shows: the choice of grid or agenda must not change
   // as the reader turns the days.
-  const noted = marked !== undefined && model.placed.some((item) => item.event.id === marked && item.lastDay >= model.days[0] && item.firstDay <= model.days[model.days.length - 1]);
+  const noted = markedInView(model, marked) !== undefined;
   const choice = chooseLayout(data, size, model.days.length, gridHeadPx(laneCount(dayBars(model.placed, model.days))), noted);
   const count = data.events.length;
   // The meta line: what is shown and how much, led by the title only where

@@ -58,11 +58,12 @@ function render(data: CalendarData, marked?: string, size = { width: 0, height: 
 const boxes = (scope: Element, id: string) => [...scope.querySelectorAll(`[data-item="${id}"]`)];
 
 // The stylesheet's rules for exactly a selector (for `.a`, not `.a-b` or
-// `.a::before`), comments out, and what they declare for a property.
+// `.a::before`), those inside an @container block too, comments out, and
+// what they declare for a property.
 const stylesheet = readFileSync(`${import.meta.dirname}/../../src/styles/index.css`, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 function rulesFor(selector: string): string[] {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return [...stylesheet.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+  return [...stylesheet.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .filter(([, selectors]) => selectors.split(',').some((each) => new RegExp(`^${escaped}$`).test(each.trim())))
     .map(([, , body]) => body);
 }
@@ -366,7 +367,7 @@ describe('the panel frame round a calendar', () => {
     // its height, which the layout sets), not a padding in stage units.
     const slot = '.calendar-object > .focusable-content';
     expect(declared(slot, 'grid-template-rows')).toEqual(['var(--panel-inset) minmax(0, 1fr) var(--panel-inset)']);
-    expect(declared(slot, 'padding-block')).toEqual(['0']);
+    expect(declared('.calendar-object .focusable-content', 'padding')).toEqual(['0 clamp(18px, 2.2cqw, 38px)']);
     expect(declared(`${slot} > *`, 'grid-row')).toEqual(['2']);
   });
 
@@ -411,7 +412,7 @@ describe('the now and today marks', () => {
     expect(declared('.calendar-grid__now-text', 'clip-path')).toEqual(['var(--now-point)']);
   });
 
-  it('draws the agenda\u2019s now in the same mark, and today the same way in every view', () => {
+  it('draws the agenda\u2019s now in the same mark, and today the same way in the grid and the month', () => {
     // The agenda's NOW row: the pointed tag along the same thin rule.
     expect(declared('.calendar-agenda__now-text', 'clip-path')).toEqual(['var(--now-point)']);
     expect(declared('.calendar-agenda__now-line', 'height')).toEqual(['1px']);
