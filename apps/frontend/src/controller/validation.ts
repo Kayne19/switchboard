@@ -771,6 +771,8 @@ function validateCodeData(data: Record<string, unknown>): { ok: true; data: Code
   }
 
   const result: CodeData = { source: sourceObj };
+  // Not copyFrameText: code has `file` where the others have `subtitle`,
+  // and checks it between title and context.
   const err =
     copyOptionalString(data, result, 'title', 256, 'code.title') ??
     copyOptionalString(data, result, 'file', 256, 'code.file') ??
