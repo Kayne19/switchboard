@@ -118,7 +118,7 @@ horizontal field
 
 vertical field
 | primary content |
-| explanation + presence |   (a strip of the note and presence when the primary outgrows its share)
+| explanation + presence |   (the note whole beside Damocles; a primary that outgrows its share scrolls in it)
 | shared footer |
 ```
 
