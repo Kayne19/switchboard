@@ -166,6 +166,10 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   useLeastHeight(least === undefined ? noRef : scrollRef, least ?? null);
   const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
+  // A pane may overflow only sideways (source with long lines, a wide
+  // table on a phone): it takes no scroll keys, but it stays a tab stop,
+  // so a reader without a pointer can still scroll it across.
+  const [across, setAcross] = useState(false);
   const [viewHeight, setViewHeight] = useState(0);
   const [pinnedDepth, setPinnedDepth] = useState(0);
 
@@ -195,6 +199,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
       current.above === next.above && current.below === next.below && current.top === next.top && current.bottom === next.bottom ? current : next,
     );
     setScrolls(element.scrollHeight > element.clientHeight + 1);
+    setAcross(element.scrollWidth > element.clientWidth + 1);
     setViewHeight(element.clientHeight);
     setPinnedDepth(depth);
   }, [scrollRef, countSelector, pinned]);
@@ -266,7 +271,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
         <div
           ref={scrollRef}
           className={`list-viewport__scroll${scrollClassName ? ` ${scrollClassName}` : ''}`}
-          tabIndex={scrolls ? 0 : undefined}
+          tabIndex={scrolls || across ? 0 : undefined}
           aria-label={label}
           role={label ? 'region' : undefined}
           onScroll={onScroll}

@@ -133,6 +133,18 @@ describe('ListViewport', () => {
     expect(scroll.tabIndex).toBe(-1);
   });
 
+  it('stays a tab stop when it overflows only sideways, and leaves Space to the surface', async () => {
+    const scroll = render(rows(3));
+    layOut(scroll, 0);
+    Object.defineProperty(scroll, 'clientWidth', { configurable: true, value: 200 });
+    Object.defineProperty(scroll, 'scrollWidth', { configurable: true, value: 600 });
+    await measured(scroll);
+    expect(scroll.tabIndex).toBe(0);
+    expect(page().querySelector('.scroll-rim__count')).toBeNull();
+    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })));
+    expect(surfaceClicks).toBe(1);
+  });
+
   it('counts the items past each edge in the noun given, and takes keys while it scrolls', async () => {
     const scroll = render(rows(10));
     layOut(scroll, 90);
