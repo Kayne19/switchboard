@@ -294,10 +294,24 @@ function checkString(val: unknown, maxLen: number, name: string): string | null 
 // backend's validators have their own set (`copy_optional_string` and the
 // rest).
 
+/**
+ * A result built key by key and cast to its type once it is whole. A helper
+ * also writes into a typed result (`ChartData`, `DiagramNode`, ...); its
+ * `key` is then one the type has, so a call cannot write a field the type
+ * lacks.
+ */
 type Fields = Record<string, unknown>;
 
+/** The four scene-frame strings most types carry, each optional. */
+interface FrameText {
+  title?: string;
+  subtitle?: string;
+  context?: string;
+  caption?: string;
+}
+
 /** The scene-frame text every type may carry, checked last. */
-function copyFrameText(data: Fields, out: Fields, kind: string): string | null {
+function copyFrameText(data: Fields, out: FrameText, kind: string): string | null {
   for (const key of ['title', 'subtitle', 'context'] as const) {
     const err = copyOptionalString(data, out, key, 256, `${kind}.${key}`);
     if (err) return err;
@@ -305,45 +319,45 @@ function copyFrameText(data: Fields, out: Fields, kind: string): string | null {
   return copyOptionalString(data, out, 'caption', 128, `${kind}.caption`);
 }
 
-function copyOptionalString(data: Fields, out: Fields, key: string, maxLen: number, field: string): string | null {
+function copyOptionalString<T extends object>(data: Fields, out: T, key: keyof T & string, maxLen: number, field: string): string | null {
   if (data[key] === undefined) return null;
   const err = checkString(data[key], maxLen, field);
   if (err) return err;
-  out[key] = data[key];
+  (out as Fields)[key] = data[key];
   return null;
 }
 
-function copyOptionalBoolean(data: Fields, out: Fields, key: string, field: string): string | null {
+function copyOptionalBoolean<T extends object>(data: Fields, out: T, key: keyof T & string, field: string): string | null {
   if (data[key] === undefined) return null;
   if (typeof data[key] !== 'boolean') return `${field} must be boolean`;
-  out[key] = data[key];
+  (out as Fields)[key] = data[key];
   return null;
 }
 
 /** An optional name from `allowed`; anything else, `null` included, is `invalidName`'s refusal. */
-function copyOptionalName(data: Fields, out: Fields, key: string, allowed: readonly string[], field: string): string | null {
+function copyOptionalName<T extends object>(data: Fields, out: T, key: keyof T & string, allowed: readonly string[], field: string): string | null {
   const value = data[key];
   if (value === undefined) return null;
   if (!isName(value, allowed)) return invalidName(field, allowed);
-  out[key] = value;
+  (out as Fields)[key] = value;
   return null;
 }
 
-function copyNumber(data: Fields, out: Fields, key: string, field: string, required: boolean): string | null {
+function copyNumber<T extends object>(data: Fields, out: T, key: keyof T & string, field: string, required: boolean): string | null {
   const value = data[key];
   if (value === undefined && !required) return null;
   if (typeof value !== 'number' || !Number.isFinite(value)) return `${field} must be a finite number`;
-  out[key] = value;
+  (out as Fields)[key] = value;
   return null;
 }
 
-function copyOptionalPercent(data: Fields, out: Fields, key: string, field: string): string | null {
+function copyOptionalPercent<T extends object>(data: Fields, out: T, key: keyof T & string, field: string): string | null {
   const value = data[key];
   if (value === undefined) return null;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) {
     return `${field} must be a number from 0 to 100`;
   }
-  out[key] = value;
+  (out as Fields)[key] = value;
   return null;
 }
 
