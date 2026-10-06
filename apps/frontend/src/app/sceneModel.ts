@@ -201,6 +201,29 @@ export function sceneKind(state: ControllerState): SceneKind {
   return primary.type === 'chart' ? 'training' : primary.type === 'diagram' ? 'architecture' : primary.type;
 }
 
+// The fields an object is named by, in the order the scene frame and the
+// agent's view take them (`summary` in apps/backend/src/display.rs, the
+// cross-side mirror): a title, a document's subject, a metric's or a
+// progress's label, an image's alt text (its title when it has none), a
+// forecast's place (so is that).
+const NAME_FIELDS = ['title', 'subject', 'label', 'alt', 'location'] as const;
+
+/**
+ * The names an object's data carries, in NAME_FIELDS order: each of those
+ * fields that holds a string, a blank one too. Every reader takes them
+ * from here: the screen-state report and the composed scene's frame take
+ * the first as it is; a card's TARGET line the first that is not blank
+ * (`objectName`).
+ */
+export function nameFields(data: unknown): string[] {
+  if (data === null || typeof data !== 'object') return [];
+  const record = data as Record<string, unknown>;
+  return NAME_FIELDS.flatMap((field) => {
+    const value = record[field];
+    return typeof value === 'string' ? [value] : [];
+  });
+}
+
 export function deriveScreenState(
   state: ControllerState,
   generation: number,
@@ -209,32 +232,13 @@ export function deriveScreenState(
   const focused = state.focusId ? state.agentObjects[state.focusId] : null;
   const primary = comp.primary;
 
-  let title = '';
-  const candidate = focused ?? primary;
-  if (candidate?.data && typeof candidate.data === 'object') {
-    const data = candidate.data as Record<string, unknown>;
-    if (typeof data.title === 'string') {
-      title = data.title;
-    } else if (typeof data.subject === 'string') {
-      title = data.subject;
-    } else if (typeof data.label === 'string') {
-      title = data.label;
-    } else if (typeof data.alt === 'string') {
-      // An image's alt text is its title when it has none.
-      title = data.alt;
-    } else if (typeof data.location === 'string') {
-      // So is a forecast's place.
-      title = data.location;
-    }
-  }
-
   return {
     view: state.workspace.effectiveView,
     pinned: state.workspace.callerPinned,
     has_visual: state.agentOrder.length > 0,
     visual_kind: comp.visualKind,
     object_ids: [...state.agentOrder],
-    title,
+    title: nameFields((focused ?? primary)?.data)[0] ?? '',
     stale: state.workspace.stale,
     generation,
   };

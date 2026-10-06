@@ -4,7 +4,7 @@ import { markedPart } from '../primitives/NoteMarker';
 import { weatherItemName } from '../primitives/weatherLayout';
 import { eventTarget } from '../primitives/calendarLayout';
 import { chartTargetText } from '../primitives/chartGeometry';
-import { cast } from './sceneModel';
+import { cast, nameFields } from './sceneModel';
 
 // A note on one item (docs/display-tool.md, "A note on one item"): a note's
 // `anchor.item` names an event, a task, a timer, a message, or a forecast
@@ -74,13 +74,7 @@ function nodeLabel(data: DiagramObjectData, id: string): string | undefined {
   return data.mode === 'sequence' ? data.actors.find((actor) => actor.id === id)?.label : data.nodes.find((node) => node.id === id)?.label;
 }
 
-// The fields an object is named by, in the order the scene frame and the
-// agent's view take them (`summary` in apps/backend/src/display.rs): a
-// title, a document's subject, a metric's or a progress's label, an
-// image's alt text, a forecast's place.
-const NAME_FIELDS = ['title', 'subject', 'label', 'alt', 'location'] as const;
-
-/** What the page shows of an object that carries none of NAME_FIELDS, in their stead: code's file (its frame's subtitle), a note's tag, a sequence's kind. */
+/** What the page shows of an object that carries none of its name fields (`nameFields`), in their stead: code's file (its frame's subtitle), a note's tag, a sequence's kind. */
 function shownName(object: SceneObject): string | undefined {
   switch (object.type) {
     case 'code':
@@ -105,12 +99,7 @@ const said = (value: unknown): string | undefined => (typeof value === 'string' 
  * caller does not read it.
  */
 export function objectName(object: SceneObject): string {
-  const data = object.data as Partial<Record<(typeof NAME_FIELDS)[number], unknown>> | null;
-  for (const field of NAME_FIELDS) {
-    const value = said(data?.[field]);
-    if (value) return value;
-  }
-  return said(shownName(object)) ?? object.type.toUpperCase();
+  return nameFields(object.data).map(said).find(Boolean) ?? said(shownName(object)) ?? object.type.toUpperCase();
 }
 
 /**

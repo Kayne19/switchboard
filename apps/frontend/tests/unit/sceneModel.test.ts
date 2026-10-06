@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
 import { fixtures } from '../../src/fixtures/scenes';
-import { besideVisuals, buildCompositionModel, sceneKind } from '../../src/app/sceneModel';
-import type { ControllerAction } from '../../src/controller/types';
+import { besideVisuals, buildCompositionModel, deriveScreenState, sceneKind } from '../../src/app/sceneModel';
+import type { ControllerAction, SceneObjectType } from '../../src/controller/types';
 
 const expected = {
   idle: 'idle',
@@ -69,5 +69,35 @@ describe('visuals beside the primary', () => {
       show('fig', 'image'),
     ]);
     expect(besideVisuals(buildCompositionModel(state)).map((object) => object.id)).toEqual(['fig']);
+  });
+});
+
+// The screen-state report's `title` names what is on screen as the
+// backend's view summary does (`summary`, apps/backend/src/display.rs):
+// the first of a title, a subject, a label, an alt text and a place that
+// the object carries as a string, a blank one as it is; '' for none.
+describe('the title a screen-state report gives', () => {
+  const titleOf = (type: SceneObjectType, data: Record<string, unknown>) =>
+    deriveScreenState(reduceActions(createInitialState(), [{ op: 'show', id: 'x', type, role: 'primary', data }]), 1).title;
+
+  it.each([
+    ['a title before the rest', 'image', { title: 'T', alt: 'A' }, 'T'],
+    ['a document by its subject', 'document', { subject: 'S', paragraphs: [] }, 'S'],
+    ['a metric by its label', 'metric', { label: 'L', value: '1' }, 'L'],
+    ['an image with no title by its alt text', 'image', { alt: 'A' }, 'A'],
+    ['a forecast with no title by its place', 'weather', { location: 'Oslo' }, 'Oslo'],
+    ['a blank title as it is, before the alt text', 'image', { title: ' ', alt: 'A' }, ' '],
+    ['nothing for a note, which carries none', 'note', { tag: 'NOTE', segments: [] }, ''],
+  ] as const)('names %s', (_, type, data, title) => {
+    expect(titleOf(type, data)).toBe(title);
+  });
+
+  it('names the focused object over the primary', () => {
+    const state = reduceActions(createInitialState(), [
+      { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { title: 'MAP' } },
+      { op: 'show', id: 'eta', type: 'metric', data: { label: 'ETA', value: '1' } },
+      { op: 'focus', id: 'eta' },
+    ]);
+    expect(deriveScreenState(state, 1).title).toBe('ETA');
   });
 });

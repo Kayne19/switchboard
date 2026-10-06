@@ -11,7 +11,7 @@ import type {
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
-import { anchoredNote, besideVisuals, buildCompositionModel, cast, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
+import { anchoredNote, besideVisuals, buildCompositionModel, cast, nameFields, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { stageReport, wantsStage, type StageReport } from '../app/stageFold';
 import { StageDemandContext, watchElement, type StageDemandListener } from '../hooks/useStageDemand';
 import { AnnotationCard, type NoteTarget } from '../primitives/AnnotationCard';
@@ -38,7 +38,7 @@ import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** A text field an object's data may carry for the scene frame, or undefined
  * when that shape has none. */
-function frameText(data: unknown, field: 'title' | 'subject' | 'label' | 'subtitle' | 'context'): string | undefined {
+function frameText(data: unknown, field: 'subtitle' | 'context'): string | undefined {
   if (data === null || typeof data !== 'object') return undefined;
   const value = (data as Record<string, unknown>)[field];
   return typeof value === 'string' ? value : undefined;
@@ -837,8 +837,8 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
   ];
 
   return {
-    // The same precedence the backend's view summary reports to the agent.
-    title: frameText(primary.data, 'title') ?? frameText(primary.data, 'subject') ?? frameText(primary.data, 'label') ?? 'COMPOSED WORKSPACE',
+    // The name the agent's view reports (`nameFields`).
+    title: nameFields(primary.data)[0] ?? 'COMPOSED WORKSPACE',
     subtitle: frameText(primary.data, 'subtitle') ?? 'STRUCTURED SCENE',
     context: frameText(primary.data, 'context') ?? 'COMPOSED',
     footer: 'DISPLAY / COMPOSED',
