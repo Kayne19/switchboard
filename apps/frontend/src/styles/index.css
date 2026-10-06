@@ -189,6 +189,7 @@ button {
 .focusable-content:focus-visible,
 .damocles-presence__button:focus-visible,
 .annotation-card__history:focus-visible,
+.live-chat-card__history:focus-visible,
 .transcript-toggle:focus-visible {
   outline: 1px solid var(--orange);
   outline-offset: 4px;
