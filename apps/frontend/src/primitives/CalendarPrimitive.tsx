@@ -37,6 +37,7 @@ import {
   type TimeAxis,
 } from './calendarLayout';
 import { countText, rimCount } from './countText';
+import { scrollMove } from './drawingScroll';
 import type { Size } from './geometry';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
@@ -387,7 +388,7 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
       before={first > 0 ? runText(model.days.slice(0, first), model.placed) : null}
       after={first + columns < model.days.length ? runText(model.days.slice(first + columns), model.placed) : null}
       shown={runText(days, model.placed)}
-      onTurn={(direction) => turn(first + direction * columns)}
+      onTurn={(direction, toEnd) => turn(toEnd ? direction * model.days.length : first + direction * columns)}
     >
       {grid}
     </PagedDays>
@@ -529,7 +530,7 @@ function DayBarBox({ bar, model, marked, first, column }: { bar: DayBar; model: 
  * A grid that holds all its days (`paged` false) stands in the same box,
  * with no rails and nothing to turn.
  */
-function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: boolean; before: string | null; after: string | null; shown: string; onTurn: (direction: -1 | 1) => void; children: ReactNode }) {
+function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: boolean; before: string | null; after: string | null; shown: string; onTurn: (direction: -1 | 1, toEnd?: boolean) => void; children: ReactNode }) {
   const start = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
   const tag = (side: 'left' | 'right', text: string) => (
@@ -539,17 +540,21 @@ function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: b
   return (
     <div
       className="calendar-grid calendar-pages"
-      // The arrow keys turn the days too, for a reader without a pointer;
-      // handled, so they reach nothing else (FocusableSurface's rule).
+      // The keys every scroller takes turn the days too, for a reader without
+      // a pointer (drawingScroll `scrollMove`, across): an arrow, Space or a
+      // page key a page of days, Home and End to the first and the last.
+      // Each is handled, even with no more days that way, so it reaches
+      // nothing else (FocusableSurface's rule: Space never expands the
+      // calendar here); a key the hours took already is left to them.
       tabIndex={0}
       role="group"
       aria-label={`Days shown: ${shown}. ${[before ? `Earlier: ${before}` : '', after ? `Later: ${after}` : ''].filter(Boolean).join('. ')}. Left and right arrow keys turn the days.`}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
-        if (event.altKey || event.ctrlKey || event.metaKey) return;
-        const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
-        if (direction === 0 || (direction < 0 && !before) || (direction > 0 && !after)) return;
+        if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+        const move = scrollMove(event.key, event.shiftKey, true);
+        if (!move) return;
         event.preventDefault();
-        onTurn(direction);
+        if ((move.direction < 0 && before) || (move.direction > 0 && after)) onTurn(move.direction, move.kind === 'end');
       }}
       onPointerDown={(event: PointerEvent<HTMLDivElement>) => {
         start.current = { x: event.clientX, y: event.clientY };

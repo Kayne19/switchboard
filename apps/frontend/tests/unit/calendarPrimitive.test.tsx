@@ -11,6 +11,7 @@ import { act } from 'react';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { CalendarData } from '../../src/controller/types';
 import { CalendarPrimitive, chooseLayout } from '../../src/primitives/CalendarPrimitive';
+import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import type { Slot } from '../../src/primitives/slot';
 import { assistantAgenda, assistantAgendaWeek, assistantDay, assistantMonth, assistantWeek } from '../../src/fixtures/scenes';
 import { mount, stubResizeObserver, unmountAll } from './sceneHarness';
@@ -137,12 +138,41 @@ describe('the week', () => {
     });
     expect(key.defaultPrevented).toBe(true);
     expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
-    // No later days: the key is left alone.
+    // No later days: the key is still taken, as a list at its end takes it, and the days stay.
     const again = new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true });
     act(() => {
       pages.dispatchEvent(again);
     });
-    expect(again.defaultPrevented).toBe(false);
+    expect(again.defaultPrevented).toBe(true);
+    expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
+  });
+
+  it('turns the days by the keys every scroller takes: Space never expands the calendar', () => {
+    let expanded = 0;
+    bodySize = { width: 330, height: 480 };
+    const host = mount(
+      <FocusableSurface onActivate={() => (expanded += 1)} ariaLabel="Expand calendar">
+        <CalendarPrimitive data={assistantWeek} slot="aux" />
+      </FocusableSurface>,
+    );
+    const heads = () => [...host.querySelectorAll('.calendar-grid__weekday')].map((cell) => cell.textContent);
+    const pages = host.querySelector('.calendar-pages') as HTMLElement;
+    const press = (key: string, shiftKey = false) => act(() => {
+      pages.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey, bubbles: true, cancelable: true }));
+    });
+    press(' ');
+    expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
+    press(' ', true);
+    expect(heads()).toEqual(['TUE', 'WED', 'THU']);
+    press('Home');
+    expect(heads()).toEqual(['MON', 'TUE', 'WED']);
+    press('End');
+    expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
+    // At the last days Space is still the calendar's, not the surface's.
+    press(' ');
+    expect(expanded).toBe(0);
+    press('Enter');
+    expect(expanded).toBe(1);
   });
 
   it('opens on today when the marked event is outside the week', () => {
