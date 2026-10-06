@@ -212,7 +212,6 @@ button {
    draws the ring on its edge, inside. A scroll draws it as its outline,
    which stays put as the content scrolls. Every box that scrolls draws it:
    Chrome puts a scroll with nothing to focus inside it in the tab order. */
-.calendar-pages:focus-visible,
 .annotation-card__text:focus-visible,
 .live-chat-card__text:focus-visible,
 .conversation-answer__text:focus-visible,
@@ -228,14 +227,25 @@ button {
 /* A region with parts over its own edges draws the ring over them, on the
    box that holds it still: an object's surface over what it holds (the
    object's box clips everything outside it, and a part with a ground of its
-   own, a source's, would cover its outline); a list's or a drawing's scroll
-   over its rims and its pinned head, on the port or view it scrolls in. */
+   own, a source's, would cover its outline); a calendar's paged days over
+   their rims and the hours' own; a list's or a drawing's scroll over its
+   rims and its pinned head, on the port or view it scrolls in. */
+/* A scroll that holds controls brings a focused one in with room for its
+   ring (a scroll stops at a whole pixel, and a control's ring reaches past
+   it). Nothing scrolls these into view but focus. */
+.content-rail__details,
+.composed-aux,
+.training-charts--compare {
+  scroll-padding: var(--focus-ring-reach);
+}
 .focusable-content:focus-visible,
+.calendar-pages:focus-visible,
 .list-viewport__scroll:focus-visible,
 .drawing-viewport__scroll:focus-visible {
   outline: none;
 }
 .focusable-content:focus-visible::after,
+.calendar-pages:focus-visible::after,
 .list-viewport__port:has(> .list-viewport__scroll:focus-visible)::after,
 .drawing-viewport__view:has(> .drawing-viewport__scroll:focus-visible)::after {
   content: "";

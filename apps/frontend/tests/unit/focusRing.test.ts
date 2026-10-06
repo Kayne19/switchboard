@@ -69,10 +69,12 @@ describe('the focus ring', () => {
     expect(over.body).toMatch(/position:\s*absolute;[\s\S]*inset:\s*0;[\s\S]*border:\s*var\(--focus-ring\);/);
     expect(over.selectors).toEqual([
       '.focusable-content:focus-visible::after',
+      '.calendar-pages:focus-visible::after',
       '.list-viewport__port:has(> .list-viewport__scroll:focus-visible)::after',
       '.drawing-viewport__view:has(> .drawing-viewport__scroll:focus-visible)::after',
     ]);
-    for (const box of ['.focusable-content', '.list-viewport__port', '.drawing-viewport__view']) expect(ruleNaming(box).body, box).toMatch(/position:\s*relative;/);
+    // Each box the ring is drawn on is the one its ::after stands in.
+    for (const box of ['.focusable-content', '.calendar-grid', '.list-viewport__port', '.drawing-viewport__view']) expect(ruleNaming(box).body, box).toMatch(/position:\s*relative;/);
   });
 
   it('is drawn by every button the page draws, RETURN / ESC and both HISTORY buttons among them', () => {
@@ -89,7 +91,7 @@ describe('the focus ring', () => {
     const reached = (name: string) => ringed(name) || control.selectors.some((selector) => selector.includes(`.${name}[`) || selector.includes(`.${name}:`));
     expect(classes.sort()).toEqual(['calendar-grid', 'drawing-viewport__scroll', 'focusable-content', 'list-viewport__scroll', 'metric-row']);
     // The paged days carry the grid's class first; the ring names the pages.
-    expect(region.selectors).toContain('.calendar-pages:focus-visible');
+    expect(ringed('calendar-pages')).toBe(true);
     expect(classes.filter((name) => name !== 'calendar-grid' && !reached(name))).toEqual([]);
   });
 
@@ -113,7 +115,7 @@ describe('the focus ring', () => {
       .filter((rule) => /outline:\s*(?:none|0)\b/.test(rule.body))
       .flatMap((rule) => rule.selectors)
       .filter((selector) => /:focus/.test(selector));
-    expect(removed).toEqual(['.focusable-content:focus-visible', '.list-viewport__scroll:focus-visible', '.drawing-viewport__scroll:focus-visible']);
+    expect(removed).toEqual(['.focusable-content:focus-visible', '.calendar-pages:focus-visible', '.list-viewport__scroll:focus-visible', '.drawing-viewport__scroll:focus-visible']);
     expect(removed.every((selector) => drawnOver(selector.slice(1, -':focus-visible'.length)))).toBe(true);
   });
 
@@ -125,5 +127,15 @@ describe('the focus ring', () => {
     expect(history.selectors).toContain('.live-chat-card__history');
     expect(history.body).toMatch(/margin-inline-end:\s*var\(--focus-ring-reach\);/);
     expect(css).toMatch(/--focus-ring-reach:\s*calc\(var\(--focus-ring-offset\) \+ 1px\);/);
+  });
+
+  it('is brought into view whole: a scroll that holds controls keeps the ring\'s reach when focus scrolls it', () => {
+    // A scroll stops at a whole pixel, and the rail brought its progress in
+    // with the ring's foot a fraction past its edge (landscape-short plan).
+    const room = ruleNaming('.content-rail__details');
+    const holding = rules().find((rule) => rule.selectors.includes('.content-rail__details') && /scroll-padding/.test(rule.body))!;
+    expect(room).toBeTruthy();
+    expect(holding.selectors).toEqual(['.content-rail__details', '.composed-aux', '.training-charts--compare']);
+    expect(holding.body).toMatch(/scroll-padding:\s*var\(--focus-ring-reach\);/);
   });
 });
