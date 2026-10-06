@@ -5003,12 +5003,20 @@ button {
   align-items: flex-start;
   gap: 3px;
 }
+/* One line, never wrapped: a second line has no room in the row and was
+   cut off. Its height holds the NOTE badge, the count and the marks; the
+   layout reckons with it and with these widths (CalendarPrimitive.tsx,
+   MARKS_LINE_PX, MARK_STEP_PX, MARK_BADGE_PX, COUNT_CHAR_PX). */
 .calendar-marks {
   display: flex;
-  flex-wrap: wrap;
+  flex: none;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 2px 3px;
+  gap: 3px;
+  max-width: 100%;
+  height: 14px;
   min-width: 0;
+  overflow: hidden;
 }
 .calendar-mark {
   flex: none;
@@ -5023,7 +5031,10 @@ button {
 .calendar-mark--cancelled {
   opacity: 0.35;
 }
+/* The mark the NOTE badge stands for hugs the badge (a block would take the
+   root's line and push the badge down out of the line). */
 .calendar-mark:has(.note-badge) {
+  display: flex;
   width: auto;
   height: auto;
   background: transparent;
@@ -5031,6 +5042,7 @@ button {
 .calendar-marks__more {
   color: rgba(var(--orange-rgb), 0.85);
   letter-spacing: 0.04em;
+  line-height: 1;
 }
 .calendar-month__list {
   flex: 1 1 0;

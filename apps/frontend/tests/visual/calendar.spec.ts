@@ -220,19 +220,22 @@ function frameCrossings() {
   return hits;
 }
 
-/** NOTE badges in a calendar that a box clips, so a reader sees part of one or none. */
-function badgesCut(scope: string) {
-  return [...document.querySelectorAll<HTMLElement>(`${scope} [data-testid="calendar"] .note-badge`)].flatMap((badge) => {
-    const rect = badge.getBoundingClientRect();
+/** The parts matching `selector` that a box clips, so a reader sees part of one or none of it. */
+function partsCut(selector: string) {
+  return [...document.querySelectorAll<HTMLElement>(selector)].flatMap((part) => {
+    const rect = part.getBoundingClientRect();
     const shown = { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
-    for (let clip = badge.parentElement; clip; clip = clip.parentElement) {
+    for (let clip = part.parentElement; clip; clip = clip.parentElement) {
       const style = getComputedStyle(clip);
       const box = clip.getBoundingClientRect();
       if (style.overflowX !== 'visible') [shown.left, shown.right] = [Math.max(shown.left, box.left), Math.min(shown.right, box.right)];
       if (style.overflowY !== 'visible') [shown.top, shown.bottom] = [Math.max(shown.top, box.top), Math.min(shown.bottom, box.bottom)];
     }
-    const whole = shown.right - shown.left >= rect.width - 0.5 && shown.bottom - shown.top >= rect.height - 0.5;
-    return whole ? [] : [`${badge.closest('[data-item]')?.getAttribute('data-item') ?? '?'} ${Math.round(rect.height - Math.max(0, shown.bottom - shown.top))}px cut`];
+    const across = Math.max(0, shown.right - shown.left);
+    const down = Math.max(0, shown.bottom - shown.top);
+    if (across >= rect.width - 0.5 && down >= rect.height - 0.5) return [];
+    const name = part.closest('[data-item]')?.getAttribute('data-item') ?? part.textContent?.trim() ?? part.className;
+    return [`${name}: ${(rect.width - across).toFixed(1)} x ${(rect.height - down).toFixed(1)} px cut`];
   });
 }
 
@@ -252,9 +255,11 @@ for (const geometry of frameGeometries) {
         // On a phone the week, the day and the month take the stage (the rail folds): that stage is measured here.
         if (geometry.name === 'portrait-phone' && scene === 'calendar') await expect(page.locator('[data-stage="primary"]')).toHaveCount(1);
         expect(await page.evaluate(frameCrossings), 'primary').toEqual([]);
+        expect(await page.evaluate(partsCut, '.content-main [data-testid="calendar"] .note-badge'), 'primary badge').toEqual([]);
         await page.evaluate(() => window.SwitchboardController?.run([{ op: 'focus', id: 'week' }]));
         await expect(page.locator('.focus-layer [data-testid="calendar"]')).toBeVisible();
-        await page.waitForTimeout(400);
+        // Past the focus layer's layout transition (0.46 s), and the calendar's measure after it.
+        await page.waitForTimeout(700);
         expect(await page.evaluate(frameCrossings), 'focus').toEqual([]);
         await open(page, scene);
         await page.evaluate((primary) => {
@@ -266,7 +271,9 @@ for (const geometry of frameGeometries) {
         await page.waitForTimeout(400);
         expect(await page.evaluate(frameCrossings), 'aux').toEqual([]);
         // However small its cell, the calendar shows the NOTE badge of the event the rail's note names, whole.
-        expect(await page.evaluate(badgesCut, '.composed-aux-object'), 'aux badge').toEqual([]);
+        const auxBadge = '.composed-aux-object [data-testid="calendar"] .note-badge';
+        expect(await page.locator(auxBadge).count(), 'aux badge drawn').toBeGreaterThan(0);
+        expect(await page.evaluate(partsCut, auxBadge), 'aux badge').toEqual([]);
         if (scene !== 'today') {
           // Alone in the aux row, the calendar asks it for its whole share (two fifths of the column): an inset the row
           // is not asked for shrank a calendar that fills its box, a step at a time, to the cell's floor.
@@ -299,8 +306,26 @@ test('the now: its time on a tag in the gutter, and a rule across today\u2019s c
       spansToday: Math.abs(rule.left - today.left) <= 1 && Math.abs(rule.right - today.right) <= 1,
       thin: rule.height <= 1.01,
       tagInGutter: tag.left >= first.left - 60 && tag.right <= first.left + 0.5,
-      eventOnTop: top?.closest('[data-item="standup-wed"]') !== null,
+      eventOnTop: Boolean(top?.closest('[data-item="standup-wed"]')),
     };
   });
   expect(placed).toEqual({ spansToday: true, thin: true, tagInGutter: true, eventOnTop: true });
+});
+
+test('a month of marks at its least rows draws every date, mark, count and badge whole, and is the agenda a pixel shorter', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Rows of 36 px (CalendarPrimitive.tsx MARKS_ROW_PX) under the weekday row, in cells of 48 px (the badge alone on its
+  // line) and of 100 px (the badge, three marks and a count): the month is held to that box, and the note's dentist
+  // is drawn in the grid, which has no room for a list under it.
+  for (const [width, height, layout] of [[336, 198, 'month-marks'], [700, 198, 'month-marks'], [336, 197, 'agenda'], [700, 197, 'agenda']] as const) {
+    await open(page, 'calendar-month');
+    await page.addStyleTag({ content: `.scene .calendar { width: ${width}px !important; } .scene .calendar__body { flex: none !important; height: ${height}px !important; }` });
+    const calendar = page.locator('.scene [data-testid="calendar"]');
+    await expect(calendar).toHaveAttribute('data-layout', layout);
+    await page.waitForTimeout(300);
+    const where = `${width} x ${height}`;
+    expect(await page.evaluate(partsCut, '.scene .calendar-month__number, .scene .calendar-marks > *'), where).toEqual([]);
+    expect(await calendar.locator('.note-badge').count(), where).toBe(1);
+    expect(await page.evaluate(partsCut, '.scene [data-testid="calendar"] .note-badge'), where).toEqual([]);
+  }
 });

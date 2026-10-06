@@ -259,17 +259,19 @@ describe('a month too small for titles', () => {
     expect(narrow.querySelector('.calendar-month__cell--today .calendar-marks')?.getAttribute('aria-label')).toBe('6 events');
   });
 
-  it('is the agenda of the month\u2019s own days where its rows cannot hold the marks, or the badge on them', () => {
-    const short = { width: 700, height: 160 };
-    // Rows of 28 px hold a line of marks, but not the badge.
-    expect(chooseLayout(assistantMonth, short, 35).layout).toBe('month-marks');
-    expect(chooseLayout(assistantMonth, short, 35, undefined, true).layout).toBe('agenda');
-    expect(chooseLayout(assistantMonth, { width: 700, height: 120 }, 35).layout).toBe('agenda');
-    const calendar = render(assistantMonth, 'dentist', short);
+  it('is the agenda of the days it draws where its rows cannot hold a line of marks, or its cells the badge', () => {
+    // Rows of 36 px hold the date and a line of marks as tall as the badge; a pixel less, the agenda.
+    expect(chooseLayout(assistantMonth, { width: 700, height: 18 + 5 * 36 }, 35).layout).toBe('month-marks');
+    expect(chooseLayout(assistantMonth, { width: 700, height: 18 + 5 * 36 - 1 }, 35).layout).toBe('agenda');
+    // Cells too narrow for the badge: the agenda where the badge would go in the grid, not where the list under it holds it.
+    expect(chooseLayout(assistantMonth, { width: 315, height: 230 }, 35).layout).toBe('month-marks');
+    expect(chooseLayout(assistantMonth, { width: 315, height: 230 }, 35, undefined, true).layout).toBe('agenda');
+    expect(chooseLayout(assistantMonth, { width: 315, height: 360 }, 35, undefined, true).layout).toBe('month-marks');
+    const calendar = render(assistantMonth, 'dentist', { width: 700, height: 160 });
     expect(calendar.getAttribute('data-layout')).toBe('agenda');
-    const days = [...calendar.querySelectorAll('.calendar-agenda__day-name')].map((name) => name.textContent);
-    expect(days[0]).toBe('THU OCT 1');
-    expect(days.some((day) => /SEP|NOV/.test(day ?? ''))).toBe(false);
+    // Every day the month draws, those of the months its rows reach too: what it counts out of view is what it does not list.
+    expect(boxes(calendar, 'sept-retro')).toHaveLength(1);
+    expect(calendar.querySelector('.calendar__meta')?.textContent).toContain('1 OUT OF VIEW');
     expect(boxes(calendar, 'dentist')[0].querySelector('.note-badge')).not.toBeNull();
   });
 });
