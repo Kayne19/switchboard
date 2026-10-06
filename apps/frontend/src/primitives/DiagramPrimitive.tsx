@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
-import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, wrapGreedy, type DiagramLayout, type EdgeLabel, type EdgeStub, type Point } from './diagramLayout';
+import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, wrapGreedy, type DiagramLayout, type EdgeLabel, type EdgeStub } from './diagramLayout';
 import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
+import type { Point } from './geometry';
 import { NoteMarker, markedPart } from './NoteMarker';
 import { SEMANTIC_COLOR } from '../design/tokens';
 

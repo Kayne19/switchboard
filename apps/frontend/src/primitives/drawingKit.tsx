@@ -2,8 +2,10 @@
 // sequence (SequencePrimitive + sequenceLayout) draw alike, said once. Each
 // drawing keeps its own sizes (its frames' cuts, its arrowheads).
 
+import type { Point, Size } from './geometry';
+
 /** An SVG path through `points`, straight from each to the next. */
-export const pathThrough = (points: ReadonlyArray<{ x: number; y: number }>) =>
+export const pathThrough = (points: readonly Point[]) =>
   points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ');
 
 /** A frame's outline, `width` by `height` (a node, an actor's header): its top corners cut across, its bottom left stepped. */
@@ -20,7 +22,7 @@ export const LABEL_HEIGHT = 14;
 export const LABEL_BACKING = 4;
 
 /** The backing a label drawn on `lines` paints over. */
-export function labelBox(lines: readonly string[]): { width: number; height: number } {
+export function labelBox(lines: readonly string[]): Size {
   return {
     width: Math.max(...lines.map((line) => line.length)) * LABEL_ADVANCE + 2 * LABEL_BACKING,
     height: lines.length * LABEL_HEIGHT + 2 * LABEL_BACKING,
@@ -28,7 +30,7 @@ export function labelBox(lines: readonly string[]): { width: number; height: num
 }
 
 /** A drawing is composed in portrait once its viewport is a little taller than wide. */
-export function drawingOrientation(viewport: { width: number; height: number }): 'landscape' | 'portrait' {
+export function drawingOrientation(viewport: Size): 'landscape' | 'portrait' {
   return viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
 }
 

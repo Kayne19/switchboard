@@ -19,21 +19,10 @@
 import type { SequenceActor, SequenceDiagramData, SequenceMessage } from '../controller/types';
 import { LABEL_ADVANCE, LABEL_BACKING, LABEL_HEIGHT, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, type DrawingFit, type Viewport } from './drawingFit';
+import type { Box, Point } from './geometry';
 import { NOTE_MARKER } from './NoteMarker';
 
 export type SequenceOrientation = 'landscape' | 'portrait';
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-export interface Box {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 export interface LaidOutActor {
   actor: SequenceActor;

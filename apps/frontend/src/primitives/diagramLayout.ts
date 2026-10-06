@@ -35,21 +35,10 @@
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
 import { LABEL_BACKING, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
+import type { Box, Point } from './geometry';
 import { NOTE_MARKER } from './NoteMarker';
 
 export type DiagramOrientation = 'landscape' | 'portrait';
-
-export interface Point {
-  x: number;
-  y: number;
-}
-
-export interface Box {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
 
 export interface NodeLine {
   kind: 'label' | 'sub' | 'detail';

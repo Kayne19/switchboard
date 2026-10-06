@@ -1,8 +1,9 @@
 // The geometry the layout tests check a drawing with, written once:
 // diagramLayout.test.ts and diagramLayoutFuzz.test.ts each kept a copy, and
 // sequenceLayout.test.ts its own `overlaps`. A box is x, y, width, height,
-// as both layouts' Box is.
-import { ARROW_LENGTH, type Box, type Point } from '../../src/primitives/diagramLayout';
+// as the layouts' Box (primitives/geometry.ts) is.
+import { ARROW_LENGTH } from '../../src/primitives/diagramLayout';
+import type { Box, Point } from '../../src/primitives/geometry';
 
 export const overlaps = (a: Box, b: Box) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
