@@ -1924,6 +1924,16 @@ button {
   overflow: auto;
   overscroll-behavior: contain;
 }
+/* A drawing that scrolls is laid out for its box (drawn a pixel short of
+   it, and recomposed for its height), so it asks its box for nothing: a
+   box as tall as the drawing would lay it out again. In an aux cell, whose
+   row is as tall as its cells ask, the two took turns: a dense graph
+   switched between a wide layout in a short row and a tall one in a row at
+   its cap every few frames, or shrank its row a pixel a frame. The cell
+   keeps a visual's floor (.composed-aux-object--visual) instead. */
+.drawing-viewport--scrolling .drawing-viewport__view {
+  contain: size;
+}
 .drawing-viewport--scrolling .drawing-viewport__scroll > svg {
   flex: none;
   margin: auto;

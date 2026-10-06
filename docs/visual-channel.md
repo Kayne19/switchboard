@@ -598,8 +598,11 @@ primary, the aux row takes what its cells need up to two fifths of the main
 column, so the primary keeps the larger share. Under a metric primary the
 card keeps its own height and the row takes the rest. Each visual keeps a
 readable floor in its cell (the head of a table and its first rows, a chart's
-plot, a figure and its caption). When the row has no room for every cell at
-its floor, it scrolls inside itself; it never shrinks a visual to nothing. A figure in a short cell is
+plot, a figure and its caption). A drawing that scrolls in its cell (a
+dense graph, a long sequence) asks for no more than that floor: it is laid
+out for the height it is given, so a cell as tall as the drawing would lay
+it out again, and the row would never settle. When the row has no room for
+every cell at its floor, it scrolls inside itself; it never shrinks a visual to nothing. A figure in a short cell is
 drawn smaller, never cropped, and a table in a narrow cell scrolls sideways
 rather than breaking a word. The cells sit side by side when the column is
 wide and stack when it is narrow, from the column's own width. A visual that
