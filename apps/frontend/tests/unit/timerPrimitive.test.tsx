@@ -75,6 +75,49 @@ describe('the page clock', () => {
     expect(digits(host, 'bread')).toBe('21:00');
   });
 
+  // The skill writes an end from the agent's clock, to the microsecond
+  // (`datetime.now(...) + timedelta(minutes=9)`), so nearly every timer
+  // ends a fraction past a second. Its digits change a whole number of
+  // seconds before that end, at the same fraction: a clock ticking on the
+  // whole second showed one too many for up to a second, and the end late.
+  it('turns a countdown over on the fraction of a second its end falls on, and is done at that end', () => {
+    // 18:33:03.250, written as the skill writes it; the page opens at 18:33:00.000.
+    const host = render({ timers: [{ id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:03.250000+00:00' }] });
+    expect(digits(host, 'tea')).toBe('00:04');
+    tick(249);
+    expect(digits(host, 'tea')).toBe('00:04');
+    tick(1);
+    expect(digits(host, 'tea')).toBe('00:03');
+    tick(2999);
+    expect(digits(host, 'tea')).toBe('00:01');
+    expect(item(host, 'tea').dataset.phase).toBe('running');
+    tick(1);
+    expect(digits(host, 'tea')).toBe('00:00');
+    expect(item(host, 'tea').dataset.phase).toBe('done');
+    tick(61_000);
+    expect(item(host, 'tea').querySelector('.timer__meta')!.textContent).toBe('ENDED 01:33 UTC / +01:01');
+  });
+
+  it('turns each countdown on its own fraction, still on one timeout', () => {
+    const host = render({ timers: [kitchen.timers[2], { id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:03.250Z' }] });
+    expect(vi.getTimerCount()).toBe(1);
+    expect([digits(host, 'eggs'), digits(host, 'tea')]).toEqual(['00:03', '00:04']);
+    tick(250);
+    expect([digits(host, 'eggs'), digits(host, 'tea')]).toEqual(['00:03', '00:03']);
+    tick(750);
+    expect([digits(host, 'eggs'), digits(host, 'tea')]).toEqual(['00:02', '00:03']);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('a timer shown while another runs reads the time now, not the last tick', () => {
+    render(kitchen);
+    // 600 ms on, the kitchen's clock has not ticked since the page opened.
+    vi.setSystemTime(NOW + 600);
+    const host = render({ timers: [{ id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:03.250Z' }] });
+    // 2650 ms to go.
+    expect(digits(host, 'tea')).toBe('00:03');
+  });
+
   it('turns every countdown over on the same whole second', () => {
     vi.setSystemTime(NOW + 400);
     const host = render(kitchen);

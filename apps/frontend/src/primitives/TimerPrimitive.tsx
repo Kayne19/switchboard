@@ -6,7 +6,7 @@ import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
 import type { Slot } from './slot';
-import { CELL_GAP, formatCountdown, instantClock, readTimer, timerGridLeast, timerLayout, type TimerReading } from './timerReading';
+import { CELL_GAP, formatCountdown, instantClock, readTimer, timerGridLeast, timerLayout, timerPhase, type TimerReading } from './timerReading';
 
 // Countdowns and reminders (docs/display-tool.md, "timer"). Every timer is
 // read against the page's one clock (usePageClock), which runs only while a
@@ -89,8 +89,8 @@ function TimerItem({ timer, reading, marked, as, measure = false }: { timer: Tim
  * (MetaTitle), so it shows once wherever they are drawn.
  */
 export function TimerPrimitive({ data, marked, slot = 'primary' }: { data: TimerData; marked?: string; slot?: Slot }) {
-  const running = data.timers.some((timer) => timer.state !== 'paused');
-  const now = usePageClock(running);
+  const phases = data.timers.map(timerPhase).filter((phase): phase is number => phase !== null);
+  const now = usePageClock(phases);
   const readings = data.timers.map((timer) => readTimer(timer, now));
   const hostRef = useRef<HTMLDivElement>(null);
   const size = useElementSize(hostRef);

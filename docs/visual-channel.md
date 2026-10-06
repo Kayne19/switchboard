@@ -436,10 +436,18 @@ what the list viewport counts.
 
 A timer is the only thing on the page that reads the time, and it reads
 it from one clock (`apps/frontend/src/hooks/usePageClock.ts`): one
-timeout for the whole page, ticking on the wall clock's whole seconds
-while a countdown on screen is running, and none while every timer is
-paused or none is shown. Two timers therefore turn over on the same tick,
-and a page with eight timers runs one timeout, not eight. What a timer
+timeout for the whole page while a countdown on screen is running, and
+none while every timer is paused or none is shown, so a page with eight
+timers runs one timeout, not eight. It ticks where a countdown's reading
+changes: a whole number of seconds before or after its `endsAt`, so on
+the fraction of a second that end falls on (`timerPhase`; an end at
+`18:42:00.368277` turns the digits 368 ms past each second). An agent's
+end is rarely on a whole second (the skill adds minutes to its clock's
+now, to the microsecond), so a clock on the whole second would show a
+digit too many for up to a second and reach `00:00` late. The timeout is
+set for the soonest turn of every countdown shown, and two that end on
+the same fraction turn over on the same tick. A timer shown while
+another runs reads the time now, not the last tick. What a timer
 reads at a moment is pure (`readTimer`): the digits round up, so they show
 `00:01` until the end and `00:00` only at `endsAt`; from that moment it is
 done, in the warning colour, and counts how long ago it ended; a paused
