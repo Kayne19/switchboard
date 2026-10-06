@@ -1522,32 +1522,19 @@ function validateNoteData(data: Record<string, unknown>): { ok: true; data: Note
     if (textErr) return { ok: false, error: textErr };
 
     const segObj: RichSegment = { text: seg.text as string };
-    if (seg.accent !== undefined) {
-      if (typeof seg.accent !== 'boolean') return { ok: false, error: 'note segment.accent must be boolean' };
-      segObj.accent = seg.accent;
-    }
-    if (seg.bold !== undefined) {
-      if (typeof seg.bold !== 'boolean') return { ok: false, error: 'note segment.bold must be boolean' };
-      segObj.bold = seg.bold;
-    }
-    if (seg.semantic !== undefined) {
-      if (!isName(seg.semantic, SEMANTICS)) return { ok: false, error: invalidName('note segment.semantic', SEMANTICS) };
-      segObj.semantic = seg.semantic as Semantic;
-    }
+    const err =
+      copyOptionalBoolean(seg, segObj, 'accent', 'note segment.accent') ??
+      copyOptionalBoolean(seg, segObj, 'bold', 'note segment.bold') ??
+      copyOptionalName(seg, segObj, 'semantic', SEMANTICS, 'note segment.semantic');
+    if (err) return { ok: false, error: err };
     segments.push(segObj);
   }
 
   const result: NoteData = { segments };
-  if (data.tag !== undefined) {
-    const err = checkString(data.tag, 128, 'note.tag');
-    if (err) return { ok: false, error: err };
-    result.tag = data.tag as string;
-  }
-  if (data.caption !== undefined) {
-    const err = checkString(data.caption, 128, 'note.caption');
-    if (err) return { ok: false, error: err };
-    result.caption = data.caption as string;
-  }
+  const err =
+    copyOptionalString(data, result, 'tag', 128, 'note.tag') ??
+    copyOptionalString(data, result, 'caption', 128, 'note.caption');
+  if (err) return { ok: false, error: err };
   if (data.anchor !== undefined) {
     if (!isRecord(data.anchor)) return { ok: false, error: 'note.anchor must be an object' };
     const anchorUnknown = checkUnknownKeys(data.anchor, new Set(['target', 'x', 'series', 'node', 'item']), 'note anchor');
@@ -1555,19 +1542,11 @@ function validateNoteData(data: Record<string, unknown>): { ok: true; data: Note
     const target = checkIdentifier(data.anchor.target, 'note.anchor.target');
     if (!target.ok) return target;
     const anchor: NonNullable<NoteData['anchor']> = { target: target.id };
-    if (data.anchor.x !== undefined) {
-      if (typeof data.anchor.x !== 'number' || !Number.isFinite(data.anchor.x)) {
-        return { ok: false, error: 'note.anchor.x must be a finite number' };
-      }
-      anchor.x = data.anchor.x;
-    }
-    for (const key of ['series', 'node'] as const) {
-      if (data.anchor[key] !== undefined) {
-        const err = checkString(data.anchor[key], 128, `note.anchor.${key}`);
-        if (err) return { ok: false, error: err };
-        anchor[key] = data.anchor[key] as string;
-      }
-    }
+    const anchorErr =
+      copyNumber(data.anchor, anchor, 'x', 'note.anchor.x', false) ??
+      copyOptionalString(data.anchor, anchor, 'series', 128, 'note.anchor.series') ??
+      copyOptionalString(data.anchor, anchor, 'node', 128, 'note.anchor.node');
+    if (anchorErr) return { ok: false, error: anchorErr };
     // An item inside the target, named as the item names itself: an id, or
     // a forecast hour's `time` or day's `date`. Like `node` and `series`, it
     // is not looked up here: the note and its target are separate objects,
@@ -1794,17 +1773,10 @@ function validateActionFields(value: unknown): ActionValidationResult {
           return { ok: false, error: 'say.at must contain at least one of x or series' };
         }
         const atObj: { x?: number; series?: string } = {};
-        if (hasX) {
-          if (typeof value.at.x !== 'number' || !Number.isFinite(value.at.x)) {
-            return { ok: false, error: 'say.at.x must be a finite number' };
-          }
-          atObj.x = value.at.x;
-        }
-        if (hasSeries) {
-          const err = checkString(value.at.series, 128, 'say.at.series');
-          if (err) return { ok: false, error: err };
-          atObj.series = value.at.series as string;
-        }
+        const err =
+          copyNumber(value.at, atObj, 'x', 'say.at.x', false) ??
+          copyOptionalString(value.at, atObj, 'series', 128, 'say.at.series');
+        if (err) return { ok: false, error: err };
         atVal = atObj;
       }
 
