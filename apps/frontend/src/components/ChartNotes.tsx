@@ -13,7 +13,7 @@ import {
   type ChartScales,
   type ChartSide,
 } from '../primitives/chartGeometry';
-import { layoutNotes, NOTE_CARD_CUT, routeLeader, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
+import { layoutNotes, NOTE_CARD_CUT, placedInFull, routeLeader, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
 import { crispLine, type Point, type Rect, type Size } from '../primitives/geometry';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
@@ -44,12 +44,14 @@ const MAX_CARD_SHARE = 0.8;
 
 // The notes are placed again at most once a step of this many pixels of
 // the layer's size or the chart's, as a graph is laid out once a step
-// (diagramLayout's FRAME_STEP): a placement costs a few milliseconds on a
-// line chart and up to 200-250 ms on a dense bar chart (four series of 40
-// with five notes and the rail), and a resize measures every frame. Within
-// a step the cards follow their points, and once the size has held still
-// for `REST_MS` the notes are placed for it, so where they come to rest is
-// where they would stand had the page opened at that size.
+// (diagramLayout's FRAME_STEP): a placement of a few notes costs tens of
+// milliseconds of CPU on a line chart and up to 200-250 ms on a dense bar
+// chart (four series of 40 with five notes and the rail), more in the page,
+// and a resize measures every frame. Past `NOTES_PLACED_IN_FULL` notes it
+// is bounded (`placedInFull`): sixteen on that bar chart cost about 40 ms.
+// Within a step the cards follow their points, and once the size has held
+// still for `REST_MS` the notes are placed for it, so where they come to
+// rest is where they would stand had the page opened at that size.
 const PLACE_STEP = 16;
 const REST_MS = 150;
 
@@ -407,7 +409,8 @@ export function ChartNotes({
       }
       const options = { spill, leaderOverlap: 1 };
       let placed = layoutNotes(toPlace, field, options);
-      if (toPlace.some((note) => !placed.get(note.id)?.settled)) {
+      // Past a few notes no card tries a narrower size, so none is measured.
+      if (placedInFull(toPlace.length) && toPlace.some((note) => !placed.get(note.id)?.settled)) {
         for (const note of toPlace) {
           if (placed.get(note.id)?.settled) continue;
           const element = cardRefs.current.get(note.id)!;

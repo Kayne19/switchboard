@@ -5,6 +5,7 @@ import { chartBarCallout, chartNoteTarget, chartObstacles, chartScales, chartSer
 import {
   DATA_CLEARANCE,
   NOTE_CARD_CUT,
+  NOTES_PLACED_IN_FULL,
   barLeader,
   hiddenFillArea,
   layoutNotes,
@@ -795,6 +796,47 @@ describe('the note left out for the rail', () => {
   });
 });
 
+type ChartAnchorAt = { x: number; series: string };
+
+// A dense bar chart, four series of forty categories, with a note on each
+// of `anchors`: its cards at the sizes a note card takes on a wide chart,
+// and the narrower ones it may try.
+function denseBarNotes(anchors: ChartAnchorAt[]): { notes: NoteToPlace[]; field: NoteField } {
+  let seed = 7;
+  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const data: ChartData = {
+    kind: 'bar',
+    labels: Array.from({ length: 40 }, (_, index) => `c${index}`),
+    series: Array.from({ length: 4 }, (_, index) => ({ name: `S${index}`, values: Array.from({ length: 40 }, () => Math.round(random() * 2000 - 1000) / 10) })),
+  };
+  const scales = chartScales(data);
+  const obstacles = chartObstacles(data, scales, { named: anchors, led: anchors });
+  const field: NoteField = { area: box(0, 0, 1000, 540), plot: scales.plot, marks: obstacles.marks, labels: obstacles.labels, wholly: true };
+  const notes: NoteToPlace[] = anchors.map((anchor, index) => {
+    const target = chartNoteTarget(data, anchor, scales)!;
+    return { id: `n${index}`, width: 420, height: 110, point: target.point, from: target.from, bar: target.bar, sizes: [{ width: 336, height: 130 }, { width: 269, height: 150 }, { width: 180, height: 210 }] };
+  });
+  return { notes, field };
+}
+
+// A line chart, four series of forty samples, with a note on each of `anchors`.
+function lineNotes(anchors: ChartAnchorAt[]): { notes: NoteToPlace[]; field: NoteField } {
+  let seed = 7;
+  const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const data: ChartData = {
+    xMax: 39,
+    series: Array.from({ length: 4 }, (_, s) => ({ name: `S${s}`, values: Array.from({ length: 40 }, (_, i) => 50 + 30 * Math.sin(i / 17 + s) + random() * 10) })),
+  };
+  const scales = chartScales(data);
+  const obstacles = chartObstacles(data, scales, { named: anchors, led: anchors });
+  const field: NoteField = { area: box(0, 0, 1000, 540), plot: scales.plot, traces: obstacles.lines, marks: obstacles.marks, labels: obstacles.labels };
+  const notes: NoteToPlace[] = anchors.map((anchor, index) => ({ id: `n${index}`, width: 300, height: 80, point: chartNoteTarget(data, anchor, scales)!.point }));
+  return { notes, field };
+}
+
+// Notes on every few categories, across the series in turn.
+const spread = (count: number): ChartAnchorAt[] => Array.from({ length: count }, (_, index) => ({ x: Math.round((index * 39) / (count - 1)), series: `S${index % 4}` }));
+
 // Placement ran barLeader for every place it tried, before it knew the
 // place could not win, and tried every other size again in each run for
 // the rail: a 40-category chart of four series with five notes took over a
@@ -803,21 +845,7 @@ describe('the note left out for the rail', () => {
 // budget is CPU time, the least of three runs (cpuTime.ts says why).
 describe('placing notes on a dense bar chart', () => {
   it('stays within a frame budget or two', () => {
-    let seed = 7;
-    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    const data: ChartData = {
-      kind: 'bar',
-      labels: Array.from({ length: 40 }, (_, index) => `c${index}`),
-      series: Array.from({ length: 4 }, (_, index) => ({ name: `S${index}`, values: Array.from({ length: 40 }, () => Math.round(random() * 2000 - 1000) / 10) })),
-    };
-    const scales = chartScales(data);
-    const anchors = [{ x: 1, series: 'S0' }, { x: 10, series: 'S1' }, { x: 20, series: 'S2' }, { x: 30, series: 'S3' }, { x: 39, series: 'S0' }];
-    const obstacles = chartObstacles(data, scales, { named: anchors, led: anchors });
-    const field: NoteField = { area: box(0, 0, 1000, 540), plot: scales.plot, marks: obstacles.marks, labels: obstacles.labels, wholly: true };
-    const notes: NoteToPlace[] = anchors.map((anchor, index) => {
-      const target = chartNoteTarget(data, anchor, scales)!;
-      return { id: `n${index}`, width: 420, height: 110, point: target.point, from: target.from, bar: target.bar, sizes: [{ width: 336, height: 130 }, { width: 269, height: 150 }, { width: 180, height: 210 }] };
-    });
+    const { notes, field } = denseBarNotes([{ x: 1, series: 'S0' }, { x: 10, series: 'S1' }, { x: 20, series: 'S2' }, { x: 30, series: 'S3' }, { x: 39, series: 'S0' }]);
     expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(900);
   });
 });
@@ -828,18 +856,51 @@ describe('placing notes on a dense bar chart', () => {
 // least of three runs (cpuTime.ts says why), wide enough for a loaded machine.
 describe('placing notes on a line chart', () => {
   it('stays within a frame budget', () => {
-    let seed = 7;
-    const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
-    const data: ChartData = {
-      xMax: 39,
-      series: Array.from({ length: 4 }, (_, s) => ({ name: `S${s}`, values: Array.from({ length: 40 }, (_, i) => 50 + 30 * Math.sin(i / 17 + s) + random() * 10) })),
-    };
-    const scales = chartScales(data);
-    const anchors = [{ x: 10, series: 'S0' }, { x: 20, series: 'S1' }, { x: 30, series: 'S2' }];
-    const obstacles = chartObstacles(data, scales, { named: anchors, led: anchors });
-    const field: NoteField = { area: box(0, 0, 1000, 540), plot: scales.plot, traces: obstacles.lines, marks: obstacles.marks, labels: obstacles.labels };
-    const notes: NoteToPlace[] = anchors.map((anchor, index) => ({ id: `n${index}`, width: 300, height: 80, point: chartNoteTarget(data, anchor, scales)!.point }));
+    const { notes, field } = lineNotes([{ x: 10, series: 'S0' }, { x: 20, series: 'S1' }, { x: 30, series: 'S2' }]);
     expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(100);
+  });
+});
+
+// Nothing bounds how many notes a chart carries: an agent that adds one per
+// observation and never hides them reaches a dozen in a call. Placed in
+// full, the cost grew about as the square of their count: sixteen took
+// 1.6 s of CPU on the dense bar chart and 0.5 s on the line chart, about
+// 5 s of main thread in the page (review-drawing M2). Past
+// `NOTES_PLACED_IN_FULL` the work is bounded; sixteen cost some 40 ms on
+// the bar chart and 20 ms on the line chart. The budget is CPU time, the
+// least of three runs (cpuTime.ts says why).
+describe('placing many notes on one chart', () => {
+  it('stays within a frame budget or two with sixteen notes on a dense bar chart', () => {
+    const { notes, field } = denseBarNotes(spread(16));
+    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(100);
+  });
+
+  it('stays within a frame budget or two with sixteen notes on a line chart', () => {
+    const { notes, field } = lineNotes(spread(16));
+    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(100);
+  });
+
+  it(`leaves no note out for the rail past ${NOTES_PLACED_IN_FULL} notes`, () => {
+    // Cards as tall as the field: two side by side cover each other, and
+    // the rail would take one of them.
+    const cards = (count: number): NoteToPlace[] => Array.from({ length: count }, (_, index) => ({ id: `c${index}`, width: 300, height: 300 }));
+    expect(layoutNotes(cards(NOTES_PLACED_IN_FULL), { area: box(0, 0, 500, 300) }, { spill: true }).size).toBe(NOTES_PLACED_IN_FULL - 1);
+    expect(layoutNotes(cards(NOTES_PLACED_IN_FULL + 1), { area: box(0, 0, 500, 300) }, { spill: true }).size).toBe(NOTES_PLACED_IN_FULL + 1);
+  });
+
+  it(`lets only the first ${NOTES_PLACED_IN_FULL} cards placed search for a clear place`, () => {
+    // A tall bar under the point: only the search finds the clear place
+    // beside it (as "keeps a card off the whole of a bar" above).
+    const field: NoteField = { area: box(0, 0, 1000, 400), marks: [box(250, 60, 100, 340)] };
+    const named: NoteToPlace = { id: 'named', width: 300, height: 80, point: { x: 300, y: 60 } };
+    const others: NoteToPlace[] = Array.from({ length: NOTES_PLACED_IN_FULL }, (_, index) => ({ id: `o${index}`, width: 40, height: 30, point: { x: 600 + index * 80, y: 300 } }));
+    const alone = layoutNotes([named], field).get('named')!;
+    expect(alone.settled).toBe(true);
+    // Placed first of six, it still searches; placed sixth, it takes the best of the rows.
+    expect(layoutNotes([named, ...others], field).get('named')!.rect).toEqual(alone.rect);
+    const sixth = layoutNotes([...others, named], field).get('named')!;
+    expect(sixth.settled).toBe(false);
+    expect(placeNotes([...others.slice(1), named], field).get('named')).toEqual(alone.rect);
   });
 });
 

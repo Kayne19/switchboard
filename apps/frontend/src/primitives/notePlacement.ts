@@ -56,6 +56,14 @@
 // the others least. The others are placed without it. Without `spill`, or
 // where no note's absence helps, each card takes the place that hides the
 // least.
+//
+// Past `NOTES_PLACED_IN_FULL` notes the work is bounded, so a chart an
+// agent keeps adding notes to never holds the page for seconds: no note is
+// left out for the rail, no card tries a narrower size, and only the first
+// that many cards placed search every place within reach of their points;
+// each card after them takes the best of the rows and the places straight
+// above, below and beside its point. Up to that many notes, all of the
+// above holds.
 
 import { clipSegment, hiddenTraceLength, intersection, overlapArea, segmentsMeet, withoutRepeats, type Point, type Rect, type Size } from './geometry';
 
@@ -104,6 +112,21 @@ export interface NoteField {
 
 /** Space kept between two cards, and between a card and the point it must not cover. */
 export const NOTE_GAP = 10;
+
+/**
+ * The most notes on one chart placed in full: past it the placement leaves
+ * none out for the rail, tries no narrower sizes, and lets only this many
+ * cards search for a clear place. The search, each size and each run for
+ * the rail cost a placement of the whole field per card, and the cards
+ * placed so far add to every place tried: sixteen notes on a dense bar
+ * chart took 1.6 s of CPU in full, about 5 s of main thread in the page.
+ */
+export const NOTES_PLACED_IN_FULL = 5;
+
+/** Whether this many notes on one chart are placed in full: whether a note may go to the rail and a card's narrower sizes are tried. */
+export function placedInFull(count: number): boolean {
+  return count <= NOTES_PLACED_IN_FULL;
+}
 
 /** Space kept between a card and the data the chart draws, so a card never reads as resting on a bar. */
 export const DATA_CLEARANCE = 6;
@@ -331,10 +354,11 @@ function isSettled(note: NoteToPlace, placement: Placement): boolean {
 export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: PlaceOptions = {}): Map<string, NotePlace> {
   const gap = options.gap ?? NOTE_GAP;
   const prepared = prepare(field, options.leaderOverlap);
-  const all = placeInOrder(notes, prepared, gap);
+  const full = placedInFull(notes.length);
+  const all = placeInOrder(notes, prepared, gap, full);
   const over = (placements: Map<string, Placement>) => [...placements.values()].filter((placement) => placement.astray).length;
   let chosen = all;
-  if (options.spill && over(all) > 0) {
+  if (options.spill && full && over(all) > 0) {
     // A note leaves only where its absence leaves fewer cards astray: the
     // rail is for a card the chart has no place for, never to make room
     // for nothing. Of those, the one whose absence leaves the fewest astray;
@@ -346,7 +370,7 @@ export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: Pla
     };
     let best: { placements: Map<string, Placement>; rank: number[] } | undefined;
     for (const note of notes) {
-      const placements = placeInOrder(notes, prepared, gap, note.id, all);
+      const placements = placeInOrder(notes, prepared, gap, full, note.id, all);
       const astray = over(placements);
       if (astray >= over(all)) continue;
       const rank = [
@@ -516,10 +540,13 @@ function prepare(field: NoteField, leaderOverlap = 0): Prepared {
 // its sizes afresh, since the room the note left is its to take first (a
 // general note's corner, say, may be what kept it from a clear place); the
 // rest keep the size they took, so a crowded chart's reruns stay cheap.
+// Not `full` (past `NOTES_PLACED_IN_FULL` notes), a card tries no other
+// size, and only the first that many placed search.
 function placeInOrder(
   notes: NoteToPlace[],
   field: Prepared,
   gap: number,
+  full: boolean,
   leftOut?: string,
   before?: Map<string, Placement>,
 ): Map<string, Placement> {
@@ -557,10 +584,11 @@ function placeInOrder(
     // shorter.
     const sized = before && !first ? before.get(note.id)?.rect : undefined;
     first = false;
-    let chosen = sized ? placeSized(note, sized.right - sized.left, sized.bottom - sized.top) : placeSized(note, note.width, note.height);
-    for (const size of sized ? [] : (note.sizes ?? [])) {
+    const searches = full || placed.size < NOTES_PLACED_IN_FULL;
+    let chosen = sized ? placeSized(note, sized.right - sized.left, sized.bottom - sized.top, searches) : placeSized(note, note.width, note.height, searches);
+    for (const size of sized || !full ? [] : (note.sizes ?? [])) {
       if (isSettled(note, chosen)) break;
-      const trial = placeSized(note, size.width, size.height);
+      const trial = placeSized(note, size.width, size.height, searches);
       // Shorter by enough to be worth the lines it costs, and never for a
       // card cut to a column.
       const shorter =
@@ -574,7 +602,7 @@ function placeInOrder(
   }
   return placed;
 
-  function placeSized(note: NoteToPlace, width: number, height: number): Placement {
+  function placeSized(note: NoteToPlace, width: number, height: number, searches: boolean): Placement {
     const { point, from } = note;
     const others = [...placed.values()].map((placement) => placement.rect);
     const minLeft = area.left;
@@ -851,7 +879,8 @@ function placeInOrder(
     // over the data. A place that falls short only as far as a search lets
     // one still has the search look for a nearer one, and a clear place a
     // long way from its bar still has the search look for a nearer one.
-    for (const through of [SHORT.clear, SHORT.fill, SHORT.label]) {
+    // A card past the first few of a chart with many notes does not search.
+    for (const through of searches ? [SHORT.clear, SHORT.fill, SHORT.label] : []) {
       if (isSettled(note, best!) || (best!.falls < through && best!.falls !== SHORT.clear)) break;
       search(through);
       if (best!.falls === SHORT.clear) break;
