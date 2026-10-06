@@ -408,6 +408,20 @@ its days, and one too small for those marks lists them). It stands inside
 the panel frame's steps, so nothing it draws crosses the frame. The wire rules and the drawing rules are in
 `docs/display-tool.md` ("calendar").
 
+**Nothing a primitive draws crosses its frame.** A frame's steps are a
+share of its height, so a slot keeps clear of them by a row of its own grid
+in that share (`--panel-inset` for the panel frame), never by a padding in
+stage units, which falls short on a tall slot. The calendar, the to-do
+list, the inbox and a figure stand in the panel's inner box; a table's and
+a source's rows stop above the code frame's lower step (their rims at the
+foot with them); a document's meta line stands under its frame's top
+line; a portrait chart's foot clears the panel's lower step.
+`frame.spec.ts` checks every primitive, as the primary, in focus and in
+the aux row, at every geometry the visual suites use: each part that draws
+something must stand inside the frame over its own span. One case is
+open: on a phone, focus draws a long first line of source under the code
+frame's top-right step.
+
 **The to-do list and the inbox are read as the table and the rail's plan
 module are read**: rows between thin rules under a meta line that names
 the list and counts what it holds, the prose face for what a person wrote,
