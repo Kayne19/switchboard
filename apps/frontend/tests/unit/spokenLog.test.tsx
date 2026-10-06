@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MessageData, SpokenLine } from '../../src/controller/types';
 import { LiveChatCard } from '../../src/primitives/LiveChatCard';
 import { SpokenLog } from '../../src/primitives/SpokenLog';
-import { mount, rerender } from './sceneHarness';
+import { mount, rerender, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement;
 
@@ -18,6 +18,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountAll();
   vi.restoreAllMocks();
 });
 

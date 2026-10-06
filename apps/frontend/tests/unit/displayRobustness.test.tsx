@@ -17,7 +17,7 @@ import { createInitialState, reduceActions } from '../../src/controller/reducer'
 import type { ControllerAction, ControllerState } from '../../src/controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
-import { mount, stubResizeObserver } from './sceneHarness';
+import { mount, stubResizeObserver, unmountAll } from './sceneHarness';
 
 let dispatch: (action: ControllerAction) => void;
 let latest: ControllerState;
@@ -75,6 +75,7 @@ beforeEach(() => {
 
 afterEach(() => {
   window.removeEventListener('error', onWindowError);
+  unmountAll();
   vi.restoreAllMocks();
 });
 

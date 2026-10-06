@@ -5,7 +5,7 @@ import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityState } from '../../src/controller/types';
 import { activitySummary, ToolActivity } from '../../src/primitives/ToolActivity';
-import { mount, rerender } from './sceneHarness';
+import { mount, rerender, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement;
 
@@ -15,6 +15,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountAll();
   vi.useRealTimers();
 });
 

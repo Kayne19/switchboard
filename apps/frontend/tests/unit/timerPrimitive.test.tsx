@@ -9,7 +9,7 @@ import { flushSync } from 'react-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TimerData } from '../../src/controller/types';
 import { TimerPrimitive } from '../../src/primitives/TimerPrimitive';
-import { mount, rootOf, stubResizeObserver, unmount } from './sceneHarness';
+import { mount, rootOf, stubResizeObserver, unmount, unmountAll } from './sceneHarness';
 
 const NOW = Date.parse('2026-10-07T18:33:00-07:00');
 const at = (minutes: number) => new Date(NOW + minutes * 60_000 - 7 * 3_600_000).toISOString().replace(/\.\d{3}Z$/, '-07:00');
@@ -39,6 +39,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountAll();
   vi.useRealTimers();
 });
 

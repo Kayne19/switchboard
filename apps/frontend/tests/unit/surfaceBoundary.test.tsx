@@ -3,7 +3,7 @@
 import { type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { SurfaceBoundary } from '../../src/components/SurfaceBoundary';
-import { mount, rerender } from './sceneHarness';
+import { mount, rerender, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement;
 let logged: MockInstance<typeof console.error>;
@@ -41,6 +41,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountAll();
   vi.restoreAllMocks();
 });
 

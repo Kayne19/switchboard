@@ -13,7 +13,7 @@ import { createInitialState, reduceActions } from '../../src/controller/reducer'
 import type { ChartData, ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
-import { mount, stubResizeObserver, unmount } from './sceneHarness';
+import { mount, stubResizeObserver, unmount, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement;
 let dispatch: (action: ControllerAction) => void;
@@ -58,6 +58,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountAll();
   for (const [name, descriptor] of Object.entries(saved)) {
     if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
     else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];

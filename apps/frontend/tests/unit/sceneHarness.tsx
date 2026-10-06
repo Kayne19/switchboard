@@ -5,6 +5,10 @@
 //
 // - `mount` renders a node into a new element on the page. Everything
 //   mounted is unmounted, and its element removed, after each test.
+//   vitest runs this file's afterEach, registered on import, after the test
+//   file's own: a file whose afterEach takes away what the tree's cleanup
+//   still uses (a spy, a stubbed global, fake timers, a stubbed prototype
+//   getter) calls `unmountAll()` first, so the tree goes before them.
 // - `renderScene` mounts the page's scene renderer and runs actions through
 //   its controller, as the agent's display calls reach it; `runActions`
 //   runs more, `lastScene` is the scene just drawn, `controllerState` what
@@ -51,8 +55,11 @@ export function unmount(host: HTMLElement): void {
   const root = roots.get(host);
   if (!root) return;
   roots.delete(host);
-  act(() => root.unmount());
-  host.remove();
+  try {
+    act(() => root.unmount());
+  } finally {
+    host.remove();
+  }
 }
 
 let sceneHost: HTMLDivElement | null = null;
@@ -71,6 +78,8 @@ function SceneRunner({ actions }: { actions: ControllerAction[] }) {
  * inside the controller ahead of the actions, so its effects run first.
  */
 export function renderScene(actions: ControllerAction[], before?: ReactNode): HTMLDivElement {
+  // runActions and lastScene name one scene; a second would take them over unseen.
+  if (sceneHost && roots.has(sceneHost)) throw new Error('renderScene: a scene is already mounted in this test');
   sceneHost = mount(
     <ControllerProvider>
       {before}
@@ -115,8 +124,20 @@ export function stubResizeObserver(): void {
   };
 }
 
-afterEach(() => {
-  for (const host of [...roots.keys()]) unmount(host);
+/** Unmounts everything mounted, now; the harness does it after each test. */
+export function unmountAll(): void {
+  // Every root goes, even past one whose cleanup throws; the first error is reported.
+  const errors: unknown[] = [];
+  for (const host of [...roots.keys()]) {
+    try {
+      unmount(host);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
   sceneHost = null;
   controller = null;
-});
+  if (errors.length > 0) throw errors[0];
+}
+
+afterEach(unmountAll);

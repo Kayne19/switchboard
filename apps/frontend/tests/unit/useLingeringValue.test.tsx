@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLingeringValue } from '../../src/hooks/useLingeringValue';
-import { mount, rerender } from './sceneHarness';
+import { mount, rerender, unmountAll } from './sceneHarness';
 
 function Probe({ value }: { value: string | null }) {
   return <span>{useLingeringValue(value, 1000) ?? 'none'}</span>;
@@ -29,6 +29,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountAll();
   vi.useRealTimers();
 });
 

@@ -7,7 +7,7 @@ import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { RAIL } from '../../src/primitives/drawingScroll';
 import { SequencePrimitive } from '../../src/primitives/SequencePrimitive';
-import { mount, rerender, stubResizeObserver } from './sceneHarness';
+import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
 
 // A scrolled drawing in the diagram slot, measured as a browser would: jsdom
 // has no layout, so the host reports the slot's viewport and the scroller
@@ -52,6 +52,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountAll();
   for (const [name, descriptor] of Object.entries(descriptors)) {
     if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
     else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];

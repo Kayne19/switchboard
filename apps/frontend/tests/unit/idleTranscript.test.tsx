@@ -13,7 +13,7 @@ import { sceneKind } from '../../src/app/sceneModel';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { helloAck } from '../fixtures/serverMessages';
-import { mount, rerender, stubResizeObserver } from './sceneHarness';
+import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
 
 type Controller = ReturnType<typeof useController>;
 
@@ -115,6 +115,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountAll();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.history.replaceState(null, '', '/');

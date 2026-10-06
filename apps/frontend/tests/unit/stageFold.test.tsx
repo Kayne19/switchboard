@@ -9,7 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { STAGE_PAST, UNSTAGE_UNDER, sharedExcess, stageReport, wantsStage, type StageReport } from '../../src/app/stageFold';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
-import { lastScene, renderScene, runActions } from './sceneHarness';
+import { lastScene, renderScene, runActions, unmountAll } from './sceneHarness';
 
 describe('when the primary takes the stage', () => {
   // In the shared layout the column is 498 px and the viewport 374.
@@ -181,6 +181,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unmountAll();
   observers.clear();
 });
 

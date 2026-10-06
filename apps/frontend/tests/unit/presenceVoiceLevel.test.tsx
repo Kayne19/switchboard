@@ -10,7 +10,7 @@ import { useController } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { mapVoiceLevelToBar } from '../../src/primitives/VoiceIndicator';
-import { controllerState, renderScene, stubResizeObserver } from './sceneHarness';
+import { controllerState, renderScene, stubResizeObserver, unmountAll } from './sceneHarness';
 
 const composed: ControllerAction[] = [
   { op: 'show', id: 'latency', type: 'metric', role: 'primary', data: { label: 'P95 LATENCY', value: '182 ms' } },
@@ -42,6 +42,7 @@ function Voice() {
 stubResizeObserver();
 
 afterEach(() => {
+  unmountAll();
   vi.unstubAllGlobals();
 });
 
