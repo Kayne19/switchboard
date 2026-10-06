@@ -200,3 +200,14 @@ describe('TasksPrimitive', () => {
     expect(list.querySelector('[data-item="claim"] .task-row__text')?.textContent).toBe(long);
   });
 });
+
+describe('the priority arrow', () => {
+  it('is the metric trend arrow: up for high, down for low, none for normal', () => {
+    const list = render({ items: [task({ id: 'hi', priority: 'high' }), task({ id: 'lo', priority: 'low' }), task({ id: 'normal' })] });
+    const arrow = (id: string) => list.querySelector(`[data-item="${id}"] .task-row__priority`);
+    expect(arrow('hi')?.querySelector('path')?.getAttribute('d')).toBe('M6 10.5 V2.2 M2.4 5.8 L6 2.2 L9.6 5.8');
+    expect(arrow('lo')?.querySelector('path')?.getAttribute('d')).toBe('M6 1.5 V9.8 M2.4 6.2 L6 9.8 L9.6 6.2');
+    expect(arrow('lo')?.getAttribute('class')).toBe('task-row__priority task-row__priority--low');
+    expect(arrow('normal')).toBeNull();
+  });
+});

@@ -3,6 +3,7 @@ import type { TaskItem, TasksData, TaskState } from '../controller/types';
 import { parseTimeValue, type TimeValue } from '../controller/validation';
 import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
+import { ArrowGlyph } from './MetricsPrimitive';
 import { StepGlyph } from './ProgressPrimitive';
 import { clockText, dayText, daysFrom, readToday } from './timeLabels';
 import { MetaTitle } from './MetaTitle';
@@ -93,16 +94,6 @@ export function countsDone(variant: TasksVariant, total: number): boolean {
   return variant === 'compact' || (variant === 'full' && total > LONG_TASK_LIST);
 }
 
-// An arrow for a priority other than normal, the metric trend's arrow:
-// up for high, down for low.
-function PriorityMark({ priority }: { priority: 'high' | 'low' }) {
-  return (
-    <svg className={`task-row__priority task-row__priority--${priority}`} viewBox="0 0 12 12" role="img" aria-label={`${priority} priority`}>
-      {priority === 'high' ? <path d="M6 10.5 V2.2 M2.4 5.8 L6 2.2 L9.6 5.8" /> : <path d="M6 1.5 V9.8 M2.4 6.2 L6 9.8 L9.6 6.2" />}
-    </svg>
-  );
-}
-
 // The due label at a row's end: the word that judges the day over the day
 // or time. A compact row has one line for it: the word, or the time on
 // today, or the day.
@@ -138,7 +129,8 @@ function TaskRow({ task, today, marked, compact }: { task: TaskItem; today: Time
       <div className="task-row__body">
         <div className="task-row__line">
           {marked ? <NoteBadge className="task-row__note" /> : null}
-          {task.priority ? <PriorityMark priority={task.priority} /> : null}
+          {/* A priority other than normal: the metric trend's arrow, up for high, down for low. */}
+          {task.priority ? <ArrowGlyph direction={task.priority === 'high' ? 'up' : 'down'} className={`task-row__priority task-row__priority--${task.priority}`} label={`${task.priority} priority`} /> : null}
           <span className="task-row__text">{task.text}</span>
         </div>
         {!compact && task.detail ? <div className="task-row__detail">{task.detail}</div> : null}

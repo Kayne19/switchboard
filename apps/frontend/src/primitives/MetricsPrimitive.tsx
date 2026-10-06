@@ -8,19 +8,28 @@ interface MetricsPrimitiveProps {
   onFocus?: (id: string) => void;
 }
 
+const ARROWS = {
+  up: 'M6 10.5 V2.2 M2.4 5.8 L6 2.2 L9.6 5.8',
+  down: 'M6 1.5 V9.8 M2.4 6.2 L6 9.8 L9.6 6.2',
+  flat: 'M1.5 6 H10.5 M7 2.4 L10.5 6 L7 9.6',
+} as const;
+
+/** The metric's trend arrow, which a to-do list's priority reuses (up for high, down for low). */
+export function ArrowGlyph({ direction, className, label }: { direction: keyof typeof ARROWS; className: string; label: string }) {
+  return (
+    <svg className={className} viewBox="0 0 12 12" role="img" aria-label={label}>
+      <path d={ARROWS[direction]} />
+    </svg>
+  );
+}
+
 // Which way the value moved, beside it in its own colour: an arrow for the
 // trend, then the delta as the agent worded it. Either may come alone.
 function MetricTrend({ data }: { data: MetricData }) {
   if (data.trend === undefined && data.delta === undefined) return null;
   return (
     <span className="metric-row__trend" data-testid="metric-trend" data-trend={data.trend}>
-      {data.trend ? (
-        <svg className="metric-row__arrow" viewBox="0 0 12 12" role="img" aria-label={data.trend}>
-          {data.trend === 'up' ? <path d="M6 10.5 V2.2 M2.4 5.8 L6 2.2 L9.6 5.8" /> : null}
-          {data.trend === 'down' ? <path d="M6 1.5 V9.8 M2.4 6.2 L6 9.8 L9.6 6.2" /> : null}
-          {data.trend === 'flat' ? <path d="M1.5 6 H10.5 M7 2.4 L10.5 6 L7 9.6" /> : null}
-        </svg>
-      ) : null}
+      {data.trend ? <ArrowGlyph direction={data.trend} className="metric-row__arrow" label={data.trend} /> : null}
       {data.delta ? <span className="metric-row__delta">{data.delta}</span> : null}
     </span>
   );
