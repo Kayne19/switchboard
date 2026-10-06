@@ -1,25 +1,12 @@
 // @vitest-environment jsdom
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { COMPACT_STEPS, ProgressPrimitive, aheadStepWindow, compactStepWindow, type ProgressVariant } from '../../src/primitives/ProgressPrimitive';
 import type { ProgressData, ProgressStep } from '../../src/controller/types';
-
-let host: HTMLDivElement;
-let root: Root;
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
+import { mount } from './sceneHarness';
 
 function render(data: ProgressData, compact: boolean | ProgressVariant = false) {
   const variant: ProgressVariant = compact === true ? 'compact' : compact === false ? 'full' : compact;
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(<ProgressPrimitive data={data} variant={variant} />));
-  return host.querySelector('[data-testid="progress"]') as HTMLElement;
+  return mount(<ProgressPrimitive data={data} variant={variant} />).querySelector('[data-testid="progress"]') as HTMLElement;
 }
 
 const plan: ProgressStep[] = [

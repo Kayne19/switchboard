@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useLingeringValue } from '../../src/hooks/useLingeringValue';
+import { mount, rerender } from './sceneHarness';
 
 function Probe({ value }: { value: string | null }) {
   return <span>{useLingeringValue(value, 1000) ?? 'none'}</span>;
@@ -18,20 +18,17 @@ function HeldProbe({ value }: { value: string | null }) {
 }
 
 let host: HTMLDivElement;
-let root: Root;
-const show = (value: string | null) => act(() => root.render(<Probe value={value} />));
-const hold = (value: string | null) => act(() => root.render(<HeldProbe value={value} />));
+const show = (value: string | null) => rerender(host, <Probe value={value} />);
+const hold = (value: string | null) => rerender(host, <HeldProbe value={value} />);
 const advance = (ms: number) => act(() => vi.advanceTimersByTime(ms));
 
 beforeEach(() => {
   vi.useFakeTimers();
   frames = [];
-  host = document.createElement('div');
-  root = createRoot(host);
+  host = mount(null);
 });
 
 afterEach(() => {
-  act(() => root.unmount());
   vi.useRealTimers();
 });
 

@@ -35,9 +35,15 @@ export function mount(node: ReactNode, options?: RootOptions): HTMLDivElement {
 
 /** Renders `node` again into the root `host` was mounted with. */
 export function rerender(host: HTMLElement, node: ReactNode): void {
-  const root = roots.get(host);
-  if (!root) throw new Error('rerender: that element is not mounted');
+  const root = rootOf(host);
   act(() => root.render(node));
+}
+
+/** The root `host` was mounted with, for a test that must commit outside act(). */
+export function rootOf(host: HTMLElement): Root {
+  const root = roots.get(host);
+  if (!root) throw new Error('rootOf: that element is not mounted');
+  return root;
 }
 
 /** Unmounts what `host` holds before the test ends, and removes it from the page. */

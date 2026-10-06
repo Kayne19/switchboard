@@ -4,9 +4,7 @@
 // sections in first-seen order, the plan's state glyphs, the due label
 // judged against the list's own `today`, done tasks counted in a long list
 // and in a compact slot, and the item a note names.
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { TaskItem, TasksData } from '../../src/controller/types';
 import { parseTimeValue } from '../../src/controller/validation';
 import { fixtures } from '../../src/fixtures/scenes';
@@ -19,34 +17,12 @@ import {
   taskSections,
   type TasksVariant,
 } from '../../src/primitives/TasksPrimitive';
+import { mount, stubResizeObserver } from './sceneHarness';
 
-let host: HTMLDivElement | null = null;
-let root: Root | null = null;
-
-beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  const rendered = root;
-  if (rendered) act(() => rendered.unmount());
-  host?.remove();
-  host = null;
-  root = null;
-});
+stubResizeObserver();
 
 function render(data: TasksData, variant: TasksVariant = 'full', marked?: string): HTMLElement {
-  const page = document.createElement('div');
-  document.body.append(page);
-  const pageRoot = createRoot(page);
-  host = page;
-  root = pageRoot;
-  act(() => pageRoot.render(<TasksPrimitive data={data} variant={variant} marked={marked} />));
-  return page.querySelector('[data-testid="tasks"]') as HTMLElement;
+  return mount(<TasksPrimitive data={data} variant={variant} marked={marked} />).querySelector('[data-testid="tasks"]') as HTMLElement;
 }
 
 const today = parseTimeValue('2026-10-07');

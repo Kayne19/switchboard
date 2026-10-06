@@ -3,13 +3,12 @@
 // page's line language: the schema's enum, the validator and the glyph
 // table agree, so a condition added to the contract without a glyph fails
 // here rather than drawing nothing on a caller's forecast.
-import { act } from 'react';
-import { createRoot } from 'react-dom/client';
 import { describe, expect, it } from 'vitest';
 import schema from '../../../../docs/display-action-v1.schema.json';
 import type { WeatherCondition } from '../../src/controller/types';
 import { validateControllerAction } from '../../src/controller/validation';
 import { conditionText, WEATHER_GLYPHS, WeatherGlyph } from '../../src/primitives/WeatherGlyph';
+import { mount } from './sceneHarness';
 
 const conditions = (schema as { definitions: { WeatherCondition: { enum: WeatherCondition[] } } }).definitions.WeatherCondition.enum;
 
@@ -38,14 +37,11 @@ describe('weather glyphs', () => {
   });
 
   it.each(conditions)('%s draws as an SVG named for its condition, never an emoji or an image', (condition) => {
-    const host = document.createElement('div');
-    const root = createRoot(host);
-    act(() => root.render(<WeatherGlyph condition={condition} />));
+    const host = mount(<WeatherGlyph condition={condition} />);
     const svg = host.querySelector('svg')!;
     expect(svg.getAttribute('aria-label')).toBe(conditionText(condition));
     expect(svg.querySelectorAll('path').length).toBe(WEATHER_GLYPHS[condition].length);
     expect(host.querySelector('img, image, text')).toBeNull();
     expect(host.textContent).toBe('');
-    act(() => root.unmount());
   });
 });

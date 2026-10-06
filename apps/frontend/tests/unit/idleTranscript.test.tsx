@@ -6,14 +6,14 @@
 // hover: none) and is proven in tests/visual/idle-transcript.spec.ts; these
 // cover the markup, the opener, and the typed turn's round trip.
 import { act, useEffect } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../src/App';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { sceneKind } from '../../src/app/sceneModel';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { helloAck } from '../fixtures/serverMessages';
+import { mount, rerender, stubResizeObserver } from './sceneHarness';
 
 type Controller = ReturnType<typeof useController>;
 
@@ -47,7 +47,6 @@ class FakeSocket {
 }
 
 let host: HTMLDivElement;
-let root: Root;
 let controller: Controller;
 let sentTexts: string[];
 
@@ -74,10 +73,7 @@ function FakeVoiceRuntime() {
 }
 
 function render(tree: React.ReactNode) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(<ControllerProvider>{tree}<Probe /></ControllerProvider>));
+  host = mount(<ControllerProvider>{tree}<Probe /></ControllerProvider>);
 }
 
 function stage(): HTMLElement {
@@ -112,21 +108,13 @@ function press(target: Element, key: string) {
   });
 }
 
-beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
+stubResizeObserver();
 
 beforeEach(() => {
   sentTexts = [];
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   window.history.replaceState(null, '', '/');
@@ -202,7 +190,7 @@ describe('the transcript toggle on the idle stage', () => {
     expect(input().disabled).toBe(true);
     expect(document.activeElement).not.toBe(input());
 
-    act(() => root.render(<ControllerProvider><TestHarness connected={true} /><Probe /></ControllerProvider>));
+    rerender(host, <ControllerProvider><TestHarness connected={true} /><Probe /></ControllerProvider>);
     expect(input().disabled).toBe(false);
     expect(document.activeElement).toBe(input());
   });

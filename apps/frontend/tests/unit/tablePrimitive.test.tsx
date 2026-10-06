@@ -1,20 +1,12 @@
 // @vitest-environment jsdom
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { TablePrimitive, inferColumnAlignment } from '../../src/primitives/TablePrimitive';
 import type { TableData } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
-
-let host: HTMLDivElement;
-let root: Root;
+import { mount } from './sceneHarness';
 
 function render(data: TableData) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(<TablePrimitive data={data} />));
-  return host.querySelector('[data-testid="table"]') as HTMLElement;
+  return mount(<TablePrimitive data={data} />).querySelector('[data-testid="table"]') as HTMLElement;
 }
 
 const results = fixtures.results[0] as { data: TableData };
@@ -55,11 +47,6 @@ describe('inferColumnAlignment', () => {
 });
 
 describe('TablePrimitive', () => {
-  afterEach(() => {
-    act(() => root.unmount());
-    host.remove();
-  });
-
   it('draws every column header and every cell as text, numbers included', () => {
     const view = render(results.data);
     const heads = [...view.querySelectorAll('th')].map((node) => node.textContent);

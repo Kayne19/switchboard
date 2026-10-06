@@ -1,31 +1,15 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { ImageData } from '../../src/controller/types';
 import { ImagePrimitive, imageDataUrl } from '../../src/primitives/ImagePrimitive';
+import { mount } from './sceneHarness';
 
 /** A real 1x1 PNG, the one the validator corpus carries. */
 const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mN48ew+AAVnAq5EDgAUAAAAAElFTkSuQmCC';
 
-let host: HTMLDivElement | undefined;
-let root: Root | undefined;
-
-afterEach(() => {
-  if (root) act(() => root!.unmount());
-  host?.remove();
-  root = undefined;
-  host = undefined;
-});
-
 function render(data: ImageData) {
-  const element = document.createElement('div');
-  document.body.append(element);
-  const created = createRoot(element);
-  host = element;
-  root = created;
-  act(() => created.render(<ImagePrimitive data={data} />));
-  return element.querySelector('[data-testid="image"]') as HTMLElement;
+  return mount(<ImagePrimitive data={data} />).querySelector('[data-testid="image"]') as HTMLElement;
 }
 
 describe('imageDataUrl', () => {

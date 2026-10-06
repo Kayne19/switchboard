@@ -4,41 +4,17 @@
 // of day on `today` and the day otherwise, the unread, flagged and tinted
 // marks, what a compact slot leaves out, the layout the list's width
 // decides, and the message a note names.
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { InboxData, InboxMessage } from '../../src/controller/types';
 import { parseTimeValue } from '../../src/controller/validation';
 import { fixtures } from '../../src/fixtures/scenes';
 import { InboxPrimitive, ONE_LINE_EMS, inboxCounts, inboxLayout, messageTime, type InboxVariant } from '../../src/primitives/InboxPrimitive';
+import { mount, stubResizeObserver } from './sceneHarness';
 
-let host: HTMLDivElement | null = null;
-let root: Root | null = null;
-
-beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  const rendered = root;
-  if (rendered) act(() => rendered.unmount());
-  host?.remove();
-  host = null;
-  root = null;
-});
+stubResizeObserver();
 
 function render(data: InboxData, variant: InboxVariant = 'full', marked?: string): HTMLElement {
-  const page = document.createElement('div');
-  document.body.append(page);
-  const pageRoot = createRoot(page);
-  host = page;
-  root = pageRoot;
-  act(() => pageRoot.render(<InboxPrimitive data={data} variant={variant} marked={marked} />));
-  return page.querySelector('[data-testid="inbox"]') as HTMLElement;
+  return mount(<InboxPrimitive data={data} variant={variant} marked={marked} />).querySelector('[data-testid="inbox"]') as HTMLElement;
 }
 
 const today = parseTimeValue('2026-10-07');

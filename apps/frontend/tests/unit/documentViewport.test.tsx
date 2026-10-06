@@ -1,23 +1,10 @@
 // @vitest-environment jsdom
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { DocumentViewport } from '../../src/primitives/DocumentViewport';
-
-let host: HTMLDivElement;
-let root: Root;
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
+import { mount } from './sceneHarness';
 
 function render(paragraphs: string[]) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(<DocumentViewport data={{ subject: 'Report', paragraphs }} />));
-  return host.querySelector('.document-viewport__body') as HTMLElement;
+  return mount(<DocumentViewport data={{ subject: 'Report', paragraphs }} />).querySelector('.document-viewport__body') as HTMLElement;
 }
 
 describe('DocumentViewport paragraphs', () => {

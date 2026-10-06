@@ -1,12 +1,11 @@
 // @vitest-environment jsdom
 import { readFileSync } from 'node:fs';
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { DiagramData } from '../../src/controller/types';
 import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
 import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import { GRAPH_MIN_SCALE } from '../../src/primitives/diagramLayout';
+import { mount, rerender, stubResizeObserver } from './sceneHarness';
 
 const data: DiagramData = {
   mode: 'graph',
@@ -22,26 +21,11 @@ const data: DiagramData = {
 };
 
 let host: HTMLDivElement;
-let root: Root;
 
-beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
+stubResizeObserver();
 
 function render() {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(<DiagramPrimitive data={data} id="test-diagram" />));
+  host = mount(<DiagramPrimitive data={data} id="test-diagram" />);
 }
 
 describe('diagram rendering', () => {
@@ -102,9 +86,6 @@ describe('diagram rendering', () => {
   });
 
   it('sizes each node box to its text and wraps a long label', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
     const sized: DiagramData = {
       mode: 'graph',
       nodes: [
@@ -113,7 +94,7 @@ describe('diagram rendering', () => {
       ],
       edges: [{ from: 'short', to: 'long' }],
     };
-    act(() => root.render(<DiagramPrimitive data={sized} id="test-diagram" />));
+    host = mount(<DiagramPrimitive data={sized} id="test-diagram" />);
     const [short, long] = [...host.querySelectorAll<SVGGElement>('.diagram-nodes > g')];
     const widthOf = (node: SVGGElement) => Number(node.querySelector('.diagram-node__frame')?.getAttribute('d')?.match(/H ([\d.]+) L/)?.[1]);
     expect(widthOf(long)).toBeGreaterThan(widthOf(short));
@@ -143,10 +124,7 @@ describe('diagram node state', () => {
   const nodeOf = (id: string) => [...host.querySelectorAll<SVGGElement>('.diagram-nodes > g')][stateful.nodes.findIndex((node) => node.id === id)];
 
   it('shows each state on its node: done dimmed with a check, active lit, blocked framed red with a cross', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root.render(<DiagramPrimitive data={stateful} id="test-diagram" />));
+    host = mount(<DiagramPrimitive data={stateful} id="test-diagram" />);
     const done = nodeOf('done');
     expect(done.querySelector('.diagram-node__body--done')).not.toBeNull();
     expect(done.querySelector('.diagram-node__tag--done polyline')).not.toBeNull();
@@ -168,17 +146,12 @@ describe('diagram node state', () => {
   });
 
   it('keeps a blocked node framed in red when a note anchors it', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() =>
-      root.render(
-        <DiagramPrimitive
-          data={stateful}
-          id="test-diagram"
-          note={{ segments: [{ text: 'x' }], anchor: { target: 'test-diagram', node: 'blocked' } }}
-        />,
-      ),
+    host = mount(
+      <DiagramPrimitive
+        data={stateful}
+        id="test-diagram"
+        note={{ segments: [{ text: 'x' }], anchor: { target: 'test-diagram', node: 'blocked' } }}
+      />,
     );
     const blocked = nodeOf('blocked');
     expect(blocked.querySelector('.diagram-node__body--anchored')).not.toBeNull();
@@ -190,19 +163,14 @@ describe('diagram node state', () => {
   });
 
   it('leaves room for both corner tags beside the label of an anchored done node', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
     const label = 'COMPILE ASSETS';
     const long = 'A note far too long to fit the callout box, so it stays in the rail and the node carries the badge beside its check.';
-    act(() =>
-      root.render(
-        <DiagramPrimitive
-          data={{ mode: 'graph', nodes: [{ id: 'build', label, state: 'done' }], edges: [] }}
-          id="test-diagram"
-          note={{ segments: [{ text: long }], anchor: { target: 'test-diagram', node: 'build' } }}
-        />,
-      ),
+    host = mount(
+      <DiagramPrimitive
+        data={{ mode: 'graph', nodes: [{ id: 'build', label, state: 'done' }], edges: [] }}
+        id="test-diagram"
+        note={{ segments: [{ text: long }], anchor: { target: 'test-diagram', node: 'build' } }}
+      />,
     );
     expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
     const tag = host.querySelector('.diagram-node__tag--done');
@@ -222,17 +190,12 @@ describe('diagram node state', () => {
   });
 
   it('gives a lit node its glow on every side of the frame', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() =>
-      root.render(
-        <DiagramPrimitive
-          data={stateful}
-          id="test-diagram"
-          note={{ segments: [{ text: 'x' }], anchor: { target: 'test-diagram', node: 'todo' } }}
-        />,
-      ),
+    host = mount(
+      <DiagramPrimitive
+        data={stateful}
+        id="test-diagram"
+        note={{ segments: [{ text: 'x' }], anchor: { target: 'test-diagram', node: 'todo' } }}
+      />,
     );
     // An active node and an anchored one are both lit.
     const lit = [nodeOf('active'), nodeOf('todo')].map((node) => node.querySelector('.diagram-node__frame'));
@@ -256,21 +219,16 @@ describe('diagram node state', () => {
 
 describe('anchored diagram note', () => {
   it('highlights the node and renders a callout with leader line', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() =>
-      root.render(
-        <DiagramPrimitive
-          data={data}
-          id="test-diagram"
-          note={{
-            tag: 'OBSERVATION',
-            anchor: { target: 'test-diagram', node: 'route' },
-            segments: [{ text: 'Route description.' }],
-          }}
-        />,
-      ),
+    host = mount(
+      <DiagramPrimitive
+        data={data}
+        id="test-diagram"
+        note={{
+          tag: 'OBSERVATION',
+          anchor: { target: 'test-diagram', node: 'route' },
+          segments: [{ text: 'Route description.' }],
+        }}
+      />,
     );
 
     const callout = host.querySelector('.diagram-callout');
@@ -283,21 +241,16 @@ describe('anchored diagram note', () => {
   });
 
   it('preserves default rendering when the anchored node is unknown', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() =>
-      root.render(
-        <DiagramPrimitive
-          data={data}
-          id="test-diagram"
-          note={{
-            tag: 'OBSERVATION',
-            anchor: { target: 'test-diagram', node: 'nonexistent' },
-            segments: [{ text: 'Route description.' }],
-          }}
-        />,
-      ),
+    host = mount(
+      <DiagramPrimitive
+        data={data}
+        id="test-diagram"
+        note={{
+          tag: 'OBSERVATION',
+          anchor: { target: 'test-diagram', node: 'nonexistent' },
+          segments: [{ text: 'Route description.' }],
+        }}
+      />,
     );
 
     expect(host.querySelector('.diagram-callout')).toBeNull();
@@ -308,10 +261,7 @@ describe('anchored diagram note', () => {
 
 describe('anchored note fit and ownership', () => {
   function renderAnchored(note: { tag?: string; anchor?: { target: string; node?: string; x?: number; series?: string }; segments: Array<{ text: string }> }) {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root.render(<DiagramPrimitive data={data} id="test-diagram" note={note} />));
+    host = mount(<DiagramPrimitive data={data} id="test-diagram" note={note} />);
   }
 
   it('falls back to the rail badge without truncating when the note does not fit the callout', () => {
@@ -374,25 +324,20 @@ describe('anchored note fit and ownership', () => {
 
   it('hands a placed callout back to the rail when the diagram unmounts', () => {
     const placed: boolean[] = [];
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() =>
-      root.render(
-        <DiagramPrimitive
-          data={data}
-          id="test-diagram"
-          note={{ tag: 'OBSERVATION', anchor: { target: 'test-diagram', node: 'route' }, segments: [{ text: 'Context moves here.' }] }}
-          onCalloutChange={(value) => placed.push(value)}
-        />,
-      ),
+    host = mount(
+      <DiagramPrimitive
+        data={data}
+        id="test-diagram"
+        note={{ tag: 'OBSERVATION', anchor: { target: 'test-diagram', node: 'route' }, segments: [{ text: 'Context moves here.' }] }}
+        onCalloutChange={(value) => placed.push(value)}
+      />,
     );
     expect(host.querySelector('.diagram-callout')).not.toBeNull();
     expect(placed.at(-1)).toBe(true);
 
     // A surface boundary replacing a diagram that threw unmounts it the same
     // way; the scene must not keep hiding the note from the rail.
-    act(() => root.render(<div />));
+    rerender(host, <div />);
     expect(placed.at(-1)).toBe(false);
   });
 
@@ -440,18 +385,13 @@ describe('corner tags inside the node frame', () => {
   for (const label of labels) {
     for (const state of states) {
       it(`${label} / ${state ?? 'todo'}: the NOTE marker and the state tag sit inside the frame, clear of the cut and the label`, () => {
-        host = document.createElement('div');
-        document.body.append(host);
-        root = createRoot(host);
         const node = { id: 'n', label, sub: 'prime-agent session in ~/projects/llm-wiki', detail: 'apps/backend/src/pbx.rs', ...(state ? { state } : {}) };
-        act(() =>
-          root.render(
-            <DiagramPrimitive
-              data={{ mode: 'graph', nodes: [{ id: 'a', label: 'A' }, node], edges: [{ from: 'a', to: 'n' }] }}
-              id="test-diagram"
-              note={{ segments: [{ text: long }], anchor: { target: 'test-diagram', node: 'n' } }}
-            />,
-          ),
+        host = mount(
+          <DiagramPrimitive
+            data={{ mode: 'graph', nodes: [{ id: 'a', label: 'A' }, node], edges: [{ from: 'a', to: 'n' }] }}
+            id="test-diagram"
+            note={{ segments: [{ text: long }], anchor: { target: 'test-diagram', node: 'n' } }}
+          />,
         );
         const group = [...host.querySelectorAll('.diagram-nodes > g')][1];
         const d = group.querySelector('.diagram-node__frame')?.getAttribute('d') ?? '';
@@ -490,10 +430,7 @@ describe('a graph too large to read whole', () => {
   // Scaled to fit a 1024 x 768 screen, the switchboard topology's text was
   // drawn at a third of its size: node subs at 3 px, edge labels at 4 px.
   it('is drawn no smaller than the readable minimum, and scrolls in its viewport instead', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root.render(<DiagramPrimitive data={topologyDiagram} id="topology" />));
+    host = mount(<DiagramPrimitive data={topologyDiagram} id="topology" />);
     const svg = host.querySelector('svg')!;
     const [, , width, height] = (svg.getAttribute('viewBox') ?? '').split(' ').map(Number);
     // Unmeasured, the host stands in for the screen (jsdom: 1024 x 768).
@@ -507,19 +444,14 @@ describe('a graph too large to read whole', () => {
   });
 
   it('keeps a note that names one of its nodes in the rail, the node carrying the marker', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
     const placed: boolean[] = [];
-    act(() =>
-      root.render(
-        <DiagramPrimitive
-          data={topologyDiagram}
-          id="topology"
-          note={{ tag: 'NOTE', anchor: { target: 'topology', node: 'gate' }, segments: [{ text: 'Short enough for a callout.' }] }}
-          onCalloutChange={(value) => placed.push(value)}
-        />,
-      ),
+    host = mount(
+      <DiagramPrimitive
+        data={topologyDiagram}
+        id="topology"
+        note={{ tag: 'NOTE', anchor: { target: 'topology', node: 'gate' }, segments: [{ text: 'Short enough for a callout.' }] }}
+        onCalloutChange={(value) => placed.push(value)}
+      />,
     );
     // A callout rides on the drawing and could sit out of view in a scroll.
     expect(host.querySelector('.diagram-callout')).toBeNull();
@@ -536,12 +468,9 @@ describe('a graph too large to read whole', () => {
 
 describe('an edge drawn as stubs', () => {
   it('draws its two stubs, an arrowhead only where it arrives, and names its far ends beside them', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
     // Too large for the window it is drawn in, the pipeline is recomposed
     // and its longest edges become stub pairs.
-    act(() => root.render(<DiagramPrimitive data={pipelineDiagram} id="test-diagram" />));
+    host = mount(<DiagramPrimitive data={pipelineDiagram} id="test-diagram" />);
     const stubs = [...host.querySelectorAll<SVGPathElement>('.diagram-edges path.diagram-edge--stub')];
     expect(stubs.length).toBeGreaterThan(0);
     const arriving = stubs.filter((stub) => stub.hasAttribute('marker-end'));

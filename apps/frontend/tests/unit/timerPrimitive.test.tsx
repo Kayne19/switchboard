@@ -6,10 +6,10 @@
 // still to come -- are pinned as the page draws them.
 import { act } from 'react';
 import { flushSync } from 'react-dom';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TimerData } from '../../src/controller/types';
 import { TimerPrimitive } from '../../src/primitives/TimerPrimitive';
+import { mount, rootOf, stubResizeObserver, unmount } from './sceneHarness';
 
 const NOW = Date.parse('2026-10-07T18:33:00-07:00');
 const at = (minutes: number) => new Date(NOW + minutes * 60_000 - 7 * 3_600_000).toISOString().replace(/\.\d{3}Z$/, '-07:00');
@@ -23,30 +23,15 @@ const kitchen: TimerData = {
   ],
 };
 
-let roots: Root[] = [];
-let hosts: HTMLElement[] = [];
-
 function render(data: TimerData, marked?: string): HTMLElement {
-  const host = document.createElement('div');
-  document.body.append(host);
-  const root = createRoot(host);
-  act(() => root.render(<TimerPrimitive data={data} marked={marked} />));
-  roots.push(root);
-  hosts.push(host);
-  return host;
+  return mount(<TimerPrimitive data={data} marked={marked} />);
 }
 
 const item = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`[data-item="${id}"]`)!;
 const digits = (host: HTMLElement, id: string) => item(host, id).querySelector('.timer__digits')!.textContent;
 const tick = (ms: number) => act(() => vi.advanceTimersByTime(ms));
 
-beforeAll(() => {
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
+stubResizeObserver();
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
@@ -54,22 +39,16 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const root of roots) act(() => root.unmount());
-  for (const host of hosts) host.remove();
-  roots = [];
-  hosts = [];
   vi.useRealTimers();
 });
 
 describe('the page clock', () => {
   it('is one timeout for every timer on the page, and none once they are gone', () => {
-    render(kitchen);
-    render(kitchen);
+    const pages = [render(kitchen), render(kitchen)];
     expect(vi.getTimerCount()).toBe(1);
     tick(5000);
     expect(vi.getTimerCount()).toBe(1);
-    for (const root of roots) act(() => root.unmount());
-    roots = [];
+    for (const page of pages) unmount(page);
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -88,7 +67,7 @@ describe('the page clock', () => {
     const resumed: TimerData = { timers: [{ id: 'bread', label: 'Bread', startedAt: at(-24), endsAt: at(22) }] };
     // The commit the browser paints: layout effects run, passive ones wait.
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
-    flushSync(() => roots[0].render(<TimerPrimitive data={resumed} />));
+    flushSync(() => rootOf(host).render(<TimerPrimitive data={resumed} />));
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     expect(digits(host, 'bread')).toBe('21:00');
   });
@@ -160,12 +139,7 @@ describe('a timer', () => {
     expect(loose.querySelector('[data-object-title]')?.textContent).toBe('KITCHEN / TIMERS');
     // With no title of its own it still names what it is.
     expect(render(kitchen).querySelector('[data-object-title]')?.textContent).toBe('TIMERS');
-    const host = document.createElement('div');
-    document.body.append(host);
-    const root = createRoot(host);
-    act(() => root.render(<TimerPrimitive data={titled} framed />));
-    roots.push(root);
-    hosts.push(host);
+    const host = mount(<TimerPrimitive data={titled} framed />);
     expect(host.querySelector('[data-object-title]')).toBeNull();
   });
 
