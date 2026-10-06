@@ -76,7 +76,6 @@ beforeAll(() => {
   });
 });
 
-
 describe('the conditions now', () => {
   it('draw the temperature, the condition, the summary, the readings and the location', () => {
     const page = render(forecast, undefined, { width: 1000, height: 620 });

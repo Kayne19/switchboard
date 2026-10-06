@@ -227,8 +227,9 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
 // both run (validatorCorpus.test.ts, and agrees_with_the_shared_validator_corpus
 // in apps/backend/tests/test_visual_protocol.rs): for each show type the
 // schema lists, the corpus accepts its smallest data, exactly the keys the
-// schema requires, and refuses that data without each of them, the error
-// naming the key. Each side once kept its own copy of these samples.
+// schema requires, and for each of those keys refuses a case that holds the
+// others but not it, with an error that names the key. Each side once kept
+// its own copy of these samples.
 describe('the corpus holds what display-action-v1.schema.json requires of each show type', () => {
   const shown = (testCase: CorpusCase) => {
     const action = testCase.action as { op?: unknown; type?: unknown; data?: unknown };

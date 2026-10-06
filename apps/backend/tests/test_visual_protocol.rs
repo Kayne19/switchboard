@@ -356,8 +356,10 @@ fn same_json(a: &Value, b: &Value) -> bool {
 ///
 /// This is also what holds the validator to `docs/display-action-v1.schema.json`:
 /// `schema.test.ts` checks that the corpus accepts every show type's
-/// smallest data and refuses it without each key the schema requires, and
-/// that every action accepted here is one the schema accepts.
+/// smallest data, refuses a case without each key the schema requires,
+/// whose error names it, and holds no accepted action the schema refuses;
+/// and the corpus's `show_type_*` errors list this side's types, which
+/// `schema.test.ts` compares, in order, with the schema's.
 #[test]
 fn agrees_with_the_shared_validator_corpus() {
     let cases = validator_corpus();
