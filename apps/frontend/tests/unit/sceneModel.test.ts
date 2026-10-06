@@ -104,6 +104,14 @@ describe('the title a screen-state report gives', () => {
     expect(titleOf(type, data)).toBe(title);
   });
 
+  it('takes the fields in their order: title, subject, label, alt text, place', () => {
+    const fields = ['title', 'subject', 'label', 'alt', 'location'] as const;
+    fields.forEach((field, index) => {
+      const data = Object.fromEntries(fields.slice(index).map((each) => [each, each.toUpperCase()]));
+      expect(titleOf('image', data)).toBe(field.toUpperCase());
+    });
+  });
+
   it('names the focused object over the primary', () => {
     const state = reduceActions(createInitialState(), [
       { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { title: 'MAP' } },

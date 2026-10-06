@@ -113,9 +113,13 @@ describe('the canonical fixtures', () => {
   it('are display actions an agent could send, each as the validator leaves it', () => {
     const refused: string[] = [];
     const changed: string[] = [];
+    const pageOwn: string[] = [];
     for (const [scene, actions] of Object.entries(fixtures)) {
       actions.forEach((action, index) => {
-        if (action.op === 'show' && action.type === 'message') return;
+        if (action.op === 'show' && action.type === 'message') {
+          pageOwn.push(`${scene}[${index}]`);
+          return;
+        }
         const result = validateControllerAction(action);
         if (!result.ok) refused.push(`${scene}[${index}]: ${result.error}`);
         else if (!isDeepStrictEqual(result.action, action)) changed.push(`${scene}[${index}]`);
@@ -123,6 +127,7 @@ describe('the canonical fixtures', () => {
     }
     expect(refused).toEqual([]);
     expect(changed).toEqual([]);
+    expect(pageOwn).toEqual(['conversation[0]']);
   });
 });
 
