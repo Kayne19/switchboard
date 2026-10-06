@@ -1,24 +1,46 @@
 import { parseTimeValue, type TimeValue } from '../controller/validation';
 
-// How a personal-assistant view writes a date or a wall time the agent sent
-// (docs/display-tool.md, "Time values"): as written, with no zone maths and
-// no page clock. "Today" is the object's own `today`, so a label reads the
-// same on every screen. Read through `parseTimeValue`, the one time parser
-// the page has.
+// How the page writes a date or a time of day: the one namer of days,
+// months and clocks, for every view that shows a time (docs/display-tool.md,
+// "Time values"). A date or a wall time the agent sent is written as sent,
+// with no zone maths and no page clock. "Today" is the object's own
+// `today`, so a label reads the same on every screen. Read through
+// `parseTimeValue`, the one time parser the page has.
 
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'] as const;
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'] as const;
 
-const two = (value: number) => String(value).padStart(2, '0');
+/** A day as the page names it: its day number (days from 1970-01-01) and
+ * its date. A parsed time is one, and so is a calendar's day. */
+export type CivilDay = Pick<TimeValue, 'dayNumber' | 'year' | 'month' | 'day'>;
 
-/** The day of the week, from the day count (1970-01-01, day 0, was a Thursday). */
-function weekdayText(time: TimeValue): string {
-  return WEEKDAYS[(((time.dayNumber + 4) % 7) + 7) % 7];
+/** A number written with two digits at least: `07`. */
+export const two = (value: number) => String(value).padStart(2, '0');
+
+/** The day of the week of a day number, Sunday 0 (1970-01-01, day 0, was a Thursday). */
+export function weekdayOf(dayNumber: number): number {
+  return (((dayNumber + 4) % 7) + 7) % 7;
 }
 
-/** A wall time's time of day, 24 h: `08:12`. */
-export function clockText(time: TimeValue): string {
-  return `${two(time.hour)}:${two(time.minute)}`;
+/** `WED`. */
+export function weekdayName(dayNumber: number): string {
+  return WEEKDAYS[weekdayOf(dayNumber)];
+}
+
+/** `OCT`, from the month's number (1 is January). */
+export function monthName(month: number): string {
+  return MONTHS[month - 1] ?? '';
+}
+
+/** `09:30`, 24 h, from minutes into a day (1440 is `24:00`, the day's end). */
+export function clockText(minuteOfDay: number): string {
+  const hours = Math.floor(minuteOfDay / 60);
+  return `${two(hours)}:${two(minuteOfDay - hours * 60)}`;
+}
+
+/** A time's time of day as written: `08:12`. */
+export function timeOfDay(time: { hour: number; minute: number }): string {
+  return clockText(time.hour * 60 + time.minute);
 }
 
 /**
@@ -29,10 +51,10 @@ export function clockText(time: TimeValue): string {
  * is the weekday and date alone: the agent that leaves `today` out has not
  * said which year the reader is in.
  */
-export function dayText(time: TimeValue, today?: TimeValue | null): string {
-  const month = MONTHS[time.month - 1];
-  if (today && today.year !== time.year) return `${month} ${time.day} ${time.year}`;
-  return `${weekdayText(time)} ${month} ${time.day}`;
+export function dayText(day: CivilDay, today?: { year: number } | null): string {
+  const month = monthName(day.month);
+  if (today && today.year !== day.year) return `${month} ${day.day} ${day.year}`;
+  return `${weekdayName(day.dayNumber)} ${month} ${day.day}`;
 }
 
 /** Days from `today` to the day of `time`: 0 on today, -1 yesterday, 1 tomorrow. */

@@ -9,7 +9,6 @@ import {
   AXIS,
   axisY,
   calendarDay,
-  clockText,
   crowdedColumns,
   dayBars,
   dayLabel,
@@ -22,7 +21,6 @@ import {
   MINUTES_PER_DAY,
   monthRowPlan,
   monthGrid,
-  monthName,
   nowMinutes,
   overlapping,
   packColumns,
@@ -32,7 +30,6 @@ import {
   timedOn,
   timeAxis,
   todayNumber,
-  weekdayName,
   type AgendaItem,
   type DayBar,
   type GridSegment,
@@ -42,6 +39,7 @@ import {
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
+import { clockText, monthName, weekdayName } from './timeLabels';
 
 // A calendar in the four views the agent picks (docs/display-tool.md,
 // "calendar"), drawn as one instrument with the table and the progress
