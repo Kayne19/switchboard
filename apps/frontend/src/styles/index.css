@@ -937,6 +937,9 @@ button {
 .annotation-card__history,
 .live-chat-card__history {
   flex: none;
+  /* It stands at the card's right edge, which clips (the card, the note's
+     box, the rail's scroll): in from it by the reach of its focus ring. */
+  margin-inline-end: var(--focus-ring-reach);
   padding: 0;
   border: 0;
   background: transparent;

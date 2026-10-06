@@ -116,4 +116,14 @@ describe('the focus ring', () => {
     expect(removed).toEqual(['.focusable-content:focus-visible', '.list-viewport__scroll:focus-visible', '.drawing-viewport__scroll:focus-visible']);
     expect(removed.every((selector) => drawnOver(selector.slice(1, -':focus-visible'.length)))).toBe(true);
   });
+
+  it('reaches no further than a HISTORY button keeps from its card\'s right edge, which clips', () => {
+    // A note's and the live response's HISTORY stand at their card's right
+    // edge (the card, the note's box and the rail's scroll clip there); the
+    // ring 4px out lost its right side to them (css-merge review M1).
+    const history = ruleNaming('.annotation-card__history');
+    expect(history.selectors).toContain('.live-chat-card__history');
+    expect(history.body).toMatch(/margin-inline-end:\s*var\(--focus-ring-reach\);/);
+    expect(css).toMatch(/--focus-ring-reach:\s*calc\(var\(--focus-ring-offset\) \+ 1px\);/);
+  });
 });
