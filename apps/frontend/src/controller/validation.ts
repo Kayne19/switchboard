@@ -290,17 +290,14 @@ function checkString(val: unknown, maxLen: number, name: string): string | null 
 
 // ---- field helpers ---------------------------------------------------------
 //
-// The checks the type validators share: each reads one field, copies it into
-// the result when it passes, and otherwise returns its error text. The
-// backend's validators have their own set (`copy_optional_string` and the
-// rest).
+// The checks the type validators share: each reads one field and copies it
+// into the result when it passes (checkItemId returns the id instead), and
+// otherwise returns its error text. A result is a typed one (`ChartData`,
+// `DiagramNode`, ...), whose type names the keys a helper may write, or
+// `Fields`. The backend's validators have their own set
+// (`copy_optional_string` and the rest).
 
-/**
- * A result built key by key and cast to its type once it is whole. A helper
- * also writes into a typed result (`ChartData`, `DiagramNode`, ...); its
- * `key` is then one the type has, so a call cannot write a field the type
- * lacks.
- */
+/** A JSON object as a validator reads it, or a result built key by key and cast once it is whole. */
 type Fields = Record<string, unknown>;
 
 /** The four scene-frame strings most types carry, each optional. */
@@ -311,7 +308,10 @@ interface FrameText {
   caption?: string;
 }
 
-/** The scene-frame text every type may carry, checked last. */
+/**
+ * The scene-frame strings, in this order: title, subtitle and context (256
+ * units), then caption (128). Most types check them last.
+ */
 function copyFrameText(data: Fields, out: FrameText, kind: string): string | null {
   for (const key of ['title', 'subtitle', 'context'] as const) {
     const err = copyOptionalString(data, out, key, 256, `${kind}.${key}`);

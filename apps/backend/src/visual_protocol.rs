@@ -233,10 +233,11 @@ fn check_unknown_keys(
 
 // ---- field helpers ---------------------------------------------------------
 //
-// The checks the type validators share: each reads one field, copies it into
-// the result when it passes, and otherwise returns its error text. The
-// browser's validators have their own set (`copyOptionalString` and the
-// rest).
+// The checks the type validators share: each reads one field and copies it
+// into the result when it passes (check_string, required_string and
+// check_item_id return the value instead), and otherwise returns its error
+// text. The browser's validators have their own set (`copyOptionalString`
+// and the rest).
 
 /// A string of at most `max_len` UTF-16 units; anything else, a missing
 /// value included, is refused. The string rule, written once: the helpers
@@ -263,10 +264,10 @@ fn copy_optional_string(
     out: &mut Map<String, Value>,
     key: &str,
     max_len: usize,
-    field_name: &str,
+    field: &str,
 ) -> Result<(), String> {
     if let Some(value) = data.get(key) {
-        let text = check_string(Some(value), max_len, field_name)?;
+        let text = check_string(Some(value), max_len, field)?;
         out.insert(key.into(), text.into());
     }
     Ok(())
@@ -274,17 +275,18 @@ fn copy_optional_string(
 
 /// Copies an optional `semantic`. Anything but one of the seven names, a
 /// non-string or `null` included, is refused, as the browser's
-/// `isName(value, SEMANTICS)` check refuses it: a field the browser refuses
-/// is refused here, never dropped.
+/// `copyOptionalName` with `SEMANTICS` refuses it: a field the browser
+/// refuses is refused here, never dropped.
 fn copy_optional_semantic(
     data: &Map<String, Value>,
     out: &mut Map<String, Value>,
-    field_name: &str,
+    field: &str,
 ) -> Result<(), String> {
-    copy_optional_name(data, out, "semantic", &SEMANTICS, field_name)
+    copy_optional_name(data, out, "semantic", &SEMANTICS, field)
 }
 
-/// The scene-frame text every type may carry, checked last.
+/// The scene-frame strings, in this order: title, subtitle and context (256
+/// units), then caption (128). Most types check them last.
 fn copy_frame_text(
     data: &Map<String, Value>,
     out: &mut Map<String, Value>,
