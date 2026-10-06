@@ -17,7 +17,7 @@ import {
   chartBars,
   chartLegendLayout,
   chartPad,
-  chartPointCallouts,
+  chartObstacles,
   chartScales,
   chartScrollHeight,
   chartSeriesPoint,
@@ -204,31 +204,34 @@ describe('chart series point', () => {
     expect(point.y).toBeCloseTo(Number(marker.getAttribute('cy')), 1);
   });
 
-  // A point a note named on a line was not marked at all while its card sat
-  // on the chart, and the marker's ring was cut in half at the plot's edge.
-  it('marks each point a note names as it marks its marker: a ring, and its value printed by it, both whole past the plot\'s clip', () => {
+  // The marker's ring is drawn whole past the plot's clip (it was cut in
+  // half on the plot's edge), and a point a note names is ringed only where
+  // no leader on the chart reaches it: a note in the rail, the band or a
+  // focus panel. A note laid over the chart marks its point with its leader,
+  // on the line itself, with no value printed there.
+  it('rings each point a note names that no leader reaches, hollow, and none a leader reaches, whole past the plot\'s clip', () => {
     const chart: ChartData = { xMax: 3, yMin: 0, yMax: 5, series: [{ name: 'LOSS', values: [5, 3, 2, 1] }], marker: { x: 3 } };
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
-    act(() => root.render(<ChartPrimitive data={chart} named={[{ x: 0 }, { x: 3 }]} />));
-    const marked = [...host.querySelectorAll<SVGGElement>('.chart-marker')];
-    // The marker's point and the first note's, once each.
-    expect(marked.map((group) => group.getAttribute('data-x'))).toEqual(['3', '0']);
-    const callouts = chartPointCallouts(chart, [{ x: 0 }, { x: 3 }]);
-    marked.forEach((group, index) => {
-      expect(group.closest('[clip-path]')).toBeNull();
-      const ring = group.querySelector('.chart-marker__point')!;
-      expect(Number(ring.getAttribute('cx'))).toBeCloseTo(callouts[index].at.x, 3);
-      expect(Number(ring.getAttribute('cy'))).toBeCloseTo(callouts[index].at.y, 3);
-      const value = group.querySelector('.chart-marker__value')!;
-      expect(value.textContent).toBe(callouts[index].value.text);
-      expect(group.getAttribute('data-from')).toBe(callouts[index].from);
-    });
-    expect(marked[1].querySelector('.chart-marker__value')!.textContent).toBe('5');
+    act(() => root.render(<ChartPrimitive data={chart} named={[{ x: 0 }, { x: 1 }, { x: 3 }]} led={[{ x: 1 }]} />));
+    const scales = chartScales(chart);
+    const marker = host.querySelector('.chart-marker__point')!;
+    expect(marker.closest('[clip-path]')).toBeNull();
+    expect(marker.getAttribute('fill')).toBe('#000');
+    expect(Number(marker.getAttribute('cx'))).toBeCloseTo(chartSeriesPoint(chart, 3, undefined, scales)!.x, 3);
+    // The first note's point alone: the second's leader reaches it, the third names the marker's.
+    const rings = [...host.querySelectorAll('.chart-note-ring')];
+    expect(rings).toHaveLength(1);
+    expect(rings[0].closest('[clip-path]')).toBeNull();
+    const first = chartSeriesPoint(chart, 0, undefined, scales)!;
+    expect(Number(rings[0].getAttribute('cx'))).toBeCloseTo(first.x, 3);
+    expect(Number(rings[0].getAttribute('cy'))).toBeCloseTo(first.y, 3);
+    expect(Number(rings[0].getAttribute('r'))).toBe(CHART_MARKER_RADIUS);
+    expect(host.querySelector('.chart-marker__value')).toBeNull();
   });
 
-  it("rings a scatter's marked point without hiding it, and fills a line's ring over the line", () => {
+  it("rings a scatter's marker without hiding the point, and fills a line's ring over the line", () => {
     renderWith({ kind: 'scatter', xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } });
     expect(host.querySelector('.chart-marker__point')!.getAttribute('fill')).toBe('none');
     act(() => root.unmount());
@@ -237,10 +240,16 @@ describe('chart series point', () => {
     expect(host.querySelector('.chart-marker__point')!.getAttribute('fill')).toBe('#000');
   });
 
+  it('rings every point a note names where no leader is given: focus, a cell beside the primary', () => {
+    renderWith({ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }] });
+    expect(host.querySelectorAll('.chart-note-ring')).toHaveLength(0);
+    act(() => root.render(<ChartPrimitive data={{ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }] }} focused named={[{ x: 1 }, { x: 2 }]} />));
+    expect(host.querySelectorAll('.chart-note-ring')).toHaveLength(2);
+  });
+
   // Focus drew the ring 2 units wider and a scatter's points 1 wider than
-  // the geometry the value beside the ring and the notes' clearances are
-  // worked out from, so in focus a value sat 2 units off its ring and the
-  // obstacle was smaller than the ring drawn (line-notes review L2).
+  // the geometry the notes' clearances are worked out from (line-notes
+  // review L2).
   it('draws the ring and the points in focus at the radius the geometry keeps clear of', () => {
     for (const kind of ['line', 'scatter'] as const) {
       const chart: ChartData = { kind, xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } };
@@ -248,17 +257,17 @@ describe('chart series point', () => {
       document.body.append(host);
       root = createRoot(host);
       act(() => root.render(<ChartPrimitive data={chart} focused />));
-      const [callout] = chartPointCallouts(chart);
       const ring = host.querySelector('.chart-marker__point')!;
       expect(Number(ring.getAttribute('r'))).toBe(CHART_MARKER_RADIUS);
-      expect((callout.ring.right - callout.ring.left) / 2).toBe(Number(ring.getAttribute('r')) + CHART_MARKER_STROKE / 2);
+      const obstacle = chartObstacles(chart).marks.at(-1)!;
+      expect((obstacle.right - obstacle.left) / 2).toBe(Number(ring.getAttribute('r')) + CHART_MARKER_STROKE / 2);
       for (const point of host.querySelectorAll('.chart-point')) expect(Number(point.getAttribute('r'))).toBe(CHART_POINT_RADIUS);
       act(() => root.unmount());
       host.remove();
     }
   });
 
-  it('marks a point with a ring and its value, with no guide line through the plot', () => {
+  it('marks a point with a ring alone, with no guide line through the plot', () => {
     renderWith({
       series: [{ name: 'LOSS', values: [4, 3, 2, 1] }],
       xMax: 3,

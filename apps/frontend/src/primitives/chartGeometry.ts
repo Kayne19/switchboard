@@ -1,6 +1,5 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
 import { readableScale, type DrawingText } from './drawingFit';
-import { LEADER_CLEARANCE, hiddenTraceLength } from './segments';
 
 // The chart draws in a viewBox -- its frame -- and the notes laid over a
 // chart map their points and the drawn marks through the same frame, so both
@@ -561,8 +560,6 @@ export function chartValueAxis(data: ChartData): ChartValueAxis {
 export interface ChartScales {
   /** The frame the chart is drawn in. */
   frame: ChartFrame;
-  /** The CSS pixels a unit of the frame is drawn at: its slot's (`chartFrame`), in steps (`chartScaleStep`); 1 where no slot is given. */
-  scale: number;
   kind: ChartKind;
   categories: ChartCategoryLayout;
   /** Bars run across the chart: the value axis is x and the category axis y. */
@@ -590,18 +587,7 @@ export interface ChartScales {
   plot: ViewRect;
 }
 
-/**
- * The scale a chart's geometry is worked out at, in steps of a twentieth.
- * The slot's own scale changes with every pixel of a resize, and the only
- * thing it moves is the clearance a note's leader keeps, in pixels, where a
- * marked point's value is printed: stepped, a chart works its callouts out
- * again only when that clearance changes by enough to matter.
- */
-export function chartScaleStep(scale: number): number {
-  return Math.max(0.05, Math.round(scale * 20) / 20);
-}
-
-export function chartScales(data: ChartData, frame: ChartFrame & { scale?: number } = CHART_FRAME): ChartScales {
+export function chartScales(data: ChartData, frame: ChartFrame = CHART_FRAME): ChartScales {
   const pad = chartPad(data, frame);
   const plot = { left: pad.left, top: pad.top, right: frame.width - pad.right, bottom: frame.height - pad.bottom };
   const plotWidth = plot.right - plot.left;
@@ -630,7 +616,6 @@ export function chartScales(data: ChartData, frame: ChartFrame & { scale?: numbe
     horizontal ? plot.left + share(value) * plotWidth : plot.top + (1 - share(value)) * plotHeight;
   return {
     frame,
-    scale: chartScaleStep(frame.scale ?? 1),
     kind,
     categories,
     horizontal,
@@ -813,300 +798,50 @@ export function chartBarCallouts(data: ChartData, named: ChartAnchor[] = [], sca
 }
 
 /**
- * Where a note's leader lands on the chart, the side it comes from, and
- * what it names there: on a bar chart the bar's callout point, past its
- * end, with the bar and its printed value; on a line, area or scatter
- * chart the point's callout, past the value printed beside its ring, with
- * the ring and the value. `callouts` are the point callouts the chart
- * draws (`chartPointCallouts` for every point its notes name): where a
- * point's value is printed depends on the others, so a caller with several
- * notes works them out once and passes them.
+ * Where a note's leader lands on the chart, and from which side: on a bar
+ * chart the bar's callout point, from past its end, the bar itself and its
+ * printed value; elsewhere the point on the drawn series, from any side.
  */
 export function chartNoteTarget(
   data: ChartData,
   anchor: ChartAnchor,
   scales: ChartScales = chartScales(data),
-  callouts: ChartPointCallout[] = chartPointCallouts(data, [anchor], scales),
-): { point: ViewPoint; from: ChartSide; mark: ViewRect; value: ViewRect } | undefined {
+): { point: ViewPoint; from?: ChartSide; bar?: ViewRect; value?: ViewRect } | undefined {
   if (scales.kind === 'bar') {
     const callout = chartBarCallout(data, anchor, scales);
-    return callout ? { point: callout.point, from: callout.from, mark: callout.bar.rect, value: callout.label } : undefined;
+    return callout ? { point: callout.point, from: callout.from, bar: callout.bar.rect, value: callout.label } : undefined;
   }
-  const sample = seriesSample(data, anchor.x, anchor.series, scales);
-  const callout = sample && callouts.find((each) => each.series === sample.series && each.x === sample.x);
-  return callout ? { point: callout.point, from: callout.from, mark: callout.ring, value: callout.label } : undefined;
+  const point = chartSeriesPoint(data, anchor.x, anchor.series, scales);
+  return point ? { point } : undefined;
 }
 
 /**
- * A point a marker or a note names on a line, area or scatter chart,
- * marked as a bar is: a ring round it, and its value printed beside the
- * ring on the side with the most clear room, where a leader to it lands --
- * the point is read off the value, as a bar is off its printed end.
+ * The rings a line, area or scatter chart draws: the marker's, and one
+ * round each point a note names (`named`) that no leader on the chart
+ * reaches (`led`), its note shown elsewhere -- the rail, the band under the
+ * chart, a focus panel, or the rail beside a chart in the aux row -- so the
+ * point its card names stays marked. A note laid over the chart marks its
+ * point with its own leader, which ends on the drawn series. The centres,
+ * on the series and held inside the plot, once each: the marker first.
+ * None on a bar chart, which marks its bars itself (`chartBarCallouts`).
  */
-export interface ChartPointCallout {
-  /** Which series, by index. */
-  series: number;
-  /** The domain x it stands at, held inside the series' domain. */
-  x: number;
-  /** The point on the drawn series, held inside the plot. */
-  at: ViewPoint;
-  /** The ring round it, stroke and all. */
-  ring: ViewRect;
-  /** The value printed beside the ring, as precise as the series' own values. */
-  value: { text: string; x: number; y: number; anchor: 'start' | 'middle' | 'end' };
-  /** The printed value's box. */
-  label: ViewRect;
-  /** Where a leader to the point lands: just past the value. */
-  point: ViewPoint;
-  /** The side of `point` a leader comes from: the side the value is printed on. */
-  from: ChartSide;
-}
-
-// The space between a point's ring and the value printed beside it.
-const POINT_VALUE_GAP = 4;
-// How far past a point's value a clear run is looked for, where the
-// leader's last run and a card come from: the side with more of it wins.
-const POINT_ROOM = 120;
-
-/** Where a point's value is printed: the side of its ring, and how the text runs from the ring's middle. */
-interface PointSpot {
-  side: ChartSide;
-  /** Above or below the ring: centred on it, or starting or ending over it, clear of a line rising one way. */
-  align: 'middle' | 'start' | 'end';
-  /** What the spot costs before anything is in its way: the order it is preferred in where spots read alike. */
-  order: number;
-}
-
-// Above the ring first, then below: a leader comes onto it straight down
-// or up, the way it reaches a bar's end. Centred where that is clear, else
-// running off to one side, clear of a line that rises the other way. Beside
-// the ring costs more on a line, where the line itself runs: it wins only
-// where above and below have much less room past them (a peak whose line
-// falls away under it, a point on the plot's edge); a scatter's point has
-// no line through it.
-const POINT_SPOTS: PointSpot[] = [
-  { side: 'above', align: 'middle', order: 0 },
-  { side: 'below', align: 'middle', order: 4 },
-  { side: 'above', align: 'end', order: 6 },
-  { side: 'above', align: 'start', order: 6 },
-  { side: 'below', align: 'end', order: 10 },
-  { side: 'below', align: 'start', order: 10 },
-  { side: 'right', align: 'start', order: 12 },
-  { side: 'left', align: 'end', order: 12 },
-];
-// What beside the ring costs more on a line or an area, as units of room.
-const POINT_BESIDE_LINE = 40;
-// How far into the gap between the plot and its axes' tick text a point's
-// value may run: the y ticks end 14 units short of the plot, the x ticks'
-// text starts 24 below it.
-const CALLOUT_TICK_GAP = 10;
-// What printing an area's value over its own fill costs, as units of room:
-// it stands past the line, outside its area, as a bar's stands past its end.
-const POINT_OWN_FILL = 60;
-
-// The value at a point, printed to the decimals the series' own values
-// have (at most six): an interpolated value never prints longer than the
-// data it was read from. A value too small for six decimals prints to
-// three significant figures rather than as 0.
-function pointValueText(values: number[], value: number): string {
-  const decimalsOf = (each: number) => {
-    let decimals = 0;
-    while (decimals < 6 && Math.abs(each * 10 ** decimals - Math.round(each * 10 ** decimals)) > 1e-9 * Math.max(1, Math.abs(each * 10 ** decimals))) decimals += 1;
-    return decimals;
-  };
-  const decimals = Math.max(0, ...values.filter((each) => Number.isFinite(each)).map(decimalsOf));
-  const text = String(Number(value.toFixed(decimals)));
-  return text === '0' && value !== 0 ? String(Number(value.toPrecision(3))) : text;
-}
-
-// A point's value printed at one spot by its ring, and where a leader to it
-// lands: past the value, in line with the point.
-function pointLabel(at: ViewPoint, spot: PointSpot, width: number): Pick<ChartPointCallout, 'value' | 'label' | 'point'> {
-  const ring = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
-  const reach = ring + POINT_VALUE_GAP;
-  const height = CALLOUT_ASCENT + CALLOUT_DESCENT;
-  if (spot.side === 'above' || spot.side === 'below') {
-    const top = spot.side === 'above' ? at.y - reach - height : at.y + reach;
-    // Centred on the ring, or starting or ending over its edge.
-    const left = spot.align === 'middle' ? at.x - width / 2 : spot.align === 'start' ? at.x - ring : at.x + ring - width;
-    const label = { left, right: left + width, top, bottom: top + height };
-    const x = spot.align === 'middle' ? at.x : spot.align === 'start' ? label.left : label.right;
-    return {
-      label,
-      value: { text: '', x, y: label.bottom - CALLOUT_DESCENT, anchor: spot.align },
-      point: { x: at.x, y: spot.side === 'above' ? label.top - CALLOUT_LANDING : label.bottom + CALLOUT_LANDING },
-    };
+export function chartRings(
+  data: ChartData,
+  named: ChartAnchor[],
+  led: ChartAnchor[],
+  scales: ChartScales = chartScales(data),
+): { marker?: ViewPoint; named: ViewPoint[] } {
+  if (scales.kind === 'bar') return { named: [] };
+  const marker = data.marker ? chartSeriesPoint(data, data.marker.x, data.marker.series, scales) : undefined;
+  const same = (a: ViewPoint, b: ViewPoint) => Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5;
+  const reached = led.flatMap((anchor) => chartSeriesPoint(data, anchor.x, anchor.series, scales) ?? []);
+  const rings: ViewPoint[] = [];
+  for (const anchor of named) {
+    const point = chartSeriesPoint(data, anchor.x, anchor.series, scales);
+    if (!point || (marker && same(point, marker)) || reached.some((each) => same(point, each)) || rings.some((each) => same(point, each))) continue;
+    rings.push(point);
   }
-  const left = spot.side === 'right' ? at.x + reach : at.x - reach - width;
-  // The text's middle on the point's height.
-  const label = { left, right: left + width, top: at.y - height / 2, bottom: at.y + height / 2 };
-  return {
-    label,
-    value: { text: '', x: spot.side === 'right' ? label.left : label.right, y: label.bottom - CALLOUT_DESCENT, anchor: spot.side === 'right' ? 'start' : 'end' },
-    point: { x: spot.side === 'right' ? label.right + CALLOUT_LANDING : label.left - CALLOUT_LANDING, y: at.y },
-  };
-}
-
-// How far from `start`, away from the point on `side`, the room past a
-// point's value stays clear of the lines and the marks and inside the
-// frame, up to `POINT_ROOM`: a run `half` units either side of its line
-// (the leader's clearance, in the frame's units) that widens at 45 degrees
-// to one side or the other -- the way a leader comes on, straight or after
-// a 45-degree turn, from a card beyond it that is wider still -- whichever
-// side has more. A peak's value printed into the narrow wedge under its
-// apex has little room; one printed over a gently rising line has all of it.
-function roomPast(side: ChartSide, start: ViewPoint, lines: ViewPoint[][], marks: ViewRect[], frame: ChartFrame, half: number): number {
-  return Math.max(roomToward(side, start, lines, marks, frame, half, 1), roomToward(side, start, lines, marks, frame, half, -1));
-}
-
-// `roomPast` with the run widening to one side: `flare` 1 towards larger x
-// (or y, on a side to the left or right), -1 towards smaller.
-function roomToward(side: ChartSide, start: ViewPoint, lines: ViewPoint[][], marks: ViewRect[], frame: ChartFrame, half: number, flare: 1 | -1): number {
-  // A point in the wedge's own terms: how far along from `start`, and how far across.
-  const along = (p: ViewPoint) => (side === 'above' ? start.y - p.y : side === 'below' ? p.y - start.y : side === 'left' ? start.x - p.x : p.x - start.x);
-  const across = (p: ViewPoint) => flare * (side === 'above' || side === 'below' ? p.x - start.x : p.y - start.y);
-  let room = Math.min(
-    POINT_ROOM,
-    Math.max(0, side === 'above' ? start.y : side === 'below' ? frame.height - start.y : side === 'left' ? start.x : frame.width - start.x),
-  );
-  // The nearest the segment a-b comes along inside the wedge (Liang-Barsky
-  // against its four sides), if it enters it.
-  const enter = (a: ViewPoint, b: ViewPoint) => {
-    const [d0, d1] = [along(a), along(b)];
-    const [c0, c1] = [across(a), across(b)];
-    let t0 = 0;
-    let t1 = 1;
-    // Each side as g(t) = g0 + t * g1 <= 0.
-    for (const [g0, g1] of [
-      [-d0, -(d1 - d0)],
-      [d0 - room, d1 - d0],
-      [c0 - d0 - half, c1 - c0 - (d1 - d0)],
-      [-c0 - half, -(c1 - c0)],
-    ]) {
-      if (g1 === 0) {
-        if (g0 > 0) return;
-        continue;
-      }
-      const t = -g0 / g1;
-      if (g1 > 0) t1 = Math.min(t1, t);
-      else t0 = Math.max(t0, t);
-      if (t0 > t1) return;
-    }
-    room = Math.min(room, d0 + (d1 - d0) * t0, d0 + (d1 - d0) * t1);
-  };
-  for (const line of lines) {
-    for (let index = 1; index < line.length; index += 1) enter(line[index - 1], line[index]);
-  }
-  // The wedge's own bounds, in the frame's units, to pass over what lies wholly outside it.
-  const reachOut = POINT_ROOM + half;
-  const bounds = {
-    left: start.x - (side === 'left' ? POINT_ROOM : reachOut),
-    right: start.x + (side === 'right' ? POINT_ROOM : reachOut),
-    top: start.y - (side === 'above' ? POINT_ROOM : reachOut),
-    bottom: start.y + (side === 'below' ? POINT_ROOM : reachOut),
-  };
-  for (const mark of marks) {
-    if (mark.right < bounds.left || mark.left > bounds.right || mark.bottom < bounds.top || mark.top > bounds.bottom) continue;
-    if (mark.left <= start.x && start.x <= mark.right && mark.top <= start.y && start.y <= mark.bottom) return 0;
-    const corners = [
-      { x: mark.left, y: mark.top },
-      { x: mark.right, y: mark.top },
-      { x: mark.right, y: mark.bottom },
-      { x: mark.left, y: mark.bottom },
-    ];
-    corners.forEach((corner, index) => enter(corner, corners[(index + 1) % 4]));
-  }
-  return Math.max(0, room);
-}
-
-/**
- * The callouts a line, area or scatter chart draws: its marker's point and
- * each point a note names, once each, in that order. Each prints its value
- * on the side of its ring that hides the least of the lines, the points,
- * the legend, the axis labels, the rings and the values before it, stays
- * on the frame, and leaves the most clear room past it for the leader that
- * lands there and the card it comes from. None on a bar chart, whose
- * callouts are its bars'.
- */
-export function chartPointCallouts(data: ChartData, named: ChartAnchor[] = [], scales: ChartScales = chartScales(data)): ChartPointCallout[] {
-  if (scales.kind === 'bar') return [];
-  const { plot, frame } = scales;
-  const clip = chartClip(scales);
-  const traces = data.series.map((series) => series.values.map((value, index) => scales.pointAt(scales.sampleX(series, index), value)));
-  const lines = scales.kind === 'scatter' ? [] : traces;
-  const points =
-    scales.kind === 'scatter'
-      ? traces.flat().map((p) => ({ left: p.x - CHART_POINT_RADIUS, top: p.y - CHART_POINT_RADIUS, right: p.x + CHART_POINT_RADIUS, bottom: p.y + CHART_POINT_RADIUS }))
-      : [];
-  // What a value keeps off besides the data: the legend and the axes' tick
-  // text, which ends 14 units short of the plot on the left and starts 24
-  // below it, a gap a value by a ring on the plot's edge may take.
-  const [ticksLeft, ticksBelow] = chartAxisBoxes(plot, frame);
-  const labels = [
-    chartLegendBox(data, frame),
-    { ...ticksLeft, right: plot.left - CALLOUT_TICK_GAP },
-    { ...ticksBelow, top: plot.bottom + CALLOUT_TICK_GAP * 2 },
-  ];
-  const reach = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
-  // The clearance a note's leader keeps, in pixels, in the frame's units.
-  const clearance = LEADER_CLEARANCE / scales.scale;
-  // Every point marked, once each, its ring first: a value keeps off every
-  // ring, a later one's too.
-  const marked: Array<{ sample: SeriesSample; at: ViewPoint; ring: ViewRect }> = [];
-  for (const anchor of [...(data.marker ? [data.marker] : []), ...named]) {
-    const sample = seriesSample(data, anchor.x, anchor.series, scales);
-    if (!sample || marked.some((other) => other.sample.series === sample.series && other.sample.x === sample.x)) continue;
-    const at = scales.pointAt(sample.x, Math.min(scales.yMax, Math.max(scales.yMin, sample.value)));
-    marked.push({ sample, at, ring: { left: at.x - reach, top: at.y - reach, right: at.x + reach, bottom: at.y + reach } });
-  }
-  const callouts: ChartPointCallout[] = [];
-  for (const { sample, at, ring } of marked) {
-    const text = pointValueText(data.series[sample.series].values, sample.value);
-    // An area's fill lies between its line and the baseline.
-    const ownFill = scales.kind === 'area' ? (sample.value >= scales.baseline ? 'below' : 'above') : undefined;
-    const width = text.length * CHART_TICK_CHAR_ADVANCE;
-    // The values before this one and every other ring; every point but its
-    // own, of those near enough to meet a value or the room past it.
-    const taken = [...callouts.map((other) => other.label), ...marked.filter((other) => other.ring !== ring).map((other) => other.ring)];
-    const within = POINT_ROOM + width + 2 * (reach + POINT_VALUE_GAP + CALLOUT_ASCENT + CALLOUT_DESCENT);
-    const others = points.filter(
-      (box) =>
-        box.right > at.x - within && box.left < at.x + within && box.bottom > at.y - within && box.top < at.y + within &&
-        !(box.left < at.x && at.x < box.right && box.top < at.y && at.y < box.bottom),
-    );
-    const inTheWay = [...others, ...taken, ...labels];
-    let best: { callout: ChartPointCallout; cost: number } | undefined;
-    for (const spot of POINT_SPOTS) {
-      const { side } = spot;
-      const { label, value, point } = pointLabel(at, spot, width);
-      const near = { left: label.left - 2, top: label.top - 2, right: label.right + 2, bottom: label.bottom + 2 };
-      const drawn = cut(near, clip);
-      let cost = spot.order + (lines.length > 0 && (side === 'left' || side === 'right') ? POINT_BESIDE_LINE : 0);
-      if (side === ownFill) cost += POINT_OWN_FILL;
-      // The lines are drawn inside the plot's clip only.
-      if (drawn) cost += hiddenTraceLength(drawn, lines) * 10;
-      for (const box of others) cost += overlap(near, box);
-      // The legend and the axes' labels, read as text, are kept clear of
-      // as the data is; the band above the plot is free.
-      for (const box of labels) cost += overlap(near, box) * 4;
-      for (const box of taken) if (overlap(near, box) > 0) cost += 1e5;
-      if (label.left < 0 || label.top < 0 || label.right > frame.width || label.bottom > frame.height) cost += 1e6;
-      cost += POINT_ROOM - roomPast(side, point, lines, inTheWay, frame, clearance);
-      if (!best || cost < best.cost) {
-        best = { cost, callout: { series: sample.series, x: sample.x, at, ring, value: { ...value, text }, label, point, from: side } };
-      }
-    }
-    callouts.push(best!.callout);
-  }
-  return callouts;
-}
-
-function area(rect: ViewRect | undefined): number {
-  return rect ? (rect.right - rect.left) * (rect.bottom - rect.top) : 0;
-}
-
-function overlap(a: ViewRect, b: ViewRect): number {
-  return area(cut(a, b));
+  return { marker, named: rings };
 }
 
 /** The radius of a scatter chart's point markers, in viewBox units. */
@@ -1119,8 +854,8 @@ export const CHART_MARKER_STROKE = 2;
 export interface ChartObstacles {
   /**
    * The marks drawn as areas: each bar and each scatter point, cut to the
-   * plot as its clip cuts them; and each callout's printed value -- a marked
-   * point's ring too -- drawn whole past the plot's edge.
+   * plot as its clip cuts them; a marked bar's printed value; and the rings
+   * (`chartRings`), drawn whole past the plot's edge.
    */
   marks: ViewRect[];
   /** The line through each series of a line or an area chart; the plot's clip cuts what runs past it. */
@@ -1179,14 +914,13 @@ export function chartClip(scales: ChartScales): ViewRect {
  * point is an area, not a line round it, so it is a mark; a line is the
  * line it draws; an area chart's fill is softer, a place to go only where
  * nothing else is free; and the legend and the axes' labels are read too.
- * `named` is every point the notes name; a caller that has worked out the
- * point callouts for them already passes those (`pointCallouts`).
+ * `notes` is what the chart is given (`ChartPrimitive`): every point the
+ * notes name, and those a leader on the chart reaches; none where not given.
  */
 export function chartObstacles(
   data: ChartData,
   scales: ChartScales = chartScales(data),
-  named: ChartAnchor[] = [],
-  pointCallouts: ChartPointCallout[] = chartPointCallouts(data, named, scales),
+  notes: { named: ChartAnchor[]; led: ChartAnchor[] } = { named: [], led: [] },
 ): ChartObstacles {
   const { plot, kind } = scales;
   // What the chart's clip lets through: the bars, the points and the ring
@@ -1218,10 +952,12 @@ export function chartObstacles(
   }
   if (kind === 'bar') {
     // A marked bar's printed value is read as part of it.
-    for (const callout of chartBarCallouts(data, named, scales)) marks.push(callout.label);
+    for (const callout of chartBarCallouts(data, notes.named, scales)) marks.push(callout.label);
   } else {
-    // A marked point's ring and its printed value, drawn whole past the plot's edge.
-    for (const callout of pointCallouts) marks.push(callout.ring, callout.label);
+    // The marker's ring, and one round each point named elsewhere, drawn whole past the plot's edge.
+    const rings = chartRings(data, notes.named, notes.led, scales);
+    const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
+    for (const point of [...(rings.marker ? [rings.marker] : []), ...rings.named]) marks.push({ left: point.x - r, top: point.y - r, right: point.x + r, bottom: point.y + r });
   }
   return { marks, lines, fills, labels: [chartLegendBox(data, scales.frame), ...chartAxisBoxes(plot, scales.frame)] };
 }

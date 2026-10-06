@@ -1,17 +1,6 @@
 // Straight segments against rects and against each other, in one plane:
-// the maths the chart and the notes laid over it share. The chart prints a
-// point's value where the lines leave room for a leader (chartGeometry);
-// the notes keep their cards and leaders off those lines (notePlacement).
-// Neither depends on the other: both read this.
-
-/**
- * How far, in CSS pixels, a note's leader keeps from the marks and lines it
- * passes on its way to a callout (notePlacement's `calloutLeader`). A
- * chart prints a point's value on the side with the most room past it
- * clear by this much, in its own units at the scale it is drawn
- * (chartGeometry's `roomPast`), so the leader that lands there can keep it.
- */
-export const LEADER_CLEARANCE = 4;
+// the maths the notes laid over a chart place their cards and leaders by
+// (notePlacement) and draw their leaders with (ChartNotes).
 
 export interface Point {
   x: number;
@@ -77,19 +66,6 @@ export function segmentsMeet(a: Point, b: Point, c: Point, d: Point): boolean {
   const within = (p: Point, q: Point, r: Point) =>
     Math.min(p.x, q.x) <= r.x && r.x <= Math.max(p.x, q.x) && Math.min(p.y, q.y) <= r.y && r.y <= Math.max(p.y, q.y);
   return (d1 === 0 && within(c, d, a)) || (d2 === 0 && within(c, d, b)) || (d3 === 0 && within(a, b, c)) || (d4 === 0 && within(a, b, d));
-}
-
-// How near the segments a-b and c-d come to each other: 0 where they meet.
-export function segmentDistance(a: Point, b: Point, c: Point, d: Point): number {
-  if (segmentsMeet(a, b, c, d)) return 0;
-  const toSegment = (p: Point, q: Point, r: Point) => {
-    const dx = r.x - q.x;
-    const dy = r.y - q.y;
-    const length = dx * dx + dy * dy;
-    const t = length > 0 ? Math.min(1, Math.max(0, ((p.x - q.x) * dx + (p.y - q.y) * dy) / length)) : 0;
-    return Math.hypot(p.x - (q.x + dx * t), p.y - (q.y + dy * t));
-  };
-  return Math.min(toSegment(a, c, d), toSegment(b, c, d), toSegment(c, a, b), toSegment(d, a, b));
 }
 
 /** The polyline without a vertex that repeats the one before it (within a millionth of a pixel). */

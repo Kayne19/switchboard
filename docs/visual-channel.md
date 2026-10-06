@@ -230,16 +230,13 @@ span past its tallest value, room for a note inside the plot. A chart that
 gives both ends is labelled at four even divisions of it, as before. A
 percentage that must stop at 100 says `yMax: 100`.
 
-A point that a `marker` or a note names is marked, its value printed where a
-leader lands. A bar is marked as a bar: outlined in the annotation colour, its
-value printed past its end. A point on a line, area or scatter chart gets a
-ring, drawn whole even on the plot's edge (hollow on a scatter, round the point
-it marks), and its value printed by the ring as precisely as the series is
-written: above or below it, where a leader comes straight onto it, by
-preference; run off to one side of a line that rises across the other; beside
-it where above and below have much less clear room past them (a peak whose
-line falls away under it, a point on the plot's top or bottom edge); past an
-area's line rather than over its own fill; and clear of the axes' text.
+A bar that a `marker` or a note names is marked as a bar: outlined in the
+annotation colour, its value printed past its end. A ring marks a point on a
+line, area or scatter chart: the marker's, drawn whole even on the plot's
+edge (hollow on a scatter, round the point it marks); a point a note names is marked by that note's leader, which ends on it,
+and gets a hollow ring of its own only where no leader on the chart reaches
+it (its note in the rail, the band under the chart, a focus panel, or the
+rail beside a chart in the aux row). No value is printed by a point.
 
 A chart is drawn in a frame its slot decides, by the slot's geometry alone.
 The approved 1000x500 canvas holds wherever it reads: its text at or above
@@ -585,11 +582,10 @@ an optional chart `x`/`series`, diagram `node`, or `item` inside a calendar, a
 to-do list, a timer, a forecast or an inbox; the browser owns the resulting
 placement. On a chart page a note lies over the chart it names, clear of what
 the chart draws: a bar or a scatter point is an area, not the line round it,
-and a card keeps a few pixels from it (6); a line it keeps twice that (12), as
-a line along a card's border reads as the card resting on it; a marked
-point's ring and value, a bar's printed value, the legend and the axis labels
-are kept clear too, and an area chart's fill is given up only where nothing
-else is free. The page
+and a card keeps a few pixels from it (6), and as many from a line; the
+rings, a bar's printed value, the legend and the axis labels are kept clear
+too, and an area chart's fill is given up only where nothing else is free.
+The page
 looks for such a place anywhere within reach of the named point, including
 the band above the plot. The card's tag names what it points at as the caller
 reads it, never the object's id or an index the agent sent: the category on a
@@ -619,25 +615,36 @@ days: one past them is named, and nothing marks it, so its card has no badge);
 a node or an item it does not hold marks nothing, and the card names the
 object. A note about no object on stage has no `TARGET` line.
 
-On every kind of chart a card lies wholly inside the plot, a few pixels in
-from its border, in clear space, or wholly outside it, never across it. Its
-leader comes onto the value the chart prints at the point it names, from the
-side the value is printed on (past a bar's end, above, below or beside a
-point's ring): out of the card's facing edge from a card past the value, or out
-of its side, along over the data between and a 45-degree turn onto the value,
-from a card beside it. It runs through no other bar, point or line, never
-alongside the bar it names, and keeps the card's edge colour, a shade firmer,
-to the end. A card with no clear place at its own width, or a long way from its
-point, tries narrower widths its text still fits at; one whose text would
-scroll at its width takes a wider one. These are the rules a card keeps where
-the chart has a place for it; where it has none, the rail takes a note (below),
-and a card the rail cannot take -- a second one astray, or one on a compare
-chart -- keeps the place that breaks the fewest of them.
+On a line, area or scatter chart a card that names a point centres over it in
+the top or the bottom row of the layer where that is clear, and may lie across
+the plot's border, as the training goldens were approved with; it never sits
+level with its point, so its leader leaves by its top or bottom border however
+short the chart, except where no place above or below the point is free. Its
+leader runs from the card's facing edge, at right angles, a 45-degree step
+across and straight on to the point on the drawn series, and fades on its way
+(to a fifth of the card's edge colour at the point).
+
+On a bar chart a card lies wholly inside the plot, a few pixels in from its
+border, or wholly outside it, never across it, and its leader comes onto the
+bar's printed value from past the bar's end: out of the card's facing edge
+from a card past that end, or out of its side, along over the bars between and
+a 45-degree turn onto the value, from a card beside it. It never runs alongside
+the bar it names or through any other, and keeps the card's edge colour, a
+shade firmer, to the end. A card with no clear place at its own width, or a
+long way from its bar, tries narrower widths its text still fits at; one whose
+text would scroll at its width takes a wider one (on any kind of chart). These
+are the rules a card keeps where the chart has a place for it; where it has
+none, the rail takes a note (below), and a card the rail cannot take -- a
+second one astray, or one on a compare chart -- keeps the place that breaks
+the fewest of them.
 
 A card is astray where the best place the chart has for it breaks one of these
 rules: over the data, too far from its point for its leader to read as its
-own, with no leader clear of the other marks and lines, across the plot's
-border, or over another card or a named point. The rail takes a note from the
+own, with no leader to its bar clear of the other bars, across a bar chart's
+plot border, level with its own point or skirting it (its point within a few
+pixels of the card's top or bottom border), or over another card or a named
+point.
+The rail takes a note from the
 chart only then, and only where leaving that note out leaves fewer cards
 astray -- the rail is for a card the chart has no place for, never room made
 for nothing. Which note goes: the one whose absence leaves the fewest cards
@@ -645,9 +652,9 @@ astray; of those, a note naming no point first, since it loses no leader in the
 rail; then one that was astray itself; then the one whose absence costs the
 others least. So a general note goes only where that gives a card it crowded a
 clear place, and an observation with no clear place goes itself rather than
-stay over the data while a general note keeps its corner. Every bar and every
-point the notes name stays marked while its note is in the rail, and the rail
-card still names its target. A note anchored to a visual on a chart page that
+stay over the data while a general note keeps its corner. Every bar the notes
+name stays marked while its note is in the rail, and a point on a line, area
+or scatter chart gets a hollow ring; the rail card still names its target. A note anchored to a visual on a chart page that
 is not a chart (one in the aux row) is shown in the rail too. The rail holds
 one note, so: only the primary chart hands one over; only the first note about
 a visual off the charts goes there (later ones lie on the primary chart, as
@@ -665,7 +672,7 @@ under a chart (a portrait stage), the note is drawn in a band under it, full
 width, carved from its slot, rather than in the rail under its metrics (a
 compare pair, which already scrolls in its row, keeps its note in the rail,
 leading it): the chart is recomposed to the shorter slot, and the card's target
-line names what the marked bar or point is. The band holds the note while it
+line names what the marked bar or ringed point is. The band holds the note while it
 is on that chart; the chart is not asked to place it again, so a chart laid
 out in less room cannot take it back and hand it out again, the band coming
 and going. This is the one exception to "the chart keeps its size for its
@@ -683,7 +690,7 @@ and the rail goes, so the notes the scene drew about it come with it, in a
 panel of their own beside the object when the focus box is wide (where the
 rail stood) and under it when the box is tall: on a chart, every note that
 names it, one under another, each card's `TARGET` line naming its point, the
-chart ringing or outlining each point and printing its value; on any other
+chart outlining each bar and printing its value, or ringing each point; on any other
 object (a diagram, a table, code, a document, a figure, a list with items, a
 metric, a progress), the first note that names it (the rail's note when the
 object is the primary), and what that note names stays marked: a diagram's node or actor, a list's item with its NOTE
