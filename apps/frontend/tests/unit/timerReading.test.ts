@@ -11,6 +11,7 @@ import {
   readTimer,
   timerGridLeast,
   timerLayout,
+  timerPhase,
 } from '../../src/primitives/timerReading';
 
 // A timer read at a moment of the page clock: the boundaries a countdown
@@ -89,6 +90,33 @@ describe('readTimer', () => {
   it('applies offsets: one moment written two ways ends at once', () => {
     const utc: Timer = { ...pasta, startedAt: '2026-10-08T01:33:00Z', endsAt: '2026-10-08T01:42:00Z' };
     for (const now of [ms(END) - 5000, ms(END), ms(END) + 5000]) expect(readTimer(utc, now)).toEqual(readTimer(pasta, now));
+  });
+});
+
+describe('timerPhase', () => {
+  it('is where in each second the reading turns: the fraction of a second its end falls on', () => {
+    expect(timerPhase(pasta)).toBe(0);
+    expect(timerPhase({ ...pasta, endsAt: '2026-10-08T01:42:00.250Z' })).toBe(250);
+    // To the microsecond, as the skill writes it, and past the millisecond.
+    expect(timerPhase({ ...pasta, endsAt: '2026-10-06T17:42:50.368277+00:00' })).toBe(368);
+    expect(timerPhase({ ...pasta, endsAt: '2026-10-08T07:12:00.999999999+05:30' })).toBe(999);
+  });
+
+  it('matches the reading: the digits change on it, and nowhere else in the second', () => {
+    const tea: Timer = { id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:42:00.250Z' };
+    const end = ms(tea.endsAt);
+    const turns: number[] = [];
+    for (let at = end - 5000; at < end + 3000; at += 1) {
+      const before = readTimer(tea, at - 1);
+      const now = readTimer(tea, at);
+      if (before.seconds !== now.seconds || before.over !== now.over || before.phase !== now.phase) turns.push(((at % 1000) + 1000) % 1000);
+    }
+    expect(turns.length).toBeGreaterThan(0);
+    expect(new Set(turns)).toEqual(new Set([timerPhase(tea)]));
+  });
+
+  it('is none for a paused timer, which does not turn', () => {
+    expect(timerPhase({ ...pasta, state: 'paused', remaining: 60 })).toBeNull();
   });
 });
 
