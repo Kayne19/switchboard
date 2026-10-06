@@ -69,10 +69,13 @@ export function ToolActivity({
   activity,
   placement = 'rail',
   reserveSpace = false,
+  away = false,
 }: {
   activity: ActivityState | null;
   placement?: 'rail' | 'conversation';
   reserveSpace?: boolean;
+  /** The rail's column has no room for the panel whole: its slot is set aside, out of the column's flow and unseen, still measured. */
+  away?: boolean;
 }) {
   const reduced = useReducedMotion();
   const shown = useLingeringValue(activity, ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS);
@@ -132,7 +135,7 @@ export function ToolActivity({
   );
   if (placement !== 'rail') return panel;
   return (
-    <div className="tool-activity-slot">
+    <div className={`tool-activity-slot${away ? ' tool-activity-slot--away' : ''}`}>
       {reserveSpace ? (
         // The panel's own three lines, unseen, so the reserved height is
         // exactly the panel's at every geometry.

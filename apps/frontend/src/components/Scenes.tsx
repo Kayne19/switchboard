@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent } from 'motion/react';
-import { useCallback, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import type {
   ChartData,
   ControllerState,
@@ -175,6 +175,10 @@ interface RailDetailsProps {
   onOpenHistory?: () => void;
   /** The note is one the charts could not hold, or one about a visual off them: where the column is too short for all it carries, the note leads it, whole, rather than fall below the metrics, out of view. */
   noteLeads?: boolean;
+  /** The rail stands under the main column (useRailUnder): its note reads whole there (useRailFit). */
+  under?: boolean;
+  /** Hears how tall the note reads whole in, CSS pixels, while the rail stands under the column; `null` with no note there. */
+  onFloor?: (height: number | null) => void;
 }
 
 // Whether the rail's column holds more than it shows, measured only while
@@ -192,6 +196,72 @@ function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): b
   return watching && crowded;
 }
 
+interface RailFit {
+  /** The column cannot hold all it carries: the note leads it. */
+  leads: boolean;
+  /** The column's foot has no room for the activity panel whole: it is set aside. */
+  away: boolean;
+  /** The column holds more below what it shows: its foot fades, as a scroller's rim does. */
+  more: boolean;
+}
+const FITS: RailFit = { leads: false, away: false, more: false };
+
+// Under the main column (a portrait stage) the rail is Damocles beside the
+// note, and the note reads whole there, as Kayne approved the portrait
+// goldens: it keeps its own height (the stylesheet), and the column says
+// how tall that is (`onFloor`), so the rail grows to hold it and the main
+// column gives up as much, keeping the larger share (the grid). What else
+// the rail carries does not size it: where it does not all fit, the note
+// leads, whole, the rest after it in the column's scroll; and the activity
+// panel stands at the column's foot only where it fits there whole -- where
+// it does not, Damocles's caption, which names the tool at work wherever
+// the rail stands, is what the caller sees of it. A column that holds more
+// below what it shows fades at its foot until it is scrolled to its end, so
+// a part cut there reads as the next one coming, not as broken. What these
+// decide changes nothing they are measured from: a part's height, the gaps
+// and the column's own.
+function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFloor: (height: number | null) => void): RailFit {
+  const [fit, setFit] = useState(FITS);
+  useLayoutEffect(() => {
+    const column = ref.current;
+    if (!under || !column) {
+      setFit(FITS);
+      onFloor(null);
+      return undefined;
+    }
+    const measure = () => {
+      const children = Array.from(column.children) as HTMLElement[];
+      const slot = children.find((child) => child.classList.contains('tool-activity-slot'));
+      const parts = children.filter((child) => child !== slot && child.offsetHeight > 0);
+      const note = parts.find((child) => child.classList.contains('rail-note'));
+      const gap = parseFloat(getComputedStyle(column).rowGap) || 0;
+      // A part that grows into the column's free space (the live response) counts at its least.
+      const least = (part: HTMLElement) => {
+        const style = getComputedStyle(part);
+        return (parseFloat(style.flexGrow) || 0) > 0 ? parseFloat(style.minHeight) || 0 : part.offsetHeight;
+      };
+      const content = parts.reduce((sum, part) => sum + least(part), 0) + gap * Math.max(0, parts.length - 1);
+      const room = column.clientHeight;
+      onFloor(note ? note.offsetHeight : null);
+      const next = {
+        leads: note !== undefined && parts.length > 1 && content > room + 1,
+        away: slot !== undefined && slot.offsetHeight > 0 && content + gap + slot.offsetHeight > room + 1,
+        more: column.scrollTop + room < column.scrollHeight - 1,
+      };
+      setFit((current) => (current.leads === next.leads && current.away === next.away && current.more === next.more ? current : next));
+    };
+    const stop = watchElement(column, measure, { children: true, changes: true });
+    column.addEventListener('scroll', measure, { passive: true });
+    return () => {
+      stop();
+      column.removeEventListener('scroll', measure);
+    };
+  }, [ref, under, onFloor]);
+  return under ? fit : FITS;
+}
+
+const noFloor = () => {};
+
 // The details column beside every content visual: the metrics and any
 // progress the main column has no slot for, one stack of instruments read
 // the same way, then the live response, the note, and tool activity. It is
@@ -200,22 +270,23 @@ function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): b
 // unmounting it first. Its children stand in one order in every state; a
 // note that leads a crowded column does so by its order there, so leading
 // moves nothing in or out of the page, and nothing is drawn afresh.
-function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, noteLeads = false }: RailDetailsProps) {
+function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, noteLeads = false, under = false, onFloor = noFloor }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
   const columnRef = useRef<HTMLDivElement>(null);
-  const leads = useCrowded(columnRef, noteLeads && note !== null);
+  const crowded = useCrowded(columnRef, !under && noteLeads && note !== null);
+  const fit = useRailFit(columnRef, under, onFloor);
   // The response and the note stretch into the column's free space, so while
   // either is shown the activity slot stays reserved and a tool starting or
   // clearing never resizes them. Metrics and progress keep their own size at
   // the top and are not moved by a panel below them.
   const reserveActivity = liveMessage !== null || note !== null;
   return (
-    <div ref={columnRef} className="content-rail__details">
+    <div ref={columnRef} className={`content-rail__details${fit.more ? ' content-rail__details--more' : ''}`}>
       {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} slot="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={noteTarget(state.agentObjects, note)} leads={leads} />
-      <ToolActivity activity={state.activity} reserveSpace={reserveActivity} />
+      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={noteTarget(state.agentObjects, note)} leads={under ? fit.leads : crowded} />
+      <ToolActivity activity={state.activity} reserveSpace={reserveActivity} away={fit.away} />
     </div>
   );
 }
@@ -638,8 +709,9 @@ function MainWithAux({
 
 // Whether the rail stands under the main column (a portrait stage) rather
 // than beside it, read from where the two boxes lie, not from a media query.
-// Where it does, the note a single chart cannot hold lies in a band under
-// it. A scene whose rail stays beside its column re-renders nothing for it.
+// Where it does, the rail's note reads whole (useRailFit), and the note a
+// single chart cannot hold lies in a band under it. A scene whose rail
+// stays beside its column re-renders nothing for it.
 function useRailUnder(active: boolean, mainRef: RefObject<HTMLDivElement | null>, railRef: RefObject<HTMLElement | null>): boolean {
   const [under, setUnder] = useState(false);
   useLayoutEffect(() => {
@@ -832,7 +904,9 @@ export function SceneShell(props: SceneProps) {
   const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
   const mainRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
-  const under = useRailUnder(content?.chartNotes !== undefined, mainRef, railRef);
+  const under = useRailUnder(content !== null, mainRef, railRef);
+  // How tall the rail's note reads whole in, while the rail stands under the column (RailDetails).
+  const [railFloor, setRailFloor] = useState<number | null>(null);
   const banding = under ? content?.chartNotes : undefined;
   const bandHeld = chartBand !== null && banding?.chart === chartBand.chart && banding.keys.includes(chartBand.note);
   useLayoutEffect(() => {
@@ -868,7 +942,7 @@ export function SceneShell(props: SceneProps) {
             <div className="scene-heading__title tech">{content.title}</div>
             <div className="scene-heading__sub tech micro">{content.subtitle}</div>
           </div>
-          <div className="content-grid">
+          <div className="content-grid" style={railFloor !== null ? ({ '--rail-floor': `${railFloor}px` } as CSSProperties) : undefined}>
             <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} drawn={calloutPlaced ? null : content.note}>
               {content.main}
             </MainWithAux>
@@ -883,6 +957,8 @@ export function SceneShell(props: SceneProps) {
                 onFocus={onFocus}
                 onOpenHistory={onOpenHistory}
                 noteLeads={content.noteLeads}
+                under={under}
+                onFloor={setRailFloor}
               />
             </motion.aside>
           </div>

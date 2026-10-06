@@ -1750,6 +1750,16 @@ button {
 .tool-activity-slot:empty {
   display: none;
 }
+/* Set aside where a rail under the column has no room for the panel whole
+   (RailDetails): out of the column's flow and unseen, still measured.
+   Damocles's caption names the tool at work. */
+.tool-activity-slot--away {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
 .tool-activity-slot > * {
   grid-area: 1 / 1;
 }
@@ -5476,11 +5486,15 @@ button {
     top: 4.8cqh;
     left: var(--edge);
   }
+  /* The rail under the column is at least as tall as its note reads whole
+     in (--rail-floor, measured by RailDetails), up to half the grid: the
+     main column keeps its 59% where the note fits in the rest, and gives up
+     what the note needs, keeping the larger share. */
   .content-grid {
     top: 9.2cqh;
     bottom: 9.2cqh;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 59cqh) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 59cqh) minmax(min(var(--rail-floor, 0px), (100% - var(--scene-gap)) / 2), 1fr);
     gap: var(--scene-gap);
   }
   .content-rail {
@@ -5502,6 +5516,20 @@ button {
     grid-column: 1;
     grid-row: 1;
     min-height: 0;
+  }
+  /* Under the column the note keeps its own height, read whole; the rail
+     grows to hold it (above). */
+  .content-rail__details > .rail-note {
+    flex: none;
+    min-height: 0;
+  }
+  .content-rail__details > .rail-note .annotation-card {
+    height: auto;
+  }
+  /* A column holding more below what it shows fades at its foot until it
+     is scrolled to its end (RailDetails), as a scroller's rim fades. */
+  .content-rail__details--more {
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
   }
   .scene-footer {
     left: var(--edge);

@@ -24,6 +24,13 @@ const shortLandscapes = [
   { width: 1536, height: 730 },
 ] as const;
 
+// Under the main column (a portrait stage) a rail with no room at its foot
+// for the panel whole sets it aside, unseen, and Damocles's caption names
+// the tool (Scenes.tsx useRailFit).
+async function setAside(page: Page) {
+  return (await page.locator('.content-rail__details .tool-activity-slot--away').count()) > 0;
+}
+
 function overlap(first: Box, second: Box) {
   return !(
     first.x + first.width <= second.x
@@ -272,14 +279,21 @@ for (const viewport of viewports) {
         detail: 'ping 10.0.0.1',
       });
 
-      await expect(page.locator('.content-rail__details .tool-activity')).toBeVisible();
+      await expect(page.locator('.content-rail__details .tool-activity')).toBeAttached();
       await page.waitForTimeout(300);
 
       const metricsBoxDuring = await page.locator('.content-rail__details .metrics').boundingBox();
       const chatBoxDuring = await page.locator('.content-rail__details .live-chat-card').boundingBox();
-      const activityBox = await page.locator('.content-rail__details .tool-activity').boundingBox();
-      expect(overlap(activityBox!, metricsBoxDuring!), 'activity covers the metrics').toBe(false);
-      expect(overlap(activityBox!, chatBoxDuring!), 'activity covers the live response').toBe(false);
+      if (await setAside(page)) {
+        // Under the column, with no room for the panel whole: Damocles names the tool.
+        await expect(page.locator('.content-rail__details .tool-activity')).toBeHidden();
+        await expect(page.locator('.content-rail [data-testid="damocles-presence"]')).toContainText(/WORKING \/ route_check/i);
+      } else {
+        await expect(page.locator('.content-rail__details .tool-activity')).toBeVisible();
+        const activityBox = await page.locator('.content-rail__details .tool-activity').boundingBox();
+        expect(overlap(activityBox!, metricsBoxDuring!), 'activity covers the metrics').toBe(false);
+        expect(overlap(activityBox!, chatBoxDuring!), 'activity covers the live response').toBe(false);
+      }
 
       expect(metricsBoxDuring!.x).toBeCloseTo(metricsBoxBefore!.x, 1);
       expect(metricsBoxDuring!.y).toBeCloseTo(metricsBoxBefore!.y, 1);
@@ -375,9 +389,11 @@ for (const viewport of viewports) {
       await page.waitForTimeout(300);
 
       const during = await settledBoxes();
+      const aside = await setAside(page);
+      if (aside) await expect(page.locator('.content-rail__details .tool-activity')).toBeHidden();
       const activityBox = (await page.locator('.content-rail__details .tool-activity').boundingBox())!;
       surfaces.forEach((selector, index) => {
-        expect(overlap(activityBox, during[index]), `activity covers ${selector}`).toBe(false);
+        if (!aside) expect(overlap(activityBox, during[index]), `activity covers ${selector}`).toBe(false);
         expect(during[index].y, `${selector} moved when activity appeared`).toBeCloseTo(before[index].y, 1);
         expect(during[index].height, `${selector} resized when activity appeared`).toBeCloseTo(before[index].height, 1);
       });
