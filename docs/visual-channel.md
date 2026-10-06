@@ -233,7 +233,7 @@ percentage that must stop at 100 says `yMax: 100`.
 A bar that a `marker` or a note names is marked as a bar: outlined in the
 annotation colour, its value printed past its end. A ring marks a point on a
 line, area or scatter chart: the marker's, drawn whole even on the plot's
-edge; a point a note names is marked by that note's leader, which ends on it,
+edge (hollow on a scatter, round the point it marks); a point a note names is marked by that note's leader, which ends on it,
 and gets a hollow ring of its own only where no leader on the chart reaches
 it (its note in the rail, the band under the chart, a focus panel, or the
 rail beside a chart in the aux row). No value is printed by a point.
@@ -640,7 +640,9 @@ the fewest of them.
 A card is astray where the best place the chart has for it breaks one of these
 rules: over the data, too far from its point for its leader to read as its
 own, with no leader to its bar clear of the other bars, across a bar chart's
-plot border, level with its own point, or over another card or a named point.
+plot border, level with its own point or skirting it (its point within a few
+pixels of the card's top or bottom border), or over another card or a named
+point.
 The rail takes a note from the
 chart only then, and only where leaving that note out leaves fewer cards
 astray -- the rail is for a card the chart has no place for, never room made
@@ -650,8 +652,8 @@ rail; then one that was astray itself; then the one whose absence costs the
 others least. So a general note goes only where that gives a card it crowded a
 clear place, and an observation with no clear place goes itself rather than
 stay over the data while a general note keeps its corner. Every bar the notes
-name stays marked while its note is in the rail, and a point on a line keeps a
-ring; the rail card still names its target. A note anchored to a visual on a chart page that
+name stays marked while its note is in the rail, and a point on a line, area
+or scatter chart gets a hollow ring; the rail card still names its target. A note anchored to a visual on a chart page that
 is not a chart (one in the aux row) is shown in the rail too. The rail holds
 one note, so: only the primary chart hands one over; only the first note about
 a visual off the charts goes there (later ones lie on the primary chart, as

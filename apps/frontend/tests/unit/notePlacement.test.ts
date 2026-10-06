@@ -470,7 +470,7 @@ describe('a note on a bar chart', () => {
     const rect = (r: Rect): Rect => ({ left: r.left * scale, top: top + r.top * scale, right: r.right * scale, bottom: top + r.bottom * scale });
     const scales = chartScales(data, frame);
     const anchor = { x: 2, series: 'THIS RUN' };
-    const obstacles = chartObstacles(data, scales, [anchor]);
+    const obstacles = chartObstacles(data, scales, { named: [anchor], led: [anchor] });
     const target = chartNoteTarget(data, anchor, scales)!;
     const field: NoteField = {
       area: box(0, 0, layer.width, layer.height),
@@ -812,7 +812,7 @@ describe('placing notes on a dense bar chart', () => {
     };
     const scales = chartScales(data);
     const anchors = [{ x: 1, series: 'S0' }, { x: 10, series: 'S1' }, { x: 20, series: 'S2' }, { x: 30, series: 'S3' }, { x: 39, series: 'S0' }];
-    const obstacles = chartObstacles(data, scales, anchors);
+    const obstacles = chartObstacles(data, scales, { named: anchors, led: anchors });
     const field: NoteField = { area: box(0, 0, 1000, 540), plot: scales.plot, marks: obstacles.marks, labels: obstacles.labels, wholly: true };
     const notes: NoteToPlace[] = anchors.map((anchor, index) => {
       const target = chartNoteTarget(data, anchor, scales)!;
@@ -836,7 +836,7 @@ describe('placing notes on a line chart', () => {
     };
     const scales = chartScales(data);
     const anchors = [{ x: 10, series: 'S0' }, { x: 20, series: 'S1' }, { x: 30, series: 'S2' }];
-    const obstacles = chartObstacles(data, scales, anchors);
+    const obstacles = chartObstacles(data, scales, { named: anchors, led: anchors });
     const field: NoteField = { area: box(0, 0, 1000, 540), plot: scales.plot, traces: obstacles.lines, marks: obstacles.marks, labels: obstacles.labels };
     const notes: NoteToPlace[] = anchors.map((anchor, index) => ({ id: `n${index}`, width: 300, height: 80, point: chartNoteTarget(data, anchor, scales)!.point }));
     expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(100);

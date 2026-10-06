@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // The notes over a chart were placed again on every frame of a resize: a
-// placement costs up to tens of milliseconds (hundreds for a dense bar
-// chart of four series with five notes and the rail), so a resize dropped frames
+// placement costs up to 200-250 ms on a dense bar chart (four series of 40
+// with five notes and the rail), so a resize dropped frames
 // (polish row 14). They are placed once a step of the size, as a graph is
 // laid out once a step; within a step the cards follow their points, and
 // where the size comes to rest they are placed for it.
@@ -115,7 +115,7 @@ afterEach(() => {
 function view(shown: ChartNote[] = notes) {
   return (
     <div className="chart-object">
-      <ChartPrimitive data={data} named={named} />
+      <ChartPrimitive data={data} named={named} led={chartNoteAnchors(chart, shown)} />
       <ChartNotes chart={chart} objects={{ [chart.id]: chart }} notes={shown} onFocus={() => {}} named={named} />
     </div>
   );

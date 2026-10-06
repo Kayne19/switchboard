@@ -495,7 +495,7 @@ for (const { viewport, two } of barNoteCases) {
 // and 2560x1080 the card stands in the top row across the plot's top
 // border, as approved.
 const pointNoteCharts = {
-  training: { actions: [], notes: { 'training-note': { x: 32, series: 'VAL LOSS', tag: 'TARGET / EPOCH 32 / VAL LOSS' } } },
+  training: { actions: [], notes: { 'training-note': { x: 32, series: 'VAL LOSS', tag: 'TARGET / EPOCH 32 / VAL LOSS', text: 'Validation loss turns upward here' } } },
   area: {
     actions: [
       { op: 'clear' },
@@ -511,7 +511,7 @@ const pointNoteCharts = {
       },
       { op: 'show', id: 'traffic-note', type: 'note', data: { tag: 'OBSERVATION / JULY', anchor: { target: 'traffic', x: 6, series: 'ORGANIC' }, segments: [{ text: 'Organic traffic peaked in July, the month the docs moved to the new site.' }] } },
     ],
-    notes: { 'traffic-note': { x: 6, series: 'ORGANIC', tag: 'TARGET / JUL / ORGANIC' } },
+    notes: { 'traffic-note': { x: 6, series: 'ORGANIC', tag: 'TARGET / JUL / ORGANIC', text: 'Organic traffic peaked in July' } },
   },
   scatter: {
     actions: [
@@ -525,7 +525,7 @@ const pointNoteCharts = {
       },
       { op: 'show', id: 'slow-note', type: 'note', data: { tag: 'OBSERVATION / 17:00', anchor: { target: 'slow', x: 17, series: 'P99' }, segments: [{ text: 'The 17:00 spike lines up with the nightly export job starting early.' }] } },
     ],
-    notes: { 'slow-note': { x: 17, series: 'P99', tag: 'TARGET / HOUR 17 / P99' } },
+    notes: { 'slow-note': { x: 17, series: 'P99', tag: 'TARGET / HOUR 17 / P99', text: 'The 17:00 spike lines up' } },
   },
 } as const;
 const pointNoteCases = (['training', 'area', 'scatter'] as const).flatMap((chart) =>
@@ -577,7 +577,10 @@ for (const { chart, viewport } of pointNoteCases) {
           }) : null,
         };
       });
-      return { plot, series, notes, values: document.querySelectorAll('.chart-marker__value').length };
+      // A point whose note is not laid over the chart keeps a hollow ring.
+      const rings = [...svg.querySelectorAll('.chart-note-ring')].map((ring) => toClient(Number(ring.getAttribute('cx')), Number(ring.getAttribute('cy'))));
+      const rail = [...document.querySelectorAll('.content-rail .rail-note, .chart-note-band')].map((element) => element.textContent).join(' ');
+      return { plot, series, notes, rings, rail, values: document.querySelectorAll('.chart-marker__value').length };
     });
     const near = (p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) => {
       const dx = b.x - a.x;
@@ -588,14 +591,25 @@ for (const { chart, viewport } of pointNoteCases) {
     const { plot } = geometry;
     expect(geometry.values, 'no value is printed by a point').toBe(0);
     for (const note of geometry.notes) {
-      const target = spec.notes[note.id as keyof typeof spec.notes] as { x: number; series: string; tag: string };
+      const target = spec.notes[note.id as keyof typeof spec.notes] as { x: number; series: string; tag: string; text: string };
       expect(note.anchor).toBe(target.tag);
-      if (note.away) continue;
-      const { card } = note;
+      const drawn = geometry.series[target.series];
+      // The point it names, on the line or a scatter's point.
+      const off = (p: { x: number; y: number }) => chart === 'scatter'
+        ? Math.hypot(p.x - drawn.points[target.x].x, p.y - drawn.points[target.x].y)
+        : Math.min(...drawn.line.slice(1).map((b, index) => near(p, drawn.line[index], b)));
       if (chart === 'training' && viewport.width >= 1440) {
-        // As approved: the top row, across the plot's top border.
-        expect(card.top < plot.top && card.bottom > plot.top, `${note.id} stands across the plot's top border`).toBe(true);
+        // As approved: on the chart, in the top row, across the plot's top border.
+        expect(note.away, `${note.id} keeps its place on the chart`).toBe(false);
+        expect(note.card.top < plot.top && note.card.bottom > plot.top, `${note.id} stands across the plot's top border`).toBe(true);
       }
+      if (note.away) {
+        // In the rail, or the band under the chart; its point ringed where no leader reaches it.
+        expect(geometry.rail, `${note.id} is in the rail`).toContain(target.text);
+        expect(geometry.rings.some((ring) => off(ring) <= 1.5), `${note.id}'s point is ringed`).toBe(true);
+        continue;
+      }
+      const { card } = note;
       // The leader leaves the card's border, fades on its way, and ends on the point it names.
       expect(note.leader, `${note.id} has a leader`).not.toBeNull();
       expect(note.bar).toBe(false);
@@ -606,11 +620,9 @@ for (const { chart, viewport } of pointNoteCases) {
         || (Math.abs(start.y - card.top) <= 1.5 || Math.abs(start.y - card.bottom) <= 1.5) && start.x >= card.left && start.x <= card.right;
       expect(onBorder, `${note.id}'s leader starts on its card's border`).toBe(true);
       const end = leader[leader.length - 1];
-      const drawn = geometry.series[target.series];
-      const off = chart === 'scatter'
-        ? Math.hypot(end.x - drawn.points[target.x].x, end.y - drawn.points[target.x].y)
-        : Math.min(...drawn.line.slice(1).map((b, index) => near(end, drawn.line[index], b)));
-      expect(off, `${note.id}'s leader ends on its point`).toBeLessThanOrEqual(1.5);
+      expect(off(end), `${note.id}'s leader ends on its point`).toBeLessThanOrEqual(1.5);
+      // A point a leader reaches is not ringed again.
+      expect(geometry.rings.some((ring) => off(ring) <= 1.5), `${note.id}'s point is ringed though its leader reaches it`).toBe(false);
     }
   });
 }

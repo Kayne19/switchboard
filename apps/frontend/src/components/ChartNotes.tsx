@@ -46,12 +46,12 @@ const MAX_CARD_SHARE = 0.8;
 
 // The notes are placed again at most once a step of this many pixels of
 // the layer's size or the chart's, as a graph is laid out once a step
-// (diagramLayout's FRAME_STEP): a placement costs up to tens of
-// milliseconds (hundreds for a dense bar chart of four series with five
-// notes and the rail), and a resize measures every frame. Within a step the cards
-// follow their points, and once the size has held still for `REST_MS` the
-// notes are placed for it, so where they come to rest is where they would
-// stand had the page opened at that size.
+// (diagramLayout's FRAME_STEP): a placement costs a few milliseconds on a
+// line chart and up to 200-250 ms on a dense bar chart (four series of 40
+// with five notes and the rail), and a resize measures every frame. Within
+// a step the cards follow their points, and once the size has held still
+// for `REST_MS` the notes are placed for it, so where they come to rest is
+// where they would stand had the page opened at that size.
 const PLACE_STEP = 16;
 const REST_MS = 150;
 
@@ -356,7 +356,7 @@ export function ChartNotes({
       if (toLayer) {
         // The chart rings a point named here only where its note is laid
         // elsewhere: the notes laid here run their leaders to theirs.
-        const obstacles = chartObstacles(data, scales, markedRef.current, chartNoteAnchors(chartRef.current, current));
+        const obstacles = chartObstacles(data, scales, { named: markedRef.current, led: chartNoteAnchors(chartRef.current, current) });
         field.plot = rectToLayer(scales.plot);
         field.traces = obstacles.lines.map((line) => line.map(toLayer!));
         field.marks = obstacles.marks.map(rectToLayer);

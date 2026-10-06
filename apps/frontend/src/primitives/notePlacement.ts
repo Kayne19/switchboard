@@ -89,7 +89,7 @@ export interface NoteField {
   plot?: Rect;
   /** The lines the chart draws through its series: a line chart's, an area chart's edge. */
   traces?: Point[][];
-  /** What the chart draws as areas, as drawn: each bar, each scatter point, the marker ring, a bar's printed value. */
+  /** What the chart draws as areas, as drawn: each bar, each scatter point, its rings (`chartRings`), a bar's printed value. */
   marks?: Rect[];
   /** An area chart's fill under its line, as convex pieces: softer than the rest of the data. */
   fills?: Point[][];

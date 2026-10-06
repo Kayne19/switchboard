@@ -217,7 +217,7 @@ export function ChartPrimitive({
   const namedKey=anchorsKey(named);
   const ledKey=anchorsKey(led);
   const callouts=useMemo(()=>chartBarCallouts(data,named,scales),[data,namedKey,scales]);
-  const rings=useMemo(()=>chartRings(data,named,led,scales),[data,namedKey,ledKey,scales]);
+  const rings=useMemo(()=>chartRings(data,named??[],led??[],scales),[data,namedKey,ledKey,scales]);
   const grounded=kind==='bar'||kind==='area';
   const base=valueAt(baseline);
   const clip=chartClip(scales);
@@ -255,12 +255,13 @@ export function ChartPrimitive({
         })}
       </g>
       {/* The rings are drawn whole, past the plot's edge where a point sits
-          on it. They and the points keep their radius in focus: the notes'
-          clearances are worked out from it, and focus draws the whole chart
-          larger already. */}
+          on it. The marker's hides the line under it, but rings a scatter's
+          point, which it stands round. They and the points keep their radius
+          in focus: the notes' clearances are worked out from it, and focus
+          draws the whole chart larger already. */}
       {rings.marker ? (
         <motion.g className="chart-marker" initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
-          <circle className="chart-marker__point" cx={rings.marker.x} cy={rings.marker.y} r={CHART_MARKER_RADIUS} fill="#000" stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
+          <circle className="chart-marker__point" cx={rings.marker.x} cy={rings.marker.y} r={CHART_MARKER_RADIUS} fill={kind==='scatter'?'none':'#000'} stroke="var(--orange)" strokeWidth={CHART_MARKER_STROKE}/>
         </motion.g>
       ) : null}
       {rings.named.map((point)=>(

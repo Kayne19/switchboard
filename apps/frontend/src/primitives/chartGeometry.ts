@@ -827,8 +827,8 @@ export function chartNoteTarget(
  */
 export function chartRings(
   data: ChartData,
-  named: ChartAnchor[] = [],
-  led: ChartAnchor[] = [],
+  named: ChartAnchor[],
+  led: ChartAnchor[],
   scales: ChartScales = chartScales(data),
 ): { marker?: ViewPoint; named: ViewPoint[] } {
   if (scales.kind === 'bar') return { named: [] };
@@ -914,14 +914,13 @@ export function chartClip(scales: ChartScales): ViewRect {
  * point is an area, not a line round it, so it is a mark; a line is the
  * line it draws; an area chart's fill is softer, a place to go only where
  * nothing else is free; and the legend and the axes' labels are read too.
- * `named` and `led` are what the chart is given (`ChartPrimitive`): every
- * point the notes name, and those a leader on the chart reaches.
+ * `notes` is what the chart is given (`ChartPrimitive`): every point the
+ * notes name, and those a leader on the chart reaches; none where not given.
  */
 export function chartObstacles(
   data: ChartData,
   scales: ChartScales = chartScales(data),
-  named: ChartAnchor[] = [],
-  led: ChartAnchor[] = named,
+  notes: { named: ChartAnchor[]; led: ChartAnchor[] } = { named: [], led: [] },
 ): ChartObstacles {
   const { plot, kind } = scales;
   // What the chart's clip lets through: the bars, the points and the ring
@@ -953,10 +952,10 @@ export function chartObstacles(
   }
   if (kind === 'bar') {
     // A marked bar's printed value is read as part of it.
-    for (const callout of chartBarCallouts(data, named, scales)) marks.push(callout.label);
+    for (const callout of chartBarCallouts(data, notes.named, scales)) marks.push(callout.label);
   } else {
     // The marker's ring, and one round each point named elsewhere, drawn whole past the plot's edge.
-    const rings = chartRings(data, named, led, scales);
+    const rings = chartRings(data, notes.named, notes.led, scales);
     const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
     for (const point of [...(rings.marker ? [rings.marker] : []), ...rings.named]) marks.push({ left: point.x - r, top: point.y - r, right: point.x + r, bottom: point.y + r });
   }

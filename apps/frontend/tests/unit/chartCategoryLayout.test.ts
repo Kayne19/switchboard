@@ -315,10 +315,10 @@ describe('chart obstacles', () => {
     const line: ChartData = { xMax: 2, series: [{ name: 'A', values: [1, 2, 3] }] };
     const scales = chartScales(line);
     expect(chartObstacles(line, scales).marks).toEqual([]);
-    expect(chartObstacles(line, scales, [{ x: 2 }]).marks).toEqual([]);
+    expect(chartObstacles(line, scales, { named: [{ x: 2 }], led: [{ x: 2 }] }).marks).toEqual([]);
     const point = chartSeriesPoint(line, 2, undefined, scales)!;
     const reach = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
-    expect(chartObstacles(line, scales, [{ x: 2 }], []).marks).toEqual([{ left: point.x - reach, top: point.y - reach, right: point.x + reach, bottom: point.y + reach }]);
+    expect(chartObstacles(line, scales, { named: [{ x: 2 }], led: [] }).marks).toEqual([{ left: point.x - reach, top: point.y - reach, right: point.x + reach, bottom: point.y + reach }]);
   });
 
   it("keeps a note off a marked bar's printed value, and off each bar a note names", () => {
@@ -326,7 +326,7 @@ describe('chart obstacles', () => {
     const scales = chartScales(marked);
     const callout = chartBarCallout(marked, { x: 1, series: 'TWO' }, scales)!;
     expect(chartObstacles(marked, scales).marks.at(-1)).toEqual(callout.label);
-    const named = chartObstacles(bars, chartScales(bars), [{ x: 0, series: 'ONE' }]).marks;
+    const named = chartObstacles(bars, chartScales(bars), { named: [{ x: 0, series: 'ONE' }], led: [{ x: 0, series: 'ONE' }] }).marks;
     expect(named.at(-1)).toEqual(chartBarCallout(bars, { x: 0, series: 'ONE' })!.label);
   });
 
@@ -658,7 +658,7 @@ describe('the rings a line chart draws', () => {
   });
 
   it('draws none on a bar chart, which marks its bars', () => {
-    expect(chartRings({ ...line, kind: 'bar', labels: ['a', 'b', 'c', 'd', 'e'] }, [{ x: 2 }])).toEqual({ named: [] });
+    expect(chartRings({ ...line, kind: 'bar', labels: ['a', 'b', 'c', 'd', 'e'] }, [{ x: 2 }], [])).toEqual({ named: [] });
   });
 
   // The leader ended past a value printed by the ring, from the side it was

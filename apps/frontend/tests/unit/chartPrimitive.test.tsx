@@ -231,6 +231,15 @@ describe('chart series point', () => {
     expect(host.querySelector('.chart-marker__value')).toBeNull();
   });
 
+  it("rings a scatter's marker without hiding the point, and fills a line's ring over the line", () => {
+    renderWith({ kind: 'scatter', xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } });
+    expect(host.querySelector('.chart-marker__point')!.getAttribute('fill')).toBe('none');
+    act(() => root.unmount());
+    host.remove();
+    renderWith({ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } });
+    expect(host.querySelector('.chart-marker__point')!.getAttribute('fill')).toBe('#000');
+  });
+
   it('rings every point a note names where no leader is given: focus, a cell beside the primary', () => {
     renderWith({ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }] });
     expect(host.querySelectorAll('.chart-note-ring')).toHaveLength(0);
