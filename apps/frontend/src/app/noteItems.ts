@@ -1,5 +1,6 @@
 import type { CalendarData, DiagramObjectData, InboxData, NoteData, SceneObject, TasksData, TimerData, WeatherData } from '../controller/types';
 import type { NoteTarget } from '../primitives/AnnotationCard';
+import { markedPart } from '../primitives/NoteMarker';
 import { weatherItemName } from '../primitives/weatherLayout';
 import { eventTarget } from '../primitives/calendarLayout';
 import { chartTargetText } from '../primitives/chartGeometry';
@@ -17,12 +18,9 @@ import { cast } from './sceneModel';
 // screen. Neither validator looks the item up, so a name the object does
 // not hold marks nothing either.
 
-/** The item the drawn note `note` names inside the object `objectId`, which
- * that object marks; nothing when the note is about another object or names
- * no item. */
+/** The item of a list the drawn note names (`markedPart`). */
 export function markedItem(note: NoteData | null | undefined, objectId: string): string | undefined {
-  const anchor = note?.anchor;
-  return anchor?.target === objectId ? anchor.item : undefined;
+  return markedPart(note, objectId).item;
 }
 
 /** An item in its object's words, and whether the object marks it: it draws every item it holds but a calendar's events past its view. */

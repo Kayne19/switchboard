@@ -5,7 +5,7 @@ import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
-import { NoteMarker } from './NoteMarker';
+import { NoteMarker, markedPart } from './NoteMarker';
 import { SEMANTIC_COLOR } from '../design/tokens';
 
 const SEMANTICS = Object.keys(SEMANTIC_COLOR) as Semantic[];
@@ -62,10 +62,7 @@ export function DiagramPrimitive({
   onCalloutChange?: (placed: boolean) => void;
 }) {
   const { hostRef, width, height, scrollbar } = useDrawingViewport();
-  // The anchor's target is part of the protocol: a note aimed at another
-  // object that happens to name one of this diagram's nodes is not ours.
-  const anchoredNodeId =
-    note?.anchor && note.anchor.target === id ? note.anchor.node : undefined;
+  const anchoredNodeId = markedPart(note, id).node;
   const hasAnchoredNode = Boolean(anchoredNodeId && data.nodes.some((n) => n.id === anchoredNodeId));
   const anchor = hasAnchoredNode ? anchoredNodeId : undefined;
   // The layout is chosen for the viewport: as drawn for the approved canvas

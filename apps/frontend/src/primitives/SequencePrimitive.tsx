@@ -4,7 +4,7 @@ import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingViewport } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
-import { NoteMarker } from './NoteMarker';
+import { NoteMarker, markedPart } from './NoteMarker';
 import { SUB_LINE_HEIGHT, actorFramePath, headerReading, pinnedDepth, viewSequence, type LaidOutMessage } from './sequenceLayout';
 import { SEMANTIC_COLOR } from '../design/tokens';
 
@@ -51,11 +51,9 @@ export function SequencePrimitive({
   note?: NoteData | null;
 }) {
   const { hostRef, width, height, scrollbar } = useDrawingViewport();
-  // The anchor's target is part of the protocol: a note aimed at another
-  // object that happens to name one of these actors is not ours. The note
-  // itself stays in the rail; the actor it names carries the NOTE marker,
-  // the rail badge's twin, in its header.
-  const anchoredActorId = note?.anchor && note.anchor.target === id ? note.anchor.node : undefined;
+  // The note itself stays in the rail; the actor it names carries the NOTE
+  // marker, the rail badge's twin, in its header.
+  const anchoredActorId = markedPart(note, id).node;
   // The geometry follows the viewport's shape, and the drawing is fitted to
   // it, or scrolled in it once fitting would make it too small to read.
   const view = useCallback(
