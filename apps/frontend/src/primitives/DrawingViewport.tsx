@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
 import { useElementSize } from '../hooks/useElementSize';
+import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { useLeastHeight } from '../hooks/useStageDemand';
 import { SLIVER, type DrawingFit, type Size } from './drawingFit';
 import {
@@ -253,17 +254,7 @@ export function DrawingViewport({
   }, [scrolling, fit.width]);
 
   // Scroll events come faster than frames: the rims are read once a frame.
-  const frame = useRef<number | null>(null);
-  const onScroll = useCallback(() => {
-    if (frame.current !== null) return;
-    frame.current = requestAnimationFrame(() => {
-      frame.current = null;
-      read();
-    });
-  }, [read]);
-  useEffect(() => () => {
-    if (frame.current !== null) cancelAnimationFrame(frame.current);
-  }, []);
+  const onScroll = useOncePerFrame(read);
 
   // Where the drawing sits in the scroller (centred across an axis it does
   // not fill) and its parts there.

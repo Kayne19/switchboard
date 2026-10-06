@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type RefObject } from 'react';
+import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../hooks/useStageDemand';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
@@ -168,7 +169,6 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
 
   // What the edges say, from where the reader stands. Read on scroll at
   // most once a frame, and whenever the list or its box changes.
-  const frame = useRef(0);
   const measure = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
@@ -191,14 +191,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     setScrolls(element.scrollHeight > element.clientHeight + 1);
     setViewHeight(element.clientHeight);
   }, [scrollRef, countSelector]);
-  const onScroll = () => {
-    if (frame.current) return;
-    frame.current = requestAnimationFrame(() => {
-      frame.current = 0;
-      measure();
-    });
-  };
-  useEffect(() => () => cancelAnimationFrame(frame.current), []);
+  const onScroll = useOncePerFrame(measure);
 
   useEffect(() => {
     const element = scrollRef.current;
