@@ -70,7 +70,7 @@ export function FocusLayer({
           >
             <div className="focus-layer__header tech micro">
               <span>FOCUS / {object.type.toUpperCase()}</span>
-              <button type="button" onClick={onClose}>RETURN / ESC</button>
+              <button className="focus-layer__return" type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
               <ObjectView object={object} slot="focus" onStage={objects} notes={notes.map((note) => note.data)} />

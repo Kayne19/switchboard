@@ -82,7 +82,7 @@ The model controls semantic intent. The frontend controls composition, geometry,
 | `AnnotationCard` | targeted explanation and rich text semantics; its TARGET line names what it is about in its object's words, never an id (`noteTarget`: the chart point, the node, actor or list item, else the object itself: its title, subject, label, alt text or place, else what the page shows of it, else its type's name), beside the tag or on a line of its own, and carries the NOTE badge (`NoteBadge`, the HTML twin of the drawings' `NoteMarker`) beside it where that part is marked |
 | `ChartNotes` + `notePlacement` | every note on a chart, laid over it clear of the others, their points and what the chart draws (`chartObstacles`: bars and scatter points as areas, lines, the rings, a bar's printed value, legend and axis labels; an area's fill only where nothing else is free); on a bar chart a card wholly in or out of the plot, its leader onto the bar from past its end; on a line, area or scatter chart a card above or below its point, across the plot's border where that is clear, its fading angular leader onto the point on the line; a card's width where its own has no clear place; where a card has no place that keeps those rules, one note handed to the rail (the one whose absence leaves the fewest cards astray, a note naming no point first among those); through a resize, a placement once a step of the size, the cards following their points between, and a placement where it rests |
 | `SceneShell` + `stageFold` | the rail beside or under the main column; under a primary that outgrows its share of a portrait stage (what its primitives say they lack, `useStageDemand`), the rail folded to a strip of the note and Damocles with a handle that opens it; a chart's handed-over note in a band under the charts where the rail stands under them |
-| `FocusableSurface` | accessible activation without invalid button-wrapped scroll regions; a click or key a control inside it has handled (`preventDefault`) is left alone, and no control stops one, so the page hears every tap |
+| `FocusableSurface` | accessible activation without invalid button-wrapped scroll regions; a click or key a control inside it has handled (`preventDefault`) is left alone, and no control stops one, so the page hears every tap; the page's focus ring drawn over what it holds |
 | `FocusLayer` | shared-object expansion and return behavior; the notes about the focused object (every note on a chart, the first note naming any other), beside or under it by the box's shape, what they name marked in it |
 | Controller reducer | six-operation state semantics |
 
@@ -101,6 +101,15 @@ A page-level patch that duplicates one of these responsibilities is usually inco
 | Clear | Content recedes until only Damocles remains |
 
 Ordinary structural motion should remain quick, generally about 200 to 500 ms. Idle motion and rare flourishes may be slower. Respect `prefers-reduced-motion`: under it nothing moves. A recomposition is drawn where it ends, and no element is handed to motion's layout projection (`useLayoutMotion`), so no box can be left at an old size; focus fades in over the object, which stays in its slot; opacity still fades.
+
+## Focus ring
+
+Every control the keyboard reaches draws the page's focus ring: one orange line, 1px (`--focus-ring` in `styles/index.css`). The browser's own ring is never drawn, and no box clips the ring.
+
+- A control (a button, the rail's handle, a metric in a cluster) draws it 4px off itself (`--focus-ring-offset`).
+- A region fills a box that clips past its edge, so it draws the ring on its own edge, inside it. A scroll or a paged view draws it as its outline, which stays put as the content moves; every box that scrolls takes it, since Chrome puts a scroll with nothing to focus inside it in the tab order. A region with parts over its own edges draws it over them: an object's surface (`FocusableSurface`) over what it holds (the object's box clips everything outside it, and a part with a ground of its own would cover an outline), a list's or a drawing's scroll over its rims and its pinned head, on the box it scrolls in.
+- A text field shows focus by its caret and its field's border (the history's composer).
+- A control's name says what it does, the same for the same control: both HISTORY buttons are "Open conversation history".
 
 ## Change policy
 

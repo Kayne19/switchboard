@@ -29,6 +29,12 @@
      right (TechFrame "document"); its inset clears that with a gap. A share
      of the frame's height, so it means that only as a top offset. */
   --document-inset: calc(28 / 800 * 100% + 4px);
+  /* The page's focus ring (DESIGN_SYSTEM.md, "Focus ring"), and how far
+     past its control it reaches: the room a control keeps from an edge
+     that clips. */
+  --focus-ring: 1px solid var(--orange);
+  --focus-ring-offset: 4px;
+  --focus-ring-reach: calc(var(--focus-ring-offset) + 1px);
   color: var(--paper);
   background: var(--black);
   font-family:
@@ -175,6 +181,7 @@ button {
 }
 
 .focusable-content {
+  position: relative;
   display: block;
   width: 100%;
   height: 100%;
@@ -186,13 +193,57 @@ button {
   text-align: inherit;
   cursor: zoom-in;
 }
-.focusable-content:focus-visible,
+/* The page's focus ring (DESIGN_SYSTEM.md, "Focus ring"): every control the
+   keyboard reaches draws one orange line, never the browser's own ring, and
+   no box clips it. A control draws it a little off itself. */
 .damocles-presence__button:focus-visible,
 .annotation-card__history:focus-visible,
 .live-chat-card__history:focus-visible,
-.transcript-toggle:focus-visible {
-  outline: 1px solid var(--orange);
-  outline-offset: 4px;
+.transcript-toggle:focus-visible,
+.rail-handle:focus-visible,
+.focus-layer__return:focus-visible,
+.transcript__return:focus-visible,
+.transcript__send:focus-visible,
+.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+/* A region fills a box that clips past its edge (a frame, a scroll), so it
+   draws the ring on its edge, inside. A scroll draws it as its outline,
+   which stays put as the content scrolls. Every box that scrolls draws it:
+   Chrome puts a scroll with nothing to focus inside it in the tab order. */
+.calendar-pages:focus-visible,
+.annotation-card__text:focus-visible,
+.live-chat-card__text:focus-visible,
+.conversation-answer__text:focus-visible,
+.transcript__body:focus-visible,
+.rich-text__code-block:focus-visible,
+.progress-primitive__steps:focus-visible,
+.composed-aux:focus-visible,
+.content-rail__details:focus-visible,
+.training-charts--compare:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -1px;
+}
+/* A region with parts over its own edges draws the ring over them, on the
+   box that holds it still: an object's surface over what it holds (the
+   object's box clips everything outside it, and a part with a ground of its
+   own, a source's, would cover its outline); a list's or a drawing's scroll
+   over its rims and its pinned head, on the port or view it scrolls in. */
+.focusable-content:focus-visible,
+.list-viewport__scroll:focus-visible,
+.drawing-viewport__scroll:focus-visible {
+  outline: none;
+}
+.focusable-content:focus-visible::after,
+.list-viewport__port:has(> .list-viewport__scroll:focus-visible)::after,
+.drawing-viewport__view:has(> .drawing-viewport__scroll:focus-visible)::after {
+  content: "";
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  border: var(--focus-ring);
+  pointer-events: none;
 }
 /* Every primitive's root, and the viewports drawings and lists scroll in,
    fill the box they are given and may be shorter than what they hold:
@@ -651,7 +702,6 @@ button {
 .transcript__send:hover:not(:disabled),
 .transcript__send:focus-visible {
   color: var(--orange);
-  outline: none;
 }
 .transcript__send:disabled {
   color: rgba(232, 230, 223, 0.18);
@@ -788,9 +838,11 @@ button {
 .rail-handle:focus-visible {
   color: var(--orange);
 }
+/* The handle reaches over the rows beside it (its margins); focused, it
+   stands over them, so the card under it does not cover its ring. */
 .rail-handle:focus-visible {
-  outline: 1px solid rgba(var(--orange-rgb), 0.6);
-  outline-offset: 3px;
+  position: relative;
+  z-index: 1;
 }
 .rail-note {
   min-width: 0;
@@ -1575,10 +1627,6 @@ button {
 .metrics--primary.metrics--cluster .metric-row[role="button"] {
   cursor: zoom-in;
 }
-.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible {
-  outline: 1px solid var(--orange);
-  outline-offset: 4px;
-}
 .metrics--primary .metric-row::before {
   content: "";
   position: absolute;
@@ -2265,10 +2313,6 @@ button {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
-}
-.list-viewport__scroll:focus-visible {
-  outline: 1px solid rgba(var(--orange-rgb), 0.6);
-  outline-offset: -1px;
 }
 
 /* Timer (primitives/TimerPrimitive.tsx): countdowns read against the page
