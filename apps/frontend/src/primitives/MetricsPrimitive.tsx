@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
 import type { KeyboardEvent } from 'react';
 import type { MetricData, SceneObject } from '../controller/types';
+import { SHARP } from './ObjectMotion';
 import type { Slot } from './slot';
 
 interface MetricsPrimitiveProps {
@@ -69,7 +70,7 @@ export function MetricsPrimitive({ metrics, slot = 'primary', onFocus }: Metrics
             key={metric.id}
             layout
             initial={{ opacity: 0, x: 12, filter: 'blur(5px)' }}
-            animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+            animate={{ opacity: 1, x: 0, ...SHARP }}
             exit={{ opacity: 0, x: 10, filter: 'blur(5px)' }}
             transition={{ duration: 0.28, ease: [0.22, 0.61, 0.36, 1] }}
             role={isCluster ? 'button' : undefined}

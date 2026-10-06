@@ -414,13 +414,13 @@ in that share (`--panel-inset` for the panel frame), never by a padding in
 stage units, which falls short on a tall slot. The calendar, the to-do
 list, the inbox and a figure stand in the panel's inner box; a table's and
 a source's rows stop above the code frame's lower step (their rims at the
-foot with them); a document's meta line stands under its frame's top
+foot with them), and a source's lines, at rest or scrolled, stand below
+its top-right step; a document's meta line stands under its frame's top
 line; a portrait chart's foot clears the panel's lower step.
 `frame.spec.ts` checks every primitive, as the primary, in focus and in
-the aux row, at every geometry the visual suites use: each part that draws
-something must stand inside the frame over its own span. One case is
-open: on a phone, focus draws a long first line of source under the code
-frame's top-right step.
+the aux row, at every geometry the visual suites use, and a long source
+scrolled to its middle: each part that draws something must stand inside
+the frame over its own span.
 
 **The to-do list and the inbox are read as the table and the rail's plan
 module are read**: rows between thin rules under a meta line that names
@@ -598,8 +598,11 @@ primary, the aux row takes what its cells need up to two fifths of the main
 column, so the primary keeps the larger share. Under a metric primary the
 card keeps its own height and the row takes the rest. Each visual keeps a
 readable floor in its cell (the head of a table and its first rows, a chart's
-plot, a figure and its caption). When the row has no room for every cell at
-its floor, it scrolls inside itself; it never shrinks a visual to nothing. A figure in a short cell is
+plot, a figure and its caption). A drawing that scrolls in its cell (a
+dense graph, a long sequence) asks for no more than that floor: it is laid
+out for the height it is given, so a cell as tall as the drawing would lay
+it out again, and the row would never settle. When the row has no room for
+every cell at its floor, it scrolls inside itself; it never shrinks a visual to nothing. A figure in a short cell is
 drawn smaller, never cropped, and a table in a narrow cell scrolls sideways
 rather than breaking a word. The cells sit side by side when the column is
 wide and stack when it is narrow, from the column's own width. A visual that

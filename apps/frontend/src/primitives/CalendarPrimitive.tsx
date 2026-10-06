@@ -174,7 +174,7 @@ function eventClasses(base: string, placed: PlacedEvent, model: CalendarModel): 
   const semantic = event.semantic ?? 'none';
   return [
     base,
-    `calendar-tone--${semantic}`,
+    `tone--${semantic}`,
     `${base}--${eventTense(placed, model.today, model.now)}`,
     event.status && event.status !== 'confirmed' ? `${base}--${event.status}` : '',
     event.active ? `${base}--active` : '',

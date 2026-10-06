@@ -94,6 +94,12 @@ describe('the aux row', () => {
     expect(topLevel('.composed-main', 'grid-template-rows')).toBe('minmax(0, 1fr)');
   });
 
+  it('takes no height from a drawing that scrolls, which is laid out for the height it is given', () => {
+    // A box as tall as its scrolling drawing lays the drawing out again for
+    // that height; in the aux row the two took turns forever.
+    expect(topLevel('.drawing-viewport--scrolling .drawing-viewport__view', 'contain')).toBe('size');
+  });
+
   it('contains an image in its cell instead of cropping it', () => {
     expect(topLevel('.composed-aux-object--image .image-primitive__field', 'height')).toBe('100%');
     expect(topLevel('.image-primitive__img', 'object-fit')).toBe('contain');

@@ -129,6 +129,31 @@ button {
 .semantic-muted {
   color: var(--muted);
 }
+/* The same set as a tone (--tone) that a part draws its marks in: an
+   inbox message's edge, a calendar event's bar, block and tag. The
+   calendar's neutral tone and its lit one stand with its rules
+   (.tone--none). */
+.tone--red {
+  --tone: var(--red);
+}
+.tone--orange {
+  --tone: var(--orange);
+}
+.tone--green {
+  --tone: var(--green);
+}
+.tone--cyan {
+  --tone: var(--cyan);
+}
+.tone--amber {
+  --tone: var(--amber);
+}
+.tone--paper {
+  --tone: var(--paper);
+}
+.tone--muted {
+  --tone: var(--muted);
+}
 
 .surface-unavailable,
 .stage-unavailable {
@@ -167,6 +192,34 @@ button {
 .transcript-toggle:focus-visible {
   outline: 1px solid var(--orange);
   outline-offset: 4px;
+}
+/* Every primitive's root, and the viewports drawings and lists scroll in,
+   fill the box they are given and may be shorter than what they hold:
+   each scrolls or lays itself out inside. A root's own rule says how. */
+.chart-primitive,
+.diagram-primitive,
+.sequence-primitive,
+.drawing-viewport,
+.list-viewport,
+.document-viewport,
+.code-viewport,
+.table-viewport,
+.image-primitive,
+.calendar,
+.tasks-primitive,
+.inbox-primitive,
+.timer-primitive,
+.weather {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+/* A document, source and a table stand on black inside their frame. */
+.document-viewport,
+.code-viewport,
+.table-viewport {
+  position: relative;
+  background: #000;
 }
 
 /* Conversation corner accents: placement from #conversation .corner-a/b in
@@ -653,6 +706,20 @@ button {
   min-width: 0;
   min-height: 0;
 }
+/* Every visual that fills the main slot (Scenes.tsx objectContent) has a
+   black ground, as a chart's object does (.chart-object). */
+.diagram-object,
+.document-object,
+.code-object,
+.table-object,
+.image-object,
+.calendar-object,
+.tasks-object,
+.inbox-object,
+.timer-object,
+.weather-object {
+  background: #000;
+}
 .content-rail {
   position: relative;
   min-width: 0;
@@ -707,12 +774,6 @@ button {
 .rail-handle__label {
   flex: none;
   white-space: nowrap;
-}
-.rail-handle__chevron {
-  flex: none;
-  width: 8px;
-  height: 6px;
-  fill: currentColor;
 }
 .rail-handle--bare {
   min-height: 0;
@@ -780,7 +841,11 @@ button {
   gap: 4px 12px;
   margin-bottom: clamp(8px, 1cqh, 13px);
 }
-.annotation-card__tag {
+/* The tag that heads a rail card: a note's, the live response's, the last
+   tool's. */
+.annotation-card__tag,
+.live-chat-card__tag,
+.tool-activity__tag {
   flex: none;
   color: rgba(232, 230, 223, 0.35);
 }
@@ -814,7 +879,10 @@ button {
   vertical-align: middle;
   border-radius: 2px;
 }
-.annotation-card__history {
+/* A note and the live response share their history button, body and
+   scrolling text (the live response pads its text off the scroll bar). */
+.annotation-card__history,
+.live-chat-card__history {
   flex: none;
   padding: 0;
   border: 0;
@@ -823,10 +891,12 @@ button {
   cursor: pointer;
   transition: color 0.16s ease;
 }
-.annotation-card__history:hover {
+.annotation-card__history:hover,
+.live-chat-card__history:hover {
   color: var(--orange);
 }
-.annotation-card__body {
+.annotation-card__body,
+.live-chat-card__body {
   height: 100%;
   min-height: 0;
 }
@@ -834,7 +904,8 @@ button {
   cursor: pointer;
 }
 /* Long explanations scroll inside the card; short ones never show a bar. */
-.annotation-card__text {
+.annotation-card__text,
+.live-chat-card__text {
   height: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -949,10 +1020,7 @@ button {
     clamp(10px, 1.2cqw, 20px);
 }
 .chart-primitive {
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   display: grid;
   place-items: center;
 }
@@ -1685,10 +1753,6 @@ button {
   justify-content: space-between;
   gap: 10px;
 }
-.live-chat-card__tag {
-  flex: none;
-  color: rgba(232, 230, 223, 0.35);
-}
 .live-chat-card__index {
   min-width: 0;
   margin-left: auto;
@@ -1696,31 +1760,7 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.live-chat-card__history {
-  flex: none;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: rgba(232, 230, 223, 0.42);
-  cursor: pointer;
-  transition: color 0.16s ease;
-}
-.live-chat-card__history:hover {
-  color: var(--orange);
-}
-.live-chat-card__body {
-  height: 100%;
-  min-height: 0;
-}
 .live-chat-card__text {
-  height: 100%;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
-  font-family: "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(13px, 1.06cqw, 18px);
-  line-height: 1.48;
   padding-right: clamp(6px, 1cqw, 14px);
 }
 /* The last tool the project agent used: a compact status panel that
@@ -1778,10 +1818,6 @@ button {
   justify-content: space-between;
   gap: 8px;
 }
-.tool-activity__tag {
-  flex: none;
-  color: rgba(232, 230, 223, 0.35);
-}
 .tool-activity__status {
   flex: none;
 }
@@ -1820,19 +1856,11 @@ button {
 }
 
 /* Diagram */
-.diagram-object {
-  background: #000;
-}
 .diagram-object .focusable-content {
   --slot-pad: clamp(18px, 2.2cqw, 38px);
   position: relative;
   z-index: 1;
   padding: var(--slot-pad);
-}
-.diagram-primitive {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
 }
 /* In the diagram slot the drawing's viewport stands between the rails
    (TechFrame "rails"): below the top rail's lower step (70 of the frame's
@@ -1861,10 +1889,7 @@ button {
 .drawing-viewport {
   position: relative;
   display: flex;
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   overflow: hidden;
 }
 .drawing-viewport--strip-bottom {
@@ -1898,6 +1923,16 @@ button {
 .drawing-viewport--scrolling .drawing-viewport__scroll {
   overflow: auto;
   overscroll-behavior: contain;
+}
+/* A drawing that scrolls is laid out for its box (drawn a pixel short of
+   it, and recomposed for its height), so it asks its box for nothing: a
+   box as tall as the drawing would lay it out again. In an aux cell, whose
+   row is as tall as its cells ask, the two took turns: a dense graph
+   switched between a wide layout in a short row and a tall one in a row at
+   its cap every few frames, or shrank its row a pixel a frame. The cell
+   keeps a visual's floor (.composed-aux-object--visual) instead. */
+.drawing-viewport--scrolling .drawing-viewport__view {
+  contain: size;
 }
 .drawing-viewport--scrolling .drawing-viewport__scroll > svg {
   flex: none;
@@ -2090,7 +2125,10 @@ button {
 .scroll-rim__count--bottom {
   bottom: 0;
 }
-.scroll-rim__chevron {
+/* The one chevron (ScrollRim `Chevron`), on a rim's count and on the rail
+   handle. */
+.scroll-rim__chevron,
+.rail-handle__chevron {
   flex: none;
   width: 8px;
   height: 6px;
@@ -2205,10 +2243,7 @@ button {
   position: relative;
   display: flex;
   flex-direction: column;
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
 }
 .list-viewport__head {
   flex: none;
@@ -2243,27 +2278,22 @@ button {
    orange while it runs, muted when paused, amber (the warning colour) once
    it is done. Several too many for readable cells are listed as rows, and
    the list scrolls inside the frame like any list. */
-.timer-object {
-  background: #000;
-}
-.timer-object .focusable-content {
+/* Timers and a forecast in the panel frame clear both of its steps with
+   their own padding (frame.spec.ts). */
+.timer-object .focusable-content,
+.weather-object .focusable-content {
   position: relative;
   z-index: 1;
   padding: clamp(26px, 4.2cqh, 48px) clamp(22px, 2.6cqw, 42px) clamp(18px, 3cqh, 34px);
 }
-.timer-primitive {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  color: var(--paper);
-}
 /* Where no frame names the timers (an aux cell, focus), their title stands
    over them and the field takes the rest. */
 .timer-primitive {
+  position: relative;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  color: var(--paper);
 }
 .timer__title {
   flex: none;
@@ -2459,9 +2489,6 @@ button {
   grid-area: meta;
   margin-top: 5px;
 }
-.focus-layer__content > .timer-primitive {
-  padding: 5cqh 4cqw 4cqh;
-}
 
 /* Weather (primitives/WeatherPrimitive.tsx): a forecast as an instrument.
    The conditions now are the hero: the condition's glyph and the
@@ -2472,20 +2499,9 @@ button {
    cyan, labelled as often as the width allows. The days are rows, each
    range a bar on one cold-to-warm scale they all share. How the three
    stand is the box's (weather--wide, --tall, --compact). */
-.weather-object {
-  background: #000;
-}
-.weather-object .focusable-content {
-  position: relative;
-  z-index: 1;
-  padding: clamp(26px, 4.2cqh, 48px) clamp(22px, 2.6cqw, 42px) clamp(18px, 3cqh, 34px);
-}
 .weather {
   position: relative;
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   color: #d9d7d1;
 }
 .weather__box {
@@ -2666,8 +2682,10 @@ button {
   font-weight: 700;
 }
 
-/* Its words, for a screen reader; out of sight. */
-.weather-now__alert-words {
+/* The alert's words, and an hour's whole reading, for a screen reader;
+   out of sight. */
+.weather-now__alert-words,
+.weather-hour > .weather-hour__reading {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -2863,22 +2881,17 @@ button {
   height: 16px;
 }
 .weather-spot__precip {
+  flex: none;
   color: var(--cyan);
 }
 
-/* In a narrow cell the readings give way at the line's end, the day and
-   its badge first in line. */
 /* Narrow, the line's readings give way in an order (WeatherPrimitive
-   Spot): the chance of rain is set aside whole first, then the
-   temperatures end in an ellipsis. */
+   Spot), the day and its badge first in line: the chance of rain is set
+   aside whole first, then the temperatures end in an ellipsis. */
 .weather-spot__temp {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.weather-spot__precip {
-  flex: none;
 }
 
 .weather-spot__precip--dropped {
@@ -2994,15 +3007,6 @@ button {
   align-self: stretch;
   display: flex;
   justify-content: center;
-  white-space: nowrap;
-}
-/* An hour's whole reading for a screen reader; out of sight. */
-.weather-hour > .weather-hour__reading {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
   white-space: nowrap;
 }
 .weather-hour__glyph {
@@ -3215,13 +3219,13 @@ button {
 .weather--compact .weather-day {
   padding: 4px 2px 4px 0;
 }
-.focus-layer__content > .weather {
-  padding: 5cqh 4cqw 4cqh;
-}
 /* Entry motion stays in CSS on elements that carry no SVG positioning
    transform: a CSS transform on a translated node group replaces its
    transform attribute and stacks every node in one corner. */
-.diagram-edge {
+.diagram-edge,
+.diagram-edge-label-group,
+.sequence-message,
+.sequence-message-label-group {
   animation: diagram-edge-resolve 0.24s ease-out backwards;
 }
 .diagram-edge--active {
@@ -3229,18 +3233,17 @@ button {
     diagram-edge-resolve 0.24s ease-out backwards,
     diagram-edge-flow 2.2s linear infinite;
 }
-.diagram-edge-label-group {
-  animation: diagram-edge-resolve 0.24s ease-out backwards;
-}
-/* The layouts measure labels in this face at this size before drawing them
-   (drawingKit.tsx `labelBox`, which .sequence-message-label shares); change
-   one and the other must follow. */
-.diagram-edge-label {
+/* The layouts measure a label on a line in this face at this size before
+   drawing it (drawingKit.tsx `labelBox`): a graph's edge labels and a
+   sequence's message labels alike. Change one and the other must follow. */
+.diagram-edge-label,
+.sequence-message-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
   letter-spacing: 0.06em;
 }
-.diagram-edge-label__backing {
+.diagram-edge-label__backing,
+.sequence-message-label__backing {
   fill: #000;
 }
 /* A stub's names list where its edges go (or come from); an edge's own
@@ -3248,7 +3251,8 @@ button {
 .diagram-edge-label__note {
   fill-opacity: 0.55;
 }
-.diagram-node__body {
+.diagram-node__body,
+.sequence-actor__body {
   transform-box: fill-box;
   transform-origin: center;
   animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1)
@@ -3301,20 +3305,8 @@ button {
 }
 
 /* A diagram in sequence mode shares the diagram slot and its motion; its
-   own classes keep the two drawings' rules apart. */
-.sequence-primitive {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-}
-
-.sequence-actor__body {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1)
-    backwards;
-}
-
+   own classes keep the two drawings' rules apart, and a rule both follow
+   names both (the motion and the line labels above). */
 .sequence-actor-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   letter-spacing: 0.1em;
@@ -3327,23 +3319,6 @@ button {
   letter-spacing: 0.09em;
 }
 
-.sequence-message {
-  animation: diagram-edge-resolve 0.24s ease-out backwards;
-}
-
-.sequence-message-label-group {
-  animation: diagram-edge-resolve 0.24s ease-out backwards;
-}
-
-.sequence-message-label {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-}
-
-.sequence-message-label__backing {
-  fill: #000;
-}
 .diagram-callout {
   animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
 }
@@ -3360,16 +3335,6 @@ button {
 }
 
 /* Document */
-.document-object {
-  background: #000;
-}
-.document-viewport {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  background: #000;
-}
 .document-viewport__inner {
   position: absolute;
   z-index: 1;
@@ -3400,6 +3365,9 @@ button {
 .document-viewport__reader {
   width: min(88%, 880px);
 }
+/* Paragraphs are read as Markdown (MarkdownBlocks). Lists and code blocks
+   keep the reader's paragraph rhythm, and a long path or hash wraps inside
+   the column instead of scrolling it sideways. */
 .document-viewport__body {
   overflow: auto;
   padding-right: clamp(8px, 1cqw, 16px);
@@ -3407,18 +3375,13 @@ button {
   font-family: "Helvetica Neue", Arial, sans-serif;
   font-size: clamp(15px, 1.28cqw, 22px);
   line-height: 1.62;
+  overflow-wrap: anywhere;
   scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
-/* Paragraphs are read as Markdown (MarkdownBlocks). Lists and code blocks
-   keep the reader's paragraph rhythm, and a long path or hash wraps inside
-   the column instead of scrolling it sideways. */
 .document-viewport__body p,
 .document-viewport__body .rich-text__list,
 .document-viewport__body .rich-text__code-block {
   margin: 0 0 1.05em;
-}
-.document-viewport__body {
-  overflow-wrap: anywhere;
 }
 
 /* In the aux row the panel is short: the subject and the opening lines are
@@ -3448,28 +3411,13 @@ button {
    zoomed; its alt text and decoded size sit on the caption line at the
    bottom edge, on the metadata baseline. The picture fades in once it has
    decoded (the object itself resolves in through ObjectMotion). */
-.image-object {
-  background: #000;
-}
 .image-primitive {
   position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
   margin: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   gap: clamp(8px, 1.4cqh, 16px);
   background: #000;
-}
-/* The panel frame is drawn behind the content, so the figure sits inside
-   its outline rather than over it. */
-.image-object .focusable-content {
-  --slot-top: clamp(22px, 3.6cqh, 42px);
-  --slot-bottom: clamp(16px, 2.6cqh, 30px);
-  position: relative;
-  z-index: 1;
-  padding: 0 clamp(22px, 2.6cqw, 42px);
 }
 .image-primitive__field {
   position: relative;
@@ -3528,32 +3476,21 @@ button {
   aspect-ratio: var(--image-aspect, 16 / 10);
   max-height: 34cqh;
 }
-.focus-layer__content > .image-primitive {
-  padding: 3cqh 2cqw 2cqh;
-}
 
 /* Code */
-.code-object {
-  background: #000;
-}
-.code-viewport {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  background: #000;
-}
-/* The table viewport shares this mask: it sits in the same frame. Its
-   lower row is the frame's lower step (the clip's 4.6% at the bottom left;
-   a share of the content box, so a little less under the table's top
-   padding) with a gap that covers that: the scroll stands above it, so no
-   row or line ever runs under that corner, and the rims sit clear of it. */
+/* The table viewport shares this mask: it sits in the same frame, and the
+   clip is that frame's inside. Each stands its scroll between the frame's
+   steps in rows of the mask's grid. The lower row is the frame's lower step (the
+   clip's 4.6% at the bottom left; a share of the content box, so a little
+   less under the table's top padding) with a gap that covers that, so no
+   row or line ever runs under that corner and the rims sit clear of it;
+   above, the source has a row of its own (below), the table its padding and
+   meta line. */
 .code-viewport__mask,
 .table-viewport__mask {
   position: absolute;
   z-index: 1;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
   inset: clamp(8px, 1.1cqh, 16px) clamp(8px, 1cqw, 16px);
   /* The inside of the approved code frame (TechFrame "code"), so source
      never crosses the rails as it scrolls. */
@@ -3570,11 +3507,24 @@ button {
   background: #000;
   overflow: hidden;
 }
+/* Source stands below the frame's top-right step as it stands above the
+   lower one: the scroll's top row is the step (the clip's 5.7%) with the
+   same gap, or the source's own top padding (--code-top) where that is
+   deeper. A long first line ran under the step (in focus on a phone), and a
+   line scrolled up passed under it. The row spans the mask, as the lower
+   one does: a CSS rule cannot know which lines are long enough to reach
+   the step. */
+.code-viewport__mask {
+  --code-top: clamp(20px, 3cqh, 34px);
+  grid-template-rows: max(var(--code-top), calc(5.7% + clamp(6px, 0.9cqh, 12px))) minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
+}
+.code-viewport__mask > .list-viewport {
+  grid-row: 2;
+}
 /* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
 .code-viewport__scroll {
   overflow: auto;
-  padding: clamp(20px, 3cqh, 34px) clamp(28px, 3cqw, 52px)
-    clamp(14px, 2cqh, 24px) clamp(52px, 4.7cqw, 78px);
+  padding: 0 clamp(28px, 3cqw, 52px) clamp(14px, 2cqh, 24px) clamp(52px, 4.7cqw, 78px);
 }
 .code-viewport pre {
   min-width: max-content;
@@ -3628,21 +3578,12 @@ button {
    only when they overflow. Thin rules, not cards; the header in the tech
    face; quantities in mono, set to the end so digits line up; a highlighted
    row carries the hot-line accent. */
-.table-object {
-  background: #000;
-}
-.table-viewport {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  background: #000;
-}
 /* The mask's top padding and the meta line stand above the scroll, so the
    sticky header is the scroll's top edge: a row scrolling up passes under it,
    never into a band above it, and the header stays below the frame's
    top-right cut. */
 .table-viewport__mask {
+  grid-template-rows: minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
   padding-top: clamp(20px, 3cqh, 34px);
 }
 /* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
@@ -3748,15 +3689,12 @@ button {
    message's unread mark is the orange square, its flag the amber pennant.
    No cards: a section is a heading over its rows. A list that outgrows its
    slot scrolls inside the frame in the list viewport. */
-.tasks-object,
-.inbox-object {
-  background: #000;
-}
 
-/* The panel frame is drawn behind the list, so the rows sit inside its
-   outline, clear of its cut corners. */
+/* The panel frame is drawn behind the content, so a list's rows and a
+   figure sit inside its outline, clear of its cut corners. */
 .tasks-object .focusable-content,
-.inbox-object .focusable-content {
+.inbox-object .focusable-content,
+.image-object .focusable-content {
   --slot-top: clamp(22px, 3.6cqh, 42px);
   --slot-bottom: clamp(16px, 2.6cqh, 30px);
   position: relative;
@@ -3766,10 +3704,7 @@ button {
 
 .tasks-primitive,
 .inbox-primitive {
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   color: #d9d7d1;
   font-family: var(--font-prose);
 }
@@ -4299,45 +4234,18 @@ button {
   color: rgba(232, 230, 223, 0.82);
 }
 
-/* A message the agent tinted: its semantic colour down its edge. */
+/* A message the agent tinted: its semantic colour (its tone) down its
+   edge. */
 .inbox-row--tint {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--tint) 12%, transparent), transparent 60%);
-  box-shadow: inset 2px 0 0 var(--tint);
-}
-
-.inbox-row--red {
-  --tint: var(--red);
-}
-
-.inbox-row--orange {
-  --tint: var(--orange);
-}
-
-.inbox-row--green {
-  --tint: var(--green);
-}
-
-.inbox-row--cyan {
-  --tint: var(--cyan);
-}
-
-.inbox-row--amber {
-  --tint: var(--amber);
-}
-
-.inbox-row--paper {
-  --tint: var(--paper);
-}
-
-.inbox-row--muted {
-  --tint: var(--muted);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 12%, transparent), transparent 60%);
+  box-shadow: inset 2px 0 0 var(--tone);
 }
 
 /* A tinted message a note names keeps both: the marked row's orange on
    its edge and accent, its own tint just inside the edge. */
 .inbox-row--marked.inbox-row--tint {
   background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.1), rgba(var(--orange-rgb), 0.02) 76%, transparent);
-  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7), inset 4px 0 0 var(--tint);
+  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7), inset 4px 0 0 var(--tone);
 }
 
 /* Calendar (CalendarPrimitive): the same instrument as the table and the
@@ -4349,9 +4257,6 @@ button {
    last day) is cut. Today's column or cell and the now line are orange.
    The heights the layout reckons with (CalendarPrimitive.tsx: DAY_ROW_PX,
    LANE_PX, LINE_PX, MONTH_*) are set inline or match these sizes. */
-.calendar-object {
-  background: #000;
-}
 .calendar-object .focusable-content {
   position: relative;
   z-index: 1;
@@ -4401,35 +4306,12 @@ button {
   --now-point: polygon(0 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 0 100%);
   display: flex;
   flex-direction: column;
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   color: #d9d7d1;
 }
-.calendar-tone--none {
+/* An event the agent gave no colour draws in a quiet paper tone. */
+.tone--none {
   --tone: rgba(232, 230, 223, 0.62);
-}
-.calendar-tone--paper {
-  --tone: var(--paper);
-}
-.calendar-tone--muted {
-  --tone: var(--muted);
-}
-.calendar-tone--red {
-  --tone: var(--red);
-}
-.calendar-tone--orange {
-  --tone: var(--orange);
-}
-.calendar-tone--green {
-  --tone: var(--green);
-}
-.calendar-tone--cyan {
-  --tone: var(--cyan);
-}
-.calendar-tone--amber {
-  --tone: var(--amber);
 }
 /* The meta line, as the table's: what the view shows and how much. */
 .calendar__meta {
@@ -4726,10 +4608,8 @@ button {
   white-space: nowrap;
 }
 .calendar-event__detail {
-  white-space: normal;
-}
-.calendar-event__detail {
   flex: 0 1 auto;
+  white-space: normal;
 }
 /* One line: the title on it, its top in the box's first pixels, so a
    stepped cluster's earlier title reads above the event laid over it. */
@@ -4800,7 +4680,7 @@ button {
   text-decoration-color: rgba(232, 230, 223, 0.7);
 }
 /* Lit, as an active diagram node is: in its own tone, orange when it has none. */
-.calendar-tone--none:is(.calendar-event--active, .calendar-bar--active, .calendar-line--active, .calendar-agenda__item--active) {
+.tone--none:is(.calendar-event--active, .calendar-bar--active, .calendar-line--active, .calendar-agenda__item--active) {
   --tone: var(--orange);
 }
 .calendar-event--active {
@@ -4998,10 +4878,6 @@ button {
   height: 5px;
   background: var(--tone);
 }
-.calendar-line--tentative::before {
-  background: transparent;
-  box-shadow: inset 0 0 0 1px var(--tone);
-}
 .calendar-line__time {
   flex: none;
   color: rgba(232, 230, 223, 0.5);
@@ -5050,6 +4926,8 @@ button {
   height: 4px;
   background: var(--tone);
 }
+/* A tentative event's line and mark are drawn hollow. */
+.calendar-line--tentative::before,
 .calendar-mark--tentative {
   background: transparent;
   box-shadow: inset 0 0 0 1px var(--tone);
@@ -5269,9 +5147,6 @@ button {
 .composed-aux-object--calendar .calendar__meta {
   margin-bottom: clamp(4px, 0.8cqh, 8px);
 }
-.focus-layer__content > .calendar {
-  padding: 3cqh 2cqw 2cqh;
-}
 
 /* Focus layer */
 .focus-layer {
@@ -5321,15 +5196,16 @@ button {
   color: inherit;
   cursor: pointer;
 }
-.focus-layer__content > .chart-primitive,
-.focus-layer__content > .diagram-primitive,
-.focus-layer__content > .sequence-primitive,
-.focus-layer__content > .document-viewport,
-.focus-layer__content > .code-viewport,
-.focus-layer__content > .table-viewport,
-.focus-layer__content > .image-primitive {
-  width: 100%;
-  height: 100%;
+/* A primitive fills the focus panel as it fills any box; timers, a
+   forecast, a figure and a calendar keep a margin inside it (a to-do
+   list's and an inbox's are with their rules). */
+.focus-layer__content > .timer-primitive,
+.focus-layer__content > .weather {
+  padding: 5cqh 4cqw 4cqh;
+}
+.focus-layer__content > .image-primitive,
+.focus-layer__content > .calendar {
+  padding: 3cqh 2cqw 2cqh;
 }
 /* A focused object keeps the notes about it (FocusLayer `focusNotes`): in
    a column beside it, where the rail stood, when the box is wide; in a band
@@ -5542,34 +5418,6 @@ button {
   overflow-wrap: anywhere;
 }
 
-.diagram-primitive--mermaid {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: auto;
-  padding: clamp(14px, 2cqw, 32px);
-}
-.diagram-primitive__mermaid {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  min-width: max-content;
-  min-height: 100%;
-}
-.diagram-primitive__mermaid > svg {
-  display: block;
-  width: auto;
-  min-width: min(100%, 520px);
-  max-width: none;
-  height: auto;
-  max-height: 100%;
-}
-.diagram-primitive__error {
-  color: var(--amber);
-}
-
 /* Geometry-driven portrait recomposition */
 @container stage (max-aspect-ratio: 1/1) {
   .tech {
@@ -5684,8 +5532,10 @@ button {
     gap: var(--scene-gap);
   }
   /* A primary that outgrows its share takes the stage's height; the rail
-     under it folds to a strip of its own height (stageFold.ts). */
+     under it folds to a strip of its own height (stageFold.ts), which
+     stands down to the footer's band. */
   .content-grid--staged {
+    bottom: 6.4cqh;
     grid-template-rows: minmax(0, 1fr) auto;
     gap: clamp(10px, 1.4cqh, 16px);
   }
@@ -5721,13 +5571,6 @@ button {
   .content-rail--foldable > .damocles-presence,
   .content-rail--foldable > .content-rail__details {
     grid-row: 2;
-  }
-  /* Folded: the note (or the live response) beside a smaller Damocles, the
-     note held to three lines; a tap on it expands it, the handle opens the
-     rest. The strip stands down to the footer's band, and its handle is
-     its top rule. */
-  .content-grid--staged {
-    bottom: 6.4cqh;
   }
   /* On the stage the frame's words keep one line, the subtitle after the
      title, cut at the stage's edge before the title is, and the primary
@@ -5768,6 +5611,9 @@ button {
     top: calc(var(--rail-top) + 10px);
     bottom: calc(var(--rail-bottom) + 10px);
   }
+  /* Folded: the note (or the live response) beside a smaller Damocles, the
+     note held to three lines; a tap on it expands it, the handle opens the
+     rest. The strip's handle is its top rule. */
   .content-rail--folded {
     grid-template-rows: auto auto;
     row-gap: clamp(6px, 0.9cqh, 10px);
@@ -5951,10 +5797,11 @@ button {
   }
 
   .code-viewport__mask {
+    --code-top: 24px;
     inset: 7px;
   }
   .code-viewport__scroll {
-    padding: 24px 34px 16px 55px;
+    padding: 0 34px 16px 55px;
   }
   .code-viewport pre {
     font-size: clamp(12px, 2.45cqw, 17px);
@@ -6075,8 +5922,10 @@ button {
     font-size: clamp(13px, 1.05cqw, 19px);
     line-height: 1.45;
   }
+  .code-viewport__mask {
+    --code-top: 18px;
+  }
   .code-viewport__scroll {
-    padding-top: 18px;
     padding-bottom: 16px;
   }
   .table-viewport__mask {
