@@ -182,7 +182,7 @@ annotations and `speak` for words. On a phone held upright the rail stands
 under the primary, and your note reads whole there: the rail grows to hold
 it while the primary keeps the larger share, and a primary too large for
 its share scrolls in it. Send what the explanation needs, and no more: a
-note longer than half the screen scrolls in the rail.
+note longer than about two fifths of the screen scrolls in the rail.
 
 The full contract is `docs/display-tool.md` in the switchboard repository;
 the switchboard validates every action and returns its reason when it

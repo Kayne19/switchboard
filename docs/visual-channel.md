@@ -281,15 +281,20 @@ Kayne approved the portrait goldens:
 - **The note reads whole.** It keeps its own height, and the rail is at
   least that tall (measured, `useRailFit` in `components/Scenes.tsx`): the
   main column gives up what the note needs past the rail's share, and
-  keeps the larger share. A note longer than half the stage's grid scrolls
-  in the rail, its foot fading, and a tap on it expands it in focus.
+  keeps the larger share. A note longer than half the content grid (about
+  two fifths of the stage) scrolls in the rail, its foot fading; a tap on
+  a note object expands it in focus.
 - **What else the rail carries does not size it.** Where the metrics,
-  progress or live response and the note do not all fit, the note leads
-  the column, whole, and the rest follows in its scroll, the column's foot
-  fading until it is scrolled to its end. The activity panel stands at the
-  column's foot only where it fits there whole; where it does not,
-  Damocles's caption, which names the tool at work wherever the rail
-  stands, is what the caller sees of it.
+  progress or live response and the note do not all fit (each at its own
+  height and margins), the note leads the column, whole, and the rest
+  follows in its scroll. An edge the column continues past fades as every
+  scroller's does (`ScrollRim`'s fade, with no tag: what lies past is the
+  rail's own). The activity panel stands at the column's foot only where
+  it fits there whole; where it does not, it is set aside, unseen but
+  still read by assistive technology, and Damocles's caption, which names
+  the tool at work wherever the rail stands, is what the caller sees of
+  it. What the rail decides is committed before the frame is painted, so
+  a rotation or a new note never shows a rail half decided.
 - **A primary that outgrows its share scrolls in it or is drawn smaller;
   it never takes the rail's room.** A drawing past its least readable
   scale, a table, code, a document, a list or a long plan scrolls inside
@@ -304,9 +309,11 @@ Why not give a large primary the stage's height: round 4 did, folding the
 rail to a strip under the primary, Damocles at about a third of its size
 and the note cut to three lines behind a handle. Kayne rejected it on the
 portrait-phone architecture golden. With Damocles at its size a strip is
-no shorter than the rail's share on a portrait stage (at 390x844 Damocles
-is 156 px of a 172 px rail; at 820x1180 it is taller than the rail), so a
-fold buys the primary nothing.
+no shorter than the rail's share on a phone's or a tablet's portrait
+stage (at 390x844 Damocles is 156 px of a 172 px rail; at 820x1180 it is
+taller than the rail), so a fold buys the primary nothing there. Only a
+tall portrait monitor (1080x1920) would gain some 100 px, where the main
+column already has over 1100.
 
 ### Personal-assistant views: time is data
 

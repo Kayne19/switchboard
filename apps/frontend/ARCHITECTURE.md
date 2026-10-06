@@ -85,14 +85,16 @@ was before the column existed, and the composed workspace no longer keeps
 an empty row's gap under a lone primary.
 
 The shell also measures whether the rail stands under the column
-(`useRailUnder`, from where the two boxes lie, not from a media query).
-Where it does (a portrait stage), the rail is Damocles beside the note, and
-the note reads whole (`useRailFit` in `RailDetails`): it keeps its own
-height, and the grid gives the rail at least that height (`--rail-floor`),
-the main column keeping the larger share. Where what the rail carries does
-not all fit, the note leads and the rest scrolls under it, the column's
-foot fading; the activity panel stands at the column's foot only where it
-fits there whole. A primary that outgrows its share scrolls in it or is
+(`useRailUnder`, from where the two boxes lie). The layout itself comes
+from the stage's portrait container query; the shell reads its result, so
+the two agree. Where the rail stands under the column, it is Damocles
+beside the note, and the note reads whole (`useRailFit` in `RailDetails`):
+it keeps its own height, and the grid gives the rail at least that height
+(`--rail-floor`), the main column keeping the larger share. Where what the
+rail carries does not all fit, the note leads and the rest scrolls under
+it, an edge the column continues past fading (`ScrollRim`'s fade); the
+activity panel stands at the column's foot only where it fits there whole.
+What the observers measure is committed before the frame is painted. A primary that outgrows its share scrolls in it or is
 drawn smaller; it never takes the rail's room. On a chart page the shell
 also moves the note the primary chart hands over into a band under the
 charts where the rail stands under them.
