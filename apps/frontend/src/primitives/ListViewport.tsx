@@ -8,8 +8,8 @@ import { drawnScale, useLeastHeight, useScrollDemand, watchElement } from '../ho
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
 // list, an inbox, an agenda, a forecast's days): the list scrolls inside
 // it, up and down only, and on each edge it continues past the viewport
-// draws what DrawingViewport draws for a drawing, in the same classes so
-// the two read as one instrument: a fade as the edge's rows run under it,
+// draws the rim DrawingViewport draws for a drawing (ScrollRim), so the
+// two read as one instrument: a fade as the edge's rows run under it,
 // the dashed cut line, and a count of the items wholly past that edge with
 // a chevron pointing there (a tap turns a page that way). A list that fits
 // has none of them and does not scroll.
@@ -238,7 +238,6 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
         fade={fade}
         text={count > 0 ? countText(count, noun) : 'MORE'}
         onPage={() => page(side === 'top' ? -1 : 1)}
-        className="list-viewport__rim"
         count={count}
       />
     ) : null;

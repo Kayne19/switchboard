@@ -58,14 +58,14 @@ export function ScrollRim({
   return (
     <>
       {fade !== null ? (
-        <div className={`drawing-viewport__more drawing-viewport__more--${side}`} style={{ [along ? 'width' : 'height']: `${fade}px`, ...below }} aria-hidden="true" />
+        <div className={`scroll-rim__fade scroll-rim__fade--${side}`} style={{ [along ? 'width' : 'height']: `${fade}px`, ...below }} aria-hidden="true" />
       ) : null}
       {text !== null ? (
         <>
-          <div className={`drawing-viewport__rail drawing-viewport__rail--${side}`} style={below ?? undefined} aria-hidden="true" />
-          <div className={`drawing-viewport__rim drawing-viewport__rim--${side}${className ? ` ${className}` : ''}`} style={tagAt} onClick={page} aria-hidden="true" data-count={count}>
-            <span className="drawing-viewport__rim-text">{text}</span>
-            <Chevron className="drawing-viewport__chevron" />
+          <div className={`scroll-rim__rail scroll-rim__rail--${side}`} style={below ?? undefined} aria-hidden="true" />
+          <div className={`scroll-rim__count scroll-rim__count--${side}${className ? ` ${className}` : ''}`} style={tagAt} onClick={page} aria-hidden="true" data-count={count}>
+            <span className="scroll-rim__text">{text}</span>
+            <Chevron className="scroll-rim__chevron" />
           </div>
         </>
       ) : null}

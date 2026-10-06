@@ -135,10 +135,10 @@ describe('a scrolled graph at rest', () => {
     const boxes = nodeBoxes();
     const past = { left: boxes.filter((box) => box.left < left + RAIL - 0.5), right: boxes.filter((box) => box.right > right - RAIL + 0.5) };
     expect(past.left.length).toBeGreaterThan(0);
-    const count = (side: string) => host.querySelector(`.drawing-viewport__rim--${side}`)?.textContent ?? '';
+    const count = (side: string) => host.querySelector(`.scroll-rim__count--${side}`)?.textContent ?? '';
     expect(count('left')).toBe(`${String(past.left.length).padStart(2, '0')} NODES`);
     if (past.right.length) expect(count('right')).toBe(`${String(past.right.length).padStart(2, '0')} ${past.right.length === 1 ? 'NODE' : 'NODES'}`);
-    expect(host.querySelector('.drawing-viewport__rail--left')).not.toBeNull();
+    expect(host.querySelector('.scroll-rim__rail--left')).not.toBeNull();
     // Every name on the left rail is a node out of view on the left.
     const names = [...host.querySelectorAll('.drawing-viewport__exit--left')].map((exit) => exit.textContent);
     expect(names.length).toBeGreaterThan(0);
@@ -161,7 +161,7 @@ describe('a scrolled graph at rest', () => {
       );
       const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
       const before = scroller.scrollLeft;
-      const count = host.querySelector<HTMLElement>('.drawing-viewport__rim--left')!;
+      const count = host.querySelector<HTMLElement>('.scroll-rim__count--left')!;
       act(() => count.click());
       expect(scroller.scrollLeft).toBeLessThan(before);
       const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.left));
@@ -391,7 +391,7 @@ describe('a scrolled graph at rest', () => {
     render(<DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />);
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
     const before = scroller.scrollLeft;
-    for (const target of [host.querySelector('.drawing-viewport__map')!, host.querySelector('.drawing-viewport__rim--left')!]) {
+    for (const target of [host.querySelector('.drawing-viewport__map')!, host.querySelector('.scroll-rim__count--left')!]) {
       act(() => {
         target.dispatchEvent(new WheelEvent('wheel', { deltaY: -40, bubbles: true, cancelable: true }));
       });
@@ -418,7 +418,7 @@ describe('a scrolled graph at rest', () => {
         scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true }));
       });
       act(() => vi.advanceTimersByTime(200));
-      act(() => host.querySelector<HTMLElement>('.drawing-viewport__rim--right')?.click());
+      act(() => host.querySelector<HTMLElement>('.scroll-rim__count--right')?.click());
       expect(calls.length).toBeGreaterThanOrEqual(2);
       expect(calls.every((call) => call?.behavior === 'auto')).toBe(true);
       expect(scroller.style.scrollSnapType).toBe('');
@@ -463,8 +463,8 @@ describe('a long exchange scrolled down', () => {
     render(<SequencePrimitive data={traceDiagram} id="trace" />);
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
     expect(scroller.scrollTop).toBe(0);
-    expect(host.querySelector('.drawing-viewport__rim--bottom')?.textContent).toMatch(/^\d\d MESSAGES$/);
-    expect(host.querySelector('.drawing-viewport__rim--top')).toBeNull();
+    expect(host.querySelector('.scroll-rim__count--bottom')?.textContent).toMatch(/^\d\d MESSAGES$/);
+    expect(host.querySelector('.scroll-rim__count--top')).toBeNull();
     const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.top));
     act(() => {
       scroller.scrollTop = stops[3];
@@ -474,7 +474,7 @@ describe('a long exchange scrolled down', () => {
     await act(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
     const pinned = host.querySelector<HTMLElement>('.drawing-viewport__pinned--shown');
     expect(pinned).not.toBeNull();
-    const top = host.querySelector<HTMLElement>('.drawing-viewport__rim--top');
+    const top = host.querySelector<HTMLElement>('.scroll-rim__count--top');
     expect(top?.textContent).toMatch(/^\d\d MESSAGES$/);
     expect(parseFloat(top!.style.top)).toBeCloseTo(parseFloat(pinned!.style.height));
   });

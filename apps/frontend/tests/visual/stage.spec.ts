@@ -313,7 +313,7 @@ test('a bar chart of sixty categories on a phone lies on its side and scrolls in
   const sizes = await labels.evaluateAll((texts) => texts.map((text) => text.getBoundingClientRect().height));
   expect(Math.min(...sizes)).toBeGreaterThanOrEqual(8);
   // The rows past the foot are counted there, and a tap turns a page.
-  const rim = chart.locator('.drawing-viewport__rim--bottom');
+  const rim = chart.locator('.scroll-rim__count--bottom');
   await expect(rim).toHaveText(/\d+ BARS/);
   // The last row is reached inside the frame, the value axis still over it.
   await chart.locator('.list-viewport__scroll').evaluate((scroll) => scroll.scrollTo({ top: scroll.scrollHeight }));
@@ -323,7 +323,7 @@ test('a bar chart of sixty categories on a phone lies on its side and scrolls in
   expect(last.y).toBeGreaterThanOrEqual(view.y - 1);
   expect(last.y + last.height).toBeLessThanOrEqual(view.y + view.height + 1);
   await expect(chart.locator('.chart-primitive__axis text').first()).toBeVisible();
-  await expect(chart.locator('.drawing-viewport__rim--top')).toHaveText(/\d+ BARS/);
+  await expect(chart.locator('.scroll-rim__count--top')).toHaveText(/\d+ BARS/);
 });
 
 // A note on a scrolled chart is laid over its whole canvas, so its card

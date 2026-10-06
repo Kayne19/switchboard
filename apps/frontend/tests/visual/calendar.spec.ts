@@ -89,7 +89,7 @@ for (const geometry of GEOMETRIES) {
             badges: badges.length,
             badgeInView: badge ? badge.bottom > port.top && badge.top < port.bottom : false,
             right: Math.round(box.right),
-            widest: Math.round(Math.max(...[...calendar.querySelectorAll<HTMLElement>('*')].filter((node) => node.getClientRects().length > 0 && !node.closest('.drawing-viewport__rim')).map((node) => node.getBoundingClientRect().right))),
+            widest: Math.round(Math.max(...[...calendar.querySelectorAll<HTMLElement>('*')].filter((node) => node.getClientRects().length > 0 && !node.closest('.scroll-rim__count')).map((node) => node.getBoundingClientRect().right))),
           };
         });
         expect(fit.sideways).toBeLessThanOrEqual(1);

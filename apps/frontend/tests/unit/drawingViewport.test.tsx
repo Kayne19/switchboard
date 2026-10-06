@@ -160,7 +160,7 @@ describe('a drawing viewport', () => {
       press('ArrowDown');
       // Before: the second press read the scroller, still at 0, and asked for the same stop.
       expect(asked).toEqual([stops[1], stops[2]]);
-      act(() => host.querySelector<HTMLElement>('.drawing-viewport__rim--bottom')!.click());
+      act(() => host.querySelector<HTMLElement>('.scroll-rim__count--bottom')!.click());
       expect(asked[2]).toBeGreaterThan(stops[2]);
       expect(stops).toContain(asked[2]);
     } finally {

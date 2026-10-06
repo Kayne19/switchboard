@@ -1959,78 +1959,80 @@ button {
   height: 100%;
   overflow: visible;
 }
-/* An edge the drawing continues past: a fade as deep as the part it cuts
-   reaches in (DrawingViewport sets the depth), darkest at the rim, so a
-   cut part reads as the next one coming rather than as broken. */
-.drawing-viewport__more {
+/* The edge a scroller continues past (primitives/ScrollRim.tsx), drawn alike
+   by a drawing, a list, a table, code, a document and a calendar's paged
+   days. First a fade as deep as the scroller sets (for a drawing, as deep as
+   the part it cuts reaches in), darkest at the rim, so a cut part reads as
+   the next one coming rather than as broken. */
+.scroll-rim__fade {
   position: absolute;
   z-index: 1;
   pointer-events: none;
 }
-.drawing-viewport__more--left,
-.drawing-viewport__more--right {
+.scroll-rim__fade--left,
+.scroll-rim__fade--right {
   top: 0;
   bottom: 0;
 }
-.drawing-viewport__more--top,
-.drawing-viewport__more--bottom {
+.scroll-rim__fade--top,
+.scroll-rim__fade--bottom {
   left: 0;
   right: 0;
 }
-.drawing-viewport__more--left {
+.scroll-rim__fade--left {
   left: 0;
   background: linear-gradient(to left, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
-.drawing-viewport__more--right {
+.scroll-rim__fade--right {
   right: 0;
   background: linear-gradient(to right, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
-.drawing-viewport__more--top {
+.scroll-rim__fade--top {
   top: 0;
   background: linear-gradient(to top, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
-.drawing-viewport__more--bottom {
+.scroll-rim__fade--bottom {
   bottom: 0;
   background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
 /* On the rim, the rail (drawingScroll.ts RAIL deep): the drawing's cut,
    a dashed orange line on the outside and a faint one within, holding the
    edge's count and the names of the lines that leave there. */
-.drawing-viewport__rail {
+.scroll-rim__rail {
   position: absolute;
   z-index: 2;
   pointer-events: none;
   --cut: rgba(var(--orange-rgb), 0.62);
   --within: rgba(var(--orange-rgb), 0.16);
 }
-.drawing-viewport__rail--left,
-.drawing-viewport__rail--right {
+.scroll-rim__rail--left,
+.scroll-rim__rail--right {
   top: 0;
   bottom: 0;
   width: 18px;
 }
-.drawing-viewport__rail--top,
-.drawing-viewport__rail--bottom {
+.scroll-rim__rail--top,
+.scroll-rim__rail--bottom {
   left: 0;
   right: 0;
   height: 18px;
 }
-.drawing-viewport__rail--left {
+.scroll-rim__rail--left {
   left: 0;
   border-left: 1px dashed var(--cut);
   box-shadow: inset -1px 0 var(--within);
 }
-.drawing-viewport__rail--right {
+.scroll-rim__rail--right {
   right: 0;
   border-right: 1px dashed var(--cut);
   box-shadow: inset 1px 0 var(--within);
 }
-.drawing-viewport__rail--top {
+.scroll-rim__rail--top {
   top: 0;
   border-top: 1px dashed var(--cut);
   box-shadow: inset 0 -1px var(--within);
 }
-.drawing-viewport__rail--bottom {
+.scroll-rim__rail--bottom {
   bottom: 0;
   border-bottom: 1px dashed var(--cut);
   box-shadow: inset 0 1px var(--within);
@@ -2040,7 +2042,7 @@ button {
    `tagLength`). A tap on it turns a page that way. On the left and right
    rails a tag is turned a quarter so it runs along the rail, its top (and
    its chevron) facing out: the left one reads up, as a spine does. */
-.drawing-viewport__rim {
+.scroll-rim__count {
   position: absolute;
   z-index: 3;
   display: flex;
@@ -2060,37 +2062,37 @@ button {
   white-space: nowrap;
   cursor: pointer;
 }
-.drawing-viewport__rim--left,
-.drawing-viewport__rim--right {
+.scroll-rim__count--left,
+.scroll-rim__count--right {
   top: 50%;
   translate: -50% -50%;
 }
-.drawing-viewport__rim--left {
+.scroll-rim__count--left {
   left: 9px;
   rotate: -90deg;
 }
-.drawing-viewport__rim--right {
+.scroll-rim__count--right {
   left: calc(100% - 9px);
   rotate: 90deg;
 }
-.drawing-viewport__rim--top,
-.drawing-viewport__rim--bottom {
+.scroll-rim__count--top,
+.scroll-rim__count--bottom {
   left: 50%;
   translate: -50% 0;
 }
-.drawing-viewport__rim--top {
+.scroll-rim__count--top {
   top: 0;
 }
-.drawing-viewport__rim--bottom {
+.scroll-rim__count--bottom {
   bottom: 0;
 }
-.drawing-viewport__chevron {
+.scroll-rim__chevron {
   flex: none;
   width: 8px;
   height: 6px;
   fill: currentColor;
 }
-.drawing-viewport__rim--bottom .drawing-viewport__chevron {
+.scroll-rim__count--bottom .scroll-rim__chevron {
   rotate: 180deg;
 }
 /* A line that leaves the view: on the rail where it leaves, the name of
@@ -2192,9 +2194,9 @@ button {
 
 /* A list that outgrows its slot (primitives/ListViewport.tsx): its head
    pinned, its rows scrolling under it inside the frame, and on each edge it
-   continues past the drawing viewport's own fade, cut line and count, by
-   the same classes, so a scrolled list and a scrolled drawing read alike.
-   The primitive gives the scroll its padding and type. */
+   continues past the scroll rim a drawing has, so a scrolled list and a
+   scrolled drawing read alike. The primitive gives the scroll its padding
+   and type. */
 .list-viewport {
   position: relative;
   display: flex;
@@ -4877,7 +4879,7 @@ button {
   bottom: 0;
   pointer-events: none;
 }
-.calendar-pages__edges > .drawing-viewport__rail {
+.calendar-pages__edges > .scroll-rim__rail {
   width: 20px;
 }
 .calendar-pages__rim {

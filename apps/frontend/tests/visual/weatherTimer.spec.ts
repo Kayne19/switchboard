@@ -32,7 +32,7 @@ async function readingFaults(page: Page, selector: string) {
       const style = getComputedStyle(element);
       const own = element.getBoundingClientRect();
       if (own.width <= 1 || own.height <= 1 || style.visibility === 'hidden') continue;
-      if (element.closest('.drawing-viewport__rim')) continue;
+      if (element.closest('.scroll-rim__count')) continue;
       if (parseFloat(style.fontSize) < 7) faults.push(`${name(element)}: ${style.fontSize}`);
       for (const node of nodes) {
         const range = document.createRange();
@@ -334,5 +334,5 @@ test('a forecast longer than a phone frame scrolls inside it and says so', async
   expect(await scroll.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
   // It opens on the day the note names, and the edges it continues past say so.
   await expect(page.locator('[data-item="2026-10-08"]')).toBeInViewport();
-  await expect(page.locator('[data-scene="weather"] .list-viewport__rim')).not.toHaveCount(0);
+  await expect(page.locator('[data-scene="weather"] .list-viewport .scroll-rim__count')).not.toHaveCount(0);
 });
