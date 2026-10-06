@@ -1,5 +1,6 @@
 import type { Timer } from '../controller/types';
 import { parseTimeValue, type TimeValue } from '../controller/validation';
+import { timeOfDay, two } from './timeLabels';
 
 // What a timer reads at a moment of the page clock, and how a set of timers
 // is laid out for the box it is drawn in. Pure, so the boundaries (exactly
@@ -15,7 +16,7 @@ export function instantMs(time: TimeValue): number {
 export function instantClock(value: string): string | null {
   const time = parseTimeValue(value);
   if (!time || time.form !== 'instant') return null;
-  const clock = `${String(time.hour).padStart(2, '0')}:${String(time.minute).padStart(2, '0')}`;
+  const clock = timeOfDay(time);
   return /(?:Z|[+-]00:00)$/.test(value) ? `${clock} UTC` : clock;
 }
 
@@ -58,8 +59,6 @@ export function readTimer(timer: Timer, now: number): TimerReading {
   if (left <= 0) return { phase: 'done', seconds: 0, over: Math.max(0, Math.floor(-left / 1000)), gone: spanMs !== null ? 1 : null, span };
   return { phase: 'running', seconds: Math.ceil(left / 1000), over: 0, gone: spanMs !== null && start !== null ? clamp01((now - start) / spanMs) : null, span };
 }
-
-const two = (value: number) => String(value).padStart(2, '0');
 
 /** Seconds as a countdown reads them: `MM:SS`, `H:MM:SS` from an hour, `ND HH:MM:SS` from a day. */
 export function formatCountdown(totalSeconds: number): string {
