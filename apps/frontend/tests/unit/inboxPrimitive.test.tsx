@@ -95,12 +95,12 @@ describe('InboxPrimitive', () => {
     expect(dentist.classList.contains('inbox-row--unread')).toBe(true);
     expect(dentist.querySelector('.inbox-row__unread')?.getAttribute('aria-label')).toBe('unread');
     expect(dentist.querySelector('.inbox-row__flag')?.getAttribute('aria-label')).toBe('flagged');
-    expect(dentist.classList.contains('inbox-row--amber')).toBe(true);
+    expect(dentist.classList.contains('tone--amber')).toBe(true);
     const ana = row(list, 'ana');
     expect(ana.classList.contains('inbox-row--read')).toBe(true);
     expect(ana.querySelector('.inbox-row__flag')).toBeNull();
     expect(ana.classList.contains('inbox-row--tint')).toBe(false);
-    expect(row(list, 'ci').classList.contains('inbox-row--red')).toBe(true);
+    expect(row(list, 'ci').classList.contains('tone--red')).toBe(true);
   });
 
   it('keeps a cell for a part a message lacks, so the columns stand', () => {

@@ -129,6 +129,31 @@ button {
 .semantic-muted {
   color: var(--muted);
 }
+/* The same set as a tone (--tone) that a part draws its marks in: an
+   inbox message's edge, a calendar event's bar, block and tag. The
+   calendar's neutral tone and its lit one stand with its rules
+   (.tone--none). */
+.tone--red {
+  --tone: var(--red);
+}
+.tone--orange {
+  --tone: var(--orange);
+}
+.tone--green {
+  --tone: var(--green);
+}
+.tone--cyan {
+  --tone: var(--cyan);
+}
+.tone--amber {
+  --tone: var(--amber);
+}
+.tone--paper {
+  --tone: var(--paper);
+}
+.tone--muted {
+  --tone: var(--muted);
+}
 
 .surface-unavailable,
 .stage-unavailable {
@@ -4241,45 +4266,18 @@ button {
   color: rgba(232, 230, 223, 0.82);
 }
 
-/* A message the agent tinted: its semantic colour down its edge. */
+/* A message the agent tinted: its semantic colour (its tone) down its
+   edge. */
 .inbox-row--tint {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--tint) 12%, transparent), transparent 60%);
-  box-shadow: inset 2px 0 0 var(--tint);
-}
-
-.inbox-row--red {
-  --tint: var(--red);
-}
-
-.inbox-row--orange {
-  --tint: var(--orange);
-}
-
-.inbox-row--green {
-  --tint: var(--green);
-}
-
-.inbox-row--cyan {
-  --tint: var(--cyan);
-}
-
-.inbox-row--amber {
-  --tint: var(--amber);
-}
-
-.inbox-row--paper {
-  --tint: var(--paper);
-}
-
-.inbox-row--muted {
-  --tint: var(--muted);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 12%, transparent), transparent 60%);
+  box-shadow: inset 2px 0 0 var(--tone);
 }
 
 /* A tinted message a note names keeps both: the marked row's orange on
    its edge and accent, its own tint just inside the edge. */
 .inbox-row--marked.inbox-row--tint {
   background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.1), rgba(var(--orange-rgb), 0.02) 76%, transparent);
-  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7), inset 4px 0 0 var(--tint);
+  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7), inset 4px 0 0 var(--tone);
 }
 
 /* Calendar (CalendarPrimitive): the same instrument as the table and the
@@ -4343,29 +4341,9 @@ button {
   min-width: 0;
   color: #d9d7d1;
 }
-.calendar-tone--none {
+/* An event the agent gave no colour draws in a quiet paper tone. */
+.tone--none {
   --tone: rgba(232, 230, 223, 0.62);
-}
-.calendar-tone--paper {
-  --tone: var(--paper);
-}
-.calendar-tone--muted {
-  --tone: var(--muted);
-}
-.calendar-tone--red {
-  --tone: var(--red);
-}
-.calendar-tone--orange {
-  --tone: var(--orange);
-}
-.calendar-tone--green {
-  --tone: var(--green);
-}
-.calendar-tone--cyan {
-  --tone: var(--cyan);
-}
-.calendar-tone--amber {
-  --tone: var(--amber);
 }
 /* The meta line, as the table's: what the view shows and how much. */
 .calendar__meta {
@@ -4734,7 +4712,7 @@ button {
   text-decoration-color: rgba(232, 230, 223, 0.7);
 }
 /* Lit, as an active diagram node is: in its own tone, orange when it has none. */
-.calendar-tone--none:is(.calendar-event--active, .calendar-bar--active, .calendar-line--active, .calendar-agenda__item--active) {
+.tone--none:is(.calendar-event--active, .calendar-bar--active, .calendar-line--active, .calendar-agenda__item--active) {
   --tone: var(--orange);
 }
 .calendar-event--active {

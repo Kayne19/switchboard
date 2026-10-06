@@ -79,7 +79,7 @@ function MessageRow({ message, today, marked, layout }: { message: InboxMessage;
     'inbox-row',
     message.unread ? 'inbox-row--unread' : 'inbox-row--read',
     message.flagged ? 'inbox-row--flagged' : '',
-    message.semantic ? `inbox-row--tint inbox-row--${message.semantic}` : '',
+    message.semantic ? `inbox-row--tint tone--${message.semantic}` : '',
     marked ? 'inbox-row--marked' : '',
   ].filter(Boolean).join(' ');
   const compact = layout === 'compact-line' || layout === 'compact-stack';
