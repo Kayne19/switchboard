@@ -61,9 +61,11 @@
 // agent keeps adding notes to never holds the page for seconds: no note is
 // left out for the rail, no card tries a narrower size, and only the first
 // that many cards placed search every place within reach of their points;
-// each card after them takes the best of the rows and the places straight
-// above, below and beside its point. Up to that many notes, all of the
-// above holds.
+// each card after them takes the best of the rows (along the top and the
+// bottom of the layer, and beside the cards and labels already there) and,
+// where none of those clears its point, of the places straight above,
+// below and beside it. Up to that many notes, all of the above holds, and
+// that many is the costliest placement there is.
 
 import { clipSegment, hiddenTraceLength, intersection, overlapArea, segmentsMeet, withoutRepeats, type Point, type Rect, type Size } from './geometry';
 
@@ -82,7 +84,8 @@ export interface NoteToPlace {
   /**
    * Narrower sizes the card may take, widest first, each with the height
    * its text needs there: tried, in turn, only where the card's own size
-   * has no clear place or runs a long leader to its bar.
+   * has no clear place or runs a long leader to its bar, and only on a
+   * chart placed in full (`placedInFull`).
    */
   sizes?: Array<Size>;
 }
@@ -303,7 +306,8 @@ export interface PlaceOptions {
    * out, its card not placed: the one whose absence leaves the fewest
    * astray; of those a note naming no point first, then one astray itself,
    * then the cheapest for the others. Its point still stands in the other
-   * cards' way.
+   * cards' way. Only on a chart placed in full (`placedInFull`): past
+   * that, no note is left out.
    */
   spill?: boolean;
   /** How far inside a card's border a bar's leader begins, so it grows out of the border as drawn. */
@@ -349,7 +353,9 @@ function isSettled(note: NoteToPlace, placement: Placement): boolean {
  * notes naming a point then sit as near their points as the corners leave,
  * with leaders no card covers. Returns each card's place by note id -- its
  * box, the leader it runs to its point, and whether it is settled; with
- * `spill`, the one note it leaves out has none.
+ * `spill`, the one note it leaves out has none. Past
+ * `NOTES_PLACED_IN_FULL` notes the work is bounded (above): none is left
+ * out, and the cards after the first that many do not search.
  */
 export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: PlaceOptions = {}): Map<string, NotePlace> {
   const gap = options.gap ?? NOTE_GAP;

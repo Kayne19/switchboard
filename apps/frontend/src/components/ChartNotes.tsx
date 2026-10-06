@@ -160,18 +160,20 @@ function sameLayout(a: NotesLayout | null, b: NotesLayout): boolean {
  * one that names none sits in a corner. The layer measures the cards, the
  * chart's drawn geometry and itself, and `layoutNotes` decides where each
  * card goes, so no card covers another, its own point, or the data the
- * chart draws where a clear place exists.
+ * chart draws where a clear place exists -- on a chart with at most
+ * `NOTES_PLACED_IN_FULL` notes; past that the placement is bounded
+ * (`placedInFull`), and a later card may cover them.
  *
  * Where the scene gives it `onRailNote` and some card has no place that
  * keeps those rules -- every bar standing to the top, say -- one note is
  * handed to the rail instead, where that leaves fewer cards astray
  * (`layoutNotes`' `spill`: the one whose absence leaves the fewest, a note
- * naming no point first among those). The layer names it through
- * `onRailNote` and keeps its card out of view (still measured, so it comes
- * back the moment the chart has room). The chart keeps the point it names
- * marked: a bar by its callout, a point on a line by a ring once the scene
- * no longer counts it among the points a leader reaches (`ChartPrimitive
- * led`).
+ * naming no point first among those), on a chart placed in full. The
+ * layer names it through `onRailNote` and keeps its card out of view (still
+ * measured, so it comes back the moment the chart has room). The chart
+ * keeps the point it names marked: a bar by its callout, a point on a line
+ * by a ring once the scene no longer counts it among the points a leader
+ * reaches (`ChartPrimitive led`).
  */
 export function ChartNotes({
   chart,

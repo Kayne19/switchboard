@@ -673,13 +673,16 @@ once the size holds still for a moment the notes are placed for it, where
 they would stand had the page opened at that size.
 
 A chart with more than five notes on it is placed with bounded work, so a
-chart the agent keeps adding notes to never holds the page: the rail takes
-none of its notes, no card tries a narrower width, and only the first five
-cards placed (the notes naming no point first, then the rest in the order they
-were shown) look for a clear place anywhere within reach of their points. Each
-card after them takes the best of the rows along the top and the bottom and
-the places straight above, below or beside its point, and may lie over the
-data or another card. Up to five notes are placed as above.
+chart the agent keeps adding notes to never holds the page for seconds: the
+rail takes none of its notes, no card tries a narrower width, and only the
+first five cards placed (the notes naming no point first, then the rest in the
+order they were shown) look for a clear place anywhere within reach of their
+points. Each card after them takes the best of the rows -- along the top and
+the bottom of the layer, and beside the cards and labels already there -- and,
+where none of those clears its point, of the places straight above, below or
+beside it, and may lie over the data or another card. Up to five notes are
+placed as above; five on a dense bar chart is the costliest placement, a few
+hundred milliseconds.
 
 The note a chart hands over stays readable beside it. Where the rail stands
 under a chart (a portrait stage), the note is drawn in a band under it, full
