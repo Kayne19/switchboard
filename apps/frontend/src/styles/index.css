@@ -3540,11 +3540,16 @@ button {
   min-height: 0;
   background: #000;
 }
-/* The table viewport shares this mask: it sits in the same frame. */
+/* The table viewport shares this mask: it sits in the same frame. Its
+   lower row is the frame's lower step (the clip's 4.6% at the bottom left)
+   with a gap: the scroll stands above it, so no row or line ever runs under
+   that corner, and the rims sit clear of it. */
 .code-viewport__mask,
 .table-viewport__mask {
   position: absolute;
   z-index: 1;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) calc(4.6% + clamp(6px, 0.9cqh, 12px));
   inset: clamp(8px, 1.1cqh, 16px) clamp(8px, 1cqw, 16px);
   /* The inside of the approved code frame (TechFrame "code"), so source
      never crosses the rails as it scrolls. */
@@ -3567,7 +3572,7 @@ button {
   overflow: auto;
   overscroll-behavior: contain;
   padding: clamp(20px, 3cqh, 34px) clamp(28px, 3cqw, 52px)
-    clamp(54px, 7cqh, 76px) clamp(52px, 4.7cqw, 78px);
+    clamp(14px, 2cqh, 24px) clamp(52px, 4.7cqw, 78px);
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
 }
@@ -3638,8 +3643,6 @@ button {
    never into a band above it, and the header stays below the frame's
    top-right cut. */
 .table-viewport__mask {
-  display: flex;
-  flex-direction: column;
   padding-top: clamp(20px, 3cqh, 34px);
 }
 .table-viewport__scroll {
@@ -3648,7 +3651,7 @@ button {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 0 clamp(28px, 3cqw, 52px) clamp(54px, 7cqh, 76px);
+  padding: 0 clamp(28px, 3cqw, 52px) clamp(14px, 2cqh, 24px);
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
 }
@@ -3731,7 +3734,7 @@ button {
   padding-top: clamp(12px, 1.8cqh, 18px);
 }
 .composed-aux-object--table .table-viewport__scroll {
-  padding: 0 clamp(16px, 1.8cqw, 28px) clamp(28px, 4cqh, 40px);
+  padding: 0 clamp(16px, 1.8cqw, 28px) clamp(8px, 1.2cqh, 14px);
 }
 .composed-aux-object--table .table-viewport__meta {
   display: none;
@@ -5935,7 +5938,7 @@ button {
     inset: 7px;
   }
   .code-viewport__scroll {
-    padding: 24px 34px 60px 55px;
+    padding: 24px 34px 16px 55px;
   }
   .code-viewport pre {
     font-size: clamp(12px, 2.45cqw, 17px);
@@ -5963,7 +5966,7 @@ button {
     padding: 0 18px;
   }
   .table-viewport__scroll {
-    padding: 0 18px 60px;
+    padding: 0 18px 16px;
   }
   .table-grid {
     font-size: clamp(12px, 3cqw, 16px);
@@ -6058,13 +6061,13 @@ button {
   }
   .code-viewport__scroll {
     padding-top: 18px;
-    padding-bottom: 48px;
+    padding-bottom: 16px;
   }
   .table-viewport__mask {
     padding-top: 18px;
   }
   .table-viewport__scroll {
-    padding-bottom: 48px;
+    padding-bottom: 16px;
   }
   /* A very wide stage draws the chart height-limited, with room beside
      it: a wider card keeps a note to fewer lines. */
