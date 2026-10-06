@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { TablePrimitive, inferColumnAlignment } from '../../src/primitives/TablePrimitive';
 import type { TableData } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
-import { mount } from './sceneHarness';
+import { mount, stubResizeObserver } from './sceneHarness';
+
+// The rows scroll in a list viewport, which watches its box.
+stubResizeObserver();
 
 function render(data: TableData) {
   return mount(<TablePrimitive data={data} />).querySelector('[data-testid="table"]') as HTMLElement;
@@ -90,7 +93,7 @@ describe('TablePrimitive', () => {
 
   it('keeps the meta line out of the scroll, so rows scroll only under the sticky header', () => {
     const view = render(results.data);
-    expect(view.querySelector('.table-viewport__mask > .table-viewport__meta')).not.toBeNull();
+    expect(view.querySelector('.table-viewport__mask .list-viewport__head > .table-viewport__meta')).not.toBeNull();
     expect(view.querySelector('.table-viewport__scroll .table-viewport__meta')).toBeNull();
     expect(view.querySelector('.table-viewport__scroll')?.firstElementChild?.tagName).toBe('TABLE');
   });
@@ -99,7 +102,7 @@ describe('TablePrimitive', () => {
     const view = render(table(['a', 'b'], []));
     expect(view.querySelectorAll('tbody tr')).toHaveLength(0);
     expect(view.querySelector('.table-grid__empty')?.textContent).toBe('NO ROWS');
-    expect(view.querySelector('.table-viewport__mask > .table-viewport__scroll')).not.toBeNull();
+    expect(view.querySelector('.table-viewport__mask .list-viewport__port > .table-viewport__scroll')).not.toBeNull();
     expect(view.querySelector('.tech-frame')).not.toBeNull();
   });
 });

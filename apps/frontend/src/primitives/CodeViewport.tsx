@@ -1,7 +1,8 @@
 import type { CodeData } from '../controller/types';
+import type { ReactNode } from 'react';
+import type { Noun } from './countText';
+import { ListViewport } from './ListViewport';
 import { TechFrame } from './TechFrame';
-import { useRef, type ReactNode } from 'react';
-import { useScrollDemand } from '../hooks/useStageDemand';
 
 const keywordPattern=/\b(export|async|function|const|let|var|if|else|return|await|new|true|false|null|undefined|type|interface|class|extends|import|from)\b/g;
 const typePattern=/\b([A-Z][A-Za-z0-9_]*)\b/g;
@@ -23,9 +24,13 @@ function highlightLine(line:string,lineIndex:number):ReactNode[]{
   if(cursor<codePart.length)nodes.push(...highlightPlainSegment(codePart.slice(cursor),`${lineIndex}-${cursor}`));if(comment)nodes.push(<span className="tok-comment" key={`${lineIndex}-comment`}>{comment}</span>);return nodes;
 }
 
+// What the rims count a source's lines as.
+const LINE: Noun = ['LINE', 'LINES'];
+
+// Source in the interrupted-rails frame, clipped to its inside. Source that
+// outgrows the frame scrolls in the list viewport, which counts its lines
+// past each edge and pages it by the keys every scroller takes.
 export function CodeViewport({data,focused=false}:{data:CodeData;focused?:boolean}){
   const lines=data.source.text.split('\n'),highlighted=new Set(data.source.highlight??[]);
-  const scrollRef=useRef<HTMLDivElement>(null);
-  useScrollDemand(scrollRef);
-  return <div className={`code-viewport${focused?' code-viewport--focused':''}`} data-testid="code"><TechFrame variant="code"/><div className="code-viewport__mask"><div ref={scrollRef} className="code-viewport__scroll" tabIndex={0}><pre>{lines.map((line,index)=>{const lineNumber=index+1;return <span className={`code-line${highlighted.has(lineNumber)?' code-line--hot':''}`} key={lineNumber}><span className="code-line__number">{lineNumber}</span><span className="code-line__source">{highlightLine(line,index)}</span></span>;})}</pre></div></div></div>;
+  return <div className={`code-viewport${focused?' code-viewport--focused':''}`} data-testid="code"><TechFrame variant="code"/><div className="code-viewport__mask"><ListViewport noun={LINE} countSelector=".code-line" scrollClassName="code-viewport__scroll" label={data.title??'Source'}><pre>{lines.map((line,index)=>{const lineNumber=index+1;return <span className={`code-line${highlighted.has(lineNumber)?' code-line--hot':''}`} key={lineNumber}><span className="code-line__number">{lineNumber}</span><span className="code-line__source">{highlightLine(line,index)}</span></span>;})}</pre></ListViewport></div></div>;
 }

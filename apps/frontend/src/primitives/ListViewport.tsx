@@ -106,13 +106,15 @@ const pageLength = (viewHeight: number) => Math.max(1, Math.round(viewHeight * P
 /**
  * Where a scroll key (drawingScroll `scrollMove`, the rule every scroller
  * keeps) moves a list's scroll to: a page, a line, or an end, no further
- * than either end; null for a key the list does not take.
+ * than either end; null for a key the list does not take. `pinned` is the
+ * band at the view's top the rows pass under (a table's header): a page is
+ * a page of what shows below it.
  */
-export function keyScrollTop(key: string, shift: boolean, scrollTop: number, viewHeight: number, contentHeight: number): number | null {
+export function keyScrollTop(key: string, shift: boolean, scrollTop: number, viewHeight: number, contentHeight: number, pinned = 0): number | null {
   const move = scrollMove(key, shift, false);
   if (!move) return null;
   const max = Math.max(0, contentHeight - viewHeight);
-  const by = move.kind === 'page' ? pageLength(viewHeight) : move.kind === 'step' ? LINE : max;
+  const by = move.kind === 'page' ? pageLength(viewHeight - pinned) : move.kind === 'step' ? LINE : max;
   return Math.max(0, Math.min(max, scrollTop + move.direction * by));
 }
 
@@ -139,6 +141,12 @@ interface ListViewportProps {
   /** The accessible name of the scroll region. */
   label?: string;
   /**
+   * The band at the top of the scroll that the rows pass under (a table's
+   * sticky header), by a selector inside it: the counts, the top edge and a
+   * page start below it.
+   */
+  pinned?: string;
+  /**
    * The least height (CSS px) the content reads whole in, for content that
    * grows to fill whatever view it is given (a calendar's hour grid): the
    * stage is asked for that, not for what the content happens to measure.
@@ -147,7 +155,7 @@ interface ListViewportProps {
   least?: number | null;
 }
 
-export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label, least }: ListViewportProps) {
+export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label, least, pinned }: ListViewportProps) {
   const ownRef = useRef<HTMLDivElement>(null);
   const scrollRef = givenRef ?? ownRef;
   // A primary list that outgrows its slot says how much height it lacks,
@@ -159,6 +167,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
   const [viewHeight, setViewHeight] = useState(0);
+  const [pinnedDepth, setPinnedDepth] = useState(0);
 
   // What the edges say, from where the reader stands. Read on scroll at
   // most once a frame, and whenever the list or its box changes.
@@ -174,8 +183,10 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
       const rect = item.getBoundingClientRect();
       return { top: rect.top, bottom: rect.bottom };
     });
+    const band = pinned ? element.querySelector<HTMLElement>(pinned) : null;
+    const depth = band ? band.getBoundingClientRect().height / k : 0;
     const overflows = element.scrollHeight > element.clientHeight + 1;
-    const counts = overflows ? countPast(items, { top: box.top, bottom: box.top + element.clientHeight * k }) : { above: 0, below: 0 };
+    const counts = overflows ? countPast(items, { top: box.top + depth * k, bottom: box.top + element.clientHeight * k }) : { above: 0, below: 0 };
     const goes = overflows ? continuesPast(element.scrollTop, element.clientHeight, element.scrollHeight) : { top: false, bottom: false };
     const next = { ...counts, top: goes.top || counts.above > 0, bottom: goes.bottom || counts.below > 0 };
     setPast((current) =>
@@ -183,7 +194,8 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     );
     setScrolls(element.scrollHeight > element.clientHeight + 1);
     setViewHeight(element.clientHeight);
-  }, [scrollRef, countSelector]);
+    setPinnedDepth(depth);
+  }, [scrollRef, countSelector, pinned]);
   const onScroll = useOncePerFrame(measure);
 
   useEffect(() => {
@@ -218,7 +230,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   const scrollKeys = (event: KeyboardEvent<HTMLDivElement>) => {
     const element = scrollRef.current;
     if (!element || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-    const top = keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight);
+    const top = keyScrollTop(event.key, event.shiftKey, element.scrollTop, element.clientHeight, element.scrollHeight, pinnedDepth);
     if (top === null) return;
     event.preventDefault();
     element.scrollTo({ top, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
@@ -227,10 +239,10 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   const page = (direction: -1 | 1) => {
     const element = scrollRef.current;
     if (!element) return;
-    element.scrollBy({ top: direction * pageLength(element.clientHeight), behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    element.scrollBy({ top: direction * pageLength(element.clientHeight - pinnedDepth), behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
 
-  const fade = fadeDepth(viewHeight);
+  const fade = fadeDepth(viewHeight - pinnedDepth);
   // An edge the list continues past: the fade, the cut line, and the count
   // of the items that lie that way, or MORE where none of them does.
   const edge = (side: 'top' | 'bottom', continues: boolean, count: number) =>
@@ -240,6 +252,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
         fade={fade}
         text={count > 0 ? rimCount(count, noun) : 'MORE'}
         onPage={() => page(side === 'top' ? -1 : 1)}
+        inset={pinned ? pinnedDepth : undefined}
         count={count}
       />
     ) : null;

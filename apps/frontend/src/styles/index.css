@@ -3391,9 +3391,13 @@ button {
   letter-spacing: -0.025em;
   font-weight: 500;
 }
+/* The reader (a list viewport) is the text column: its rims span the
+   column, not the frame. */
+.document-viewport__reader {
+  width: min(88%, 880px);
+}
 .document-viewport__body {
   min-height: 0;
-  width: min(88%, 880px);
   overflow: auto;
   overscroll-behavior: contain;
   padding-right: clamp(8px, 1cqw, 16px);
@@ -3431,8 +3435,10 @@ button {
   margin: 0 0 clamp(6px, 1cqh, 10px);
   font-size: clamp(15px, 1.25cqw, 20px);
 }
-.composed-aux-object--document .document-viewport__body {
+.composed-aux-object--document .document-viewport__reader {
   width: 100%;
+}
+.composed-aux-object--document .document-viewport__body {
   font-size: clamp(13px, 0.95cqw, 16px);
   line-height: 1.5;
 }
@@ -5917,8 +5923,10 @@ button {
     margin: 16px 0 13px;
     font-size: clamp(21px, 4.8cqw, 34px);
   }
-  .document-viewport__body {
+  .document-viewport__reader {
     width: 100%;
+  }
+  .document-viewport__body {
     font-size: clamp(14px, 2.8cqw, 19px);
     line-height: 1.56;
   }

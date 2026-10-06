@@ -187,6 +187,29 @@ describe('ListViewport', () => {
     expect(rims).toEqual([['top', 'MORE'], ['bottom', '01 DAY']]);
   });
 
+  it('counts, draws its top edge and pages below a band pinned at its top (a table header)', async () => {
+    const element = mount(
+      <ListViewport noun={['ROW', 'ROWS']} pinned=".band">
+        {[<div key="band" className="band">HEAD</div>, ...rows(10)]}
+      </ListViewport>,
+    );
+    const scroll = element.querySelector<HTMLElement>('.list-viewport__scroll')!;
+    layOut(scroll, 90);
+    // The band covers the view's top 30px (40-70 on screen).
+    element.querySelector<HTMLElement>('.band')!.getBoundingClientRect = () => ({ top: 40, bottom: 70, left: 0, right: 200, width: 200, height: 30, x: 0, y: 40, toJSON() {} }) as DOMRect;
+    await measured(scroll);
+    // Row 3 (40-70) lies under the band: past the top edge, with rows 0-2.
+    const rims = Array.from(element.querySelectorAll<HTMLElement>('.scroll-rim__count'));
+    expect(rims.map((rim) => rim.textContent)).toEqual(['04 ROWS', '04 ROWS']);
+    expect(rims[0].style.top).toBe('30px');
+    expect(element.querySelector<HTMLElement>('.scroll-rim__fade--top')!.style.top).toBe('30px');
+    const calls: ScrollToOptions[] = [];
+    scroll.scrollTo = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollTo;
+    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true })));
+    // A page of the 70px that show under the band.
+    expect(calls.map((call) => call.top)).toEqual([90 + 61]);
+  });
+
   it('names one item in the singular', async () => {
     const scroll = render(rows(4));
     layOut(scroll, 0);

@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import { DocumentViewport } from '../../src/primitives/DocumentViewport';
-import { mount } from './sceneHarness';
+import { mount, stubResizeObserver } from './sceneHarness';
+
+// The rows scroll in a list viewport, which watches its box.
+stubResizeObserver();
 
 function render(paragraphs: string[]) {
   return mount(<DocumentViewport data={{ subject: 'Report', paragraphs }} />).querySelector('.document-viewport__body') as HTMLElement;

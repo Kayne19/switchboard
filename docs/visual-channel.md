@@ -524,20 +524,22 @@ over their field. The forecast's head names its place in every role.
 ### Lists that outgrow the frame
 
 A list longer than its slot (a forecast's days, timers in a small slot,
-and the other assistant lists) scrolls up and down inside its frame in a
-`ListViewport`, the HTML twin of a drawing's viewport: on each edge it
-continues past it draws the same fade, dashed cut line and tag (one
-`ScrollRim`), the tag counting the items that lie that way in two digits
-at least, as every rim counts ("06 TASKS", a week's hidden days "MON-TUE /
-07 EVENTS"); a row of which no more than a sliver shows counts as past
-the edge; it says MORE where none does. A
-tap on the tag turns a page and does not expand the object. A focused
-list takes the keys a drawing takes (an arrow moves it a line, Space and
-Page Down a page on, Shift+Space and Page Up a page back, Home and End to
-the ends), each marked handled so Space never expands the object; Enter
-still does. It opens on the item a note names, never
-under the fade, and keeps the reader's place through an update. Focus
-gives the list the whole stage.
+and the other assistant lists), and a table, source or document longer
+than its frame, scrolls up and down inside its frame in a `ListViewport`,
+the HTML twin of a drawing's viewport: on each edge it continues past it
+draws the same fade, dashed cut line and tag (one `ScrollRim`), the tag
+counting the items that lie that way in two digits at least, as every rim
+counts ("06 TASKS", "33 ROWS", "54 LINES", "04 PARAGRAPHS", a week's
+hidden days "MON-TUE / 07 EVENTS"); a row of which no more than a sliver
+shows counts as past the edge; it says MORE where none does. A table's
+rows pass under its header: they are counted, and its top edge drawn,
+below the header. A tap on the tag turns a page and does not expand the
+object. A focused list takes the keys a drawing takes (an arrow moves it
+a line, Space and Page Down a page on, Shift+Space and Page Up a page
+back, Home and End to the ends), each marked handled so Space never
+expands the object; Enter still does. It opens on the item a note names,
+never under the fade, and keeps the reader's place through an update.
+Focus gives the list the whole stage.
 
 ### Composition & focus
 

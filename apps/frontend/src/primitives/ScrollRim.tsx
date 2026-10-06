@@ -49,8 +49,8 @@ export function ScrollRim({
 }) {
   const along = side === 'left' || side === 'right';
   const below = inset !== undefined && side !== 'bottom' ? { top: `${inset}px` } : null;
-  const tagAt: CSSProperties | undefined =
-    at === undefined ? undefined : along ? { top: `${at}px` } : { left: `${at}px`, ...(side === 'top' ? below : null) };
+  const topBelow = side === 'top' ? below : null;
+  const tagAt: CSSProperties | null = at === undefined ? topBelow : along ? { top: `${at}px` } : { left: `${at}px`, ...topBelow };
   const page = (event: MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
     onPage();
@@ -63,7 +63,7 @@ export function ScrollRim({
       {text !== null ? (
         <>
           <div className={`scroll-rim__rail scroll-rim__rail--${side}`} style={below ?? undefined} aria-hidden="true" />
-          <div className={`scroll-rim__count scroll-rim__count--${side}${className ? ` ${className}` : ''}`} style={tagAt} onClick={page} aria-hidden="true" data-count={count}>
+          <div className={`scroll-rim__count scroll-rim__count--${side}${className ? ` ${className}` : ''}`} style={tagAt ?? undefined} onClick={page} aria-hidden="true" data-count={count}>
             <span className="scroll-rim__text">{text}</span>
             <Chevron className="scroll-rim__chevron" />
           </div>
