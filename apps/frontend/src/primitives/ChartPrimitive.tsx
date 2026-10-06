@@ -173,18 +173,18 @@ export function ChartPrimitive({
 }) {
   const reduced = useReducedMotion();
   const clipId = useId().replace(/:/g,'');
-  // The frame is the slot's to decide: the approved canvas where it reads,
-  // else one of the slot's own shape (`chartFrame`).
+  // The frame is the box's to decide: the approved canvas where it reads,
+  // else one of the box's own shape (`chartFrame`).
   const hostRef = useRef<HTMLDivElement>(null);
-  const box = useElementSize(hostRef);
+  const size = useElementSize(hostRef);
   // A bar chart whose categories want a row each asks for the height.
   useLeastHeight(hostRef, useCallback((box: { width: number }) => chartLeastHeight(data, box.width), [data]));
-  // A bar chart too long for its slot on its side, in a slot taller than
+  // A bar chart too long for its box on its side, in a box taller than
   // it is wide, is drawn at its least height in a canvas that scrolls in
-  // the slot (`chartScrollHeight`); its frame is the canvas's, as the notes
+  // the box (`chartScrollHeight`); its frame is the canvas's, as the notes
   // laid over it read it.
-  const scroll = useMemo(() => chartScrollHeight(data, box), [data, box]);
-  const fit = chartFrame(scroll === null ? box : { width: box.width, height: scroll });
+  const scroll = useMemo(() => chartScrollHeight(data, size), [data, size]);
+  const fit = chartFrame(scroll === null ? size : { width: size.width, height: scroll });
   const width = fit.width, height = fit.height;
   const scales=useMemo(()=>chartScales(data,{width,height}),[data,width,height]);
   const {plot,kind,horizontal,baseline,valueAt}=scales;
@@ -287,7 +287,7 @@ export function ChartPrimitive({
   );
   // The category a note names, or the marker's, is the row it opens on.
   const lead = [...(named ?? []), ...(data.marker ? [data.marker] : [])][0];
-  const drawnScale = box.width / width;
+  const drawnScale = size.width / width;
   return <div ref={hostRef} className={`chart-primitive${slot==='focus'?' chart-primitive--focused':''}${scroll===null?'':' chart-primitive--scrolls'}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     {scroll===null ? svg : (
       // Scrolled, it reads as a list does: the rows past each edge counted
