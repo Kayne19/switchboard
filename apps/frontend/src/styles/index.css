@@ -25,6 +25,10 @@
   --panel-step-share: calc(24 / 620);
   --panel-step: calc(var(--panel-step-share) * 100%);
   --panel-inset: calc(var(--panel-step) + clamp(6px, 0.9cqh, 12px));
+  /* The document frame's top line steps down to 28 of its 800 units at its
+     right (TechFrame "document"); its inset clears that with a gap. A share
+     of the frame's height, so it means that only as a top offset. */
+  --document-inset: calc(28 / 800 * 100% + 4px);
   color: var(--paper);
   background: var(--black);
   font-family:
@@ -3369,7 +3373,7 @@ button {
 .document-viewport__inner {
   position: absolute;
   z-index: 1;
-  inset: clamp(20px, 3.8cqh, 42px) clamp(20px, 3.5cqw, 48px)
+  inset: max(clamp(20px, 3.8cqh, 42px), var(--document-inset)) clamp(20px, 3.5cqw, 48px)
     clamp(20px, 3.8cqh, 42px);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -3424,7 +3428,7 @@ button {
    the point, so the meta line goes, the subject drops to a reading size,
    and the body takes the rest of the panel and scrolls inside it. */
 .composed-aux-object--document .document-viewport__inner {
-  inset: clamp(12px, 1.8cqh, 18px) clamp(14px, 1.6cqw, 24px);
+  inset: max(clamp(12px, 1.8cqh, 18px), var(--document-inset)) clamp(14px, 1.6cqw, 24px) clamp(12px, 1.8cqh, 18px);
   grid-template-rows: auto minmax(0, 1fr);
 }
 .composed-aux-object--document .document-viewport__meta {
@@ -5929,7 +5933,7 @@ button {
     --slot-pad: 14px;
   }
   .document-viewport__inner {
-    inset: 22px 20px 20px;
+    inset: max(22px, var(--document-inset)) 20px 20px;
   }
   .document-viewport__meta {
     grid-template-columns: 1fr auto;
@@ -6066,7 +6070,7 @@ button {
     --signal-height: clamp(30px, 6cqh, 42px);
   }
   .document-viewport__inner {
-    inset: 20px 30px;
+    inset: max(20px, var(--document-inset)) 30px 20px;
   }
   .document-viewport h1 {
     margin: 12px 0 10px;
