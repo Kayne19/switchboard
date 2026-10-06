@@ -59,6 +59,10 @@ The renderer does not load bespoke route pages. It derives a broad composition f
 
 Additional metrics, progress, notes, comparisons, and speech modify that composition incrementally. Any other visual on stage that the composition does not draw itself (`besideVisuals` in `src/app/sceneModel.ts`) goes in the aux row under the primary; see "Scene shell".
 
+A visual primary's composition is named for its type (`sceneKind`, from `VISUAL_TYPES`), but a chart's, `training`, and a diagram's, `architecture`.
+
+Wherever an object is drawn, `renderObject(object, slot, ...)` (`src/components/renderObject.tsx`) draws it: the main slot of its own scene, the composed workspace's primary, a cell in the aux row, and focus. A primitive takes one `slot` prop for where it is (`primary`, `aux` or `focus`, `src/primitives/slot.ts`; metrics and progress also `rail`) and draws what that place has room for. A chart's own page draws its charts itself, with the notes laid over them.
+
 ## Scene shell
 
 Every composition is drawn by one `SceneShell` (`src/components/Scenes.tsx`).
@@ -150,10 +154,10 @@ to the backend. Neither contains layout logic.
 Add a new content type in this order:
 
 1. Define its semantic data type.
-2. Implement one reusable primitive.
-3. Add focus behavior.
-4. Add it to scene composition rules.
-5. Create a canonical fixture.
+2. Implement one reusable primitive that takes the `slot` prop.
+3. Draw it in `renderObject`, once for every slot.
+4. Add it to scene composition rules: a visual type to `VISUAL_TYPES`, which names its scene, and its frame words to `sceneFrame` (`src/components/Scenes.tsx`).
+5. Create a canonical fixture. Every fixture action must be one the validator accepts as written (`validation.test.ts`).
 6. Add reducer or rendering tests.
 7. Add visual references at approved geometries.
 
