@@ -5,8 +5,9 @@ import type { TableData } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { mount } from './sceneHarness';
 
+// In an aux cell, where no frame names the table and its meta line leads with its title.
 function render(data: TableData) {
-  return mount(<TablePrimitive data={data} />).querySelector('[data-testid="table"]') as HTMLElement;
+  return mount(<TablePrimitive data={data} slot="aux" />).querySelector('[data-testid="table"]') as HTMLElement;
 }
 
 const results = fixtures.results[0] as { data: TableData };

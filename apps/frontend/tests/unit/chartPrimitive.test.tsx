@@ -219,7 +219,7 @@ describe('chart series point', () => {
   it('rings every point a note names where no leader is given: focus, a cell beside the primary', () => {
     renderWith({ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }] });
     expect(host.querySelectorAll('.chart-note-ring')).toHaveLength(0);
-    rerender(host, <ChartPrimitive data={{ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }] }} focused named={[{ x: 1 }, { x: 2 }]} />);
+    rerender(host, <ChartPrimitive data={{ xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }] }} slot="focus" named={[{ x: 1 }, { x: 2 }]} />);
     expect(host.querySelectorAll('.chart-note-ring')).toHaveLength(2);
   });
 
@@ -229,7 +229,7 @@ describe('chart series point', () => {
   it('draws the ring and the points in focus at the radius the geometry keeps clear of', () => {
     for (const kind of ['line', 'scatter'] as const) {
       const chart: ChartData = { kind, xMax: 3, series: [{ name: 'A', values: [4, 3, 2, 1] }], marker: { x: 2 } };
-      host = mount(<ChartPrimitive data={chart} focused />);
+      host = mount(<ChartPrimitive data={chart} slot="focus" />);
       const ring = host.querySelector('.chart-marker__point')!;
       expect(Number(ring.getAttribute('r'))).toBe(CHART_MARKER_RADIUS);
       const obstacle = chartObstacles(chart).marks.at(-1)!;

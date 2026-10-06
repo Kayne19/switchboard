@@ -159,7 +159,7 @@ function RailProgress({ progressList, onFocus }: { progressList: Array<SceneObje
         <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
           <ObjectSurface object={progress}>
             <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
-              <ProgressPrimitive data={progress.data} variant="rail" />
+              <ProgressPrimitive data={progress.data} slot="rail" />
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -220,7 +220,7 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
   const reserveActivity = liveMessage !== null || note !== null;
   return (
     <div ref={columnRef} id={id} className={`content-rail__details${folded && note ? ' content-rail__details--noted' : ''}`}>
-      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} variant="rail" /> : null}
+      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} slot="rail" /> : null}
       <RailProgress progressList={progressList} onFocus={onFocus} />
       {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
       <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={noteTarget(state.agentObjects, note)} leads={leads} />
@@ -861,7 +861,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
             <div className="focusable-content">
               <MetricsPrimitive
                 metrics={primaryMetrics}
-                variant="primary"
+                slot="primary"
                 onFocus={onFocus}
               />
             </div>
@@ -872,7 +872,7 @@ function composedContent({ state, onFocus }: SceneProps, onDemand: StageDemandLi
               {isMetricPrimary ? (
                 <MetricsPrimitive
                   metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
-                  variant="primary"
+                  slot="primary"
                   onFocus={onFocus}
                 />
               ) : (

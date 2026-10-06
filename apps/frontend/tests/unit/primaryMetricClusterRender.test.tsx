@@ -46,7 +46,7 @@ const m3: SceneObject<MetricData> = {
 
 describe('primary metric cluster rendering', () => {
   it('renders a single metric as primary without cluster class', () => {
-    const host = mount(<MetricsPrimitive metrics={[m1]} variant="primary" />);
+    const host = mount(<MetricsPrimitive metrics={[m1]} slot="primary" />);
 
     const metricsEl = host.querySelector('.metrics');
     expect(metricsEl).not.toBeNull();
@@ -61,7 +61,7 @@ describe('primary metric cluster rendering', () => {
   });
 
   it('renders multiple metrics as a cluster with data-count attribute', () => {
-    const host = mount(<MetricsPrimitive metrics={[m1, m2, m3]} variant="primary" />);
+    const host = mount(<MetricsPrimitive metrics={[m1, m2, m3]} slot="primary" />);
 
     const metricsEl = host.querySelector('.metrics');
     expect(metricsEl).not.toBeNull();
@@ -78,7 +78,7 @@ describe('primary metric cluster rendering', () => {
 
   it('triggers onFocus with clicked metric id in a cluster', () => {
     const onFocus = vi.fn();
-    const host = mount(<MetricsPrimitive metrics={[m1, m2, m3]} variant="primary" onFocus={onFocus} />);
+    const host = mount(<MetricsPrimitive metrics={[m1, m2, m3]} slot="primary" onFocus={onFocus} />);
 
     const rows = host.querySelectorAll<HTMLDivElement>('.metric-row');
     act(() => {

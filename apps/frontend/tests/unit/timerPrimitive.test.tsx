@@ -23,8 +23,9 @@ const kitchen: TimerData = {
   ],
 };
 
+// In an aux cell, where no frame names the timers and they lead with their title.
 function render(data: TimerData, marked?: string): HTMLElement {
-  return mount(<TimerPrimitive data={data} marked={marked} />);
+  return mount(<TimerPrimitive data={data} slot="aux" marked={marked} />);
 }
 
 const item = (host: HTMLElement, id: string) => host.querySelector<HTMLElement>(`[data-item="${id}"]`)!;
@@ -68,7 +69,7 @@ describe('the page clock', () => {
     const resumed: TimerData = { timers: [{ id: 'bread', label: 'Bread', startedAt: at(-24), endsAt: at(22) }] };
     // The commit the browser paints: layout effects run, passive ones wait.
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
-    flushSync(() => rootOf(host).render(<TimerPrimitive data={resumed} />));
+    flushSync(() => rootOf(host).render(<TimerPrimitive data={resumed} slot="aux" />));
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     expect(digits(host, 'bread')).toBe('21:00');
   });
@@ -140,7 +141,7 @@ describe('a timer', () => {
     expect(loose.querySelector('[data-object-title]')?.textContent).toBe('KITCHEN / TIMERS');
     // With no title of its own it still names what it is.
     expect(render(kitchen).querySelector('[data-object-title]')?.textContent).toBe('TIMERS');
-    const host = mount(<TimerPrimitive data={titled} framed />);
+    const host = mount(<TimerPrimitive data={titled} slot="primary" />);
     expect(host.querySelector('[data-object-title]')).toBeNull();
   });
 

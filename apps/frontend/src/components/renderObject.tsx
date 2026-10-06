@@ -50,34 +50,34 @@ export function renderObject(object: SceneObject, slot: Slot, { onStage, notes, 
     case 'chart': {
       const chart = cast.chart(object);
       // `chartNoteAnchors` reads each note's data alone.
-      return <ChartPrimitive data={chart.data} focused={slot === 'focus'} named={chartNoteAnchors(chart, notes.map((data, index) => ({ key: String(index), data })))} />;
+      return <ChartPrimitive data={chart.data} slot={slot} named={chartNoteAnchors(chart, notes.map((data, index) => ({ key: String(index), data })))} />;
     }
     case 'diagram':
-      return <DiagramObject data={cast.diagram(object).data} id={object.id} focused={slot === 'focus'} note={note} callout={slot === 'primary'} onCalloutChange={onCalloutChange} />;
+      return <DiagramObject data={cast.diagram(object).data} id={object.id} slot={slot} note={note} onCalloutChange={onCalloutChange} />;
     case 'document':
-      return <DocumentViewport data={cast.document(object).data} focused={slot === 'focus'} />;
+      return <DocumentViewport data={cast.document(object).data} slot={slot} />;
     case 'code':
-      return <CodeViewport data={cast.code(object).data} focused={slot === 'focus'} />;
+      return <CodeViewport data={cast.code(object).data} slot={slot} />;
     case 'table':
-      return <TablePrimitive data={cast.table(object).data} focused={slot === 'focus'} framed={slot === 'primary'} />;
+      return <TablePrimitive data={cast.table(object).data} slot={slot} />;
     case 'image':
-      return <ImagePrimitive data={cast.image(object).data} focused={slot === 'focus'} />;
+      return <ImagePrimitive data={cast.image(object).data} slot={slot} />;
     case 'metric':
-      return <MetricsPrimitive metrics={[cast.metric(object)]} variant={slot === 'primary' ? 'primary' : undefined} />;
+      return <MetricsPrimitive metrics={[cast.metric(object)]} slot={slot} />;
     case 'progress':
-      return <ProgressPrimitive data={cast.progress(object).data} variant={slot === 'aux' ? 'compact' : 'full'} />;
+      return <ProgressPrimitive data={cast.progress(object).data} slot={slot} />;
     case 'note':
       return <AnnotationCard data={cast.note(object).data} named={standingNoteTarget(onStage, cast.note(object).data)} />;
     case 'calendar':
       return <CalendarPrimitive data={cast.calendar(object).data} marked={marked} focused={slot === 'focus'} framed={slot === 'primary'} />;
     case 'tasks':
-      return <TasksPrimitive data={cast.tasks(object).data} variant={slot === 'aux' ? 'compact' : slot === 'focus' ? 'focus' : 'full'} marked={marked} framed={slot === 'primary'} />;
+      return <TasksPrimitive data={cast.tasks(object).data} slot={slot} marked={marked} />;
     case 'inbox':
-      return <InboxPrimitive data={cast.inbox(object).data} variant={slot === 'aux' ? 'compact' : 'full'} marked={marked} framed={slot === 'primary'} />;
+      return <InboxPrimitive data={cast.inbox(object).data} slot={slot} marked={marked} />;
     case 'timer':
-      return <TimerPrimitive data={cast.timer(object).data} marked={marked} framed={slot === 'primary'} />;
+      return <TimerPrimitive data={cast.timer(object).data} slot={slot} marked={marked} />;
     case 'weather':
-      return <WeatherPrimitive data={cast.weather(object).data} marked={marked} framed={slot === 'primary'} />;
+      return <WeatherPrimitive data={cast.weather(object).data} slot={slot} marked={marked} />;
     default:
       return null;
   }

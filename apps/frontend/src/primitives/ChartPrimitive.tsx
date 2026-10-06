@@ -28,6 +28,7 @@ import { SEMANTIC_COLOR } from '../design/tokens';
 import { useElementSize } from '../hooks/useElementSize';
 import { useLeastHeight } from '../hooks/useStageDemand';
 import { ListViewport } from './ListViewport';
+import type { Slot } from './slot';
 
 const fallbackSeriesSemantics: Semantic[] = ['green', 'orange', 'cyan', 'amber', 'paper', 'muted'];
 
@@ -149,12 +150,13 @@ function Grid({ scales }: { scales: ChartScales }) {
 
 export function ChartPrimitive({
   data,
-  focused = false,
+  slot = 'primary',
   named,
   led,
 }: {
   data: ChartData;
-  focused?: boolean;
+  /** Where the chart is drawn: in focus its lines are heavier. */
+  slot?: Slot;
   /**
    * The points the notes on this chart name: a bar chart marks each one's
    * bar as it marks its marker's; a line, area or scatter chart rings each
@@ -174,15 +176,15 @@ export function ChartPrimitive({
   // The frame is the slot's to decide: the approved canvas where it reads,
   // else one of the slot's own shape (`chartFrame`).
   const hostRef = useRef<HTMLDivElement>(null);
-  const slot = useElementSize(hostRef);
+  const box = useElementSize(hostRef);
   // A bar chart whose categories want a row each asks for the height.
   useLeastHeight(hostRef, useCallback((box: { width: number }) => chartLeastHeight(data, box.width), [data]));
   // A bar chart too long for its slot on its side, in a slot taller than
   // it is wide, is drawn at its least height in a canvas that scrolls in
   // the slot (`chartScrollHeight`); its frame is the canvas's, as the notes
   // laid over it read it.
-  const scroll = useMemo(() => chartScrollHeight(data, slot), [data, slot]);
-  const fit = chartFrame(scroll === null ? slot : { width: slot.width, height: scroll });
+  const scroll = useMemo(() => chartScrollHeight(data, box), [data, box]);
+  const fit = chartFrame(scroll === null ? box : { width: box.width, height: scroll });
   const width = fit.width, height = fit.height;
   const scales=useMemo(()=>chartScales(data,{width,height}),[data,width,height]);
   const {plot,kind,horizontal,baseline,valueAt}=scales;
@@ -245,7 +247,7 @@ export function ChartPrimitive({
           const color=chartSeriesColor(series,index);
           return <motion.g key={series.name} className="chart-series-group" data-series={series.name} clipPath={`url(#${clipId}-trace-${index})`} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{duration:.3,delay:index*.08}}>
             {kind==='area' ? <path className="chart-area" d={series.area} fill={color} fillOpacity={0.16} stroke="none"/> : null}
-            {kind==='line'||kind==='area' ? <path className="chart-series" d={series.path} fill="none" stroke={color} strokeWidth={focused?3:2.3} vectorEffect="non-scaling-stroke"/> : null}
+            {kind==='line'||kind==='area' ? <path className="chart-series" d={series.path} fill="none" stroke={color} strokeWidth={slot==='focus'?3:2.3} vectorEffect="non-scaling-stroke"/> : null}
             {kind==='scatter' ? series.points.map((p,sample)=><circle key={sample} className="chart-point" cx={p.x} cy={p.y} r={CHART_POINT_RADIUS} fill={color}/>) : null}
             {kind==='bar' ? series.bars.map((bar)=><rect key={bar.index} className="chart-bar" x={bar.rect.left} y={bar.rect.top} width={Math.max(0.5,bar.rect.right-bar.rect.left)} height={Math.max(0.5,bar.rect.bottom-bar.rect.top)} fill={color}/>) : null}
           </motion.g>;
@@ -285,8 +287,8 @@ export function ChartPrimitive({
   );
   // The category a note names, or the marker's, is the row it opens on.
   const lead = [...(named ?? []), ...(data.marker ? [data.marker] : [])][0];
-  const drawnScale = slot.width / width;
-  return <div ref={hostRef} className={`chart-primitive${focused?' chart-primitive--focused':''}${scroll===null?'':' chart-primitive--scrolls'}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
+  const drawnScale = box.width / width;
+  return <div ref={hostRef} className={`chart-primitive${slot==='focus'?' chart-primitive--focused':''}${scroll===null?'':' chart-primitive--scrolls'}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     {scroll===null ? svg : (
       // Scrolled, it reads as a list does: the rows past each edge counted
       // there, a tap turning a page; its value axis pinned over the rows.
