@@ -433,8 +433,12 @@ one reply line; the host agent never pushes. A connection may carry several
 requests; they are answered in order. A request line is at most 13 MiB: the
 largest display action (an image, at most 12 MiB) with room for its envelope,
 and safely under the host link's 16 MiB frame, which the relayed call is
-re-wrapped in. A longer line is answered `refused`, `too_large`, in its turn,
-and then the connection ends; lines after it are not read.
+re-wrapped in. A line ends at `\n` (a `\r` before it is part of the break),
+and its length is counted as its bytes arrive: a line that passes 13 MiB is
+answered `refused`, `too_large`, in its turn, without waiting for its newline.
+The host agent reads the rest of that line and drops it as it arrives, so it
+never holds more than the cap of any line however long it runs, and the
+connection ends with the line; lines after it are not read.
 
 ### Hello
 

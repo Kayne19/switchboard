@@ -18,7 +18,7 @@ interface Relayed {
 	timeoutMs: number;
 }
 
-async function withSocket(fn: (ctx: { ask: (m: unknown) => Promise<Record<string, unknown>>; manager: SessionManager; handle: string; sessionId: string; relayed: Relayed[]; socketPath: string; setReply: (r: ModuleReply | Error) => void }) => Promise<void>) {
+async function withSocket(fn: (ctx: { ask: (m: unknown) => Promise<Record<string, unknown>>; connect: () => Promise<net.Socket>; manager: SessionManager; handle: string; sessionId: string; relayed: Relayed[]; socketPath: string; setReply: (r: ModuleReply | Error) => void }) => Promise<void>) {
 	const home = mkdtempSync(path.join(os.tmpdir(), "sb-sk-"));
 	const socketPath = path.join(home, ".cache", "switchboard", "host-agent.sock");
 	const daemon = new FakeDaemon();
@@ -56,10 +56,21 @@ async function withSocket(fn: (ctx: { ask: (m: unknown) => Promise<Record<string
 			waiting.push((line) => resolve(JSON.parse(line)));
 			conn.write(`${typeof m === "string" ? m : JSON.stringify(m)}\n`);
 		});
+	// Another connection, closed with the rest: the socket's close waits for
+	// every connection, so one a failed test left open would hang the run.
+	const others: net.Socket[] = [];
+	const connect = async () => {
+		const other = net.createConnection(socketPath);
+		others.push(other);
+		other.on("error", () => {});
+		await new Promise<void>((resolve) => other.once("connect", () => resolve()));
+		return other;
+	};
 	try {
-		await fn({ ask, manager, handle: info.session, sessionId: info.session_id, relayed, socketPath, setReply: (r) => (reply = r) });
+		await fn({ ask, connect, manager, handle: info.session, sessionId: info.session_id, relayed, socketPath, setReply: (r) => (reply = r) });
 	} finally {
 		conn.destroy();
+		for (const other of others) other.destroy();
 		await socket.close();
 	}
 }
@@ -158,8 +169,8 @@ test("background mode refuses speak, but accepts request_to_speak and display", 
 	});
 });
 
-test("a 12 MiB image display line is relayed whole; a line over the cap is refused and ends the connection", async () => {
-	await withSocket(async ({ ask, manager, handle, sessionId, relayed, socketPath }) => {
+test("a 12 MiB image display line is relayed whole; a line over the cap is refused and ends the connection", { timeout: 30_000 }, async () => {
+	await withSocket(async ({ ask, connect, manager, handle, sessionId, relayed }) => {
 		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
 		// 12 MiB of base64: the largest image action the service accepts.
 		const bytes = "A".repeat(12 * 1024 * 1024 - 256);
@@ -171,20 +182,110 @@ test("a 12 MiB image display line is relayed whole; a line over the cap is refus
 		// for that under the host link's 16 MiB frame limit.
 		assert.ok(MAX_LINE_BYTES + 1024 * 1024 <= 16 * 1024 * 1024);
 		const before = relayed.length;
-		const long = net.createConnection(socketPath);
+		const long = await connect();
 		let answer = "";
 		long.on("data", (chunk) => {
 			answer += String(chunk);
 		});
 		const closed = new Promise<void>((resolve) => long.once("close", () => resolve()));
-		long.on("error", () => {});
 		long.write(`${JSON.stringify({ op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: "display", args: { pad: "A".repeat(MAX_LINE_BYTES) } })}\n`);
 		// A request after it on the same connection is not answered.
 		long.write(`${JSON.stringify({ op: "hello", session_id: sessionId, depth: 0 })}\n`);
-		await closed;
+		await within(10_000, closed, "the connection closed after the refused line");
 		// It used to close without a word, and the module could only report
 		// that the host agent hung up.
 		assert.equal(answer, '{"status":"refused","reason":"too_large"}\n');
 		assert.equal(relayed.length, before, "an over-long line is never relayed");
+	});
+});
+
+/** `promise`, or a failure naming `what` once `ms` pass without it. */
+async function within<T>(ms: number, promise: Promise<T>, what: string): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	const late = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`no ${what} within ${ms} ms`)), ms);
+	});
+	try {
+		return await Promise.race([promise, late]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** Everything `conn` sends, as it arrives, and a promise for its first line. */
+function listen(conn: net.Socket): { text: () => string; firstLine: Promise<void>; closed: Promise<void> } {
+	let text = "";
+	const firstLine = new Promise<void>((resolve) => {
+		conn.on("data", (chunk) => {
+			text += String(chunk);
+			if (text.includes("\n")) resolve();
+		});
+	});
+	const closed = new Promise<void>((resolve) => conn.once("close", () => resolve()));
+	return { text: () => text, firstLine, closed };
+}
+
+/**
+ * Writes `bytes` bytes of "A" to `conn` a mebibyte at a time, waiting for
+ * each to drain, and returns how far this process's resident memory rose
+ * meanwhile. The socket under test is served in this process, so a line it
+ * held would show here; the block written is one buffer, used again.
+ */
+async function writeAs(conn: net.Socket, bytes: number): Promise<number> {
+	const block = Buffer.alloc(1024 * 1024, "A");
+	const start = process.memoryUsage().rss;
+	let peak = start;
+	for (let left = bytes; left > 0; left -= block.length) {
+		const part = left < block.length ? block.subarray(0, left) : block;
+		if (!conn.write(part)) await new Promise<void>((resolve) => conn.once("drain", () => resolve()));
+		peak = Math.max(peak, process.memoryUsage().rss);
+	}
+	return peak - start;
+}
+
+const TOO_LARGE_LINE = '{"status":"refused","reason":"too_large"}\n';
+
+test("a line is refused once it passes the cap, before its newline, and the rest of it is dropped as it arrives", { timeout: 30_000 }, async () => {
+	await withSocket(async ({ ask, connect, sessionId, relayed }) => {
+		const long = await connect();
+		const heard = listen(long);
+		// One byte past the cap, and no newline. The line used to be held until
+		// its newline came, however long it grew.
+		long.write("A".repeat(MAX_LINE_BYTES + 1));
+		await within(5000, heard.firstLine, "answer to a line past the cap, before its newline");
+		assert.equal(heard.text(), TOO_LARGE_LINE);
+		// The rest of the line is still read, and dropped: the module writes a
+		// line whole before it reads the answer, so it is not cut off mid-line.
+		const more = await new Promise<Error | null | undefined>((resolve) => long.write("A".repeat(4 * 1024 * 1024), resolve));
+		assert.equal(more ?? null, null, "the connection stays open to the end of the refused line");
+		// The connection ends where the line does.
+		long.write("\n");
+		await within(5000, heard.closed, "close at the end of the refused line");
+		assert.equal(heard.text(), TOO_LARGE_LINE, "one answer, and nothing after it");
+		assert.equal(relayed.length, 0, "an over-long line is never relayed");
+		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: false });
+	});
+});
+
+test("a 64 MiB and a 600 MiB line are each refused at the cap and dropped, and the host agent keeps serving", { timeout: 120_000 }, async () => {
+	await withSocket(async ({ ask, connect, sessionId, relayed }) => {
+		for (const mebibytes of [64, 600]) {
+			const long = await connect();
+			const heard = listen(long);
+			// Past V8's longest string (about 512 MiB), the old reader threw
+			// RangeError: Invalid string length and ended the process. The
+			// answer comes at the cap, long before the line is written out.
+			const writing = writeAs(long, mebibytes * 1024 * 1024);
+			await within(10_000, heard.firstLine, `answer to a ${mebibytes} MiB line, before its newline`);
+			const rose = await within(60_000, writing, `room for the rest of a ${mebibytes} MiB line`);
+			// The cap's 13 MiB and the reads in flight, not the line: about
+			// 40 MiB on a 600 MiB line.
+			assert.ok(rose < 256 * 1024 * 1024, `memory rose ${Math.round(rose / 1024 / 1024)} MiB over a ${mebibytes} MiB line`);
+			long.write("\n");
+			await within(5000, heard.closed, `close at the end of a ${mebibytes} MiB line`);
+			assert.equal(heard.text(), TOO_LARGE_LINE);
+		}
+		assert.equal(relayed.length, 0, "an over-long line is never relayed");
+		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: false });
 	});
 });
