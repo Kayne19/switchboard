@@ -841,12 +841,23 @@ const spread = (count: number): ChartAnchorAt[] => Array.from({ length: count },
 // place could not win, and tried every other size again in each run for
 // the rail: a 40-category chart of four series with five notes took over a
 // second (1208 ms), at mount and on every resize frame (review finding).
-// It takes some 200-250 ms of CPU time now, up to 400 ms at load 50; the
-// budget is CPU time, the least of three runs (cpuTime.ts says why).
+// Then the search read every bar across each place it tried, for every
+// pass, size and run, and sorted them: 200-250 ms of CPU with five anchored
+// notes, 300-320 ms with five that name no point. It reads what the data
+// blocks across a span once a span now, joined: some 70 ms and 55 ms. The
+// budget is CPU time, the least of three runs (cpuTime.ts says why), about
+// twice the cost, and under the old one.
 describe('placing notes on a dense bar chart', () => {
-  it('stays within a frame budget or two', () => {
-    const { notes, field } = denseBarNotes([{ x: 1, series: 'S0' }, { x: 10, series: 'S1' }, { x: 20, series: 'S2' }, { x: 30, series: 'S3' }, { x: 39, series: 'S0' }]);
-    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(900);
+  const five = [{ x: 1, series: 'S0' }, { x: 10, series: 'S1' }, { x: 20, series: 'S2' }, { x: 30, series: 'S3' }, { x: 39, series: 'S0' }];
+  it('stays within a frame budget or two with five notes on bars', () => {
+    const { notes, field } = denseBarNotes(five);
+    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(150);
+  });
+
+  it('stays within a frame budget or two with five notes that name no point', () => {
+    const { notes, field } = denseBarNotes(five);
+    const general = notes.map(({ id, width, height, sizes }) => ({ id, width, height, sizes }));
+    expect(leastCpuMs(() => layoutNotes(general, field, { spill: true }))).toBeLessThan(150);
   });
 });
 

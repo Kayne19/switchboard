@@ -695,8 +695,8 @@ points. Each card after them takes the best of the rows -- along the top and
 the bottom of the layer, and beside the cards and labels already there -- and,
 where none of those clears its point, of the places straight above, below or
 beside it, and may lie over the data or another card. Up to five notes are
-placed as above; five on a dense bar chart is the costliest placement, a few
-hundred milliseconds.
+placed as above; five on a dense bar chart is the costliest placement, some
+70 ms of CPU.
 
 The note a chart hands over stays readable beside it. Where the rail stands
 under a chart (a portrait stage), the note is drawn in a band under it, full

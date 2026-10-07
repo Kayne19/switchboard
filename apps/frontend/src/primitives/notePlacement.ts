@@ -499,6 +499,8 @@ interface Prepared {
   labels: Rect[];
   segmentsNear: (near: Rect, visit: (segment: [Point, Point]) => void) => void;
   marksNear: (near: Rect, visit: (mark: Rect) => void) => void;
+  /** What the data blocks across each span the search has tried (`dataAcross`), by its left and right. */
+  across: Map<number, Map<number, ReadonlyArray<[number, number]>>>;
 }
 
 function prepare(field: NoteField, leaderOverlap = 0): Prepared {
@@ -533,7 +535,47 @@ function prepare(field: NoteField, leaderOverlap = 0): Prepared {
       SEGMENTS_BUCKETED_FROM,
     ),
     marksNear: bucketed(marks, (mark) => mark, area, MARKS_BUCKETED_FROM),
+    across: new Map(),
   };
+}
+
+// The heights the data blocks across a span of the layer, a clearance away
+// above and below, joined where they meet: every mark that meets the span a clearance wide, and
+// every stretch of a line inside it. The search asks this for each place
+// along the layer it tries, in each of its passes, for each size of each
+// card and in each run for the rail, and the answer depends on the span
+// alone, so it is worked out once a span: on a dense bar chart the search
+// had read every bar for every place it tried, most of a placement's time.
+function dataAcross(field: Prepared, left: number, right: number): ReadonlyArray<[number, number]> {
+  let byRight = field.across.get(left);
+  if (!byRight) field.across.set(left, (byRight = new Map()));
+  const known = byRight.get(right);
+  if (known) return known;
+  const { area, marksNear, segmentsNear } = field;
+  const slab = { left: left - DATA_CLEARANCE, right: right + DATA_CLEARANCE, top: area.top - DATA_CLEARANCE, bottom: area.bottom + DATA_CLEARANCE };
+  const runs: Array<[number, number]> = [];
+  marksNear(slab, (mark) => {
+    if (mark.left < slab.right && mark.right > slab.left) runs.push([mark.top - DATA_CLEARANCE, mark.bottom + DATA_CLEARANCE]);
+  });
+  segmentsNear(slab, ([a, b]) => {
+    const share = clipSegment(a, b, { ...slab, top: -Infinity, bottom: Infinity });
+    if (!share) return;
+    const y0 = a.y + (b.y - a.y) * share[0];
+    const y1 = a.y + (b.y - a.y) * share[1];
+    runs.push([Math.min(y0, y1) - DATA_CLEARANCE, Math.max(y0, y1) + DATA_CLEARANCE]);
+  });
+  // As one sorted run of disjoint heights: the free runs the search reads
+  // between them are the same, and sorting a few is what it then pays for
+  // each place, not every bar across the span.
+  runs.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const [start, end] of runs) {
+    const last = merged[merged.length - 1];
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else merged.push([start, end]);
+  }
+  byRight.set(right, merged);
+  return merged;
 }
 
 // Places the notes one by one, all of them but `leftOut`. Placed again
@@ -811,17 +853,9 @@ function placeInOrder(
           }
         }
         for (const other of others) if (blocks(other, left - gap, right + gap)) blocked.push([other.top - gap, other.bottom + gap]);
-        const slab = { left: left - DATA_CLEARANCE, right: right + DATA_CLEARANCE, top: area.top - DATA_CLEARANCE, bottom: area.bottom + DATA_CLEARANCE };
-        marksNear(slab, (mark) => {
-          if (blocks(mark, slab.left, slab.right)) blocked.push([mark.top - DATA_CLEARANCE, mark.bottom + DATA_CLEARANCE]);
-        });
-        segmentsNear(slab, ([a, b]) => {
-          const share = clipSegment(a, b, { ...slab, top: -Infinity, bottom: Infinity });
-          if (!share) return;
-          const y0 = a.y + (b.y - a.y) * share[0];
-          const y1 = a.y + (b.y - a.y) * share[1];
-          blocked.push([Math.min(y0, y1) - DATA_CLEARANCE, Math.max(y0, y1) + DATA_CLEARANCE]);
-        });
+        // The data across the card's span, a clearance away: the same for
+        // every pass, size and run that tries this span (`dataAcross`).
+        for (const run of dataAcross(field, left, right)) blocked.push(run);
         if (through < SHORT.label) {
           for (const label of labels) if (blocks(label, left, right)) blocked.push([label.top, label.bottom]);
         }
