@@ -149,8 +149,11 @@ never converts zones or reads its own clock, so give `today` and `now`
 yourself. A Python `date` or `datetime` is converted for you: a date to a
 date, and a datetime to a wall time on its own clock, so give it in the
 caller's zone (`dt.astimezone(zone)`). A timer's `endsAt` and `startedAt`
-take an aware datetime (`datetime.now(timezone.utc) + timedelta(minutes=9)`)
-and become instants; a naive one raises.
+take an aware datetime in the caller's zone too
+(`datetime.now(zone) + timedelta(minutes=9)`, `zone` the caller's
+`ZoneInfo`) and become instants; a naive one raises. The screen shows an
+end's time of day as written, so one in UTC reads `ENDS 17:42 UTC`, not the
+caller's clock.
 
 ```python
 switchboard.display(op="show", id="week", type="calendar", role="primary", data={

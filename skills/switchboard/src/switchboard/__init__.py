@@ -469,8 +469,9 @@ def _wire_instant(value, key):
     offset = value.utcoffset()
     if offset is None:
         raise ValueError(
-            f"{key} is an instant: give an aware datetime, such as "
-            "datetime.now(timezone.utc) + timedelta(minutes=9), or text like 2026-10-05T18:42:00-07:00"
+            f"{key} is an instant: give an aware datetime in the caller's zone, such as "
+            "datetime.now(zone) + timedelta(minutes=9) with zone the caller's ZoneInfo, "
+            "or text like 2026-10-05T18:42:00-07:00"
         )
     if offset.seconds % 60 or offset.microseconds:
         value = value.astimezone(_datetime.timezone.utc)
