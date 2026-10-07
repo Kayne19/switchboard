@@ -169,6 +169,37 @@ function truncateLabel(name: string, maxWidth: number, advance: number): { text:
   return { text: `${name.slice(0, maxChars).trimEnd()}${CHART_ELLIPSIS}`, truncated: true };
 }
 
+// The axes' names are the same face at 11px, tracked 0.14em (index.css
+// `.chart-axis-label`): an advance of 8.4 viewBox units, rounded up as the
+// legend's is.
+export const CHART_AXIS_NAME_ADVANCE = monoAdvance(11, 0.14, { roundUp: true });
+
+/** An axis's name as drawn: cut to its axis with an ellipsis where it runs longer, the whole name kept for its title. */
+export interface ChartAxisName {
+  text: string;
+  /** The name as given, where `text` is cut short of it. */
+  full?: string;
+}
+
+/**
+ * The names drawn along the bottom and up the side of the chart, each no
+ * longer than the plot's span along it: a long one ran past the plot and
+ * across the frame (review-drawing L3). The axes follow the bars, so a
+ * horizontal bar chart's categories are named up the side.
+ */
+export function chartAxisNames(data: ChartData, scales: ChartScales): { bottom: ChartAxisName; side: ChartAxisName } {
+  const { plot, horizontal } = scales;
+  const name = (given: string | undefined, fallback: string, span: number): ChartAxisName => {
+    const whole = given ?? fallback;
+    const cut = truncateLabel(whole, Math.max(0, span), CHART_AXIS_NAME_ADVANCE);
+    return cut.truncated ? { text: cut.text, full: whole } : { text: whole };
+  };
+  return {
+    bottom: name(horizontal ? data.yLabel : data.xLabel, horizontal ? 'Y' : 'X', plot.right - plot.left),
+    side: name(horizontal ? data.xLabel : data.yLabel, horizontal ? 'X' : 'Y', plot.bottom - plot.top),
+  };
+}
+
 // How far a legend item's origin moves the next one along its row.
 function legendAdvance(contentWidth: number): number {
   return Math.max(CHART_LEGEND_STEP, contentWidth + CHART_LEGEND_GAP);

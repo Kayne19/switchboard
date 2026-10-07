@@ -11,6 +11,7 @@ import {
   CHART_POINT_RADIUS,
   CHART_TICK_BASELINE,
   CHART_TICK_ROW_HEIGHT,
+  chartAxisNames,
   chartBarCallouts,
   chartBars,
   chartCategoryLabelX,
@@ -193,6 +194,7 @@ export function ChartPrimitive({
   // grow downward from there instead.
   const plotWidth=plot.right-plot.left;
   const legend=useMemo(()=>chartLegendLayout(data,plotWidth,{width,height}),[data,plotWidth,width,height]);
+  const axisNames=chartAxisNames(data,scales);
   const drawn=useMemo(()=>{
     const bars=chartBars(data,scales);
     const baseY=valueAt(baseline);
@@ -275,9 +277,10 @@ export function ChartPrimitive({
         </motion.g>;
       })}
       {/* The axis names follow their axes: a horizontal bar chart's
-          categories run down the left and its values along the bottom. */}
-      <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{(horizontal ? data.yLabel : data.xLabel) ?? (horizontal ? 'Y' : 'X')}</text>
-      <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{(horizontal ? data.xLabel : data.yLabel) ?? (horizontal ? 'X' : 'Y')}</text>
+          categories run down the left and its values along the bottom.
+          Each is cut to its axis's span, its title the whole name. */}
+      <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{axisNames.bottom.text}{axisNames.bottom.full?<title>{axisNames.bottom.full}</title>:null}</text>
+      <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{axisNames.side.text}{axisNames.side.full?<title>{axisNames.side.full}</title>:null}</text>
       {/* Rows grow downward from the one-row anchor (`CHART_PAD.top`, not
           the possibly-grown plot top): `chartPad` already grew the plot's
           own top padding to keep the last row clear of it. The series past

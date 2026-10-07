@@ -224,7 +224,8 @@ them -- a path at its start, so its file name stays. The legend wraps onto as
 many rows as its series need, up to a quarter of the chart's height and never
 so many that the plot is left less than six rows of tick text tall; past those
 rows it counts the rest in one last item (`+12 SERIES`), whose title names
-them. There is no pie chart and
+them. An axis name (`xLabel`, `yLabel`) longer than its axis is cut to it
+with an ellipsis, its title the whole name. There is no pie chart and
 no sparkline: a single series with no axes is a `metric`, and a share of a
 whole reads better as a bar per part.
 

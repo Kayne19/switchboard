@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primitives/ChartPrimitive';
 import {
+  CHART_AXIS_NAME_ADVANCE,
   CHART_FRAME,
   CHART_LEGEND_CHAR_ADVANCE,
   CHART_LEGEND_GAP,
@@ -769,5 +770,33 @@ describe('chart category labels down the left', () => {
       const middle = (ys[0] + ys[ys.length - 1]) / 2;
       expect(middle).toBeCloseTo(scales.xAt(index) + 4, 6);
     });
+  });
+});
+
+// review-drawing L3: an axis name of up to 128 characters ran past the plot
+// and across the frame; the legend and the category labels were cut already.
+describe("a chart's axis names", () => {
+  const long = (word: string) => `${word} `.repeat(30).trim().slice(0, 128);
+  it.each(['line', 'bar'] as const)('are cut to the span of their axis, the whole name in a title (%s)', (kind) => {
+    const chart: ChartData = { kind, xLabel: long('EPOCHS'), yLabel: long('LOSS'), labels: kind === 'bar' ? ['A', 'B'] : undefined, series: [{ name: 'S', values: [1, 2] }] };
+    host = mount(<ChartPrimitive data={chart} />);
+    const scales = chartScales(chart);
+    const names = [...host.querySelectorAll('.chart-axis-label')];
+    expect(names).toHaveLength(2);
+    const spans = [scales.plot.right - scales.plot.left, scales.plot.bottom - scales.plot.top];
+    names.forEach((name, index) => {
+      const text = name.firstChild!.textContent!;
+      expect(text.endsWith('…')).toBe(true);
+      expect(text.length * CHART_AXIS_NAME_ADVANCE).toBeLessThanOrEqual(spans[index]);
+      expect(name.querySelector('title')?.textContent).toBe(index === 0 ? chart.xLabel : chart.yLabel);
+    });
+    unmount(host);
+  });
+
+  it('are drawn whole, with no title, where they fit', () => {
+    host = mount(<ChartPrimitive data={{ xLabel: 'EPOCH', yLabel: 'LOSS', series: [{ name: 'S', values: [1, 2] }] }} />);
+    expect([...host.querySelectorAll('.chart-axis-label')].map((name) => name.textContent)).toEqual(['EPOCH', 'LOSS']);
+    expect(host.querySelector('.chart-axis-label title')).toBeNull();
+    unmount(host);
   });
 });
