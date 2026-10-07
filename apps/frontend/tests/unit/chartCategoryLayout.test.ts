@@ -331,7 +331,7 @@ describe('chart obstacles', () => {
   });
 
   // The marker ring on a point at the plot's edge was cut in half by the
-  // plot's clip (wave 1 open item): it is drawn whole, past the edge.
+  // plot's clip: it is drawn whole, past the edge.
   it("keeps a scatter's point at the plot's edge whole in its wider clip, and the ring round it whole past that", () => {
     // The marker on the last point, on the plot's right edge.
     const scatter: ChartData = { kind: 'scatter', xMax: 2, series: [{ name: 'A', values: [1, 3, 2] }], marker: { x: 2 } };

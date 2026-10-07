@@ -4,6 +4,7 @@ import { act } from 'react';
 import { MetricsPrimitive } from '../../src/primitives/MetricsPrimitive';
 import type { MetricData, SceneObject } from '../../src/controller/types';
 import type { Slot } from '../../src/primitives/slot';
+import { arrowHeading } from './drawingGeometry';
 import { mount } from './sceneHarness';
 
 function renderMetrics(metrics: Array<SceneObject<MetricData>>, slot: Slot | 'rail' = 'aux') {
@@ -79,6 +80,18 @@ describe('MetricsPrimitive', () => {
     expect(trend.querySelector('.metric-row__arrow')?.getAttribute('aria-label')).toBe('down');
     expect(trend.querySelector('.metric-row__delta')?.textContent).toBe('-12 ms');
     expect(value.textContent).toBe('182 ms-12 ms');
+  });
+
+  // The label names the trend; the path is what the caller sees, so the
+  // arrow drawn must point the way the label says.
+  it.each([
+    ['up', { x: 0, y: -1 }],
+    ['down', { x: 0, y: 1 }],
+    ['flat', { x: 1, y: 0 }],
+  ] as const)('draws the %s trend as an arrow pointing that way', (trend, heading) => {
+    const host = renderMetrics([{ ...metric1, data: { label: 'P95', value: '182 ms', trend } }]);
+    const d = host.querySelector('.metric-row__arrow path')?.getAttribute('d') ?? '';
+    expect(arrowHeading(d)).toEqual(heading);
   });
 
   it('draws a delta without an arrow, and an arrow without a delta', () => {
