@@ -96,11 +96,11 @@ A page-level patch that duplicates one of these responsibilities is usually inco
 | Updated object | Changes in place without being recreated |
 | Removed object | Content de-resolves, then its frame withdraws |
 | Recomposition | Existing objects move and resize continuously |
-| Focus | The same object expands through a shared layout identity (under reduced motion, its focus fades in over it) |
+| Focus | The same object expands through a shared layout identity, and its slot stands empty under it (under reduced motion, its focus fades in over the empty slot) |
 | Annotation | Explanation resolves near its semantic target |
 | Clear | Content recedes until only Damocles remains |
 
-Ordinary structural motion should remain quick, generally about 200 to 500 ms. Idle motion and rare flourishes may be slower. Respect `prefers-reduced-motion`: under it no element moves or resizes. A recomposition is drawn where it ends, and no element is handed to motion's layout projection (`useLayoutMotion`), so no box can be left at an old size; focus fades in over the object, which stays in its slot; a scene change crossfades, the last scene fading out where it stood as the next fades in, and the leaving scene lets Damocles go at once, so there is one; reveals (clip, blur) and opacity still play.
+Ordinary structural motion should remain quick, generally about 200 to 500 ms. Idle motion and rare flourishes may be slower. Respect `prefers-reduced-motion`: under it no element moves or resizes. A recomposition is drawn where it ends, and no element is handed to motion's layout projection (`useLayoutMotion`), so no box can be left at an old size; focus fades in over the object's slot, whose copy is hidden as the shared identity would hide it (`useFocusCopyHidden`) and keeps its box; a scene change crossfades, the last scene fading out where it stood as the next fades in, and the leaving scene lets Damocles go at once, so there is one; reveals (clip, blur) and opacity still play.
 
 ## Focus ring
 

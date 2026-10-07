@@ -12,7 +12,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { MotionConfig } from 'motion/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { useLayoutMotion, type LayoutMotion } from '../../src/hooks/useLayoutMotion';
+import { FocusedObject, useFocusCopyHidden, useLayoutMotion, type LayoutMotion } from '../../src/hooks/useLayoutMotion';
 import { mount, unmountAll } from './sceneHarness';
 
 let seen: LayoutMotion | null = null;
@@ -40,6 +40,24 @@ describe('layout motion', () => {
   it('is nothing under reduced motion: no layout animation and no shared identity to project', () => {
     mount(<MotionConfig reducedMotion="always"><Probe motion={{ layout: true, layoutId: 'switchboard-object-route' }} /></MotionConfig>);
     expect(seen).toEqual({});
+  });
+
+  it('hides the focused object\'s slot copy only where motion is reduced: elsewhere motion hides it by the shared identity', () => {
+    let hidden: boolean[] = [];
+    function Copy({ id }: { id: string }) {
+      hidden.push(useFocusCopyHidden(id));
+      return null;
+    }
+    const stage = (reducedMotion: 'always' | 'never') => (
+      <MotionConfig reducedMotion={reducedMotion}>
+        <FocusedObject.Provider value="route"><Copy id="route" /><Copy id="other" /></FocusedObject.Provider>
+      </MotionConfig>
+    );
+    mount(stage('always'));
+    expect(hidden).toEqual([true, false]);
+    hidden = [];
+    mount(stage('never'));
+    expect(hidden).toEqual([false, false]);
   });
 
   it('is the only way a motion element takes layout or layoutId: none is written on the element', () => {

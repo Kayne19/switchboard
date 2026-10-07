@@ -2,6 +2,7 @@ import { AnimatePresence, LayoutGroup, MotionConfig } from "motion/react";
 import { buildCompositionModel, sceneKind } from "../app/sceneModel";
 import type { ControllerState } from "../controller/types";
 import { useController } from "../controller/context";
+import { FocusedObject } from "../hooks/useLayoutMotion";
 import { DamoclesPresence } from "../primitives/DamoclesPresence";
 import { FocusLayer, focusNotes } from "./FocusLayer";
 import { SurfaceBoundary } from "./SurfaceBoundary";
@@ -43,6 +44,7 @@ function SceneContent({
 
   return (
     <LayoutGroup id="switchboard-layout">
+      <FocusedObject.Provider value={focusedObject?.id ?? null}>
       <main className="stage" data-scene-kind={kind}>
         <AnimatePresence mode="sync" initial={false}>
           <SceneShell key={kind} kind={kind} {...shared} />
@@ -60,6 +62,7 @@ function SceneContent({
           onClose={() => dispatch({ op: "focus", id: null })}
         />
       </main>
+      </FocusedObject.Provider>
     </LayoutGroup>
   );
 }

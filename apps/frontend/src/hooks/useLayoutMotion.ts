@@ -1,4 +1,5 @@
 import { useReducedMotionConfig, type MotionProps } from 'motion/react';
+import { createContext, useContext } from 'react';
 
 /** What an element hands motion's layout projection: its own moves and resizes (`layout`), and the identity it shares with another element (`layoutId`: an object and its focus, Damocles from scene to scene). */
 export type LayoutMotion = Pick<MotionProps, 'layout' | 'layoutId'>;
@@ -25,4 +26,22 @@ export type LayoutMotion = Pick<MotionProps, 'layout' | 'layoutId'>;
  */
 export function useLayoutMotion(motion: LayoutMotion): LayoutMotion {
   return useReducedMotionConfig() ? {} : motion;
+}
+
+/** The id of the object the focus layer holds, or null: the stage provides it (SceneRenderer). */
+export const FocusedObject = createContext<string | null>(null);
+
+/**
+ * Whether an object's slot copy stands aside for its focus. Where motion is
+ * not reduced the slot copy and the focus share one identity
+ * (`switchboard-object-<id>`), and motion hides the copy that does not lead,
+ * so the focus grows out of the slot and the slot stands empty under it.
+ * Under reduced motion there is no shared identity (above), and the copy
+ * stayed in its slot under the backdrop, the focus fading in over it. Here
+ * it is hidden instead, as motion would have hidden it: no box moves.
+ */
+export function useFocusCopyHidden(objectId: string): boolean {
+  const reduced = useReducedMotionConfig();
+  const focused = useContext(FocusedObject);
+  return Boolean(reduced) && focused === objectId;
 }
