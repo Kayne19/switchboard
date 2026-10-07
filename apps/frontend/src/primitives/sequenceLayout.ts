@@ -17,8 +17,9 @@
 // and scrolls down (drawingFit.ts).
 
 import type { SequenceActor, SequenceDiagramData, SequenceMessage } from '../controller/types';
-import { graphemes, headCells, textCells } from '../design/textCells';
+import { textCells } from '../design/textCells';
 import { monoAdvance } from '../design/tokens';
+import { wrapText, wrapWords } from './textWrap';
 import { LABEL_ADVANCE, LABEL_BACKING, LABEL_HEIGHT, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, type DrawingFit, type Viewport } from './drawingFit';
 import type { Box, Point } from './geometry';
@@ -195,47 +196,9 @@ const MARKER_SIDE = 8;
 const LIFELINE_TAIL = 36;
 const EMPTY_LIFELINE = 80;
 
-// Words onto lines of at most `chars` cells; a word longer than that
-// takes a line of its own and the caller widens the box to fit it. A bare
-// separator such as the `/` in "DAMOCLES / FRONT DESK" stays on the line
-// before it rather than opening one of its own.
-function wrapWords(text: string, chars: number): string[] {
-  const lines: string[] = [];
-  let current = '';
-  for (const word of text.split(/\s+/).filter(Boolean)) {
-    const separator = /^[^\p{L}\p{N}]+$/u.test(word);
-    if (!current) current = word;
-    else if (separator || textCells(current) + 1 + textCells(word) <= chars) current += ` ${word}`;
-    else {
-      lines.push(current);
-      current = word;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
-}
-
 /** The width, in user units, a sequence is recomposed to when it is too wide to read whole. */
 export interface SequenceFrame {
   width: number;
-}
-
-// A line still wider than `chars` cells (one long word, such as a path or a
-// call) breaks after the last separator that keeps it short enough, or
-// else at `chars` itself.
-function breakLine(line: string, chars: number): string[] {
-  const parts: string[] = [];
-  let rest = line;
-  while (textCells(rest) > chars) {
-    // At least one character a line, so a wide one in a one-cell room still moves on.
-    const head = headCells(rest, chars) || graphemes(rest)[0];
-    const cut = Math.max(head.lastIndexOf('.'), head.lastIndexOf('/'), head.lastIndexOf('_'), head.lastIndexOf('-'), head.lastIndexOf('('));
-    const at = cut > 0 ? cut + 1 : head.length;
-    parts.push(rest.slice(0, at).trimEnd());
-    rest = rest.slice(at).trimStart();
-  }
-  if (rest) parts.push(rest);
-  return parts;
 }
 
 /**
@@ -557,10 +520,10 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
     // (The pitch search settles within half a unit of the frame, which can
     // leave a hair less room than a whole character: that hair still holds it.)
     const labelChars = Math.max(1, Math.floor(text / labelAdvance + 0.05));
-    const wrapped = wrapWords(actor.label, labelChars).flatMap((line) => breakLine(line, labelChars));
+    const wrapped = wrapText(actor.label, labelChars);
     const labelLines = wrapped.length > 0 ? wrapped : [actor.label];
     const subChars = Math.max(1, Math.floor(text / subAdvance + 1e-6));
-    const subLines = actor.sub ? wrapWords(actor.sub, subChars).flatMap((line) => breakLine(line, subChars)) : [];
+    const subLines = actor.sub ? wrapText(actor.sub, subChars) : [];
     const widest = Math.max(0, ...labelLines.map((line) => textCells(line) * labelAdvance), ...subLines.map((line) => textCells(line) * subAdvance));
     // The anchored header holds the marker: beside its label when compact
     // and its room allows, else under its words, at least MARKER_ROOM wide.
@@ -613,7 +576,7 @@ function layoutToWidth(data: SequenceDiagramData, orientation: SequenceOrientati
     const within = chars >= MIN_SPAN_CHARS ? wrapWords(message.label, chars) : [];
     // An empty label fits anywhere.
     const fits = !message.label.trim() || (within.length > 0 && within.length <= (from === to ? 2 : 3) && within.every((line) => textCells(line) <= chars));
-    const lines = fits ? within : wrapWords(message.label, overChars).flatMap((line) => breakLine(line, overChars));
+    const lines = fits ? within : wrapText(message.label, overChars);
     return [{ message, index, from, to, lines: lines.length > 0 ? lines : [message.label], over: !fits }];
   });
   const { messages, lifelineEnd } = layRows(entries, xs, headerBottom, width, padX);

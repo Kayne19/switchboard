@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
-import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, wrapGreedy, type DiagramLayout, type EdgeLabel, type EdgeStub } from './diagramLayout';
+import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub } from './diagramLayout';
 import { GlowFilters, LABEL_HEIGHT, entranceStep, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
@@ -8,6 +8,7 @@ import { viewWithMap, type DrawingMap } from './drawingScroll';
 import type { Point } from './geometry';
 import { NoteMarker, markedPart } from './NoteMarker';
 import type { Slot } from './slot';
+import { wrapWords } from './textWrap';
 import { textCells } from '../design/textCells';
 import { SEMANTIC_COLOR } from '../design/tokens';
 
@@ -125,7 +126,7 @@ export function DiagramPrimitive({
   // stays in the rail with the matching badge and nothing is silently lost.
   const calloutLines =
     hasAnchoredNode && note
-      ? wrapGreedy(note.segments.map((segment) => segment.text).join('').split(/\s+/), CALLOUT_LINE_CHARS)
+      ? wrapWords(note.segments.map((segment) => segment.text).join(''), CALLOUT_LINE_CHARS)
       : [];
   const calloutFits =
     calloutLines.length > 0 &&

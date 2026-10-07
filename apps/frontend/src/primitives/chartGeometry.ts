@@ -1,6 +1,7 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
-import { graphemes, headCells, tailCells, textCells } from '../design/textCells';
+import { headCells, textCells } from '../design/textCells';
 import { monoAdvance } from '../design/tokens';
+import { breakWord, wrapText } from './textWrap';
 import { readableScale, type DrawingText } from './drawingFit';
 import { intersection, type Point, type Rect, type Size } from './geometry';
 
@@ -318,93 +319,31 @@ export interface ChartCategoryLayout {
 const CHART_CATEGORY_LINES = 3;
 
 /**
- * A label set on at most `lines` lines of at most `width` cells: a
- * line breaks after a space, a path's separator or a dot, or inside a
- * camel-cased name before a capital, where it can; inside a word only where
- * a word alone is too long. A label that needs more lines is cut with an
- * ellipsis: at its start when it is a path (a slash and no space), whose
- * file name at the end is what tells it apart, else at its end.
+ * A label set on at most `lines` lines of at most `width` cells, as every
+ * drawing wraps its text (textWrap.ts): at spaces, a word too long broken
+ * after a separator or inside a camel-cased name. A label that needs more
+ * lines is cut with an ellipsis: at its start when it is a path (a slash
+ * and no space), whose file name at the end is what tells it apart, else
+ * at its end.
  */
 export function wrapLabel(label: string, width: number, lines: number): { text: string; lines: string[]; truncated: boolean } {
   const room = Math.max(2, width);
   if (textCells(label) <= room) return { text: label, lines: [label], truncated: false };
-  const pieces = labelPieces(label);
-  const set = fill(pieces, room);
-  if (set.length <= lines) return { text: label, lines: set.map((line) => line.trim()), truncated: false };
+  const set = wrapText(label, room);
+  if (set.length <= lines) return { text: label, lines: set, truncated: false };
   if (label.includes('/') && !/\s/.test(label)) {
-    // From the end: the pieces filled backward, the last lines kept, and
-    // the first of them led by the ellipsis.
-    const back = fill([...pieces].reverse(), room - 1, true).reverse().map((line) => line.trim());
-    const kept = back.slice(-lines);
+    // From the end: the last lines kept, the first of them led by the ellipsis.
+    const kept = breakWord(label, room - 1, { fromEnd: true }).slice(-lines);
     kept[0] = `${CHART_ELLIPSIS}${kept[0]}`;
     return { text: kept.join(' '), lines: kept, truncated: true };
   }
   // The lines kept as set, and what the label says after them, cut.
   const kept = set.slice(0, lines - 1);
-  const rest = label.slice(kept.reduce((sum, line) => sum + line.length, 0)).trim();
-  const last = truncateLabel(rest, room * CHART_TICK_CHAR_ADVANCE, CHART_TICK_CHAR_ADVANCE).text;
-  const shown = [...kept.map((line) => line.trim()), last];
+  let cursor = 0;
+  for (const line of kept) cursor = label.indexOf(line, cursor) + line.length;
+  const last = truncateLabel(label.slice(cursor).trim(), room * CHART_TICK_CHAR_ADVANCE, CHART_TICK_CHAR_ADVANCE).text;
+  const shown = [...kept, last];
   return { text: shown.join(' '), lines: shown, truncated: true };
-}
-
-// The pieces a line may end after: each run up to and including a space, a
-// path's separator or a dot, or up to a capital that starts a word inside
-// a camel-cased name (`note|Placement.|test.ts`).
-function labelPieces(label: string): string[] {
-  const pieces: string[] = [];
-  let piece = '';
-  const chars = graphemes(label);
-  for (let index = 0; index < chars.length; index += 1) {
-    const char = chars[index];
-    const next = chars[index + 1] ?? '';
-    piece += char;
-    const separator = /[\s/_.:-]/.test(char) && !/[\s/_.:-]/.test(next);
-    const camel = /[a-z]/.test(char) && /[A-Z]/.test(next);
-    if (separator || camel) {
-      pieces.push(piece);
-      piece = '';
-    }
-  }
-  if (piece) pieces.push(piece);
-  return pieces;
-}
-
-// Pieces set on lines of at most `room` cells (spaces at a line's
-// ends not counted), in order -- or, with `backward`, the pieces given last
-// first, each line grown at its start. The lines keep their spaces, so in
-// order they join back into the label.
-function fill(pieces: string[], room: number, backward = false): string[] {
-  const set: string[] = [];
-  let line = '';
-  const join = (piece: string) => (backward ? piece + line : line + piece);
-  for (const piece of pieces) {
-    let rest = piece;
-    while (rest.length > 0) {
-      if (textCells(join(rest).trim()) <= room) {
-        line = join(rest);
-        rest = '';
-      } else if (line.trim().length > 0) {
-        set.push(line);
-        line = '';
-      } else if (backward) {
-        // At least one character a line, so a wide one in a one-cell room still moves on.
-        const tail = tailCells(rest, room) || graphemes(rest).at(-1) || rest;
-        set.push(tail + line);
-        rest = rest.slice(0, rest.length - tail.length);
-        line = '';
-      } else {
-        const head = headCells(rest, room) || graphemes(rest)[0];
-        set.push(line + head);
-        rest = rest.slice(head.length);
-        line = '';
-      }
-    }
-  }
-  if (line.length > 0) {
-    if (line.trim().length > 0 || set.length === 0) set.push(line);
-    else set[set.length - 1] = backward ? line + set[set.length - 1] : set[set.length - 1] + line;
-  }
-  return set;
 }
 
 function upright(categories: string[] | undefined, ticks: ChartTick[], rows: number, step: number): ChartCategoryLayout {
