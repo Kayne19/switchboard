@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import type { MouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent } from 'react';
 import type { ControllerState, NoteData, SceneObject } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
@@ -47,6 +47,7 @@ export function FocusLayer({
   const noted = notes.length > 0;
   // The focused object shares its identity with the object in its slot.
   const shared = useLayoutMotion({ layoutId: object ? `switchboard-object-${object.id}` : undefined });
+  const returnButton = useModalFocus(object !== null);
   return (
     <AnimatePresence>
       {object ? (
@@ -70,7 +71,7 @@ export function FocusLayer({
           >
             <div className="focus-layer__header tech micro">
               <span>FOCUS / {object.type.toUpperCase()}</span>
-              <button className="focus-layer__return" type="button" onClick={onClose}>RETURN / ESC</button>
+              <button ref={returnButton} className="focus-layer__return" type="button" onClick={onClose}>RETURN / ESC</button>
             </div>
             <SurfaceBoundary surfaceId={object.id} resetKey={object}>
               <ObjectView object={object} slot="focus" onStage={objects} notes={notes.map((note) => note.data)} />
@@ -89,4 +90,32 @@ export function FocusLayer({
       ) : null}
     </AnimatePresence>
   );
+}
+
+/**
+ * The focus layer is a modal dialog, and focus acts as one: it moves to
+ * RETURN as the layer opens, stays in the layer (everything behind it is
+ * `inert` while it is open: the scene, SceneShell `behindFocus`; the
+ * history, TranscriptDrawer; the demo page's own controls, App), and goes
+ * back to what held it before (the surface that was activated) when the
+ * layer closes. Focus opened by the agent, with nothing held, gives focus
+ * back to nothing. Before, the layer only said it was modal: Tab walked on
+ * into the stage behind the backdrop.
+ */
+function useModalFocus(open: boolean) {
+  const returnButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const held = document.activeElement;
+    const opener = held instanceof HTMLElement && held !== document.body ? held : null;
+    returnButton.current?.focus({ preventScroll: true });
+    return () => {
+      if (!opener?.isConnected) return;
+      opener.focus({ preventScroll: true });
+      // Where the slot copy is hidden by motion's shared identity, it is
+      // shown again in motion's next frame, not in this commit.
+      if (document.activeElement !== opener) requestAnimationFrame(() => opener.focus({ preventScroll: true }));
+    };
+  }, [open]);
+  return returnButton;
 }

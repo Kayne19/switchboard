@@ -39,7 +39,9 @@ export function ControllerPanel({ open, onClose }: { open: boolean; onClose: () 
   };
 
   return (
-    <aside className={`controller-panel${open ? ' controller-panel--open' : ''}`} aria-hidden={!open}>
+    // Closed, the panel is off the screen and out of reach: `inert` keeps its
+    // controls out of the tab order, as aria-hidden alone did not.
+    <aside className={`controller-panel${open ? ' controller-panel--open' : ''}`} aria-hidden={!open} inert={!open}>
       <div className="controller-panel__head tech micro">
         <span>V17.2 / CONTROLLER</span>
         <button type="button" onClick={onClose}>CLOSE</button>

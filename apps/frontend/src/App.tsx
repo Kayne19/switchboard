@@ -103,7 +103,8 @@ export default function App() {
     <div className="app-shell">
       <SceneRenderer />
       {demoMode ? <>
-        <button className="dev-toggle tech micro" type="button" onClick={() => setControllerOpen(true)}>CTRL</button>
+        {/* Behind the focus layer, a modal, the demo page's controls are inert too (FocusLayer `useModalFocus`). */}
+        <button className="dev-toggle tech micro" type="button" onClick={() => setControllerOpen(true)} inert={Boolean(state.focusId)}>CTRL</button>
         <ControllerPanel open={controllerOpen} onClose={() => setControllerOpen(false)} />
         <IRDrawer open={irOpen} onClose={() => setIrOpen(false)} />
       </> : <RuntimeIntegration />}

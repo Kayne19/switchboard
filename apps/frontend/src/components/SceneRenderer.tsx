@@ -40,6 +40,7 @@ function SceneContent({
     // An explanation offers the history only when there is one to open.
     onOpenHistory: conversation ? () => setTranscriptOpen(true) : undefined,
     setTranscriptOpen,
+    behindFocus: focusedObject !== null,
   };
 
   return (
@@ -51,6 +52,7 @@ function SceneContent({
         </AnimatePresence>
         <TranscriptDrawer
           open={transcriptOpen}
+          behindFocus={focusedObject !== null}
           lines={conversation?.data.transcript ?? []}
           onClose={() => setTranscriptOpen(false)}
           onSend={voiceRuntime?.sendText}
