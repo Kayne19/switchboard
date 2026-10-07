@@ -149,6 +149,7 @@ describe('formatCountdown', () => {
     expect(formatCountdown(1e20)).toBe('84006D 00:00:00');
     expect(formatCountdown(1e300)).toBe('84006D 00:00:00');
     expect(formatCountdown(Number.POSITIVE_INFINITY)).toBe('84006D 00:00:00');
+    expect(formatCountdown(Number.NaN)).toBe('00:00');
   });
 });
 

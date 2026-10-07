@@ -84,7 +84,7 @@ export function readTimer(timer: Timer, now: number): TimerReading {
 
 /** Seconds as a countdown reads them: `MM:SS`, `H:MM:SS` from an hour, `ND HH:MM:SS` from a day; held to MAX_COUNTDOWN. */
 export function formatCountdown(totalSeconds: number): string {
-  const seconds = Math.min(MAX_COUNTDOWN, Math.max(0, Math.floor(totalSeconds)));
+  const seconds = Number.isNaN(totalSeconds) ? 0 : Math.min(MAX_COUNTDOWN, Math.max(0, Math.floor(totalSeconds)));
   const days = Math.floor(seconds / 86_400);
   const hours = Math.floor((seconds % 86_400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
