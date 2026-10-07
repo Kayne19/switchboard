@@ -38,6 +38,14 @@ export interface TimerReading {
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
 /**
+ * The longest countdown the page draws, in seconds: the longest span two
+ * instants make (1970-01-01 to 2200-01-01, the years an instant is read
+ * in). A running timer cannot count longer; a paused one's `remaining` is
+ * bounded on the wire below only, and 1e20 drew 16 digits of days.
+ */
+export const MAX_COUNTDOWN = 84_006 * 86_400;
+
+/**
  * Where in each second a timer's reading turns over, in milliseconds past
  * the whole second (0 to 999): its digits change a whole number of seconds
  * before its end, and the time since a whole number after, so on the
@@ -66,7 +74,7 @@ export function readTimer(timer: Timer, now: number): TimerReading {
   const spanMs = start !== null && ends > start ? ends - start : null;
   const span = spanMs !== null ? Math.round(spanMs / 1000) : null;
   if (timer.state === 'paused') {
-    const remaining = Math.max(0, timer.remaining ?? 0);
+    const remaining = Math.min(MAX_COUNTDOWN, Math.max(0, timer.remaining ?? 0));
     return { phase: 'paused', seconds: Math.ceil(remaining), over: 0, gone: spanMs !== null ? clamp01(1 - (remaining * 1000) / spanMs) : null, span };
   }
   const left = ends - now;
@@ -74,9 +82,9 @@ export function readTimer(timer: Timer, now: number): TimerReading {
   return { phase: 'running', seconds: Math.ceil(left / 1000), over: 0, gone: spanMs !== null && start !== null ? clamp01((now - start) / spanMs) : null, span };
 }
 
-/** Seconds as a countdown reads them: `MM:SS`, `H:MM:SS` from an hour, `ND HH:MM:SS` from a day. */
+/** Seconds as a countdown reads them: `MM:SS`, `H:MM:SS` from an hour, `ND HH:MM:SS` from a day; held to MAX_COUNTDOWN. */
 export function formatCountdown(totalSeconds: number): string {
-  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const seconds = Math.min(MAX_COUNTDOWN, Math.max(0, Math.floor(totalSeconds)));
   const days = Math.floor(seconds / 86_400);
   const hours = Math.floor((seconds % 86_400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
