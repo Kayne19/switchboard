@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 // The notes over a chart were placed again on every frame of a resize: a
 // placement costs up to 200-250 ms on a dense bar chart (four series of 40
-// with five notes and the rail), so a resize dropped frames. They are placed once a step of the size, as a graph is
-// laid out once a step; within a step the cards follow their points, and
-// where the size comes to rest they are placed for it.
+// with five notes and the rail), so a resize dropped frames. They are
+// placed once a step of the size, as a graph is laid out once a step; within
+// a step the cards follow their points, and where the size comes to rest
+// they are placed for it.
 import { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 

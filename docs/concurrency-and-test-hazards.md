@@ -432,7 +432,9 @@ The rule: a unit-test time budget measures with `leastCpuMs`, never the wall
 clock. `scripts/check_hygiene.mjs` refuses `performance.now`, `Date.now` and
 `process.hrtime` anywhere in `apps/frontend/tests/unit` but `cpuTime.ts`. A
 test about the page clock uses vitest's fake timers
-(`vi.setSystemTime`, `vi.advanceTimersByTime`), never the real one.
+(`vi.setSystemTime`, `vi.advanceTimersByTime`), never the real one, and reads
+the fake time with `vi.getMockedSystemTime()` or `new Date()`, since the gate
+refuses `Date.now` whatever clock it reads.
 
 ## A broken pipe reported instead of the error that caused it
 
