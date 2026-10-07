@@ -756,6 +756,8 @@ button {
   top: 6.2cqh;
   display: grid;
   gap: 0.45cqh;
+  /* It has nothing to click, and spans the band at the stage's top. */
+  pointer-events: none;
 }
 .scene-heading__title,
 .scene-heading__sub {
