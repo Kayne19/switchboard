@@ -7,7 +7,9 @@
 //! keeps the registry of hosts that `/healthz` reports. Over the current link
 //! of a host it sends commands and matches their replies, hands each session's
 //! events, snapshots and module calls to whoever subscribed to that session,
-//! and answers module calls nobody subscribed to.
+//! and answers module calls nobody subscribed to. A frame it cannot read is
+//! answered by its id when it has one (a module call refused, a reply's
+//! command failed) and otherwise logged with the reason and dropped.
 //!
 //! The per-host tokens come from one JSON file, read once at startup. A token
 //! is never logged; logs name hosts and counts only.
@@ -31,6 +33,11 @@ pub const OLDEST_HOST_LINK_PROTOCOL: u64 = 1;
 
 /// Largest frame a host may send; a snapshot is the biggest one.
 const MAX_HOST_FRAME_BYTES: usize = 16 * 1024 * 1024;
+/// How deep arrays and objects may nest in a frame the service reads:
+/// serde_json's recursion limit refuses the 128th level. The skill module
+/// holds a call to the same depth before sending (`_MAX_FRAME_DEPTH`;
+/// `scripts/check_hygiene.mjs` keeps the two equal).
+const MAX_FRAME_DEPTH: usize = 127;
 /// Close code for a link a newer link of the same host replaced.
 const CLOSE_FENCED: u16 = 4001;
 /// Close code for a link that missed too many pongs.
@@ -154,7 +161,8 @@ impl SentCommand {
 }
 
 /// Why a command did not succeed: the host agent's error code and message,
-/// or `not_connected`, `link_lost` or `timeout` from this side.
+/// or `not_connected`, `link_lost`, `timeout` or `unreadable_reply` from this
+/// side.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandError {
     pub code: String,
@@ -217,6 +225,47 @@ impl Drop for ModuleCall {
             let _ = sender.send(json!({"status": "failed", "reason": "failed"}));
         }
     }
+}
+
+/// What a module call is answered when the service cannot read its frame.
+/// The skill shows the reason to the agent word for word.
+fn unreadable_call(cause: &str) -> Value {
+    json!({"status": "refused", "reason": format!("this call cannot be read: {cause}")})
+}
+
+/// Why serde_json could not read a frame, in words an agent can act on. The
+/// line and column are left out: they count in the host-link frame, which
+/// the agent never sees.
+fn parse_cause(error: &serde_json::Error) -> String {
+    let message = error.to_string();
+    let position = format!(" at line {} column {}", error.line(), error.column());
+    match message.strip_suffix(&position).unwrap_or(&message) {
+        "lone leading surrogate in hex escape" | "unexpected end of hex escape" => {
+            "a string holds half of a UTF-16 surrogate pair".to_owned()
+        }
+        "number out of range" => "a number is beyond what a double can hold".to_owned(),
+        "recursion limit exceeded" => {
+            format!(
+                "arrays and objects nest deeper than the service reads ({MAX_FRAME_DEPTH} levels)"
+            )
+        }
+        other => other.to_owned(),
+    }
+}
+
+/// The fields of a frame that say what it is and what would answer it. They
+/// are read on their own when the whole frame cannot be: serde skips every
+/// other field without building it, so a lone surrogate, a number beyond a
+/// double, or nesting deeper than serde_json reads, anywhere else in the
+/// frame, does not stop them.
+#[derive(Default, Deserialize)]
+struct FrameHead {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    id: Option<String>,
+    epoch: Option<u64>,
+    session: Option<String>,
+    call: Option<String>,
 }
 
 /// The frame a module reply goes out as.
@@ -682,6 +731,10 @@ impl Hosts {
                         Answer::Nothing => {}
                     },
                     Some(Ok(Message::Close(_))) | None => return "disconnected",
+                    Some(Ok(Message::Binary(frame))) => {
+                        tracing::warn!(%host, epoch, bytes = frame.len(), "host sent a binary frame; the host link is JSON text, so it is dropped");
+                    }
+                    // WebSocket pings and pongs; the heartbeat is JSON.
                     Some(Ok(_)) => {}
                     Some(Err(_)) => return "read failed",
                 },
@@ -691,10 +744,13 @@ impl Hosts {
 
     /// Applies one frame from the link at `epoch`. Frames from a link that is
     /// no longer the host's current one change nothing.
-    fn on_frame(&self, host: &str, epoch: u64, frame: &str) -> Answer {
-        let Ok(frame) = serde_json::from_str::<Value>(frame) else {
-            tracing::debug!(%host, epoch, "host sent a frame that is not JSON");
-            return Answer::Nothing;
+    fn on_frame(&self, host: &str, epoch: u64, raw: &str) -> Answer {
+        let frame = match serde_json::from_str::<Value>(raw) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.on_unreadable_frame(host, epoch, raw, &error);
+                return Answer::Nothing;
+            }
         };
         match frame["type"].as_str() {
             Some("ping") => return Answer::Pong,
@@ -712,10 +768,11 @@ impl Hosts {
         state.seq += 1;
         let seq = state.seq;
         match frame["type"].as_str() {
-            Some("event") | Some("snapshot") => {
+            Some(kind @ ("event" | "snapshot")) => {
                 let (Some(session), Some(cursor)) =
                     (frame["session"].as_str(), frame["cursor"].as_str())
                 else {
+                    tracing::warn!(%host, epoch, frame = kind, "host sent a session frame without a session or cursor; dropped");
                     return Answer::Nothing;
                 };
                 let closed = frame["event"]["kind"] == "session_closed";
@@ -743,6 +800,7 @@ impl Hosts {
             }
             Some("reply") => {
                 let Some(id) = frame["id"].as_str() else {
+                    tracing::warn!(%host, epoch, "host sent a reply without an id; no command can take it, so it is dropped");
                     return Answer::Nothing;
                 };
                 if frame["epoch"].as_u64() != Some(epoch) {
@@ -770,6 +828,7 @@ impl Hosts {
             }
             Some("module_call") => {
                 let Some(id) = frame["id"].as_str().map(str::to_owned) else {
+                    tracing::warn!(%host, epoch, "host sent a module call without an id; nothing can answer it, so it is dropped");
                     return Answer::Nothing;
                 };
                 let outbound = state.link.as_ref().map(|link| link.outbound.clone());
@@ -798,8 +857,13 @@ impl Hosts {
                     args: frame["args"].clone(),
                     reply: Some(reply),
                 }));
-                if delivered.is_err() {
+                if let Err(mpsc::error::SendError(frame)) = delivered {
+                    // The session stopped listening: answered as if it never had.
                     state.subscribers.remove(session);
+                    if let SessionFrame::ModuleCall(call) = frame {
+                        tracing::info!(%host, call = %call.call, "module call from a session no longer on a call refused");
+                        call.answer(json!({"status": "refused", "reason": "not_on_call"}));
+                    }
                 }
                 // Answered on the link the call came from, whenever the answer
                 // is ready; a call nobody answers in time failed.
@@ -818,9 +882,72 @@ impl Hosts {
                 tracing::info!(%host, epoch, sessions = state.cursors.len(), "host synced");
             }
             // A stale `synced` and anything newer are not acted on.
-            _ => {}
+            other => {
+                tracing::debug!(%host, epoch, frame = other.unwrap_or("untyped"), "host frame not acted on");
+            }
         }
         Answer::Nothing
+    }
+
+    /// Answers a frame the service cannot read as far as its head allows
+    /// (`FrameHead`): a module call is refused at once, with the reason, and
+    /// a command's reply fails that command at once. Both used to wait out a
+    /// deadline: the agent heard `failed` only when the host agent gave up,
+    /// 30 s on, and the command waited all of its own. A frame without an id
+    /// to answer by is logged with the reason and dropped. Frames from a
+    /// fenced link change nothing, as in `on_frame`.
+    fn on_unreadable_frame(&self, host: &str, epoch: u64, raw: &str, error: &serde_json::Error) {
+        let cause = parse_cause(error);
+        let head = serde_json::from_str::<FrameHead>(raw).unwrap_or_default();
+        let kind = head.kind.as_deref().unwrap_or("unknown");
+        let mut hosts = self.0.hosts.lock().unwrap();
+        let Some(state) = hosts.get_mut(host) else {
+            return;
+        };
+        let Some(link) = state.link.as_ref().filter(|link| link.epoch == epoch) else {
+            tracing::debug!(%host, epoch, frame = kind, %cause, "unreadable frame from a fenced host link ignored");
+            return;
+        };
+        match (kind, head.id) {
+            ("module_call", Some(id)) => {
+                tracing::warn!(
+                    %host,
+                    epoch,
+                    %id,
+                    call = head.call.as_deref().unwrap_or_default(),
+                    %cause,
+                    "module call the service cannot read refused"
+                );
+                let _ = link
+                    .outbound
+                    .send(text(module_reply(&id, unreadable_call(&cause))));
+            }
+            ("reply", Some(id)) if head.epoch != Some(epoch) => {
+                tracing::debug!(%host, epoch, %id, %cause, "unreadable reply for another link epoch ignored");
+            }
+            ("reply", Some(id)) => {
+                let Some(pending) = state.pending.remove(&id) else {
+                    tracing::debug!(%host, epoch, %id, %cause, "unreadable reply for no pending command ignored");
+                    return;
+                };
+                tracing::warn!(%host, epoch, %id, %cause, "reply the service cannot read failed its command");
+                let _ = pending.reply.send(Err(CommandError::new(
+                    "unreadable_reply",
+                    format!("host {host} answered, but the service cannot read the reply: {cause}"),
+                )));
+            }
+            _ => {
+                tracing::warn!(
+                    %host,
+                    epoch,
+                    frame = kind,
+                    session = head.session.as_deref().unwrap_or_default(),
+                    bytes = raw.len(),
+                    %cause,
+                    "host sent a frame the service cannot read and nothing in it can be answered; dropped"
+                );
+            }
+        }
     }
 
     /// Forgets the link at `epoch` if it is still the host's current one.

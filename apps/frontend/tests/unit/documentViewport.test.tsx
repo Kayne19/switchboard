@@ -1,27 +1,13 @@
 // @vitest-environment jsdom
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { DocumentViewport } from '../../src/primitives/DocumentViewport';
+import { mount, stubResizeObserver } from './sceneHarness';
 
-let host: HTMLDivElement;
-let root: Root;
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
+// The rows scroll in a list viewport, which watches its box.
+stubResizeObserver();
 
 function render(paragraphs: string[]) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  act(() => root.render(<DocumentViewport data={{ subject: 'Report', paragraphs }} />));
-  return host.querySelector('.document-viewport__body') as HTMLElement;
+  return mount(<DocumentViewport data={{ subject: 'Report', paragraphs }} />).querySelector('.document-viewport__body') as HTMLElement;
 }
 
 describe('DocumentViewport paragraphs', () => {

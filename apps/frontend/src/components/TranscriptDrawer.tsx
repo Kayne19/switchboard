@@ -14,13 +14,15 @@ interface TranscriptDrawerProps {
    * out. Absent when no call runtime is connected to this page.
    */
   onSend?: (text: string) => boolean;
+  /** The focus layer is open over the history: it is inert behind it (FocusLayer `useModalFocus`). */
+  behindFocus?: boolean;
 }
 
 // The conversation history, opened over whichever scene is showing: from the
 // conversation scene's transcript toggle or from an explanation card beside
 // content. It belongs to the stage rather than to one scene so that opening it
 // never swaps the scene underneath.
-export function TranscriptDrawer({ open, lines, onClose, onSend }: TranscriptDrawerProps) {
+export function TranscriptDrawer({ open, lines, onClose, onSend, behindFocus = false }: TranscriptDrawerProps) {
   return (
     <AnimatePresence>
       {open ? (
@@ -28,6 +30,7 @@ export function TranscriptDrawer({ open, lines, onClose, onSend }: TranscriptDra
           className="transcript"
           role="dialog"
           aria-label="Conversation history"
+          inert={behindFocus}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -35,7 +38,7 @@ export function TranscriptDrawer({ open, lines, onClose, onSend }: TranscriptDra
         >
           <div className="transcript__header tech micro">
             <span>CONVERSATION / HISTORY</span>
-            <button type="button" onClick={onClose}>RETURN / ESC</button>
+            <button className="transcript__return" type="button" onClick={onClose}>RETURN / ESC</button>
           </div>
           <TranscriptBody lines={lines} />
           <TranscriptComposer onSend={onSend} />

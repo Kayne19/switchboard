@@ -3,10 +3,17 @@
   --red: #c61522;
   --orange: #f15a24;
   --orange-rgb: 241, 90, 36;
+  /* The item a note names (a task, a message, a timer, a forecast day or
+     hour) is marked alike: an orange edge on the side it is read from and
+     a wash fading away from it, its name in orange, and the NOTE badge. */
+  --marked-edge: rgba(var(--orange-rgb), 0.7);
+  --marked-wash-from: rgba(var(--orange-rgb), 0.1);
+  --marked-wash-to: rgba(var(--orange-rgb), 0.02);
   --amber: #ffb000;
   --green: #7fd63d;
   --cyan: #5ed6d8;
   --paper: #e8e6df;
+  --paper-rgb: 232, 230, 223;
   --muted: #8c8c86;
   --dim: #3e3e3a;
   /* The two stacks beside the narrow root face: data and labels (.tech,
@@ -16,6 +23,27 @@
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
     monospace;
   --font-prose: "Helvetica Neue", Arial, sans-serif;
+  /* The panel frame's steps (TechFrame "panel": 24 of its 620 units, in at
+     its top right and its bottom left): a share of the frame's height. The
+     inset keeps content that fills a panel clear of both with a gap. Its
+     percentage resolves where it is used, and means the frame's height
+     only in a row track (or a top or bottom offset) of the box the frame
+     is drawn over: in a padding it would be a share of the width. */
+  --panel-step-share: calc(24 / 620);
+  --panel-step: calc(var(--panel-step-share) * 100%);
+  --panel-inset: calc(var(--panel-step) + clamp(6px, 0.9cqh, 12px));
+  /* The document frame's top line steps down to 28 of its 800 units at its
+     right (TechFrame "document"); its inset clears that with a gap. A share
+     of the frame's height, so it means that only as a top offset. */
+  --document-inset: calc(28 / 800 * 100% + 4px);
+  /* The page's focus ring (DESIGN_SYSTEM.md, "Focus ring"), and how far
+     past its control it reaches: the room a control keeps from an edge
+     that clips. */
+  --focus-ring: 1px solid var(--orange);
+  --focus-ring-offset: 4px;
+  --focus-ring-reach: calc(var(--focus-ring-offset) + 1px);
+  /* How far in from its edge a region draws it. */
+  --focus-ring-inset: 1px;
   color: var(--paper);
   background: var(--black);
   font-family:
@@ -92,7 +120,7 @@ button {
   letter-spacing: 0.17em;
 }
 .muted {
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
 }
 .accent,
 .semantic-orange {
@@ -116,6 +144,31 @@ button {
 .semantic-muted {
   color: var(--muted);
 }
+/* The same set as a tone (--tone) that a part draws its marks in: an
+   inbox message's edge, a calendar event's bar, block and tag. The
+   calendar's neutral tone and its lit one stand with its rules
+   (.tone--none). */
+.tone--red {
+  --tone: var(--red);
+}
+.tone--orange {
+  --tone: var(--orange);
+}
+.tone--green {
+  --tone: var(--green);
+}
+.tone--cyan {
+  --tone: var(--cyan);
+}
+.tone--amber {
+  --tone: var(--amber);
+}
+.tone--paper {
+  --tone: var(--paper);
+}
+.tone--muted {
+  --tone: var(--muted);
+}
 
 .surface-unavailable,
 .stage-unavailable {
@@ -125,7 +178,7 @@ button {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
 }
 .stage-unavailable {
   position: absolute;
@@ -137,6 +190,7 @@ button {
 }
 
 .focusable-content {
+  position: relative;
   display: block;
   width: 100%;
   height: 100%;
@@ -148,12 +202,101 @@ button {
   text-align: inherit;
   cursor: zoom-in;
 }
-.focusable-content:focus-visible,
+/* The page's focus ring (DESIGN_SYSTEM.md, "Focus ring"): every control the
+   keyboard reaches draws one orange line, never the browser's own ring, and
+   no box clips it. A control draws it a little off itself. */
 .damocles-presence__button:focus-visible,
 .annotation-card__history:focus-visible,
-.transcript-toggle:focus-visible {
-  outline: 1px solid var(--orange);
-  outline-offset: 4px;
+.live-chat-card__history:focus-visible,
+.transcript-toggle:focus-visible,
+.focus-layer__return:focus-visible,
+.transcript__return:focus-visible,
+.transcript__send:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-ring-offset);
+}
+/* A metric in a cluster is a card clipped to its chamfer, which would clip
+   an outline away whole; its edge is already a line (its ground round its
+   black face), so its ring is that edge in the ring's colour. */
+.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible {
+  outline: none;
+  background: var(--orange);
+}
+/* A region fills a box that clips past its edge (a frame, a scroll), so it
+   draws the ring inside its edge, a pixel in (`--focus-ring-inset`): a
+   box a scroll cuts a fraction of a pixel short, as a scroll's last item
+   can be, still shows it. A scroll draws it as its outline, which stays put
+   as the content scrolls. Every box that scrolls draws it: Chrome puts a
+   scroll with nothing to focus inside it in the tab order. */
+.annotation-card__text:focus-visible,
+.live-chat-card__text:focus-visible,
+.conversation-answer__text:focus-visible,
+.transcript__body:focus-visible,
+.rich-text__code-block:focus-visible,
+.progress-primitive__steps:focus-visible,
+.content-rail__details:focus-visible,
+.training-charts--compare:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: calc(-1px - var(--focus-ring-inset));
+}
+/* A scroll that holds controls brings a focused one in with room for its
+   ring (a scroll stops at a whole pixel, and a control's ring reaches past
+   it). Nothing scrolls these into view but focus. */
+.content-rail__details,
+.composed-aux,
+.training-charts--compare {
+  scroll-padding: var(--focus-ring-reach);
+}
+/* A region with parts over its own edges draws the ring over them, on the
+   box that holds it still: an object's surface over what it holds (the
+   object's box clips everything outside it, and a part with a ground of its
+   own, a source's, would cover its outline); a calendar's paged days over
+   their rims and the hours' own; a list's or a drawing's scroll over its
+   rims and its pinned head, on the port or view it scrolls in. */
+.focusable-content:focus-visible,
+.calendar-pages:focus-visible,
+.list-viewport__scroll:focus-visible,
+.drawing-viewport__scroll:focus-visible {
+  outline: none;
+}
+.focusable-content:focus-visible::after,
+.calendar-pages:focus-visible::after,
+.list-viewport__port:has(> .list-viewport__scroll:focus-visible)::after,
+.drawing-viewport__view:has(> .drawing-viewport__scroll:focus-visible)::after {
+  content: "";
+  position: absolute;
+  z-index: 10;
+  inset: var(--focus-ring-inset);
+  border: var(--focus-ring);
+  pointer-events: none;
+}
+/* Every primitive's root, and the viewports drawings and lists scroll in,
+   fill the box they are given and may be shorter than what they hold:
+   each scrolls or lays itself out inside. A root's own rule says how. */
+.chart-primitive,
+.diagram-primitive,
+.sequence-primitive,
+.drawing-viewport,
+.list-viewport,
+.document-viewport,
+.code-viewport,
+.table-viewport,
+.image-primitive,
+.calendar,
+.tasks-primitive,
+.inbox-primitive,
+.timer-primitive,
+.weather {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+/* A document, source and a table stand on black inside their frame. */
+.document-viewport,
+.code-viewport,
+.table-viewport {
+  position: relative;
+  background: #000;
 }
 
 /* Conversation corner accents: placement from #conversation .corner-a/b in
@@ -279,7 +422,7 @@ button {
   flex: none;
   width: max-content;
   text-align: center;
-  color: rgba(232, 230, 223, 0.54);
+  color: rgba(var(--paper-rgb), 0.54);
   white-space: nowrap;
 }
 /* Sized to its content, never narrower than the bars need: a label wider
@@ -318,7 +461,7 @@ button {
   transform-origin: center;
 }
 .voice-indicator__label {
-  color: rgba(232, 230, 223, 0.45);
+  color: rgba(var(--paper-rgb), 0.45);
   text-align: center;
   white-space: nowrap;
   line-height: 1.2;
@@ -362,7 +505,7 @@ button {
   z-index: 2;
   left: 4.3%;
   top: 8.5%;
-  color: rgba(232, 230, 223, 0.38);
+  color: rgba(var(--paper-rgb), 0.38);
 }
 .conversation-answer__index {
   position: absolute;
@@ -376,7 +519,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(232, 230, 223, 0.28);
+  color: rgba(var(--paper-rgb), 0.28);
 }
 .conversation-answer__text {
   position: absolute;
@@ -414,7 +557,7 @@ button {
 }
 .spoken-log__line {
   min-width: 0;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   transition: color 0.24s ease;
 }
 .spoken-log__line--current {
@@ -424,7 +567,7 @@ button {
   position: absolute;
   left: 6.2cqw;
   bottom: 7.3cqh;
-  color: rgba(232, 230, 223, 0.34);
+  color: rgba(var(--paper-rgb), 0.34);
 }
 .transcript-toggle {
   position: absolute;
@@ -434,7 +577,7 @@ button {
   padding: 8px 12px;
   border: 0;
   background: transparent;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   cursor: pointer;
   transition:
     color 0.16s ease,
@@ -503,7 +646,7 @@ button {
   justify-content: space-between;
   align-items: center;
   height: 6cqh;
-  color: rgba(232, 230, 223, 0.48);
+  color: rgba(var(--paper-rgb), 0.48);
   border-bottom: 1px solid rgba(var(--orange-rgb), 0.34);
 }
 .transcript__header button {
@@ -515,7 +658,7 @@ button {
 .transcript__body {
   height: 67cqh;
   overflow: auto;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.13);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.13);
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.42) transparent;
 }
@@ -524,7 +667,7 @@ button {
   grid-template-columns: minmax(80px, 10cqw) 1fr;
   gap: 2cqw;
   padding: 2.4cqh 0;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.08);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.08);
   font-family: var(--transcript-font);
   font-size: var(--transcript-size);
   line-height: 1.5;
@@ -534,7 +677,7 @@ button {
   font-size: clamp(16px, 1.45cqw, 25px);
 }
 .transcript-line__speaker {
-  color: rgba(232, 230, 223, 0.34);
+  color: rgba(var(--paper-rgb), 0.34);
 }
 .transcript__composer {
   position: absolute;
@@ -545,7 +688,7 @@ button {
   align-items: stretch;
   height: 6cqh;
   min-height: 48px;
-  border: 1px solid rgba(232, 230, 223, 0.17);
+  border: 1px solid rgba(var(--paper-rgb), 0.17);
   background: #050505;
 }
 .transcript__composer:focus-within {
@@ -569,25 +712,24 @@ button {
   line-height: 1.5;
 }
 .transcript__input:disabled {
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
 }
 .transcript__send {
   flex: none;
   padding: 0 18px;
   border: 0;
-  border-left: 1px solid rgba(232, 230, 223, 0.1);
+  border-left: 1px solid rgba(var(--paper-rgb), 0.1);
   background: transparent;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   cursor: pointer;
   transition: color 0.16s ease;
 }
 .transcript__send:hover:not(:disabled),
 .transcript__send:focus-visible {
   color: var(--orange);
-  outline: none;
 }
 .transcript__send:disabled {
-  color: rgba(232, 230, 223, 0.18);
+  color: rgba(var(--paper-rgb), 0.18);
   cursor: default;
 }
 .transcript__status {
@@ -604,20 +746,35 @@ button {
   --scene-gap: clamp(42px, 4.6cqw, 96px);
   --footer-y: 6.7cqh;
 }
+/* The heading runs to the stage's far edge and no further: a long title
+   (up to 128 characters) or subtitle is cut there with an ellipsis. */
 .scene-heading {
   position: absolute;
   z-index: 3;
   left: var(--edge);
+  right: var(--edge);
   top: 6.2cqh;
   display: grid;
   gap: 0.45cqh;
+  /* It has nothing to click, and spans the band at the stage's top. */
+  pointer-events: none;
+}
+.scene-heading__title,
+.scene-heading__sub {
+  min-width: 0;
+  /* Clipped a little outside the box: a glyph's antialiased edge reaches
+     past it, and a short title is drawn as it was before. */
+  overflow: clip;
+  overflow-clip-margin: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .scene-heading__title {
   color: var(--orange);
   font-weight: 700;
 }
 .scene-heading__sub {
-  color: rgba(232, 230, 223, 0.36);
+  color: rgba(var(--paper-rgb), 0.36);
 }
 .content-grid {
   position: absolute;
@@ -639,6 +796,20 @@ button {
   position: relative;
   min-width: 0;
   min-height: 0;
+}
+/* Every visual that fills the main slot (Scenes.tsx objectContent) has a
+   black ground, as a chart's object does (.chart-object). */
+.diagram-object,
+.document-object,
+.code-object,
+.table-object,
+.image-object,
+.calendar-object,
+.tasks-object,
+.inbox-object,
+.timer-object,
+.weather-object {
+  background: #000;
 }
 .content-rail {
   position: relative;
@@ -668,7 +839,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: rgba(232, 230, 223, 0.28);
+  color: rgba(var(--paper-rgb), 0.28);
   pointer-events: none;
 }
 
@@ -691,26 +862,45 @@ button {
   text-align: left;
   overflow: hidden;
 }
+/* A card puts what it names on a line of its own where it does not fit
+   beside the tag, rather than cut it to an ellipsis there: the TARGET
+   line's words are the object's own (a title, a node's label, a list's
+   item), and they are its point: cut beside the tag in a phone's rail,
+   they read `TARG…`. */
 .annotation-card__header {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: 4px 12px;
   margin-bottom: clamp(8px, 1cqh, 13px);
 }
-.annotation-card__tag {
+/* The tag that heads a rail card: a note's, the live response's, the last
+   tool's. */
+.annotation-card__tag,
+.live-chat-card__tag,
+.tool-activity__tag {
   flex: none;
-  color: rgba(232, 230, 223, 0.35);
+  color: rgba(var(--paper-rgb), 0.35);
+}
+.annotation-card__target {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
 }
 .annotation-card__anchor {
   min-width: 0;
-  margin-left: auto;
   color: rgba(var(--orange-rgb), 0.7);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.annotation-card__node-badge {
+/* The NOTE badge (NoteBadge): on the rail card that names a part, and on
+   the item of a list a note names. */
+.note-badge {
   flex: none;
   display: inline-block;
   padding: 0 4px;
@@ -723,19 +913,27 @@ button {
   vertical-align: middle;
   border-radius: 2px;
 }
-.annotation-card__history {
+/* A note and the live response share their history button, body and
+   scrolling text (the live response pads its text off the scroll bar). */
+.annotation-card__history,
+.live-chat-card__history {
   flex: none;
+  /* It stands at the card's right edge, which clips (the card, the note's
+     box, the rail's scroll): in from it by the reach of its focus ring. */
+  margin-inline-end: var(--focus-ring-reach);
   padding: 0;
   border: 0;
   background: transparent;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   cursor: pointer;
   transition: color 0.16s ease;
 }
-.annotation-card__history:hover {
+.annotation-card__history:hover,
+.live-chat-card__history:hover {
   color: var(--orange);
 }
-.annotation-card__body {
+.annotation-card__body,
+.live-chat-card__body {
   height: 100%;
   min-height: 0;
 }
@@ -743,7 +941,8 @@ button {
   cursor: pointer;
 }
 /* Long explanations scroll inside the card; short ones never show a bar. */
-.annotation-card__text {
+.annotation-card__text,
+.live-chat-card__text {
   height: 100%;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -797,14 +996,14 @@ button {
   overflow-x: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  background: rgba(232, 230, 223, 0.08);
+  background: rgba(var(--paper-rgb), 0.08);
   color: var(--paper);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.86em;
 }
 .rich-text__code {
   padding: 0.05em 0.3em;
-  background: rgba(232, 230, 223, 0.08);
+  background: rgba(var(--paper-rgb), 0.08);
   color: var(--paper);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.86em;
@@ -814,7 +1013,21 @@ button {
 .training-main {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
+  grid-auto-rows: auto;
   gap: clamp(12px, 2cqh, 22px);
+}
+/* The note the primary chart leaves out, where the rail stands under the
+   charts: a band under them, its card's text scrolling past a third of the
+   column. */
+.chart-note-band {
+  min-width: 0;
+  min-height: 0;
+  max-height: 34cqh;
+  display: flex;
+}
+.chart-note-band .annotation-card {
+  height: auto;
+  max-height: 100%;
 }
 .training-charts {
   position: relative;
@@ -844,41 +1057,98 @@ button {
     clamp(10px, 1.2cqw, 20px);
 }
 .chart-primitive {
-  width: 100%;
-  height: 100%;
   min-width: 0;
-  min-height: 0;
   display: grid;
   place-items: center;
 }
-.chart-primitive svg {
+.chart-primitive > svg,
+.chart-primitive__canvas > svg {
   display: block;
   width: 100%;
   height: 100%;
   min-height: 0;
   overflow: visible;
 }
+
+/* A bar chart too long for its slot scrolls in it (ChartPrimitive,
+   chartScrollHeight): a list viewport over the slot, its value axis
+   pinned over the rows, the canvas the chart's least height. Its
+   scrollbar is the viewport's edges and counts, as a drawing's is. */
+.chart-primitive--scrolls {
+  display: flex;
+}
+
+.chart-primitive__viewport {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+}
+
+.chart-primitive__scroll {
+  scrollbar-width: none;
+}
+
+.chart-primitive__scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.chart-primitive__canvas {
+  position: relative;
+  width: 100%;
+}
+
+.chart-primitive__axis {
+  display: block;
+}
 .chart-grid line {
-  stroke: rgba(232, 230, 223, 0.11);
+  stroke: rgba(var(--paper-rgb), 0.11);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+/* Bars and areas rise from their baseline, drawn a shade firmer than the
+   grid so the eye reads the ground they stand on. */
+.chart-baseline {
+  stroke: rgba(var(--paper-rgb), 0.32);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 .chart-grid text,
 .chart-legend text,
 .chart-axis-label {
-  fill: rgba(232, 230, 223, 0.38);
+  fill: rgba(var(--paper-rgb), 0.38);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 13px;
   letter-spacing: 0.08em;
 }
 .chart-axis-label {
-  fill: rgba(232, 230, 223, 0.28);
+  fill: rgba(var(--paper-rgb), 0.28);
   font-size: 11px;
   letter-spacing: 0.14em;
 }
 .chart-legend text {
-  fill: rgba(232, 230, 223, 0.62);
+  fill: rgba(var(--paper-rgb), 0.62);
   font-size: 11px;
+}
+
+/* A bar a marker or a note names is marked as a bar: outlined in the
+   annotation colour, its value printed past its end in the tick text's
+   face, where a note's leader lands. */
+.chart-callout__outline {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-callout__value {
+  fill: var(--orange);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.chart-callout__value--inside {
+  fill: var(--black);
 }
 .compare-label {
   position: absolute;
@@ -906,6 +1176,14 @@ button {
 .training-charts--compare .chart-notes {
   --note-width: min(80%, 440px);
 }
+/* The box the cards and leaders are placed in: the layer's own, or, over
+   a chart that scrolls, the chart's canvas, moved with its scroll inside
+   the layer, which is then clipped to the scroll's port (ChartNotes). */
+.chart-notes__frame {
+  position: absolute;
+  inset: 0;
+}
+
 .chart-notes__leaders {
   position: absolute;
   inset: 0;
@@ -933,6 +1211,13 @@ button {
 .chart-note-leader__stop--point {
   stop-opacity: 0.2;
 }
+
+/* A leader to a bar lands by its printed value, among bars it would fade
+   into: it keeps the card's edge colour, a shade firmer, the whole way. */
+.chart-note-leader--bar .chart-note-leader__stop {
+  stop-color: rgba(var(--orange-rgb), 0.8);
+  stop-opacity: 1;
+}
 .chart-note {
   position: absolute;
   left: 0;
@@ -940,19 +1225,38 @@ button {
   display: flex;
   flex-direction: column;
   width: var(--note-width);
-  max-height: 36%;
+  /* A third of the layer, but on a short one (a phone on its side) room
+     for its header and a few lines, up to three fifths of it: at a third
+     of a layer 150 px tall the card had room for its header alone, and
+     its text scrolled out of sight. */
+  max-height: max(36%, min(104px, 62%));
   background: #000;
   pointer-events: auto;
 }
+
 .chart-note .annotation-card {
   height: auto;
   min-height: 0;
   padding: clamp(10px, 1cqw, 16px) clamp(12px, 1.2cqw, 18px)
     clamp(10px, 1cqw, 16px);
   border: 1px solid var(--chart-note-edge);
-  /* The layer's leader router cuts the same share (CARD_CUT) from the top
-     edge it may leave by. */
+  /* The leader router keeps off the same cut (notePlacement's
+     NOTE_CARD_CUT: 8% of the top edge, 23% of the right side). */
   clip-path: polygon(0 0, 92% 0, 100% 23%, 100% 100%, 0 100%);
+}
+/* The note a chart leaves out so the others are clear of its data is shown
+   in the rail; its card stays here out of view only to be measured, and
+   the point it names keeps a ring, drawn as the chart draws its marker but
+   hollow, so the data under it still shows. So does a point whose note is
+   in the band under the chart or in a focus panel (`chartRings`). A bar
+   stays marked by its callout. */
+.chart-note--away {
+  visibility: hidden;
+  pointer-events: none;
+}
+.chart-note-ring {
+  fill: none;
+  stroke: var(--orange);
 }
 .training-progress {
   min-height: 64px;
@@ -966,19 +1270,24 @@ button {
   min-height: 64px;
   padding-top: clamp(10px, 1.2cqh, 16px);
 }
+/* A label with no space to break at (a path, a long name) wraps inside
+   its column rather than running under the bar and out of the frame. */
 .progress-primitive__label {
   display: grid;
   gap: 4px;
+  min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 .progress-primitive__label strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: clamp(18px, 1.8cqw, 31px);
   font-weight: 500;
   color: var(--paper);
 }
 .progress-primitive__track {
   height: 5px;
-  background: rgba(232, 230, 223, 0.11);
+  background: rgba(var(--paper-rgb), 0.11);
   overflow: hidden;
 }
 .progress-primitive__fill {
@@ -991,8 +1300,96 @@ button {
   transform-origin: left center;
 }
 .progress-primitive__text {
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
   white-space: nowrap;
+}
+/* The plan under the bar: one line per step, a square glyph for its state,
+   its detail in the muted face after it. The list is the frame's scroll
+   region, so it scrolls inside the frame only once it outgrows the room
+   the slot gives it (the same viewport treatment as a document body or a
+   code pane) and never crosses the frame geometry. */
+.progress-primitive--stepped {
+  /* The bar's row keeps its own height; a slot taller than the two rows
+     leaves the room under the list instead of opening a gap between them,
+     and the wide column gap of the bar row is not the gap to the list. */
+  align-content: start;
+  row-gap: 0;
+}
+.progress-primitive__steps {
+  grid-column: 1 / -1;
+  /* Stretched to its row, not centred in it: a row bounded by the slot
+     (the primary cell) then bounds the list, and the list scrolls. */
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  margin: clamp(4px, 0.8cqh, 10px) 0 0;
+  padding: clamp(6px, 0.9cqh, 10px) clamp(6px, 0.6cqw, 10px) 0 0;
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
+  list-style: none;
+  display: grid;
+  /* A list shorter than its stretched box keeps its rows at their own
+     height at the top, rather than spreading them over the box. */
+  align-content: start;
+  gap: clamp(3px, 0.6cqh, 7px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
+}
+.progress-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
+  align-items: baseline;
+  column-gap: clamp(8px, 0.8cqw, 14px);
+  min-width: 0;
+  color: rgba(var(--paper-rgb), 0.5);
+  line-height: 1.5;
+}
+.progress-step__glyph {
+  width: 0.95em;
+  height: 0.95em;
+  align-self: center;
+}
+.progress-step__label,
+.progress-step__detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.progress-step--done {
+  color: rgba(var(--paper-rgb), 0.62);
+}
+.progress-step--done .progress-step__glyph {
+  color: var(--green);
+}
+.progress-step--active {
+  color: var(--paper);
+}
+.progress-step--active .progress-step__glyph {
+  color: var(--orange);
+}
+.progress-step--todo .progress-step__glyph {
+  color: rgba(var(--paper-rgb), 0.4);
+}
+.progress-step--blocked {
+  color: var(--paper);
+}
+.progress-step--blocked .progress-step__glyph,
+.progress-step--blocked .progress-step__label {
+  color: var(--red);
+}
+/* The steps a compact slot leaves out, counted on one line in their place. */
+.progress-step--elided {
+  grid-template-columns: 1fr;
+  padding-left: calc(0.95em + clamp(6px, 0.7cqw, 12px));
+  color: rgba(var(--paper-rgb), 0.35);
+}
+/* The training page's progress sits under its charts in an auto row: the
+   list is capped so a long plan scrolls here rather than squeezing the
+   chart out. */
+.training-progress .progress-primitive__steps {
+  max-height: clamp(72px, 20cqh, 220px);
 }
 .metrics {
   width: 100%;
@@ -1011,46 +1408,121 @@ button {
   align-items: center;
   min-height: 0;
   padding: clamp(8px, 1.25cqh, 14px) 0;
-  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
 }
 .metric-row__label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
 }
 .metric-row__value {
+  display: flex;
+  align-items: baseline;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: clamp(15px, 1.28cqw, 23px);
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The number and the move beside it share the value's width. The number
+   never shrinks for the move's sake (shrink 0), so the move is what gives
+   way, down to a floor that still shows the arrow and the start of the
+   delta; a number wider than the cell is capped at the cell and truncates
+   as it always did. */
+.metric-row__number {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Which way the value moved, beside it in the value's own colour: a small
+   arrow and the delta as the agent worded it, sized against the value so
+   they read the same in a rail row and on a primary card. */
+.metric-row__trend {
+  display: inline-flex;
+  align-items: baseline;
+  flex: 0 1 auto;
+  gap: 0.35em;
+  margin-left: 0.55em;
+  min-width: 6ch;
+  font-size: clamp(9px, 0.46em, 30px);
+  letter-spacing: 0.08em;
+  opacity: 0.86;
+}
+.metric-row__delta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.metric-row__arrow {
+  width: 1em;
+  height: 1em;
+  align-self: center;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
 }
 
 /* Generic composed workspaces */
+/* The main column of every content scene. Row 1 is the scene's own main
+   slot, and alone it fills the column. Row 2, when there is one, is the aux
+   row: the objects beside the primary that the slot does not draw (compare
+   objects, the other visuals, secondary progress) get an explicit visible
+   slot below it, so an accepted object is never lost to the layout. The row
+   takes what its cells need up to two fifths of the column, so the primary
+   keeps the larger share; past that the row scrolls inside itself. (A metric
+   primary's card keeps its own height instead, and the row takes the rest.) */
 .composed-main {
   display: grid;
-  /* Row 2 is the aux strip: compare objects and secondary progress get an
-     explicit visible slot below the primary, so an accepted object is
-     never lost to the layout. */
-  grid-template-rows: minmax(0, 1fr) minmax(0, auto);
+  grid-template-rows: minmax(0, 1fr);
+  grid-auto-rows: fit-content(40%);
   gap: clamp(12px, 2cqh, 22px);
 }
-.composed-aux {
+.composed-aux-viewport {
+  /* The readable floor of a visual's cell: the head of a table or a code
+     pane and its first rows, a chart's plot, a figure with its caption. On
+     a short stage it fits the row's cap, so one cell shows whole. */
+  --aux-visual-floor: clamp(112px, 18cqh, 200px);
   grid-row: 2;
   min-width: 0;
   min-height: clamp(96px, 15cqh, 210px);
+}
+/* A row with no room for every cell at its floor scrolls, the same bounded
+   scroll as a list (ListViewport, which draws its rim), and never squeezes
+   a cell to nothing. */
+.composed-aux {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: clamp(10px, 1.6cqw, 20px);
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
 .composed-primary-object,
 .composed-aux-object {
   position: relative;
   min-width: 0;
   min-height: 0;
+}
+/* A cell is never shorter than what it holds needs: a metric, a note or a
+   progress keeps its own height, and a visual, whose drawing fits any box,
+   keeps the readable floor. */
+.composed-aux-object {
+  min-height: auto;
+}
+.composed-aux-object--visual {
+  min-height: var(--aux-visual-floor);
+}
+
+/* A chart's floor is its least frame at the readable scale
+   (chartGeometry.ts: CHART_MIN_FRAME 240 units tall, CHART_READABLE_SCALE
+   7/11 px a unit, so 153px) inside the cell's padding: shorter, its text
+   would fall below the page's floors, so the row scrolls instead. */
+.composed-aux-object--chart {
+  min-height: max(var(--aux-visual-floor), calc(153px + 2 * clamp(12px, 1.4cqw, 22px)));
 }
 .composed-primary-object > .focusable-content,
 .composed-aux-object > .focusable-content {
@@ -1066,10 +1538,17 @@ button {
 }
 .composed-main--metric-primary {
   grid-template-rows: auto;
+  /* As tall as its cells ask, but no taller than what the card leaves: on
+     a short stage (844x390) a chart's cell under the card ran past the
+     column and the stage's foot, its x axis out of view. */
+  grid-auto-rows: minmax(0, auto);
   align-content: center;
 }
+/* A metric card keeps its height; the aux row under it takes the rest of
+   the slot and scrolls inside it when that is not enough. */
 .composed-primary-object--metric {
   width: min(100%, 720px);
+  min-height: auto;
   justify-self: start;
 }
 .composed-primary-object--cluster {
@@ -1139,10 +1618,6 @@ button {
 .metrics--primary.metrics--cluster .metric-row[role="button"] {
   cursor: zoom-in;
 }
-.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible {
-  outline: 1px solid var(--orange);
-  outline-offset: 4px;
-}
 .metrics--primary .metric-row::before {
   content: "";
   position: absolute;
@@ -1159,14 +1634,14 @@ button {
   position: absolute;
   right: clamp(22px, 3cqw, 42px);
   top: clamp(18px, 2cqh, 28px);
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: clamp(8px, 0.56cqw, 11px);
   letter-spacing: 0.16em;
 }
 .metrics--primary .metric-row__label {
   align-self: end;
-  color: rgba(232, 230, 223, 0.52);
+  color: rgba(var(--paper-rgb), 0.52);
 }
 .metrics--primary .metric-row__value {
   align-self: start;
@@ -1218,43 +1693,96 @@ button {
   flex: 1 1 auto;
   min-height: clamp(64px, 10cqh, 110px);
 }
+/* A note the charts could not hold, leading a column too short for all of
+   it: whole, the metrics after it in the column's scroll. */
+.content-rail__details > .rail-note--leads {
+  flex: none;
+  order: -1;
+}
+.rail-note--leads .annotation-card {
+  height: auto;
+}
+/* A rail with more than one note reads each whole, at its own height, one
+   after another; the column scrolls where they do not all fit, its edges
+   fading as a scroller's do. */
+.content-rail__details > .rail-note--stacked {
+  flex: none;
+  min-height: 0;
+}
+.rail-note--stacked .annotation-card {
+  height: auto;
+}
+.content-rail > .scroll-rim__fade {
+  grid-column: 1;
+  grid-row: 2;
+}
 .content-rail__details > .rail-progress {
   flex: none;
   min-width: 0;
 }
-.rail-progress .progress-primitive,
 .composed-aux-object--progress .progress-primitive {
-  /* A rail or an aux cell is too narrow for the wide label | bar | text row:
-     the fixed label column and the gaps leave the bar no width at all. Here
-     the label takes its own line and the bar shares the next with the text. */
+  /* An aux cell is too narrow for the wide label | bar | text row: the
+     fixed label column and the gaps leave the bar no width at all. Here the
+     label takes its own line and the bar shares the next with the text. */
   grid-template-columns: minmax(0, 1fr) fit-content(50%);
   gap: 8px 12px;
   min-height: 0;
   padding-top: clamp(8px, 1cqh, 12px);
 }
-.rail-progress .progress-primitive__label,
 .composed-aux-object--progress .progress-primitive__label {
   grid-column: 1 / -1;
   min-width: 0;
 }
-.rail-progress .progress-primitive__label > *,
 .composed-aux-object--progress .progress-primitive__label > *,
-.rail-progress .progress-primitive__text,
 .composed-aux-object--progress .progress-primitive__text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rail-progress .progress-primitive__label strong,
 .composed-aux-object--progress .progress-primitive__label strong {
   font-size: clamp(14px, 1.3cqw, 22px);
 }
-.rail-progress .progress-primitive__text,
 .composed-aux-object--progress .progress-primitive__text {
   grid-column: 2;
   justify-self: end;
 }
+/* The rail's progress module reads as the metrics above it do: its head is
+   a metric row (the label in the tech face, the share done as the value),
+   the bar runs under it, then one row counts the steps done and each step
+   still to do is a row between the same thin rules, its state in the
+   glyph. The details and the agent's own wording wait for focus, which
+   lists the whole plan. */
+.progress-primitive.progress-primitive--rail {
+  display: block;
+  min-height: 0;
+  padding-top: 0;
+  border-top: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+.progress-primitive--rail .progress-primitive__head {
+  border-top: 0;
+}
+.progress-primitive--rail .progress-primitive__track {
+  height: 3px;
+  margin-bottom: clamp(4px, 0.8cqh, 8px);
+}
+.progress-primitive--rail .progress-primitive__steps {
+  margin: 0;
+  padding: 0;
+  border-top: 0;
+  gap: 0;
+  overflow: visible;
+}
+.progress-primitive--rail .progress-step {
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: clamp(3px, 0.55cqh, 7px) 0;
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
+  line-height: 1.3;
+}
+.progress-primitive--rail .progress-step__detail {
+  display: none;
+}
+
 /* The live chat output: the current assistant turn in a contained
    scrollable card. It grows with the rail and scrolls inside; the note
    and the metrics keep their own space. */
@@ -1269,6 +1797,11 @@ button {
   padding-top: clamp(10px, 1.2cqh, 14px);
   border-top: 1px solid rgba(var(--orange-rgb), 0.48);
 }
+/* The response's text box clips it: its fades (SpokenLog) stand over the
+   box's edges. */
+.live-chat-card__body {
+  position: relative;
+}
 .content-rail__details > .live-chat-card {
   flex: 1 1 auto;
   min-height: clamp(84px, 13cqh, 140px);
@@ -1279,10 +1812,6 @@ button {
   justify-content: space-between;
   gap: 10px;
 }
-.live-chat-card__tag {
-  flex: none;
-  color: rgba(232, 230, 223, 0.35);
-}
 .live-chat-card__index {
   min-width: 0;
   margin-left: auto;
@@ -1290,31 +1819,7 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.live-chat-card__history {
-  flex: none;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: rgba(232, 230, 223, 0.42);
-  cursor: pointer;
-  transition: color 0.16s ease;
-}
-.live-chat-card__history:hover {
-  color: var(--orange);
-}
-.live-chat-card__body {
-  height: 100%;
-  min-height: 0;
-}
 .live-chat-card__text {
-  height: 100%;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
-  font-family: "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(13px, 1.06cqw, 18px);
-  line-height: 1.48;
   padding-right: clamp(6px, 1cqw, 14px);
 }
 /* The last tool the project agent used: a compact status panel that
@@ -1326,7 +1831,7 @@ button {
   display: grid;
   gap: 4px;
   padding-top: clamp(8px, 1.1cqh, 12px);
-  border-top: 1px solid rgba(232, 230, 223, 0.14);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.14);
 }
 .tool-activity {
   position: relative;
@@ -1372,10 +1877,6 @@ button {
   justify-content: space-between;
   gap: 8px;
 }
-.tool-activity__tag {
-  flex: none;
-  color: rgba(232, 230, 223, 0.35);
-}
 .tool-activity__status {
   flex: none;
 }
@@ -1383,7 +1884,7 @@ button {
   color: var(--orange);
 }
 .tool-activity__status--done {
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
 }
 .tool-activity__tool,
 .tool-activity__detail {
@@ -1414,29 +1915,1389 @@ button {
 }
 
 /* Diagram */
-.diagram-object {
-  background: #000;
-}
 .diagram-object .focusable-content {
+  --slot-pad: clamp(18px, 2.2cqw, 38px);
   position: relative;
   z-index: 1;
-  padding: clamp(18px, 2.2cqw, 38px);
+  padding: var(--slot-pad);
 }
-.diagram-primitive {
+/* In the diagram slot the drawing's viewport stands between the rails
+   (TechFrame "rails"): below the top rail's lower step (70 of the frame's
+   700 units) and above the bottom rail's upper step (624 of 700), with
+   room, so a drawing that fills it or scrolls in it never meets them. */
+.diagram-object :is(.diagram-primitive, .sequence-primitive) {
+  position: absolute;
+  top: calc(10% + 10px);
+  bottom: calc(10.86% + 10px);
+  left: var(--slot-pad);
+  right: var(--slot-pad);
+  width: auto;
+  height: auto;
+}
+/* A drawing's viewport (DrawingViewport): the drawing contained when it
+   reads at that size; otherwise drawn at its readable minimum and scrolled
+   inside it, along the axis it overflows, clipped to its box. Its auto
+   margins centre a drawing smaller than the box without ever cutting off
+   the start of one larger. A drawing that scrolls says where its reader is
+   in its own marks rather than with a scroll bar (drawingScroll.ts): it
+   rests between its parts, each edge it continues past counts what lies
+   that way and fades over what it cuts, a line leaving the view names
+   where it goes, and its map stands in a strip of its own beside it (the
+   view takes the rest, and holds the scroller and everything drawn over
+   it). */
+.drawing-viewport {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+}
+.drawing-viewport--strip-bottom {
+  flex-direction: column;
+}
+.drawing-viewport__view {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.drawing-viewport__scroll {
+  position: relative;
+  display: flex;
   width: 100%;
   height: 100%;
-  min-height: 0;
+  overflow: hidden;
+  scrollbar-width: none;
 }
-.diagram-primitive svg {
+.drawing-viewport__scroll::-webkit-scrollbar {
+  display: none;
+}
+.drawing-viewport__scroll > svg {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.drawing-viewport--scrolling .drawing-viewport__scroll {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+/* A drawing that scrolls is laid out for its box (drawn a pixel short of
+   it, and recomposed for its height), so it asks its box for nothing: a
+   box as tall as the drawing would lay it out again. In an aux cell, whose
+   row is as tall as its cells ask, the two took turns: a dense graph
+   switched between a wide layout in a short row and a tall one in a row at
+   its cap every few frames, or shrank its row a pixel a frame. The cell
+   keeps a visual's floor (.composed-aux-object--visual) instead. */
+.drawing-viewport--scrolling .drawing-viewport__view {
+  contain: size;
+}
+.drawing-viewport--scrolling .drawing-viewport__scroll > svg {
+  flex: none;
+  margin: auto;
+}
+/* At rest the drawing stands at a stop (restStops): each stop is a band
+   reaching to the next, and the browser settles the drawing at a band's
+   start. The end marker holds the content open to where the last stop
+   needs it (restEnd), a little past the drawing's end when its last
+   place to rest must not cut a part. A wheel, a trackpad or a drag on
+   the map lets go of the stops (DrawingViewport sets the scroller's own
+   snap type) until it pauses. */
+.drawing-viewport[data-scroll="x"] .drawing-viewport__scroll {
+  scroll-snap-type: x mandatory;
+}
+.drawing-viewport[data-scroll="y"] .drawing-viewport__scroll {
+  scroll-snap-type: y mandatory;
+}
+.drawing-viewport[data-scroll="both"] .drawing-viewport__scroll {
+  scroll-snap-type: both mandatory;
+}
+.drawing-viewport__stops {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+/* A stop spans the content across, so it is in view at any position on
+   the other axis: a browser only snaps to an area it can see. */
+.drawing-viewport__stop {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+.drawing-viewport__end {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+.drawing-viewport__pinned {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  right: 0;
+  visibility: hidden;
+  pointer-events: none;
+  background: #000;
+}
+.drawing-viewport__pinned--shown {
+  visibility: visible;
+}
+.drawing-viewport__pinned-drawing {
+  height: 100%;
+  overflow: hidden;
+}
+.drawing-viewport__pinned-drawing > svg {
   display: block;
   width: 100%;
   height: 100%;
   overflow: visible;
 }
+/* The edge a scroller continues past (primitives/ScrollRim.tsx), drawn alike
+   by a drawing, a list, a table, code, a document and a calendar's paged
+   days. First a fade as deep as the scroller sets (for a drawing, as deep as
+   the part it cuts reaches in), darkest at the rim, so a cut part reads as
+   the next one coming rather than as broken. */
+.scroll-rim__fade {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+}
+.scroll-rim__fade--left,
+.scroll-rim__fade--right {
+  top: 0;
+  bottom: 0;
+}
+.scroll-rim__fade--top,
+.scroll-rim__fade--bottom {
+  left: 0;
+  right: 0;
+}
+.scroll-rim__fade--left {
+  left: 0;
+  background: linear-gradient(to left, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
+}
+.scroll-rim__fade--right {
+  right: 0;
+  background: linear-gradient(to right, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
+}
+.scroll-rim__fade--top {
+  top: 0;
+  background: linear-gradient(to top, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
+}
+.scroll-rim__fade--bottom {
+  bottom: 0;
+  background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
+}
+/* On the rim, the rail (drawingScroll.ts RAIL deep): the drawing's cut,
+   a dashed orange line on the outside and a faint one within, holding the
+   edge's count and the names of the lines that leave there. */
+.scroll-rim__rail {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  --cut: rgba(var(--orange-rgb), 0.62);
+  --within: rgba(var(--orange-rgb), 0.16);
+}
+.scroll-rim__rail--left,
+.scroll-rim__rail--right {
+  top: 0;
+  bottom: 0;
+  width: 18px;
+}
+.scroll-rim__rail--top,
+.scroll-rim__rail--bottom {
+  left: 0;
+  right: 0;
+  height: 18px;
+}
+.scroll-rim__rail--left {
+  left: 0;
+  border-left: 1px dashed var(--cut);
+  box-shadow: inset -1px 0 var(--within);
+}
+.scroll-rim__rail--right {
+  right: 0;
+  border-right: 1px dashed var(--cut);
+  box-shadow: inset 1px 0 var(--within);
+}
+.scroll-rim__rail--top {
+  top: 0;
+  border-top: 1px dashed var(--cut);
+  box-shadow: inset 0 -1px var(--within);
+}
+.scroll-rim__rail--bottom {
+  bottom: 0;
+  border-bottom: 1px dashed var(--cut);
+  box-shadow: inset 0 1px var(--within);
+}
+/* A rail's count: how many parts lie that way, and a chevron pointing
+   there, set along the rail in the rail face (drawingScroll.ts
+   `tagLength`). A tap on it turns a page that way. On the left and right
+   rails a tag is turned a quarter so it runs along the rail, its top (and
+   its chevron) facing out: the left one reads up, as a spine does. */
+.scroll-rim__count {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  border: 1px solid rgba(var(--orange-rgb), 0.85);
+  background: #000;
+  color: var(--orange);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.scroll-rim__count--left,
+.scroll-rim__count--right {
+  top: 50%;
+  translate: -50% -50%;
+}
+.scroll-rim__count--left {
+  left: 9px;
+  rotate: -90deg;
+}
+.scroll-rim__count--right {
+  left: calc(100% - 9px);
+  rotate: 90deg;
+}
+.scroll-rim__count--top,
+.scroll-rim__count--bottom {
+  left: 50%;
+  translate: -50% 0;
+}
+.scroll-rim__count--top {
+  top: 0;
+}
+.scroll-rim__count--bottom {
+  bottom: 0;
+}
+/* The one chevron (ScrollRim `Chevron`), on a rim's count. */
+.scroll-rim__chevron {
+  flex: none;
+  width: 8px;
+  height: 6px;
+  fill: currentColor;
+}
+.scroll-rim__count--bottom .scroll-rim__chevron {
+  rotate: 180deg;
+}
+/* A line that leaves the view: on the rail where it leaves, the name of
+   the part it goes to, in the line's colour, its chevron pointing out,
+   turned as a rail's count is. drawingScroll.ts places it by this face and
+   these sizes (TAG_ADVANCE, TAG_PAD, TAG_DEPTH); DrawingViewport sets its
+   centre. */
+.drawing-viewport__exits {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.drawing-viewport__exit {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 15px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 16%, #000);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  white-space: nowrap;
+  translate: -50% -50%;
+}
+.drawing-viewport__exit::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 5px;
+  background: currentColor;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.drawing-viewport__exit--left {
+  rotate: -90deg;
+}
+.drawing-viewport__exit--right {
+  rotate: 90deg;
+}
+.drawing-viewport__exit--bottom::before {
+  rotate: 180deg;
+}
+/* The map's strip: beside the drawing along the way it scrolls (under
+   one that scrolls across, right of one that scrolls down), as deep as
+   the map, its padding and margins (drawingScroll MAP_PAD, MAP_MARGIN,
+   which DrawingViewport sets on the map), so the map covers none of the
+   drawing. The map stands at its far end: the whole drawing, its parts
+   and lines, and the view boxed in orange. A tap or a drag on it moves
+   the view there. */
+.drawing-viewport__strip {
+  position: relative;
+  flex: none;
+  min-width: 0;
+  min-height: 0;
+}
+.drawing-viewport__map {
+  position: absolute;
+  box-sizing: content-box;
+  background: #000;
+  cursor: pointer;
+  touch-action: none;
+}
+.drawing-viewport__map-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: none;
+  stroke: rgba(var(--paper-rgb), 0.3);
+  stroke-width: 1;
+}
+.drawing-viewport__map-sketch {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.drawing-viewport__map-line {
+  fill: none;
+  stroke-opacity: 0.32;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.drawing-viewport__map-box {
+  fill-opacity: 0.72;
+}
+.drawing-viewport__map-view {
+  fill: rgba(var(--orange-rgb), 0.12);
+  stroke: var(--orange);
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+/* A list that outgrows its slot (primitives/ListViewport.tsx): its head
+   pinned, its rows scrolling under it inside the frame, and on each edge it
+   continues past the scroll rim a drawing has, so a scrolled list and a
+   scrolled drawing read alike. The primitive gives the scroll its padding
+   and type. */
+.list-viewport {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.list-viewport__head {
+  flex: none;
+  min-width: 0;
+}
+.list-viewport__port {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.list-viewport__scroll {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
+}
+
+/* Timer (primitives/TimerPrimitive.tsx): countdowns read against the page
+   clock. A countdown is its figure, mono with tabular digits so it does not
+   shimmer as it counts, as large as its cell allows (timerReading.ts
+   `timerLayout` sets --timer-digits; CELL_GAP is the grid's gap). Each sits
+   on a rule with a tab in its phase's colour, as a metric sits on its rule:
+   orange while it runs, muted when paused, amber (the warning colour) once
+   it is done. Several too many for readable cells are listed as rows, and
+   the list scrolls inside the frame like any list. */
+/* Timers and a forecast in the panel frame clear both of its steps with
+   their own padding (frame.spec.ts). */
+.timer-object .focusable-content,
+.weather-object .focusable-content {
+  position: relative;
+  z-index: 1;
+  padding: clamp(26px, 4.2cqh, 48px) clamp(22px, 2.6cqw, 42px) clamp(18px, 3cqh, 34px);
+}
+/* Where no frame names the timers (an aux cell, focus), their title stands
+   over them and the field takes the rest. */
+.timer-primitive {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--paper);
+}
+.timer__title {
+  flex: none;
+  margin-bottom: 10px;
+  overflow: hidden;
+  color: rgba(var(--orange-rgb), 0.8);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timer-primitive__field {
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  /* It asks a box sized by its content (an aux cell) for --timer-ask, set
+     by TimerPrimitive from its width alone: never for what it drew, which
+     the box's height chose (a grid drew a little less than its box, and in
+     an aux cell, as tall as its cells ask, cells and rows took turns every
+     frame). A definite box (the main slot, focus) sizes it as before. */
+  contain: size;
+  contain-intrinsic-height: var(--timer-ask, 0px);
+}
+/* The rows as the list draws them, laid out unseen for their height. */
+.timer-primitive__measure {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+}
+/* Its own block, so the first row's margin is in its height, as it is in
+   the list's scroll. */
+.timer-primitive__measure > ol {
+  display: flow-root;
+}
+.timer-primitive ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.timer-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--timer-columns, 1), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--timer-rows, 1), minmax(0, 1fr));
+  /* timerReading.ts CELL_GAP, set by TimerPrimitive: the gap the layout counted. */
+  gap: var(--timer-gap, 20px);
+  width: 100%;
+  height: 100%;
+}
+.timer-cell,
+.timer-row {
+  --phase: var(--orange);
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+.timer-cell--paused,
+.timer-row--paused {
+  --phase: rgba(var(--paper-rgb), 0.45);
+}
+.timer-cell--done,
+.timer-row--done {
+  --phase: var(--amber);
+}
+.timer__body {
+  position: relative;
+  min-width: 0;
+  border-top: 1px solid rgba(var(--paper-rgb), 0.16);
+}
+/* The tab on the rule, in the phase's colour; a marked timer's whole rule
+   is orange, as the note that names it. */
+.timer__body::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: 0;
+  width: 34px;
+  height: 3px;
+  background: var(--phase);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 3px) 100%, 0 100%);
+}
+.timer-cell--marked > .timer__body,
+.timer-row--marked > .timer__body {
+  border-top-color: var(--marked-edge);
+}
+/* A cell stands its timer in its middle, rule and all. */
+.timer-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.timer-cell > .timer__body {
+  padding-top: 12px;
+}
+.timer__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.timer__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--paper);
+  font-family: var(--font-prose);
+  font-size: clamp(14px, 1.1cqw, 19px);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timer__head .note-badge {
+  align-self: center;
+}
+.timer__phase {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding: 1px 0;
+  color: var(--phase);
+}
+.timer__phase--done {
+  padding: 1px 6px;
+  background: var(--amber);
+  color: #000;
+  font-weight: 700;
+}
+.timer__phase-glyph {
+  width: 8px;
+  height: 8px;
+  fill: currentColor;
+}
+.timer__digits {
+  margin: 4px 0 8px;
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: var(--timer-digits, 30px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+.timer-cell--paused .timer__digits,
+.timer-row--paused .timer__digits {
+  color: rgba(var(--paper-rgb), 0.5);
+}
+.timer-cell--done .timer__digits,
+.timer-row--done .timer__digits {
+  color: var(--amber);
+}
+.timer__track {
+  height: 3px;
+  background: rgba(var(--paper-rgb), 0.11);
+  overflow: hidden;
+}
+/* The share gone sweeps with the clock, one tick to the next; with reduced
+   motion the transition goes (the block at the end of this sheet), and it
+   steps at each tick. */
+.timer__fill {
+  height: 100%;
+  background: var(--phase);
+  transition: width 1s linear;
+}
+.timer__meta {
+  margin-top: 8px;
+  color: rgba(var(--paper-rgb), 0.42);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A row of the list: the label and its phase, the countdown at the end of
+   the line, the bar and the meta line under them. */
+.timer-list {
+  padding-right: 4px;
+}
+.timer-row > .timer__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "head digits"
+    "track track"
+    "meta meta";
+  align-items: baseline;
+  column-gap: 14px;
+  padding: 9px 0 10px;
+}
+.timer-row:first-child {
+  margin-top: 2px;
+}
+.timer-row .timer__head {
+  grid-area: head;
+}
+.timer-row .timer__phase {
+  margin-left: 0;
+}
+.timer-row .timer__digits {
+  grid-area: digits;
+  margin: 0;
+  font-size: clamp(18px, 1.5cqw, 26px);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.timer-row .timer__track {
+  grid-area: track;
+  margin-top: 7px;
+  height: 2px;
+}
+.timer-row .timer__meta {
+  grid-area: meta;
+  margin-top: 5px;
+}
+
+/* Weather (primitives/WeatherPrimitive.tsx): a forecast as an instrument.
+   The conditions now are the hero: the condition's glyph and the
+   temperature large in the mono face (weatherLayout sets --weather-temp
+   from the box), the readings on rules under it as a metric's are, an
+   alert on an amber rule (the warning colour). The hours are a strip, a
+   column each: the temperature traced in orange over the chance of rain in
+   cyan, labelled as often as the width allows. The days are rows, each
+   range a bar on one cold-to-warm scale they all share. How the three
+   stand is the box's (weather--wide, --tall, --compact). */
+.weather {
+  position: relative;
+  min-width: 0;
+  color: #d9d7d1;
+}
+.weather__box {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.weather__field {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  gap: clamp(14px, 2.4cqh, 28px) clamp(22px, 2.6cqw, 44px);
+}
+.weather--wide .weather__field {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(150px, 36%);
+  grid-template-areas:
+    "now daily"
+    "hourly hourly";
+}
+/* With no days, the hours take the height the days would have had. */
+.weather--wide .weather__field[data-parts="now hourly"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(150px, 1fr);
+  grid-template-areas:
+    "now"
+    "hourly";
+}
+.weather--wide .weather__field[data-parts="now daily"] {
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "now daily";
+}
+/* Down the box the column keeps each part's own height and scrolls as one
+   (a ListViewport) when it is longer than the box. */
+.weather--tall .weather__field {
+  height: auto;
+  min-height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto var(--weather-strip-least) auto;
+  grid-template-areas:
+    "now"
+    "hourly"
+    "daily";
+  align-content: start;
+}
+.weather--tall .weather__field[data-parts="now daily"] {
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "now"
+    "daily";
+}
+.weather--tall .weather__field[data-parts="now hourly"] {
+  grid-template-rows: auto minmax(var(--weather-strip-least), 1fr);
+  grid-template-areas:
+    "now"
+    "hourly";
+}
+.weather__scroll {
+  padding-right: 4px;
+}
+.weather--compact .weather__field {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    "now"
+    "daily";
+  gap: 10px;
+}
+.weather--compact .weather__field[data-parts="now hourly"] {
+  grid-template-areas:
+    "now"
+    "hourly";
+}
+/* Conditions alone stand in the middle of the box. */
+.weather__field[data-parts="now"] {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto;
+  grid-template-areas: "now";
+  align-content: center;
+}
+.weather__field[data-parts="now"] .weather-now {
+  width: min(100%, 720px);
+}
+/* Alone, the words stand under the figure, so the figure has the width. */
+.weather__field[data-parts="now"] .weather-now__body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The thirteen glyphs: strokes that keep their width at any size, each
+   part in its kind's colour. */
+.weather-glyph {
+  display: block;
+  width: 1em;
+  height: 1em;
+  overflow: visible;
+  fill: none;
+  stroke-width: var(--glyph-stroke, 1.4px);
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+.weather-glyph path {
+  vector-effect: non-scaling-stroke;
+}
+.weather-glyph__sun {
+  stroke: var(--orange);
+}
+.weather-glyph__cloud {
+  stroke: rgba(var(--paper-rgb), 0.88);
+}
+.weather-glyph__water {
+  stroke: var(--cyan);
+}
+.weather-glyph__ice {
+  stroke: var(--paper);
+}
+.weather-glyph__bolt {
+  stroke: var(--amber);
+}
+.weather-glyph__air {
+  stroke: rgba(var(--paper-rgb), 0.7);
+}
+.weather-glyph path.weather-glyph--solid {
+  fill: var(--paper);
+  stroke: none;
+}
+
+/* Conditions now. */
+.weather-now {
+  grid-area: now;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.5cqh, 16px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.weather-now__head,
+.weather-section__head {
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  gap: 14px;
+  padding-bottom: 6px;
+  color: rgba(var(--paper-rgb), 0.42);
+  white-space: nowrap;
+}
+.weather-now__head {
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+.weather-now__location {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(var(--orange-rgb), 0.9);
+  text-overflow: ellipsis;
+}
+/* The title where no frame shows it: it leads, and the place gives way. */
+.weather-now__title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The alert's tag, where its line has given way (weatherLayout alertLine):
+   after the title, the place kept at the head's end. */
+.weather-now__alert-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  margin-right: auto;
+  color: var(--amber);
+  font-weight: 700;
+}
+
+/* The alert's words, and an hour's whole reading, for a screen reader;
+   out of sight. */
+.weather-now__alert-words,
+.weather-hour > .weather-hour__reading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.weather-now__title + .weather-now__location {
+  flex: 0 10 auto;
+  color: rgba(var(--paper-rgb), 0.5);
+}
+.weather-now__body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  align-items: center;
+  gap: clamp(10px, 1.6cqh, 18px) clamp(20px, 2.6cqw, 44px);
+  min-width: 0;
+}
+.weather-now__detail {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.4cqh, 14px);
+  min-width: 0;
+}
+.weather-now__main {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--weather-temp, 64px) * 0.24);
+  min-width: 0;
+}
+.weather-now__glyph {
+  --glyph-stroke: 1.8px;
+  flex: none;
+  width: calc(var(--weather-temp, 64px) * 1.1);
+  height: calc(var(--weather-temp, 64px) * 1.1);
+}
+.weather-now__figure {
+  min-width: 0;
+}
+.weather-now__temp {
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: var(--weather-temp, 64px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 300;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+  white-space: nowrap;
+}
+.weather-now__unit {
+  margin-left: 0.1em;
+  color: rgba(var(--paper-rgb), 0.55);
+  font-size: 0.34em;
+  letter-spacing: 0.04em;
+  vertical-align: top;
+}
+.weather-now__condition {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--condition-gap);
+  margin-top: 8px;
+  color: var(--paper);
+}
+.weather-now__high-low {
+  color: rgba(var(--paper-rgb), 0.55);
+}
+.weather-now__summary {
+  max-width: 46ch;
+  margin: 0;
+  color: #d9d7d1;
+  font-family: var(--font-prose);
+  font-size: clamp(14px, 1.15cqw, 19px);
+  line-height: 1.4;
+}
+.weather-now__readings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 0 18px;
+  margin: 0;
+}
+.weather-now__reading {
+  min-width: 0;
+  padding: 7px 0 4px;
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
+}
+.weather-now__reading dt {
+  color: rgba(var(--paper-rgb), 0.4);
+}
+/* A reading's value wraps at its words rather than losing them (a wind
+   of "W 12 mph, gusts 25" in a narrow cell). */
+.weather-now__reading dd {
+  margin: 3px 0 0;
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: clamp(14px, 1.15cqw, 20px);
+  line-height: 1.25;
+  overflow-wrap: break-word;
+}
+/* Beside the outlook the figure's column is as wide as the figure, at most
+   the body's, so its condition line still wraps; the days take the rest.
+   The sizes come from weatherLayout (OUTLOOK_*), set on the body. */
+.weather-now__body--outlook,
+.weather__field[data-parts="now"] .weather-now__body--outlook {
+  grid-template-columns: var(--outlook-figure) minmax(0, 1fr);
+  column-gap: var(--outlook-space);
+}
+
+/* The days beside the conditions in a slot too short for a list: whole
+   columns only (outlookCount), each its name, glyph, high and low. */
+.weather-outlook {
+  display: flex;
+  gap: var(--outlook-gap);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.weather-outlook__day {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: var(--outlook-column);
+  padding: 8px 0 2px;
+  border-top: 1px solid rgba(var(--paper-rgb), 0.16);
+  line-height: 1.15;
+}
+
+.weather-outlook__name {
+  color: rgba(var(--paper-rgb), 0.6);
+  white-space: nowrap;
+}
+
+.weather-outlook__glyph {
+  width: 18px;
+  height: 18px;
+}
+
+.weather-outlook__high {
+  color: var(--paper);
+}
+
+.weather-outlook__low {
+  color: rgba(var(--paper-rgb), 0.55);
+}
+
+.weather-outlook__day--marked {
+  border-top-color: var(--marked-edge);
+  background: linear-gradient(180deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+}
+
+.weather-outlook__day--marked > .weather-outlook__name {
+  color: var(--orange);
+}
+
+.weather-outlook__badge {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  translate: -50% -50%;
+  /* Over the column's top rule, the badge's tint is laid on black. */
+  background: linear-gradient(rgba(var(--orange-rgb), 0.25), rgba(var(--orange-rgb), 0.25)) #000;
+}
+
+/* The item a note names, where the slot has no list to show it in: one
+   line on the orange rule, its badge first. */
+.weather-spot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px 4px 0;
+  border-top: 1px solid rgba(var(--orange-rgb), 0.55);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.weather-spot__when {
+  color: var(--orange);
+}
+.weather-spot__glyph {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.weather-spot__precip {
+  flex: none;
+  color: var(--cyan);
+}
+
+/* Narrow, the line's readings give way in an order (WeatherPrimitive
+   Spot), the day and its badge first in line: the chance of rain is set
+   aside whole first, then the temperatures end in an ellipsis. */
+.weather-spot__temp {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.weather-spot__precip--dropped {
+  position: absolute;
+  visibility: hidden;
+}
+/* The alert: an amber rule, its sign and its words, the warning colour. */
+.weather-alert {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--amber);
+  background: linear-gradient(90deg, rgba(255, 176, 0, 0.13), rgba(255, 176, 0, 0.02) 80%, transparent);
+  color: var(--amber);
+}
+.weather-alert__glyph {
+  flex: none;
+  align-self: center;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: miter;
+}
+.weather-alert__tag {
+  flex: none;
+  font-weight: 700;
+}
+.weather-alert__text {
+  min-width: 0;
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1.02cqw, 17px);
+  line-height: 1.35;
+}
+
+/* The hours. Each column holds its rows; the trace lies over the band
+   between the labels and the rain, across every column. */
+.weather-hourly {
+  grid-area: hourly;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.weather-section__head {
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.13);
+}
+/* --strip-pad is weatherLayout.ts STRIP_PAD, set by WeatherPrimitive: the
+   padding the label step counted. */
+.weather-hourly__strip {
+  --badge-row: 0px;
+  --glyph-row: 22px;
+  --temp-row: 16px;
+  --rain-row: 24px;
+  --precip-row: 14px;
+  --time-row: 15px;
+  position: relative;
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 120px;
+  padding: 0 var(--strip-pad);
+}
+.weather-hourly__strip--marked {
+  --badge-row: 18px;
+}
+.weather-hourly__trace {
+  position: absolute;
+  left: var(--strip-pad);
+  top: calc(var(--badge-row) + var(--glyph-row) + var(--temp-row) + 6px);
+  width: calc(100% - 2 * var(--strip-pad));
+  height: calc(100% - var(--badge-row) - var(--glyph-row) - var(--temp-row) - var(--rain-row) - var(--precip-row) - var(--time-row) - 14px);
+  overflow: visible;
+  pointer-events: none;
+}
+.weather-hourly__area {
+  fill: rgba(var(--orange-rgb), 0.08);
+  stroke: none;
+}
+.weather-hourly__line {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 1.6px;
+  stroke-linejoin: miter;
+  vector-effect: non-scaling-stroke;
+}
+.weather-hourly__dots {
+  fill: none;
+  stroke: var(--paper);
+  stroke-width: 5px;
+  stroke-linecap: square;
+  vector-effect: non-scaling-stroke;
+}
+.weather-hourly__dots--marked {
+  stroke: var(--orange);
+  stroke-width: 9px;
+}
+.weather-hour {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  padding-top: var(--badge-row);
+}
+.weather-hour > span {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  justify-content: center;
+  white-space: nowrap;
+}
+.weather-hour__glyph {
+  height: var(--glyph-row);
+  align-items: center;
+}
+.weather-hour__glyph .weather-glyph {
+  width: 18px;
+  height: 18px;
+}
+.weather-hour__temp {
+  height: var(--temp-row);
+  color: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: var(--temp-row);
+}
+.weather-hour > .weather-hour__plot {
+  flex: 1 1 auto;
+}
+.weather-hour__rain {
+  height: var(--rain-row);
+  align-items: flex-end;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.16);
+}
+.weather-hour__rain-bar {
+  width: calc(100% - 2px);
+  max-width: 16px;
+  background: rgba(94, 214, 216, 0.5);
+}
+.weather-hour__precip {
+  height: var(--precip-row);
+  color: var(--cyan);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: var(--precip-row);
+}
+.weather-hour__time {
+  height: var(--time-row);
+  align-items: flex-end;
+  color: rgba(var(--paper-rgb), 0.5);
+}
+/* Midnight: a dashed rule down the strip and the new day's name. */
+.weather-hour--day {
+  box-shadow: inset 1px 0 0 rgba(var(--orange-rgb), 0.35);
+}
+.weather-hour--day > .weather-hour__time {
+  color: rgba(var(--orange-rgb), 0.9);
+}
+/* The hour a note names: its badge over it, a rule down through its
+   point, and its words in orange. */
+.weather-hour--marked::before {
+  content: "";
+  position: absolute;
+  top: var(--badge-row);
+  bottom: calc(var(--time-row) + var(--precip-row));
+  left: calc(50% - 0.5px);
+  width: 1px;
+  background: var(--marked-edge);
+}
+.weather-hour--marked > .weather-hour__temp,
+.weather-hour--marked > .weather-hour__time {
+  color: var(--orange);
+}
+.weather-hour__badge {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 50%;
+  translate: -50% 0;
+}
+
+/* The days. */
+.weather-daily {
+  grid-area: daily;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.weather-daily > .list-viewport {
+  flex: 1 1 auto;
+  height: auto;
+}
+/* The rows share one set of columns (a subgrid), so a day's name and the
+   NOTE badge beside it widen the first column for every row, and the
+   glyphs, chances and ranges stand in line down the list. */
+.weather-daily__days {
+  display: grid;
+  grid-template-columns: max-content 1.3em max-content max-content minmax(36px, 1fr) max-content;
+  column-gap: clamp(8px, 0.9cqw, 14px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: clamp(13px, 1.02cqw, 17px);
+}
+.weather-day {
+  position: relative;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: center;
+  padding: clamp(5px, 0.75cqh, 9px) 4px clamp(5px, 0.75cqh, 9px) 0;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
+  color: #d9d7d1;
+  font-variant-numeric: tabular-nums;
+}
+.weather-day__name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: rgba(var(--paper-rgb), 0.78);
+  white-space: nowrap;
+}
+.weather-day__glyph {
+  width: 1.3em;
+  height: 1.3em;
+}
+.weather-day__precip {
+  color: var(--cyan);
+  text-align: right;
+}
+.weather-day__precip--none {
+  color: rgba(var(--paper-rgb), 0.3);
+}
+.weather-day__low {
+  color: rgba(var(--paper-rgb), 0.55);
+  text-align: right;
+}
+.weather-day__high {
+  color: var(--paper);
+}
+/* A day's range on the shared scale: the track is the whole scale, and
+   the bar is that scale's gradient, cold to warm, shown only from the
+   day's low to its high, so the same colour is the same temperature on
+   every row. */
+.weather-day__range {
+  position: relative;
+  height: 4px;
+  background: rgba(var(--paper-rgb), 0.08);
+}
+.weather-day__bar {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--cyan), var(--paper) 55%, var(--orange));
+  clip-path: inset(0 calc(100% - var(--to)) 0 var(--from));
+}
+.weather-day--marked {
+  background: linear-gradient(90deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+  box-shadow: inset 2px 0 0 var(--marked-edge);
+}
+.weather-day--marked .weather-day__name {
+  padding-left: 8px;
+  color: var(--orange);
+}
+
+/* A small slot: conditions on one line, one list under them. */
+.weather--compact .weather-now {
+  gap: 6px;
+}
+.weather--compact .weather-now__main {
+  gap: var(--figure-gap);
+}
+.weather--compact .weather-now__condition {
+  margin-top: 3px;
+}
+
+/* A slot too short to stack them: the condition beside the temperature, on
+   one line that ends in an ellipsis rather than wrap back under it. */
+.weather--compact .weather-now--inline .weather-now__figure {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.weather--compact .weather-now--inline .weather-now__condition {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  gap: 12px;
+  min-width: 0;
+  margin-top: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* The high and low give way first: the condition word stays whole. */
+.weather--compact .weather-now--inline .weather-now__condition > :first-child {
+  flex: none;
+}
+
+.weather--compact .weather-now--inline .weather-now__high-low {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.weather--compact .weather-alert {
+  padding: 3px 8px;
+}
+.weather--compact .weather-alert__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.weather--compact .weather-daily__days {
+  grid-template-columns: max-content 1.2em max-content max-content minmax(18px, 1fr) max-content;
+  column-gap: 7px;
+  font-size: 12px;
+}
+.weather--compact .weather-day {
+  padding: 4px 2px 4px 0;
+}
 /* Entry motion stays in CSS on elements that carry no SVG positioning
    transform: a CSS transform on a translated node group replaces its
    transform attribute and stacks every node in one corner. */
-.diagram-edge {
+.diagram-edge,
+.diagram-edge-label-group,
+.sequence-message,
+.sequence-message-label-group {
   animation: diagram-edge-resolve 0.24s ease-out backwards;
 }
 .diagram-edge--active {
@@ -1444,20 +3305,26 @@ button {
     diagram-edge-resolve 0.24s ease-out backwards,
     diagram-edge-flow 2.2s linear infinite;
 }
-.diagram-edge-label-group {
-  animation: diagram-edge-resolve 0.24s ease-out backwards;
-}
-/* The layout measures labels in this face at this size before drawing them
-   (diagramLayout.ts); change one and the other must follow. */
-.diagram-edge-label {
+/* The layouts measure a label on a line in this face at this size before
+   drawing it (drawingKit.tsx `labelBox`): a graph's edge labels and a
+   sequence's message labels alike. Change one and the other must follow. */
+.diagram-edge-label,
+.sequence-message-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
   letter-spacing: 0.06em;
 }
-.diagram-edge-label__backing {
+.diagram-edge-label__backing,
+.sequence-message-label__backing {
   fill: #000;
 }
-.diagram-node__body {
+/* A stub's names list where its edges go (or come from); an edge's own
+   label sits under its name, quieter, so the names read as the list. */
+.diagram-edge-label__note {
+  fill-opacity: 0.55;
+}
+.diagram-node__body,
+.sequence-actor__body {
   transform-box: fill-box;
   transform-origin: center;
   animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1)
@@ -1479,6 +3346,9 @@ button {
     transform: scale(0.94);
   }
 }
+/* The layout sizes each node's box from its text in these three faces at
+   these sizes (diagramLayout.ts, NODE_TEXT); change one and the other must
+   follow. */
 .diagram-node-label {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 15px;
@@ -1486,22 +3356,41 @@ button {
   font-weight: 700;
 }
 .diagram-node-sub {
-  fill: rgba(232, 230, 223, 0.55);
+  fill: rgba(var(--paper-rgb), 0.55);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 9px;
   letter-spacing: 0.09em;
 }
 .diagram-node-detail {
-  fill: rgba(232, 230, 223, 0.27);
+  fill: rgba(var(--paper-rgb), 0.27);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 7px;
   letter-spacing: 0.08em;
 }
-.diagram-node__body--anchored .diagram-node__frame {
-  stroke: var(--orange);
-  stroke-width: 2.2px;
-  stroke-opacity: 1;
+/* Node state: a done node recedes and carries a check in its corner tag; an
+   active one is lit by the same glow as an active edge; a blocked one is
+   framed in red with a cross in its tag. A todo node is the plain frame.
+   The frame's stroke (colour, width, opacity) is drawn by
+   DiagramPrimitive alone: a rule here would outrank its attributes. */
+.diagram-node__body--done {
+  opacity: 0.52;
 }
+
+/* A diagram in sequence mode shares the diagram slot and its motion; its
+   own classes keep the two drawings' rules apart, and a rule both follow
+   names both (the motion and the line labels above). */
+.sequence-actor-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+}
+
+.sequence-actor-sub {
+  fill: rgba(var(--paper-rgb), 0.55);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: 0.09em;
+}
+
 .diagram-callout {
   animation: diagram-node-resolve 0.28s cubic-bezier(0.22, 0.61, 0.36, 1) backwards;
 }
@@ -1518,20 +3407,10 @@ button {
 }
 
 /* Document */
-.document-object {
-  background: #000;
-}
-.document-viewport {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  background: #000;
-}
 .document-viewport__inner {
   position: absolute;
   z-index: 1;
-  inset: clamp(20px, 3.8cqh, 42px) clamp(20px, 3.5cqw, 48px)
+  inset: max(clamp(20px, 3.8cqh, 42px), var(--document-inset)) clamp(20px, 3.5cqw, 48px)
     clamp(20px, 3.8cqh, 42px);
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -1541,7 +3420,6 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr auto;
   gap: 18px;
-  color: rgba(232, 230, 223, 0.37);
 }
 .document-viewport h1 {
   width: min(88%, 900px);
@@ -1553,45 +3431,142 @@ button {
   letter-spacing: -0.025em;
   font-weight: 500;
 }
-.document-viewport__body {
-  min-height: 0;
+/* The reader (a list viewport) is the text column: its rims span the
+   column, not the frame. */
+.document-viewport__reader {
   width: min(88%, 880px);
+}
+/* Paragraphs are read as Markdown (MarkdownBlocks). Lists and code blocks
+   keep the reader's paragraph rhythm, and a long path or hash wraps inside
+   the column instead of scrolling it sideways. */
+.document-viewport__body {
   overflow: auto;
-  overscroll-behavior: contain;
   padding-right: clamp(8px, 1cqw, 16px);
   color: #cfcbc4;
   font-family: "Helvetica Neue", Arial, sans-serif;
   font-size: clamp(15px, 1.28cqw, 22px);
   line-height: 1.62;
-  scrollbar-width: thin;
+  overflow-wrap: anywhere;
   scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
-/* Paragraphs are read as Markdown (MarkdownBlocks). Lists and code blocks
-   keep the reader's paragraph rhythm, and a long path or hash wraps inside
-   the column instead of scrolling it sideways. */
 .document-viewport__body p,
 .document-viewport__body .rich-text__list,
 .document-viewport__body .rich-text__code-block {
   margin: 0 0 1.05em;
 }
-.document-viewport__body {
-  overflow-wrap: anywhere;
+
+/* In the aux row the panel is short: the subject and the opening lines are
+   the point, so the meta line goes, the subject drops to a reading size,
+   and the body takes the rest of the panel and scrolls inside it. */
+.composed-aux-object--document .document-viewport__inner {
+  inset: max(clamp(12px, 1.8cqh, 18px), var(--document-inset)) clamp(14px, 1.6cqw, 24px) clamp(12px, 1.8cqh, 18px);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.composed-aux-object--document .document-viewport__meta {
+  display: none;
+}
+.composed-aux-object--document .document-viewport h1 {
+  width: 100%;
+  margin: 0 0 clamp(6px, 1cqh, 10px);
+  font-size: clamp(15px, 1.25cqw, 20px);
+}
+.composed-aux-object--document .document-viewport__reader {
+  width: 100%;
+}
+.composed-aux-object--document .document-viewport__body {
+  font-size: clamp(13px, 0.95cqw, 16px);
+  line-height: 1.5;
+}
+
+/* Image: a raster figure contained on the black field, never cropped or
+   zoomed; its alt text and decoded size sit on the caption line at the
+   bottom edge, on the metadata baseline. The picture fades in once it has
+   decoded (the object itself resolves in through ObjectMotion). */
+.image-primitive {
+  position: relative;
+  margin: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: clamp(8px, 1.4cqh, 16px);
+  background: #000;
+}
+.image-primitive__field {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Out of flow, so the decoded size never stretches the grid row: the
+   figure is fitted to the field, whatever its own proportions. */
+.image-primitive__img {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.28s ease-out;
+}
+.image-primitive[data-state="ready"] .image-primitive__img {
+  opacity: 1;
+}
+.image-primitive__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(var(--orange-rgb), 0.6);
+}
+.image-primitive__caption {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  padding-top: clamp(6px, 1cqh, 10px);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.12);
+  color: rgba(var(--paper-rgb), 0.37);
+}
+.image-primitive__alt {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.image-primitive__size {
+  color: rgba(var(--orange-rgb), 0.62);
+}
+/* The aux row is as tall as its content, and the picture is out of flow,
+   so there the field asks for the figure's decoded proportions, held to a
+   share of the stage's height. A row given less than that still bounds the
+   field (the height resolves once the row is sized), so the picture is
+   contained in a smaller field rather than cropped by its cell. */
+.composed-aux-object--image .image-primitive__field {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: var(--image-aspect, 16 / 10);
+  max-height: 34cqh;
 }
 
 /* Code */
-.code-object {
-  background: #000;
-}
-.code-viewport {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  background: #000;
-}
-.code-viewport__mask {
+/* The table viewport shares this mask: it sits in the same frame, and the
+   clip is that frame's inside. Each stands its scroll between the frame's
+   steps, in the middle row of the mask's grid, by one rule. The top row is
+   the top-right step (the clip's 5.7%) with a gap, or the pane's own top
+   padding (--mask-top) where that is deeper, or what the row holds where
+   that is deeper still (a table's meta line, left-set beside the step). The
+   lower row is the lower step (the clip's 4.6% at the bottom left) with the
+   same gap. So no row or line ever runs under a step, at rest or scrolled,
+   and the rims sit clear of them. The rows span the mask: a CSS rule cannot
+   know which lines are long enough to reach the step. */
+.code-viewport__mask,
+.table-viewport__mask {
+  --mask-top: clamp(20px, 3cqh, 34px);
+  --mask-gap: clamp(6px, 0.9cqh, 12px);
   position: absolute;
   z-index: 1;
+  display: grid;
+  grid-template-rows: minmax(max(var(--mask-top), calc(5.7% + var(--mask-gap))), auto) minmax(0, 1fr) calc(4.6% + var(--mask-gap));
   inset: clamp(8px, 1.1cqh, 16px) clamp(8px, 1cqw, 16px);
   /* The inside of the approved code frame (TechFrame "code"), so source
      never crosses the rails as it scrolls. */
@@ -1608,15 +3583,14 @@ button {
   background: #000;
   overflow: hidden;
 }
+.code-viewport__mask > .list-viewport,
+.table-viewport__mask > .list-viewport {
+  grid-row: 2;
+}
+/* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
 .code-viewport__scroll {
-  width: 100%;
-  height: 100%;
   overflow: auto;
-  overscroll-behavior: contain;
-  padding: clamp(20px, 3cqh, 34px) clamp(28px, 3cqw, 52px)
-    clamp(54px, 7cqh, 76px) clamp(52px, 4.7cqw, 78px);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
+  padding: 0 clamp(28px, 3cqw, 52px) clamp(14px, 2cqh, 24px) clamp(52px, 4.7cqw, 78px);
 }
 .code-viewport pre {
   min-width: max-content;
@@ -1638,7 +3612,7 @@ button {
   left: -42px;
   width: 28px;
   text-align: right;
-  color: rgba(232, 230, 223, 0.2);
+  color: rgba(var(--paper-rgb), 0.2);
   user-select: none;
 }
 .code-line--hot {
@@ -1666,7 +3640,1592 @@ button {
   color: #686862;
 }
 
+/* Table: rows of named columns in the code frame, scrolling inside its mask
+   only when they overflow. Thin rules, not cards; the header in the tech
+   face; quantities in mono, set to the end so digits line up; a highlighted
+   row carries the hot-line accent. */
+/* The scroll is a list viewport's (`.list-viewport__scroll`), across too. */
+.table-viewport__scroll {
+  overflow: auto;
+  padding: 0 clamp(28px, 3cqw, 52px) clamp(14px, 2cqh, 24px);
+}
+/* The meta line stands in the mask's top row at the pane's top padding,
+   left-set beside the frame's top-right cut, above the scroll: the sticky
+   header is the scroll's top edge, so a row scrolling up passes under it,
+   never into a band above it. */
+.table-viewport__meta {
+  grid-row: 1;
+  display: flex;
+  gap: clamp(18px, 2.4cqw, 36px);
+  margin-bottom: clamp(10px, 1.6cqh, 18px);
+  padding: var(--mask-top) clamp(28px, 3cqw, 52px) 0;
+}
+.table-grid {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: #d9d7d1;
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1.05cqw, 18px);
+  line-height: 1.4;
+}
+.table-grid__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0 clamp(8px, 0.9cqw, 14px) clamp(8px, 1cqh, 12px);
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+  background: #000;
+  color: rgba(var(--paper-rgb), 0.55);
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+.table-grid__cell {
+  padding: clamp(7px, 0.9cqh, 11px) clamp(8px, 0.9cqw, 14px);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
+  vertical-align: top;
+  text-align: left;
+  /* Not `anywhere`: that lets the table size a column below its longest
+     word, so a long prose column squeezed `MEDIUM` into `MEDIU` / `M`. A
+     word wider than the frame scrolls sideways instead. */
+  overflow-wrap: break-word;
+}
+.table-grid__head:first-child,
+.table-grid__cell:first-child {
+  padding-left: clamp(6px, 0.6cqw, 10px);
+}
+.table-grid__cell--end {
+  text-align: right;
+}
+.table-grid__cell.table-grid__cell--end {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.table-grid__text--bold {
+  font-weight: 700;
+}
+.table-grid__row--hot {
+  background: linear-gradient(
+    90deg,
+    rgba(var(--orange-rgb), 0.085),
+    rgba(var(--orange-rgb), 0.018) 76%,
+    transparent
+  );
+}
+.table-grid__row--hot .table-grid__cell {
+  border-bottom-color: rgba(var(--orange-rgb), 0.3);
+}
+.table-grid__row--hot .table-grid__cell:first-child {
+  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.64);
+}
+.table-grid__empty {
+  margin-top: clamp(12px, 2cqh, 20px);
+  color: rgba(var(--paper-rgb), 0.3);
+}
+/* In the aux row the panel is short: the header and the first rows are
+   the point, so the meta line goes and the padding tightens. */
+.composed-aux-object--table .table-viewport__mask {
+  --mask-top: clamp(12px, 1.8cqh, 18px);
+}
+.composed-aux-object--table .table-viewport__scroll {
+  padding: 0 clamp(16px, 1.8cqw, 28px) clamp(8px, 1.2cqh, 14px);
+}
+.composed-aux-object--table .table-viewport__meta {
+  display: none;
+}
+.composed-aux-object--table .table-grid {
+  font-size: clamp(12px, 0.85cqw, 15px);
+}
+.composed-aux-object--table .table-grid__cell {
+  padding: clamp(4px, 0.6cqh, 7px) clamp(6px, 0.7cqw, 10px);
+}
+
+/* Tasks and inbox (primitives/TasksPrimitive.tsx, InboxPrimitive.tsx): two
+   lists read as the table and the rail's plan module are read. Rows between
+   thin rules, a meta line under an orange rule naming the list and what it
+   holds, the prose face for what a person wrote and the tech face for
+   states, days and counts. A task's state is the plan's step glyph; a
+   message's unread mark is the orange square, its flag the amber pennant.
+   No cards: a section is a heading over its rows. A list that outgrows its
+   slot scrolls inside the frame in the list viewport. */
+
+/* The panel frame is drawn behind the content, so a list's rows and a
+   figure sit inside its outline, clear of its cut corners. */
+.tasks-object .focusable-content,
+.inbox-object .focusable-content,
+.image-object .focusable-content {
+  --slot-top: clamp(22px, 3.6cqh, 42px);
+  --slot-bottom: clamp(16px, 2.6cqh, 30px);
+  position: relative;
+  z-index: 1;
+  padding: 0 clamp(22px, 2.6cqw, 42px);
+}
+
+.tasks-primitive,
+.inbox-primitive {
+  min-width: 0;
+  color: #d9d7d1;
+  font-family: var(--font-prose);
+}
+
+.focus-layer__content > .tasks-primitive,
+.focus-layer__content > .inbox-primitive {
+  padding: clamp(20px, 3.2cqh, 40px) clamp(18px, 2.6cqw, 44px) clamp(12px, 2cqh, 24px);
+}
+
+/* What the list is, and what it holds on the right, or under it where the
+   slot has no room for both. */
+.tasks-primitive__meta,
+.inbox-primitive__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px clamp(12px, 1.8cqw, 28px);
+  padding: 0 0 clamp(6px, 1cqh, 10px) 10px;
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+
+.tasks-primitive__title,
+.inbox-primitive__title {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The counts wrap part by part where the list is too narrow for them on
+   one line (an aux cell), never cut at its edge. */
+.tasks-primitive__counts,
+.inbox-primitive__counts {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  text-align: right;
+}
+
+/* Every object's meta line (a table's, a document's, a list's, a
+   calendar's) is inked alike, and so is the title it leads with where no
+   frame shows one (MetaTitle); each primitive keeps its own layout. */
+.meta-line {
+  color: rgba(var(--paper-rgb), 0.42);
+}
+.meta-line__title {
+  color: rgba(var(--orange-rgb), 0.85);
+}
+.meta-count {
+  white-space: nowrap;
+}
+
+.tasks-primitive__overdue {
+  color: var(--red);
+}
+
+.inbox-primitive__unread {
+  color: var(--paper);
+}
+
+.tasks-primitive__scroll,
+.inbox-primitive__scroll {
+  font-size: clamp(13px, 1.05cqw, 17px);
+  line-height: 1.4;
+}
+
+/* ---- Tasks ---- */
+
+/* Sections stand side by side where the list is wide enough for two
+   readable columns, and stack where it is not: the column's own width
+   decides, not the device. One section takes the whole width. */
+.tasks-primitive__sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24em), 1fr));
+  align-items: start;
+  gap: clamp(10px, 1.6cqh, 22px) clamp(22px, 2.8cqw, 52px);
+  padding-bottom: clamp(10px, 1.6cqh, 20px);
+}
+
+.task-section {
+  min-width: 0;
+}
+
+/* A section's name, and what it holds on the right, or under it where
+   the column has no room for both. */
+.task-section__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding: clamp(8px, 1.4cqh, 14px) 0 clamp(4px, 0.6cqh, 7px) 10px;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.22);
+  color: rgba(var(--paper-rgb), 0.4);
+}
+
+.task-section__name {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(var(--paper-rgb), 0.78);
+}
+
+.task-section__count {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.task-section__overdue {
+  color: var(--red);
+}
+
+.task-section__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: clamp(9px, 0.9cqw, 15px);
+  padding: clamp(7px, 1cqh, 11px) 0 clamp(7px, 1cqh, 11px) 10px;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
+}
+
+.task-row__glyph {
+  width: 0.8em;
+  height: 0.8em;
+  /* Centred on the first line, however many lines the text wraps to. */
+  margin-top: 0.3em;
+  color: rgba(var(--paper-rgb), 0.4);
+}
+
+.task-row--active .task-row__glyph {
+  color: var(--orange);
+}
+
+.task-row--done .task-row__glyph {
+  color: var(--green);
+}
+
+.task-row--blocked .task-row__glyph {
+  color: var(--red);
+}
+
+.task-row__body {
+  min-width: 0;
+}
+
+.task-row__line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45em;
+  min-width: 0;
+}
+
+.task-row__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.task-row--active .task-row__text,
+.task-row--blocked .task-row__text {
+  color: var(--paper);
+}
+
+.task-row--high .task-row__text {
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.task-row--low .task-row__text {
+  color: rgba(var(--paper-rgb), 0.6);
+}
+
+/* Done is quieter: the check says it, the words step back. */
+.task-row--done .task-row__text {
+  color: rgba(var(--paper-rgb), 0.4);
+  font-weight: 400;
+}
+
+.task-row__priority {
+  flex: none;
+  width: 0.78em;
+  height: 0.78em;
+  align-self: center;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+
+.task-row__priority--high {
+  color: var(--orange);
+}
+
+.task-row__priority--low {
+  color: rgba(var(--paper-rgb), 0.42);
+}
+
+.task-row--done .task-row__priority {
+  color: rgba(var(--paper-rgb), 0.3);
+}
+
+.task-row__detail {
+  margin-top: 2px;
+  color: rgba(var(--paper-rgb), 0.5);
+  font-size: 0.86em;
+  line-height: 1.35;
+  overflow-wrap: break-word;
+}
+
+.task-row__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 6px;
+}
+
+.task-tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 5px;
+  border: 1px solid rgba(var(--paper-rgb), 0.2);
+  color: rgba(var(--paper-rgb), 0.55);
+  line-height: 1.6;
+}
+
+.task-row--done .task-tag {
+  color: rgba(var(--paper-rgb), 0.32);
+  border-color: rgba(var(--paper-rgb), 0.1);
+}
+
+/* The due day at the end of the row: the word that judges it (OVERDUE,
+   TODAY, TOMORROW) over the day or time, both in the tech face. */
+.task-row__due {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-top: 0.2em;
+  color: rgba(var(--paper-rgb), 0.5);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.task-row__due-word {
+  font-weight: 700;
+}
+
+.task-row__due--overdue {
+  color: var(--red);
+}
+
+.task-row__due--today {
+  color: var(--orange);
+}
+
+.task-row__due--tomorrow {
+  color: rgba(var(--paper-rgb), 0.78);
+}
+
+.task-row--done .task-row__due {
+  color: rgba(var(--paper-rgb), 0.3);
+}
+
+/* A section's done tasks, counted on one row in their place. */
+.task-row--counted {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  color: rgba(var(--paper-rgb), 0.4);
+}
+
+.task-row--counted .task-row__glyph {
+  margin-top: 0;
+  opacity: 0.6;
+}
+
+/* The task a note names: the hot-row accent of a table and the NOTE badge
+   the rail card carries. */
+.task-row--marked,
+.inbox-row--marked {
+  background: linear-gradient(90deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+  box-shadow: inset 2px 0 0 var(--marked-edge);
+}
+
+.task-row__note,
+.inbox-row__note {
+  align-self: center;
+}
+
+/* Beside the primary the list reads as the rail's plan module does: one
+   line a task between thin rules, its day at the end, the detail and tags
+   a focus away. */
+.tasks-primitive--compact .tasks-primitive__scroll,
+.inbox-primitive--compact .inbox-primitive__scroll {
+  font-size: clamp(12px, 0.85cqw, 15px);
+  line-height: 1.3;
+}
+
+.tasks-primitive--compact .tasks-primitive__sections {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+  padding-bottom: 4px;
+}
+
+.tasks-primitive--compact .task-section__head {
+  padding: clamp(6px, 1cqh, 10px) 0 clamp(2px, 0.4cqh, 4px) 10px;
+  border-bottom: 0;
+}
+
+.tasks-primitive--compact .task-row {
+  align-items: center;
+  padding: clamp(3px, 0.55cqh, 7px) 0 clamp(3px, 0.55cqh, 7px) 10px;
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
+  border-bottom: 0;
+}
+
+.tasks-primitive--compact .task-row__glyph {
+  margin-top: 0;
+}
+
+.tasks-primitive--compact .task-row__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-primitive--compact .task-row__due {
+  flex-direction: row;
+  gap: 0.6em;
+  margin-top: 0;
+}
+
+/* ---- Inbox ---- */
+
+/* The list is a grid and each message a row of its columns (a subgrid),
+   so the senders, the channels and the times stand in columns down the
+   list whatever each message holds. */
+.inbox-primitive__rows {
+  display: grid;
+  align-items: baseline;
+  column-gap: clamp(8px, 0.9cqw, 14px);
+  margin: 0;
+  padding: 0 0 clamp(8px, 1.4cqh, 16px);
+  list-style: none;
+}
+
+/* Wide: one line a message, the sender in a column of its own. */
+.inbox-primitive__rows--line {
+  grid-template-columns: calc(0.5em + 10px) fit-content(14em) minmax(0, 1fr) auto auto auto;
+}
+
+/* Narrow: the sender, the channel and the time over the subject, and the
+   snippet under it. */
+.inbox-primitive__rows--stack {
+  grid-template-columns: calc(0.5em + 10px) minmax(0, 1fr) auto auto auto;
+}
+
+/* Beside the primary, wide: the sender and the subject on one line. */
+.inbox-primitive__rows--compact-line {
+  grid-template-columns: calc(0.5em + 10px) fit-content(38%) minmax(0, 1fr) auto auto;
+}
+
+/* Beside the primary, narrow: the sender and the time over the subject. */
+.inbox-primitive__rows--compact-stack {
+  grid-template-columns: calc(0.5em + 10px) minmax(0, 1fr) auto auto;
+}
+
+.inbox-row {
+  position: relative;
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  row-gap: 2px;
+  padding: clamp(7px, 1cqh, 11px) 0;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
+}
+
+.inbox-primitive__rows--compact-line > .inbox-row,
+.inbox-primitive__rows--compact-stack > .inbox-row {
+  padding-top: clamp(3px, 0.55cqh, 7px);
+  padding-bottom: clamp(3px, 0.55cqh, 7px);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
+  border-bottom: 0;
+}
+
+.inbox-primitive__rows--stack .inbox-row__text,
+.inbox-primitive__rows--compact-stack .inbox-row__text {
+  grid-row: 2;
+  grid-column: 2 / -1;
+}
+
+.inbox-primitive__rows--stack .inbox-row__text {
+  display: grid;
+}
+
+/* The mark stands at the end of its column, which keeps the row's edge
+   free for a tint or the marked accent. */
+.inbox-row__unread {
+  justify-self: end;
+  width: 0.5em;
+  height: 0.5em;
+  align-self: center;
+}
+
+.inbox-primitive__rows--stack .inbox-row__unread,
+.inbox-primitive__rows--compact-stack .inbox-row__unread {
+  grid-row: 1;
+}
+
+.inbox-row--unread .inbox-row__unread {
+  background: var(--orange);
+}
+
+.inbox-row__from {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45em;
+  min-width: 0;
+}
+
+.inbox-row__sender {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(var(--paper-rgb), 0.62);
+}
+
+.inbox-row--unread .inbox-row__sender {
+  color: var(--paper);
+  font-weight: 700;
+}
+
+/* A subject and a snippet hold one line each and are cut at its end. */
+.inbox-row__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-primitive__rows--stack .inbox-row__subject,
+.inbox-primitive__rows--stack .inbox-row__snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inbox-row__subject {
+  color: rgba(var(--paper-rgb), 0.66);
+}
+
+.inbox-row--unread .inbox-row__subject {
+  color: var(--paper);
+  font-weight: 600;
+}
+
+.inbox-row__snippet {
+  color: rgba(var(--paper-rgb), 0.42);
+}
+
+/* A message with no subject is read by its snippet: an unread one keeps
+   it strong. */
+.inbox-row--unread .inbox-row__snippet:first-child {
+  color: rgba(var(--paper-rgb), 0.78);
+}
+
+.inbox-primitive__rows--line .inbox-row__subject + .inbox-row__snippet::before {
+  content: "\2003";
+}
+
+.inbox-primitive--compact .inbox-row__subject,
+.inbox-primitive--compact .inbox-row--unread .inbox-row__subject {
+  color: rgba(var(--paper-rgb), 0.55);
+  font-weight: 400;
+}
+
+.inbox-row__channel {
+  justify-self: end;
+  align-self: center;
+  display: flex;
+}
+
+/* A tag is set a step over the micro floor: it is read, not just seen. */
+.task-tag,
+.inbox-row__tag {
+  font-size: clamp(7.5px, 0.58cqw, 11px);
+}
+
+.inbox-row__tag {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid rgba(var(--paper-rgb), 0.2);
+  color: rgba(var(--paper-rgb), 0.55);
+  line-height: 1.6;
+}
+
+.inbox-row__flagged {
+  align-self: center;
+  display: flex;
+}
+
+.inbox-row__flag {
+  flex: none;
+  width: 0.78em;
+  height: 0.78em;
+  color: var(--amber);
+}
+
+.inbox-row__time {
+  justify-self: end;
+  color: rgba(var(--paper-rgb), 0.48);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.inbox-row--unread .inbox-row__time,
+.inbox-row__time--today {
+  color: rgba(var(--paper-rgb), 0.82);
+}
+
+/* A message the agent tinted: its semantic colour (its tone) down its
+   edge. */
+.inbox-row--tint {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 12%, transparent), transparent 60%);
+  box-shadow: inset 2px 0 0 var(--tone);
+}
+
+/* A tinted message a note names keeps both: the marked row's orange on
+   its edge and accent, its own tint just inside the edge. */
+.inbox-row--marked.inbox-row--tint {
+  background: linear-gradient(90deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+  box-shadow: inset 2px 0 0 var(--marked-edge), inset 4px 0 0 var(--tone);
+}
+
+/* Calendar (CalendarPrimitive): the same instrument as the table and the
+   progress module -- thin rules, no cards, times in the mono face, titles
+   in the prose face. An event takes its colour from its `semantic` (the
+   tone), drawn as a stripe and a dark tint of it; tentative is dashed,
+   cancelled is struck and receded, an event over is receded, the active one
+   is lit, and an edge an event runs past (midnight, the view's first or
+   last day) is cut. Today's column or cell and the now line are orange.
+   The heights the layout reckons with (CalendarPrimitive.tsx: DAY_ROW_PX,
+   LANE_PX, LINE_PX, MONTH_*) are set inline or match these sizes. */
+.calendar-object .focusable-content {
+  position: relative;
+  z-index: 1;
+  padding: 0 clamp(18px, 2.2cqw, 38px);
+}
+/* A primary in the panel frame that reaches its edges stands in the
+   frame's inner box: inside both of its steps (--panel-step), with a gap.
+   A calendar fills its box to the edges (the grid's foot, the month's last
+   row, the agenda's cut line) and keeps no more room than that; a to-do
+   list, an inbox and a figure keep their own padding where it is deeper
+   (--slot-top, --slot-bottom). The step is a share of the frame's height,
+   and the main slot's height is the frame's and is set by the layout, so
+   the inset is a row of the slot's own grid, exact at any height. A padding
+   in stage units fell short of the step on every slot taller than it
+   assumed: a calendar's grid, a list's last rows and a figure's caption ran
+   over the lower step. Timers and a forecast keep their own padding, which
+   clears both steps (frame.spec.ts). */
+.calendar-object > .focusable-content,
+.tasks-object > .focusable-content,
+.inbox-object > .focusable-content,
+.image-object > .focusable-content {
+  display: grid;
+  grid-template-rows: max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px));
+}
+.calendar-object > .focusable-content > *,
+.tasks-object > .focusable-content > *,
+.inbox-object > .focusable-content > *,
+.image-object > .focusable-content > * {
+  grid-row: 2;
+  min-height: 0;
+}
+/* An aux cell is as tall as what it holds asks, so a share of the cell
+   cannot be its inset: a track in percent asks for nothing while the row
+   is sized, and a calendar that fills its box then shrank the cell a step
+   at a time to its floor. The inset is a padding, asked for, as large as
+   the step of the tallest cell there can be, with a gap: the aux row is at
+   most two fifths of the column (`.composed-main`), so a cell held by the
+   row has a step under the panel's share of 40cqh; one taller than that is
+   held by a floor (the row's least, 210 px at most, or a visual's, 200 px),
+   whose step is under 9 px, within the 12 px the clamp keeps. */
+.composed-aux-object--calendar > .focusable-content {
+  padding-block: max(clamp(12px, 1.4cqw, 22px), calc(var(--panel-step-share) * 40cqh + 4px));
+}
+.calendar {
+  /* The now's tag, pointed at what it reads (the grid's gutter tag, the
+     agenda's NOW row): a date's tag is square, a time's points. */
+  --now-point: polygon(0 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 0 100%);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: #d9d7d1;
+}
+/* An event the agent gave no colour draws in a quiet paper tone. */
+.tone--none {
+  --tone: rgba(var(--paper-rgb), 0.62);
+}
+/* The meta line, as the table's: what the view shows and how much. */
+.calendar__meta {
+  display: flex;
+  flex: none;
+  justify-content: space-between;
+  gap: clamp(12px, 2cqw, 32px);
+  min-width: 0;
+  margin-bottom: clamp(8px, 1.4cqh, 16px);
+}
+.calendar__meta > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar__meta-range {
+  margin-left: auto;
+}
+.calendar-more__note {
+  margin-left: 4px;
+}
+.calendar__body {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.calendar-grid,
+.calendar-agenda__viewport,
+.calendar-month {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.calendar-more {
+  align-self: center;
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  color: rgba(var(--orange-rgb), 0.85);
+  white-space: nowrap;
+}
+
+/* The time grid: a day row and the all-day strip pinned over the hours. */
+.calendar-grid__head {
+  display: grid;
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+.calendar-grid__day {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  border-left: 1px solid rgba(var(--paper-rgb), 0.08);
+  color: rgba(var(--paper-rgb), 0.55);
+  white-space: nowrap;
+  line-height: 36px;
+}
+.calendar-grid__date {
+  font-family: var(--font-mono);
+  font-size: clamp(15px, 1.15cqw, 21px);
+  color: var(--paper);
+  letter-spacing: -0.02em;
+}
+.calendar-grid__month {
+  color: rgba(var(--paper-rgb), 0.38);
+}
+.calendar-grid__day--today {
+  background: rgba(var(--orange-rgb), 0.07);
+  box-shadow: inset 0 1px 0 var(--orange);
+  color: var(--orange);
+}
+.calendar-grid__day--today .calendar-grid__date {
+  padding: 0 4px;
+  background: var(--orange);
+  color: #000;
+  line-height: 1.25;
+}
+.calendar-grid__strip {
+  grid-column: 1 / -1;
+  display: grid;
+  padding: 3px 0;
+  border-top: 1px solid rgba(var(--paper-rgb), 0.1);
+}
+.calendar-grid__strip-label {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  overflow: hidden;
+  color: rgba(var(--paper-rgb), 0.35);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.calendar-grid__strip-cell {
+  grid-row: 1 / -1;
+  border-left: 1px solid rgba(var(--paper-rgb), 0.08);
+}
+.calendar-grid__strip-cell--today {
+  background: rgba(var(--orange-rgb), 0.05);
+}
+.calendar-grid__scroll {
+  scrollbar-width: none;
+}
+.calendar-grid__scroll::-webkit-scrollbar {
+  display: none;
+}
+.calendar-grid__body {
+  position: relative;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+}
+.calendar-grid__rules {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.calendar-grid__hour {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+}
+.calendar-grid__hour::after {
+  content: "";
+  position: absolute;
+  left: var(--grid-lead, var(--calendar-gutter));
+  right: var(--grid-trail, 0px);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.08);
+}
+.calendar-grid__hour-text {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: calc(var(--calendar-gutter) - 8px);
+  color: rgba(var(--paper-rgb), 0.4);
+  text-align: right;
+  letter-spacing: 0.06em;
+}
+/* A run of empty hours folded: hatched, its hours named, so the grid
+   reads as cut there rather than as hours missing. It spans the days as
+   the hour rules do, never the gutter: the scale has no hours to show
+   there, and a band out to the calendar's edge reached for the frame. */
+.calendar-grid__fold {
+  position: absolute;
+  left: var(--grid-lead, var(--calendar-gutter));
+  right: var(--grid-trail, 0px);
+  display: flex;
+  align-items: center;
+  border-top: 1px dashed rgba(var(--paper-rgb), 0.18);
+  border-bottom: 1px dashed rgba(var(--paper-rgb), 0.18);
+  background: repeating-linear-gradient(-45deg, rgba(var(--paper-rgb), 0.06) 0 1px, transparent 1px 6px);
+}
+.calendar-grid__fold-text {
+  margin-left: 8px;
+  padding: 0 5px;
+  background: #000;
+  color: rgba(var(--paper-rgb), 0.42);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+.calendar-grid__column {
+  position: relative;
+  grid-row: 1;
+  min-width: 0;
+  border-left: 1px solid rgba(var(--paper-rgb), 0.08);
+}
+.calendar-grid__column--today {
+  background: rgba(var(--orange-rgb), 0.04);
+}
+/* The parts of a crowded cluster a column has no width for, counted. */
+.calendar-grid__more {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2px;
+  border: 1px dashed rgba(var(--orange-rgb), 0.55);
+  background: #000;
+  color: rgba(var(--orange-rgb), 0.9);
+  letter-spacing: 0.04em;
+}
+.calendar-grid__nothing {
+  position: absolute;
+  top: 40%;
+  left: var(--calendar-gutter);
+  right: 0;
+  color: rgba(var(--paper-rgb), 0.36);
+  text-align: center;
+}
+/* The agent's now, one mark in every view (the agenda's NOW row is the
+   same): its time on an orange tag pointed at what it reads, here from the
+   gutter at the grid, and a thin solid rule where the time is today --
+   across today's column only, under the events, so a box the now lies in
+   reads whole and the rule shows in the free time around it. The other
+   days of a week carry nothing: they are not now. */
+.calendar-grid__now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  pointer-events: none;
+}
+.calendar-grid__now-text {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(var(--calendar-gutter) - 2px);
+  padding: 0 5px 0 1px;
+  translate: 0 -50%;
+  background: var(--orange);
+  color: #000;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-align: center;
+  clip-path: var(--now-point);
+}
+.calendar-grid__now-line {
+  position: absolute;
+  top: 0;
+  left: calc(var(--grid-lead) + (100% - var(--grid-lead) - var(--grid-trail)) * var(--now-column) / var(--columns));
+  width: calc((100% - var(--grid-lead) - var(--grid-trail)) / var(--columns));
+  height: 1px;
+  background: var(--orange);
+}
+
+/* An event in the grid: a slot of its place and size, and the box in it.
+   The slot is opaque, so the now rule under it never shows through a box
+   drawn receded (past, or cancelled and see-through) as a strike. */
+.calendar-event-slot {
+  position: absolute;
+  z-index: 1;
+  background: #000;
+}
+.calendar-event {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 2px 5px 2px 6px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--tone) 34%, transparent);
+  border-left: 2px solid var(--tone);
+  background: color-mix(in srgb, var(--tone) 13%, #000);
+  color: var(--paper);
+}
+.calendar-event__title {
+  display: -webkit-box;
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-prose);
+  font-size: clamp(11px, 0.8cqw, 14px);
+  font-weight: 600;
+  line-height: 15px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--title-lines, 1);
+  /* A word too long for a narrow column breaks with a hyphen, not mid-letter. */
+  hyphens: auto;
+  overflow-wrap: break-word;
+}
+.calendar-event__time {
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(var(--paper-rgb), 0.55);
+  letter-spacing: 0.06em;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-event__where,
+.calendar-event__detail {
+  flex: none;
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(var(--paper-rgb), 0.58);
+  font-family: var(--font-prose);
+  font-size: clamp(10.5px, 0.7cqw, 13px);
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-event__detail {
+  flex: 0 1 auto;
+  white-space: normal;
+}
+/* One line: the title on it, its top in the box's first pixels, so a
+   stepped cluster's earlier title reads above the event laid over it. */
+.calendar-event--line {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 6px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.calendar-event--line .calendar-event__title {
+  display: block;
+  flex: 0 1 auto;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-event--line .calendar-event__time--inline,
+.calendar-event--line .calendar-event__where--inline {
+  line-height: 14px;
+}
+.calendar-event__where--inline {
+  flex: 0 1 auto;
+}
+.calendar-event__time--inline {
+  flex: none;
+  color: rgba(var(--paper-rgb), 0.6);
+}
+/* A later event of a stepped cluster lies over the earlier ones, parted
+   from them by the black field. */
+.calendar-event--stepped {
+  box-shadow: 0 0 0 1px #000;
+}
+.calendar-event--stepped.calendar-event--active {
+  box-shadow: 0 0 0 1px var(--tone), 0 0 14px color-mix(in srgb, var(--tone) 40%, transparent);
+}
+.calendar-event__note {
+  position: absolute;
+  z-index: 1;
+  top: -7px;
+  right: 3px;
+  /* The badge's own tint, made opaque so the box edge under it does not show through. */
+  background: color-mix(in srgb, var(--orange) 25%, #000);
+}
+
+.calendar-event--past,
+.calendar-bar--past,
+.calendar-line--past,
+.calendar-mark--past {
+  opacity: 0.5;
+}
+.calendar-event--tentative {
+  border-style: dashed;
+  border-left-style: dashed;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--tone) 14%, transparent) 0 3px, transparent 3px 7px), #000;
+}
+.calendar-event--cancelled,
+.calendar-bar--cancelled {
+  opacity: 0.55;
+  border-style: dotted;
+  background: transparent;
+}
+.calendar-event--cancelled .calendar-event__title,
+.calendar-bar--cancelled .calendar-bar__title,
+.calendar-line--cancelled .calendar-line__title,
+.calendar-agenda__item--cancelled .calendar-agenda__title {
+  text-decoration: line-through;
+  text-decoration-color: rgba(var(--paper-rgb), 0.7);
+}
+/* Lit, as an active diagram node is: in its own tone, orange when it has none. */
+.tone--none:is(.calendar-event--active, .calendar-bar--active, .calendar-line--active, .calendar-agenda__item--active) {
+  --tone: var(--orange);
+}
+.calendar-event--active {
+  border-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 24%, #000);
+  box-shadow: 0 0 0 1px var(--tone), 0 0 14px color-mix(in srgb, var(--tone) 40%, transparent);
+}
+/* An event that runs on past the day's edge has that edge cut. */
+.calendar-event--from-before {
+  border-top-style: dashed;
+  clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 0 100%, 0 7px);
+}
+.calendar-event--to-after {
+  border-bottom-style: dashed;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 7px 100%, 0 calc(100% - 7px));
+}
+.calendar-event--from-before.calendar-event--to-after {
+  clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 7px, 100% calc(100% - 7px), calc(100% - 7px) 100%, 7px 100%, 0 calc(100% - 7px), 0 7px);
+}
+
+/* An all-day bar, over the days it runs; an end past the view is pointed. */
+.calendar-bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 16px;
+  margin: 1px 2px;
+  padding: 0 6px;
+  overflow: hidden;
+  border-left: 2px solid var(--tone);
+  background: color-mix(in srgb, var(--tone) 22%, #000);
+  color: var(--paper);
+  white-space: nowrap;
+}
+.calendar-bar__title {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-prose);
+  font-size: clamp(10.5px, 0.75cqw, 13px);
+  font-weight: 600;
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+.calendar-bar__time {
+  flex: none;
+  color: rgba(var(--paper-rgb), 0.6);
+  letter-spacing: 0.04em;
+}
+.calendar-bar__status {
+  flex: none;
+  color: rgba(var(--paper-rgb), 0.55);
+}
+.calendar-bar--tentative {
+  border-left-style: dashed;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--tone) 20%, transparent) 0 3px, transparent 3px 7px), #000;
+  outline: 1px dashed color-mix(in srgb, var(--tone) 50%, transparent);
+  outline-offset: -1px;
+}
+.calendar-bar--active {
+  background: color-mix(in srgb, var(--tone) 34%, #000);
+  box-shadow: inset 0 0 0 1px var(--tone);
+}
+.calendar-bar--from-before {
+  padding-left: 11px;
+  border-left: 0;
+  clip-path: polygon(7px 0, 100% 0, 100% 100%, 7px 100%, 0 50%);
+}
+.calendar-bar--to-after {
+  padding-right: 11px;
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 0 100%);
+}
+.calendar-bar--from-before.calendar-bar--to-after {
+  clip-path: polygon(7px 0, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, 7px 100%, 0 50%);
+}
+.calendar-bar__note {
+  flex: none;
+  margin-left: auto;
+}
+
+/* The paged week: the days a narrow grid has no room for are named on a
+   rail at each side, as a scrolled drawing's rails count its parts. A
+   swipe across the days is the page's (PagedDays): the browser keeps only
+   the pan up and down. The hours scroll on their own, and a browser reads
+   a touch's touch-action only up to the nearest scroll, so they say it
+   too, or a swipe in them (most of a phone's grid) is taken as a pan
+   across and never turns the days. */
+.calendar-pages,
+.calendar-pages .calendar-grid__scroll {
+  touch-action: pan-y;
+}
+.calendar-pages__edges {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.calendar-pages__edges > .scroll-rim__rail {
+  width: 20px;
+}
+.calendar-pages__rim {
+  pointer-events: auto;
+}
+
+/* The month: a week to a row, Monday first. */
+.calendar-month {
+  display: flex;
+  flex-direction: column;
+}
+.calendar-month__grid {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.calendar-month__weekdays {
+  display: grid;
+  flex: none;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  align-items: center;
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
+  color: rgba(var(--paper-rgb), 0.45);
+}
+.calendar-month__weekdays > span {
+  padding: 0 5px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.calendar-month__weeks {
+  position: relative;
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.calendar-month__weeks > .calendar-grid__nothing {
+  z-index: 2;
+  left: 0;
+}
+.calendar-month__week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  min-height: 0;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
+}
+.calendar-month__cell {
+  grid-row: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+  padding: 2px 4px;
+  border-left: 1px solid rgba(var(--paper-rgb), 0.07);
+}
+.calendar-month__number {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: clamp(11px, 0.8cqw, 14px);
+  line-height: 16px;
+  color: rgba(var(--paper-rgb), 0.75);
+}
+.calendar-month__cell--outside {
+  background: rgba(var(--paper-rgb), 0.02);
+}
+.calendar-month__cell--outside .calendar-month__number {
+  color: rgba(var(--paper-rgb), 0.25);
+}
+.calendar-month__cell--past .calendar-month__number {
+  color: rgba(var(--paper-rgb), 0.42);
+}
+/* Today is one mark in the grid and the month: its date on a square
+   orange tag, an orange rule along the top of its column head or cell (the
+   now's rule, for the day), and a faint tint; never a box round it. The
+   agenda names it TODAY on the same square tag, over its head's orange
+   rule. */
+.calendar-month__cell--today {
+  background: rgba(var(--orange-rgb), 0.06);
+  box-shadow: inset 0 1px 0 var(--orange);
+}
+.calendar-month__cell--today .calendar-month__number {
+  padding: 0 4px;
+  background: var(--orange);
+  color: #000;
+}
+.calendar-line {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.calendar-line::before {
+  content: "";
+  flex: none;
+  width: 5px;
+  height: 5px;
+  background: var(--tone);
+}
+.calendar-line__time {
+  flex: none;
+  color: rgba(var(--paper-rgb), 0.5);
+  letter-spacing: 0.04em;
+}
+.calendar-line__title {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-prose);
+  font-size: clamp(10.5px, 0.75cqw, 13px);
+  line-height: 16px;
+  text-overflow: ellipsis;
+}
+.calendar-line--active .calendar-line__title {
+  color: var(--tone);
+  font-weight: 600;
+}
+.calendar-line__note {
+  flex: none;
+}
+/* A month too small for titles: a short mark per event under each day. */
+.calendar-month--marks .calendar-month__cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+/* One line, never wrapped: a second line has no room in the row and was
+   cut off. Its height holds the NOTE badge, the count and the marks; the
+   layout reckons with it and with these widths (CalendarPrimitive.tsx,
+   MARKS_LINE_PX, MARK_STEP_PX, MARK_BADGE_PX, COUNT_CHAR_PX). */
+.calendar-marks {
+  display: flex;
+  flex: none;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  height: 14px;
+  min-width: 0;
+  overflow: hidden;
+}
+.calendar-mark {
+  flex: none;
+  width: 7px;
+  height: 4px;
+  background: var(--tone);
+}
+/* A tentative event's line and mark are drawn hollow. */
+.calendar-line--tentative::before,
+.calendar-mark--tentative {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--tone);
+}
+.calendar-mark--cancelled {
+  opacity: 0.35;
+}
+/* The mark the NOTE badge stands for hugs the badge (a block would take the
+   root's line and push the badge down out of the line). */
+.calendar-mark:has(.note-badge) {
+  display: flex;
+  width: auto;
+  height: auto;
+  background: transparent;
+}
+.calendar-marks__more {
+  color: rgba(var(--orange-rgb), 0.85);
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+.calendar-month__list {
+  flex: none;
+  padding-top: clamp(8px, 1.4cqh, 14px);
+}
+
+/* The agenda: a day's head, then a row per event: its time, its stripe,
+   its title and where, its tags. The head scrolls with its rows: the
+   viewport's own rail holds the top edge. */
+.calendar-agenda {
+  margin: 0;
+  padding: 0 4px 0 0;
+  list-style: none;
+}
+.calendar-agenda__day {
+  padding-bottom: clamp(6px, 1cqh, 12px);
+}
+.calendar-agenda__day-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.2);
+  background: #000;
+  color: rgba(var(--paper-rgb), 0.6);
+  white-space: nowrap;
+}
+.calendar-agenda__day--today .calendar-agenda__day-head {
+  border-bottom-color: rgba(var(--orange-rgb), 0.6);
+  color: var(--orange);
+}
+.calendar-agenda__day--past .calendar-agenda__day-head {
+  color: rgba(var(--paper-rgb), 0.38);
+}
+.calendar-agenda__today {
+  padding: 0 4px;
+  background: var(--orange);
+  color: #000;
+  font-weight: 700;
+}
+.calendar-agenda__day-count {
+  margin-left: auto;
+  color: rgba(var(--paper-rgb), 0.38);
+}
+.calendar-agenda__items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* An agenda of several days in a wide box runs its days in columns, as
+   many as fit at a reading width, rather than one long line per event. */
+.calendar-agenda--days {
+  column-width: 540px;
+  column-gap: clamp(24px, 2.4cqw, 48px);
+}
+.calendar-agenda--days > li {
+  break-inside: avoid;
+}
+.calendar-agenda__item {
+  display: grid;
+  grid-template-columns: minmax(5.5ch, max-content) 2px minmax(0, 1fr);
+  column-gap: clamp(8px, 0.9cqw, 14px);
+  align-items: start;
+  padding: clamp(5px, 0.8cqh, 9px) 0;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.08);
+}
+.calendar-agenda__time {
+  display: grid;
+  min-width: 5.5ch;
+  font-family: var(--font-mono);
+  font-size: clamp(11px, 0.82cqw, 14px);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  color: var(--paper);
+  white-space: nowrap;
+}
+.calendar-agenda__to {
+  color: rgba(var(--paper-rgb), 0.45);
+  font-size: 0.86em;
+}
+.calendar-agenda__stripe {
+  align-self: stretch;
+  background: var(--tone);
+}
+.calendar-agenda__item--tentative .calendar-agenda__stripe {
+  background: repeating-linear-gradient(to bottom, var(--tone) 0 3px, transparent 3px 6px);
+}
+.calendar-agenda__text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.calendar-agenda__title {
+  min-width: 0;
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1.02cqw, 17px);
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--paper);
+  overflow-wrap: anywhere;
+}
+.calendar-agenda__where {
+  min-width: 0;
+  font-family: var(--font-prose);
+  font-size: clamp(11.5px, 0.82cqw, 14px);
+  line-height: 1.35;
+  color: rgba(var(--paper-rgb), 0.5);
+  overflow-wrap: anywhere;
+}
+.calendar-agenda__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 8px;
+  min-width: 0;
+}
+.calendar-tag {
+  flex: none;
+  padding: 0 4px;
+  border: 1px solid currentColor;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.calendar-agenda__line > .note-badge {
+  align-self: center;
+}
+.calendar-tag--active {
+  border-color: var(--orange);
+  background: var(--orange);
+  color: #000;
+  font-weight: 700;
+}
+.calendar-tag--tentative {
+  border-style: dashed;
+  color: rgba(var(--paper-rgb), 0.6);
+}
+.calendar-tag--cancelled {
+  color: rgba(var(--paper-rgb), 0.45);
+}
+.calendar-tag--overlap {
+  color: var(--amber);
+}
+.calendar-agenda__item--active {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 12%, transparent), color-mix(in srgb, var(--tone) 3%, transparent) 76%, transparent);
+}
+.calendar-agenda__item--active .calendar-agenda__title {
+  font-weight: 600;
+}
+.calendar-agenda__item--past,
+.calendar-agenda__item--cancelled {
+  opacity: 0.5;
+}
+.calendar-agenda__item--again .calendar-agenda__title {
+  color: rgba(var(--paper-rgb), 0.7);
+}
+/* The now between the rows: the grid's mark laid down the list, its tag
+   pointed along the rule. */
+.calendar-agenda__now {
+  display: flex;
+  align-items: center;
+  padding: 3px 0;
+  color: var(--orange);
+}
+.calendar-agenda__now-text {
+  flex: none;
+  padding: 0 8px 0 4px;
+  background: var(--orange);
+  color: #000;
+  font-weight: 700;
+  clip-path: var(--now-point);
+}
+.calendar-agenda__now-line {
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--orange);
+}
+.calendar-agenda__empty {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 6px 0;
+  border-bottom: 1px dashed rgba(var(--paper-rgb), 0.14);
+  color: rgba(var(--paper-rgb), 0.42);
+}
+.calendar-agenda__empty-text {
+  color: rgba(var(--paper-rgb), 0.3);
+}
+/* The agenda under a month too small for titles, and an agenda in an aux cell: tighter rows. */
+.calendar-agenda__viewport--compact .calendar-agenda__item,
+.composed-aux-object--calendar .calendar-agenda__item {
+  padding: 4px 0;
+}
+.composed-aux-object--calendar .calendar-agenda__title {
+  font-size: clamp(12px, 0.88cqw, 15px);
+}
+.composed-aux-object--calendar .calendar__meta {
+  margin-bottom: clamp(4px, 0.8cqh, 8px);
+}
+
 /* Focus layer */
+/* The focused object's slot copy under reduced motion: hidden, as motion
+   hides it where the copy and the focus share one identity
+   (useFocusCopyHidden). It keeps its box; nothing in the slot moves. */
+[data-focus-copy],
+[data-focus-copy] .drawing-viewport__pinned--shown {
+  visibility: hidden;
+}
 .focus-layer {
   position: fixed;
   inset: 0;
@@ -1706,7 +5265,7 @@ button {
   top: -3.4cqh;
   display: flex;
   justify-content: space-between;
-  color: rgba(232, 230, 223, 0.48);
+  color: rgba(var(--paper-rgb), 0.48);
 }
 .focus-layer__header button {
   border: 0;
@@ -1714,12 +5273,43 @@ button {
   color: inherit;
   cursor: pointer;
 }
-.focus-layer__content > .chart-primitive,
-.focus-layer__content > .diagram-primitive,
-.focus-layer__content > .document-viewport,
-.focus-layer__content > .code-viewport {
-  width: 100%;
-  height: 100%;
+/* A primitive fills the focus panel as it fills any box; timers, a
+   forecast, a figure and a calendar keep a margin inside it (a to-do
+   list's and an inbox's are with their rules). */
+.focus-layer__content > .timer-primitive,
+.focus-layer__content > .weather {
+  padding: 5cqh 4cqw 4cqh;
+}
+.focus-layer__content > .image-primitive,
+.focus-layer__content > .calendar {
+  padding: 3cqh 2cqw 2cqh;
+}
+/* A focused object keeps the notes about it (FocusLayer `focusNotes`): in
+   a column beside it, where the rail stood, when the box is wide; in a band
+   under it when the box is tall (the portrait rule below). A card is as tall
+   as its words up to the room; a longer note scrolls inside it. A chart's
+   notes stand one under another, sharing the panel's height past that. */
+.focus-layer__content--noted {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(220px, 22%, 340px);
+  grid-template-rows: minmax(0, 1fr);
+  column-gap: clamp(18px, 2.4cqw, 40px);
+}
+.focus-layer__note {
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.6cqh, 18px);
+  padding-top: clamp(12px, 2cqh, 28px);
+}
+.focus-layer__note .annotation-card {
+  flex: 0 1 auto;
+  height: auto;
+  min-height: 0;
+  max-height: 100%;
 }
 .focus-layer__content--note .annotation-card {
   height: auto;
@@ -1732,6 +5322,15 @@ button {
   font-size: clamp(20px, 2cqw, 34px);
   line-height: 1.45;
 }
+/* A metric or a progress with a note beside it is wider by the note's
+   column, so it keeps the width it has alone; it is held to the focus box's
+   height, as every other focused object is, so a long note scrolls inside
+   its card rather than push the box, and RETURN with it, off the screen. */
+.focus-layer__content--metric.focus-layer__content--noted,
+.focus-layer__content--progress.focus-layer__content--noted {
+  width: min(92vw, 1240px);
+  max-height: min(88vh, 920px);
+}
 .focus-layer__content--metric .metrics {
   display: grid;
   place-items: center;
@@ -1741,6 +5340,40 @@ button {
 }
 .focus-layer__content--progress .progress-primitive {
   margin-top: 5cqh;
+}
+/* Focus lists every step; a plan longer than the screen scrolls inside. */
+.focus-layer__content--progress .progress-primitive__steps {
+  max-height: 52vh;
+  font-size: clamp(11px, 0.85cqw, 15px);
+}
+/* A progress holding the primary slot is framed to its own height and
+   centred in the column, as a metric card is, so a short plan does not
+   leave most of a full-height frame empty. A plan taller than the column
+   fills it and its list scrolls inside: the panel is held to the column
+   (max-height), and the column flexboxes down to the list shrink to fit
+   it, where a percentage height would have nothing definite to resolve. */
+.composed-primary-object--progress {
+  align-self: center;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.composed-primary-object--progress > .focusable-content {
+  flex: 0 1 auto;
+  height: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.composed-primary-object--progress .progress-primitive {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+/* With steps: the bar on top, the list taking the rest and scrolling
+   inside it once the panel is held to the column. */
+.composed-primary-object--progress .progress-primitive--stepped {
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: start;
 }
 
 /* Development controls */
@@ -1753,7 +5386,7 @@ button {
   border: 0;
   border-left: 1px solid rgba(var(--orange-rgb), 0.48);
   background: rgba(0, 0, 0, 0.72);
-  color: rgba(232, 230, 223, 0.34);
+  color: rgba(var(--paper-rgb), 0.34);
   cursor: pointer;
 }
 .dev-toggle:hover {
@@ -1798,8 +5431,8 @@ button {
   justify-content: space-between;
   align-items: center;
   padding-bottom: 14px;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.13);
-  color: rgba(232, 230, 223, 0.56);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.13);
+  color: rgba(var(--paper-rgb), 0.56);
 }
 .controller-panel__head button,
 .ir-drawer__head button {
@@ -1816,7 +5449,7 @@ button {
 }
 .controller-panel button,
 .controller-panel textarea {
-  border: 1px solid rgba(232, 230, 223, 0.15);
+  border: 1px solid rgba(var(--paper-rgb), 0.15);
   background: #050505;
   color: #d8d5ce;
 }
@@ -1838,7 +5471,7 @@ button {
 .controller-panel__label {
   display: block;
   margin: 20px 0 8px;
-  color: rgba(232, 230, 223, 0.38);
+  color: rgba(var(--paper-rgb), 0.38);
 }
 .controller-panel textarea {
   width: 100%;
@@ -1855,39 +5488,11 @@ button {
 }
 .controller-panel__state,
 .ir-drawer pre {
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
   font-size: 10px;
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-
-.diagram-primitive--mermaid {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: auto;
-  padding: clamp(14px, 2cqw, 32px);
-}
-.diagram-primitive__mermaid {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  min-width: max-content;
-  min-height: 100%;
-}
-.diagram-primitive__mermaid > svg {
-  display: block;
-  width: auto;
-  min-width: min(100%, 520px);
-  max-width: none;
-  height: auto;
-  max-height: 100%;
-}
-.diagram-primitive__error {
-  color: var(--amber);
 }
 
 /* Geometry-driven portrait recomposition */
@@ -1918,9 +5523,15 @@ button {
     --presence-width: min(29cqw, 21cqh, 220px);
     --signal-height: clamp(38px, 5.5cqh, 52px);
   }
+  /* Damocles in the rail under the column: his size is the scene's, so
+     the grid can hold a rail as tall as he is (.content-grid). */
+  .scene--content {
+    --rail-presence-width: min(25cqw, 18cqh, 185px);
+    --rail-signal-height: clamp(34px, 4.6cqh, 44px);
+  }
   .damocles-presence--rail {
-    --presence-width: min(25cqw, 18cqh, 185px);
-    --signal-height: clamp(34px, 4.6cqh, 44px);
+    --presence-width: var(--rail-presence-width);
+    --signal-height: var(--rail-signal-height);
   }
 
   .scene--conversation {
@@ -1995,11 +5606,17 @@ button {
     top: 4.8cqh;
     left: var(--edge);
   }
+  /* The rail under the column is at least as tall as its note reads whole
+     in (--rail-floor, measured by RailDetails) and as Damocles stands (his
+     glyph, 944 by 1133, over his signal row), up to half the grid: the
+     main column keeps its 59% where both fit in the rest, and gives up
+     what they need, keeping the larger share. */
   .content-grid {
+    --rail-presence-height: calc(var(--rail-presence-width) * 1133 / 944 + var(--rail-signal-height));
     top: 9.2cqh;
     bottom: 9.2cqh;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 59cqh) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 59cqh) minmax(min(max(var(--rail-floor, 0px), var(--rail-presence-height)), (100% - var(--scene-gap)) / 2), 1fr);
     gap: var(--scene-gap);
   }
   .content-rail {
@@ -2022,6 +5639,36 @@ button {
     grid-row: 1;
     min-height: 0;
   }
+  /* Under the column the note keeps its own height, read whole; the rail
+     grows to hold it (above). */
+  .content-rail__details > .rail-note {
+    flex: none;
+    min-height: 0;
+  }
+  .content-rail__details > .rail-note .annotation-card {
+    height: auto;
+  }
+  /* The column holds what it sets aside (the activity panel's slot, out
+     of its flow), and an edge it continues past fades over it (ScrollRim's
+     fade, placed on the column's grid area). */
+  .content-rail__details {
+    position: relative;
+  }
+  .content-rail > .scroll-rim__fade {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  /* Set aside where the column has no room for the panel whole
+     (RailDetails): out of its flow at the column's width, unseen but still
+     read by assistive technology, still measured. Damocles's caption names
+     the tool at work. */
+  .tool-activity-slot--away {
+    position: absolute;
+    top: 0;
+    inset-inline: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
   .scene-footer {
     left: var(--edge);
     right: var(--edge);
@@ -2040,8 +5687,17 @@ button {
   .training-charts--compare .chart-object {
     min-height: 38cqh;
   }
+  /* The plot's foot stands above the panel's lower step, with the panel's
+     gap: on a tall portrait slot the step outgrows the 8 px, and the first
+     tick sat on it. */
   .chart-object > .focusable-content {
-    padding: 14px 8px 8px;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) max(8px, var(--panel-inset));
+    padding: 14px 8px 0;
+  }
+  .chart-object > .focusable-content > * {
+    grid-row: 1;
+    min-height: 0;
   }
   .chart-notes {
     --note-width: min(78%, 460px);
@@ -2069,6 +5725,16 @@ button {
   .progress-primitive__text {
     grid-column: 2;
     justify-self: end;
+  }
+  /* The main row is a fixed share of a portrait stage: the list takes
+     less of it so the chart above keeps its height. */
+  .training-progress .progress-primitive__steps {
+    max-height: clamp(56px, 12cqh, 140px);
+  }
+  /* Portrait puts the text on its own row under the bar, so the list that
+     stretches in the primary slot is the third row, not the second. */
+  .composed-primary-object--progress .progress-primitive--stepped {
+    grid-template-rows: auto auto minmax(0, 1fr);
   }
   .metric-row {
     min-height: 0;
@@ -2111,10 +5777,10 @@ button {
   }
 
   .diagram-object .focusable-content {
-    padding: 14px;
+    --slot-pad: 14px;
   }
   .document-viewport__inner {
-    inset: 22px 20px 20px;
+    inset: max(22px, var(--document-inset)) 20px 20px;
   }
   .document-viewport__meta {
     grid-template-columns: 1fr auto;
@@ -2128,20 +5794,54 @@ button {
     margin: 16px 0 13px;
     font-size: clamp(21px, 4.8cqw, 34px);
   }
-  .document-viewport__body {
+  .document-viewport__reader {
     width: 100%;
+  }
+  .document-viewport__body {
     font-size: clamp(14px, 2.8cqw, 19px);
     line-height: 1.56;
   }
 
-  .code-viewport__mask {
+  .code-viewport__mask,
+  .table-viewport__mask {
+    --mask-top: 24px;
     inset: 7px;
   }
   .code-viewport__scroll {
-    padding: 24px 34px 60px 55px;
+    padding: 0 34px 16px 55px;
   }
   .code-viewport pre {
     font-size: clamp(12px, 2.45cqw, 17px);
+  }
+
+  /* A list on a portrait stage sets its prose by the stage's width, which
+     is all it has across: the landscape list's size on a wide portrait
+     stage, the page's least on a narrow one. */
+  .tasks-primitive__scroll,
+  .inbox-primitive__scroll {
+    font-size: clamp(13px, 1.9cqw, 17px);
+  }
+
+  /* Tags take the micro face's portrait size, the page's floor on a phone. */
+  .task-tag,
+  .inbox-row__tag {
+    font-size: clamp(7px, 1.08cqw, 9px);
+  }
+
+  .table-viewport__meta {
+    padding-inline: 18px;
+  }
+  .table-viewport__scroll {
+    padding: 0 18px 16px;
+  }
+  .table-grid {
+    font-size: clamp(12px, 3cqw, 16px);
+  }
+  .table-grid__head {
+    padding: 0 8px 7px;
+  }
+  .table-grid__cell {
+    padding: 7px 8px;
   }
 
   .focus-layer {
@@ -2151,17 +5851,48 @@ button {
     width: 94vw;
     height: 86vh;
   }
+  /* The chart's frame follows its box (chartFrame), so a portrait focus
+     gives it a square to read in rather than a 2:1 strip. */
   .focus-layer__content--chart {
     width: 94vw;
     height: auto;
-    max-height: none;
-    aspect-ratio: 2 / 1;
+    max-height: 70vh;
+    aspect-ratio: 1 / 1;
   }
   .focus-layer__content--note,
   .focus-layer__content--metric,
-  .focus-layer__content--progress {
+  .focus-layer__content--progress,
+  .focus-layer__content--metric.focus-layer__content--noted,
+  .focus-layer__content--progress.focus-layer__content--noted {
     width: 90vw;
     min-height: 220px;
+  }
+  .focus-layer__content--noted {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    row-gap: clamp(10px, 1.6cqh, 18px);
+  }
+  /* A metric or a progress is as tall as what it shows: its note stands
+     right under it, not at the foot of the box. */
+  .focus-layer__content--metric.focus-layer__content--noted,
+  .focus-layer__content--progress.focus-layer__content--noted {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  /* There a long note may take the rest of the box: nothing under it needs the room. */
+  .focus-layer__content--metric.focus-layer__content--noted .focus-layer__note,
+  .focus-layer__content--progress.focus-layer__content--noted .focus-layer__note {
+    max-height: 100%;
+  }
+  /* A chart with its notes under it takes the focus box's height, not a
+     square: the notes come out of the box, not out of the chart's room. */
+  .focus-layer__content--chart.focus-layer__content--noted {
+    height: 86vh;
+    max-height: none;
+    aspect-ratio: auto;
+  }
+  .focus-layer__note {
+    max-height: 30cqh;
+    padding-top: 0;
   }
 }
 
@@ -2171,6 +5902,23 @@ button {
     --edge: clamp(20px, 3.4cqw, 66px);
     --rail: clamp(190px, 15cqw, 300px);
     --scene-gap: clamp(32px, 3.7cqw, 72px);
+  }
+  /* A stage twice as wide as tall has the width a metric card does not use
+     and not the height for a visual's cell under it: on a phone on its
+     side a chart's cell ran past the column's foot, its x axis out of
+     view. The aux row stands beside the card instead, as tall as the
+     column; a card with no row keeps the column to itself. */
+  .composed-main--metric-primary:has(> .composed-aux-viewport) {
+    grid-template-columns: fit-content(60%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    align-content: stretch;
+  }
+  .composed-main--metric-primary:has(> .composed-aux-viewport) > .composed-primary-object {
+    align-self: center;
+  }
+  .composed-main--metric-primary > .composed-aux-viewport {
+    grid-row: 1;
+    grid-column: 2;
   }
   .content-grid {
     top: 13cqh;
@@ -2184,7 +5932,7 @@ button {
     --signal-height: clamp(30px, 6cqh, 42px);
   }
   .document-viewport__inner {
-    inset: 20px 30px;
+    inset: max(20px, var(--document-inset)) 30px 20px;
   }
   .document-viewport h1 {
     margin: 12px 0 10px;
@@ -2194,9 +5942,15 @@ button {
     font-size: clamp(13px, 1.05cqw, 19px);
     line-height: 1.45;
   }
+  .code-viewport__mask,
+  .table-viewport__mask {
+    --mask-top: 18px;
+  }
   .code-viewport__scroll {
-    padding-top: 18px;
-    padding-bottom: 48px;
+    padding-bottom: 16px;
+  }
+  .table-viewport__scroll {
+    padding-bottom: 16px;
   }
   /* A very wide stage draws the chart height-limited, with room beside
      it: a wider card keeps a note to fewer lines. */
@@ -2209,7 +5963,10 @@ button {
   .tech-frame__path,
   .diagram-edge,
   .diagram-edge-label-group,
-  .diagram-node__body {
+  .diagram-node__body,
+  .sequence-message,
+  .sequence-message-label-group,
+  .sequence-actor__body {
     animation: none !important;
   }
   *,

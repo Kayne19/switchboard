@@ -2,14 +2,11 @@
 // Every page draws the parts every page has once (#121): one Damocles
 // presence, and the tool activity panel while the agent runs a tool. The
 // idle page shows no activity panel.
-import { act, useEffect } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { SceneRenderer } from '../../src/components/SceneRenderer';
+import { describe, expect, it } from 'vitest';
 import { sceneKind, type SceneKind } from '../../src/app/sceneModel';
-import { ControllerProvider, useController } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
+import { controllerState, renderScene, stubResizeObserver } from './sceneHarness';
 
 const composed: ControllerAction[] = [
   { op: 'show', id: 'latency', type: 'metric', role: 'primary', data: { label: 'P95 LATENCY', value: '182 ms' } },
@@ -23,46 +20,24 @@ const scenes: Array<[SceneKind, ControllerAction[]]> = [
   ['architecture', fixtures.architecture],
   ['document', fixtures.email],
   ['code', fixtures.code],
+  ['table', fixtures.results],
+  ['image', fixtures.figure],
+  ['calendar', fixtures.calendar],
+  ['tasks', fixtures.tasks],
+  ['timer', fixtures.timer],
+  ['weather', fixtures.weather],
+  ['inbox', fixtures.inbox],
   ['composed', composed],
 ];
 
 const tool: ControllerAction = { op: 'runtime_activity', activity: { label: 'READ', tool: 'read', detail: 'src/main.rs' }, at: 0 };
 
-let host: HTMLDivElement;
-let root: Root;
-
-function Scene({ actions }: { actions: ControllerAction[] }) {
-  const { run, state } = useController();
-  useEffect(() => run([...actions, tool]), [actions, run]);
-  return <div data-kind={sceneKind(state)} />;
-}
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
+stubResizeObserver();
 
 describe('every page', () => {
   it.each(scenes)('draws one presence and its tool activity on the %s page', (kind, actions) => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => root.render(
-      <ControllerProvider>
-        <Scene actions={actions} />
-        <SceneRenderer />
-      </ControllerProvider>,
-    ));
-    expect(host.querySelector('[data-kind]')?.getAttribute('data-kind')).toBe(kind);
+    const host = renderScene([...actions, tool]);
+    expect(sceneKind(controllerState())).toBe(kind);
     const page = host.querySelector(`[data-scene="${kind}"]`)!;
     expect(page).not.toBeNull();
     expect(page.querySelectorAll('[data-testid="damocles-presence"]')).toHaveLength(1);

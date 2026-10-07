@@ -1,10 +1,13 @@
 import type {
   AgentObjectType,
+  CalendarData,
   ChartData,
   CodeData,
   ControllerState,
-  DiagramData,
+  DiagramObjectData,
   DocumentData,
+  ImageData,
+  InboxData,
   MessageData,
   MetricData,
   NoteData,
@@ -12,6 +15,10 @@ import type {
   SceneObject,
   SceneObjectType,
   ScreenStateReport,
+  TableData,
+  TasksData,
+  TimerData,
+  WeatherData,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
 
@@ -141,18 +148,38 @@ export function buildCompositionModel(state: ControllerState): CompositionModel 
   };
 }
 
+/** The note about an object: the first note shown whose anchor names it. The rail's first note (the rest follow it) and the one the focus layer takes. */
+export function anchoredNote(notes: Array<SceneObject<NoteData>>, targetId: string): SceneObject<NoteData> | undefined {
+  return notes.find((note) => note.data.anchor?.target === targetId);
+}
+
 export function primaryObject(state: ControllerState): SceneObject | null {
   return buildCompositionModel(state).primary;
 }
 
-export type SceneKind =
-  | 'idle'
-  | 'conversation'
-  | 'training'
-  | 'architecture'
-  | 'document'
-  | 'code'
-  | 'composed';
+/** The content types that need a slot of their own to be read. The others
+ * (metrics, notes, progress) are small enough for the rail or a compact
+ * place in a scene. */
+const VISUAL_TYPE_LIST = ['chart', 'diagram', 'document', 'code', 'table', 'image', 'calendar', 'tasks', 'timer', 'weather', 'inbox'] as const;
+type VisualType = (typeof VISUAL_TYPE_LIST)[number];
+export const VISUAL_TYPES: ReadonlySet<SceneObjectType> = new Set<SceneObjectType>(VISUAL_TYPE_LIST);
+const isVisual = (type: SceneObjectType): type is VisualType => VISUAL_TYPES.has(type);
+
+/**
+ * Every visual on stage beside the primary, in the order a composition
+ * places them: compare objects first, then secondary, then ambient, each in
+ * show order. No composition may drop one: a scene draws the ones its main
+ * slot has a place for, and the rest go in the aux row under it
+ * (`components/Scenes.tsx`), so an accepted visual is never lost to the
+ * layout. An ambient visual is here too: the rail has no room for a visual,
+ * so it takes the last place in the row.
+ */
+export function besideVisuals(comp: CompositionModel): SceneObject[] {
+  return [...comp.compare, ...comp.secondary, ...comp.ambient].filter((object) => VISUAL_TYPES.has(object.type));
+}
+
+/** The composition a scene is drawn as: one per visual type that can be the primary, named for its type but for the two the page drew first (a chart's training run, a diagram's architecture), and the three that are not a visual's. */
+export type SceneKind = 'idle' | 'conversation' | 'composed' | 'training' | 'architecture' | Exclude<VisualType, 'chart' | 'diagram'>;
 
 export function sceneKind(state: ControllerState): SceneKind {
   if (state.workspace.effectiveView === 'comms') {
@@ -170,11 +197,31 @@ export function sceneKind(state: ControllerState): SceneKind {
     return 'idle';
   }
   if (primary.type === 'message') return 'conversation';
-  if (primary.type === 'chart') return 'training';
-  if (primary.type === 'diagram') return 'architecture';
-  if (primary.type === 'document') return 'document';
-  if (primary.type === 'code') return 'code';
-  return 'composed';
+  if (!isVisual(primary.type)) return 'composed';
+  return primary.type === 'chart' ? 'training' : primary.type === 'diagram' ? 'architecture' : primary.type;
+}
+
+// The fields an object is named by, in the order the scene frame and the
+// agent's view take them (`summary` in apps/backend/src/display.rs, the
+// cross-side mirror): a title, a document's subject, a metric's or a
+// progress's label, an image's alt text (its title when it has none), a
+// forecast's place (so is that).
+const NAME_FIELDS = ['title', 'subject', 'label', 'alt', 'location'] as const;
+
+/**
+ * The names an object's data carries, in NAME_FIELDS order: each of those
+ * fields that holds a string, a blank one too. Every reader takes them
+ * from here: the screen-state report and the composed scene's frame take
+ * the first as it is; a card's TARGET line the first that is not blank
+ * (`objectName`).
+ */
+export function nameFields(data: unknown): string[] {
+  if (data === null || typeof data !== 'object') return [];
+  const record = data as Record<string, unknown>;
+  return NAME_FIELDS.flatMap((field) => {
+    const value = record[field];
+    return typeof value === 'string' ? [value] : [];
+  });
 }
 
 export function deriveScreenState(
@@ -185,26 +232,13 @@ export function deriveScreenState(
   const focused = state.focusId ? state.agentObjects[state.focusId] : null;
   const primary = comp.primary;
 
-  let title = '';
-  const candidate = focused ?? primary;
-  if (candidate?.data && typeof candidate.data === 'object') {
-    const data = candidate.data as Record<string, unknown>;
-    if (typeof data.title === 'string') {
-      title = data.title;
-    } else if (typeof data.subject === 'string') {
-      title = data.subject;
-    } else if (typeof data.label === 'string') {
-      title = data.label;
-    }
-  }
-
   return {
     view: state.workspace.effectiveView,
     pinned: state.workspace.callerPinned,
     has_visual: state.agentOrder.length > 0,
     visual_kind: comp.visualKind,
     object_ids: [...state.agentOrder],
-    title,
+    title: nameFields((focused ?? primary)?.data)[0] ?? '',
     stale: state.workspace.stale,
     generation,
   };
@@ -214,9 +248,16 @@ export const cast = {
   chart: (object: SceneObject) => object as SceneObject<ChartData>,
   metric: (object: SceneObject) => object as SceneObject<MetricData>,
   progress: (object: SceneObject) => object as SceneObject<ProgressData>,
-  diagram: (object: SceneObject) => object as SceneObject<DiagramData>,
+  diagram: (object: SceneObject) => object as SceneObject<DiagramObjectData>,
   document: (object: SceneObject) => object as SceneObject<DocumentData>,
   code: (object: SceneObject) => object as SceneObject<CodeData>,
+  table: (object: SceneObject) => object as SceneObject<TableData>,
+  image: (object: SceneObject) => object as SceneObject<ImageData>,
+  calendar: (object: SceneObject) => object as SceneObject<CalendarData>,
+  tasks: (object: SceneObject) => object as SceneObject<TasksData>,
+  timer: (object: SceneObject) => object as SceneObject<TimerData>,
+  weather: (object: SceneObject) => object as SceneObject<WeatherData>,
+  inbox: (object: SceneObject) => object as SceneObject<InboxData>,
   message: (object: SceneObject) => object as SceneObject<MessageData>,
   note: (object: SceneObject) => object as SceneObject<NoteData>,
 };

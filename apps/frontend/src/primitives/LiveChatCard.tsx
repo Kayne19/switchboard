@@ -15,13 +15,13 @@ export function LiveChatCard({ message, onOpenHistory }: { message: MessageData;
         <span className="live-chat-card__tag tech micro">LIVE / CURRENT RESPONSE</span>
         <span className="live-chat-card__index tech muted">{index}</span>
         {onOpenHistory ? (
-          <button className="live-chat-card__history tech micro" type="button" onClick={onOpenHistory}>
+          <button className="live-chat-card__history tech micro" type="button" onClick={onOpenHistory} aria-label="Open conversation history">
             HISTORY
           </button>
         ) : null}
       </div>
       <div className="live-chat-card__body">
-        <SpokenLog message={message} className="live-chat-card__text" />
+        <SpokenLog message={message} className="live-chat-card__text" edges />
       </div>
     </div>
   );

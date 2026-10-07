@@ -8,8 +8,7 @@
 // are dispatched straight to the controller: they stand in for a primitive
 // bug, which no valid payload can reach.
 import { act, type ReactNode } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../src/App';
 import { buildCompositionModel } from '../../src/app/sceneModel';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
@@ -18,9 +17,8 @@ import { createInitialState, reduceActions } from '../../src/controller/reducer'
 import type { ControllerAction, ControllerState } from '../../src/controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
+import { mount, stubResizeObserver, unmountAll } from './sceneHarness';
 
-let host: HTMLDivElement | undefined;
-let root: Root | undefined;
 let dispatch: (action: ControllerAction) => void;
 let latest: ControllerState;
 // Errors thrown out of React entirely, which unmount the whole page.
@@ -39,28 +37,21 @@ function ControllerHandle() {
   return null;
 }
 
-function mount(page: ReactNode): HTMLDivElement {
-  const stage = document.createElement('div');
-  document.body.append(stage);
-  const pageRoot = createRoot(stage, {
-    onUncaughtError: (error) => uncaughtErrors.push(error),
-    onCaughtError: (error) => caughtErrors.push(error),
-  });
-  host = stage;
-  root = pageRoot;
-  act(() =>
-    pageRoot.render(
-      <ControllerProvider>
-        {page}
-        <ControllerHandle />
-      </ControllerProvider>,
-    ),
+function mountPage(page: ReactNode): HTMLDivElement {
+  return mount(
+    <ControllerProvider>
+      {page}
+      <ControllerHandle />
+    </ControllerProvider>,
+    {
+      onUncaughtError: (error) => uncaughtErrors.push(error),
+      onCaughtError: (error) => caughtErrors.push(error),
+    },
   );
-  return stage;
 }
 
 function mountStage(): HTMLDivElement {
-  return mount(<SceneRenderer />);
+  return mountPage(<SceneRenderer />);
 }
 
 function send(...actions: ControllerAction[]) {
@@ -72,14 +63,7 @@ function click(element: Element | null) {
   act(() => element.dispatchEvent(new MouseEvent('click', { bubbles: true })));
 }
 
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
+stubResizeObserver();
 
 beforeEach(() => {
   uncaughtErrors = [];
@@ -91,11 +75,7 @@ beforeEach(() => {
 
 afterEach(() => {
   window.removeEventListener('error', onWindowError);
-  const mounted = root;
-  if (mounted) act(() => mounted.unmount());
-  host?.remove();
-  root = undefined;
-  host = undefined;
+  unmountAll();
   vi.restoreAllMocks();
 });
 
@@ -305,7 +285,7 @@ describe('a display that fails outright', () => {
   });
 
   it('does not hang up the call', () => {
-    const page = mount(<App />);
+    const page = mountPage(<App />);
     const socket = FakeSocket.latest;
     expect(socket).not.toBeNull();
 

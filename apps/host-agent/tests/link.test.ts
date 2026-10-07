@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DaemonCommandError } from "../src/daemon_port.ts";
-import { HOST_LINK_PROTOCOL, HostLink, type HostLinkOptions, type HostLinkStatus, parseCursor } from "../src/link.ts";
+import { HOST_LINK_PROTOCOL, HostLink, type HostLinkOptions, type HostLinkStatus, parseCursor, type SocketLike } from "../src/link.ts";
 import { CommandError } from "../src/sessions.ts";
 import { command, FakeService, type Message } from "./fake_service.ts";
 
@@ -318,6 +318,130 @@ test("module calls are relayed to the service; no reply in time means failed", a
 		assert.deepEqual(await autonomous, { status: "refused", reason: "stale" });
 		const late = link.relayModuleCall("a1", "tok", "view", {}, 50);
 		assert.deepEqual(await late, { status: "failed", reason: "failed" });
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
+
+/** A socket the test drives by hand: it opens, delivers frames and changes state when told. */
+class HandSocket implements SocketLike {
+	readyState = 0;
+	readonly sent: Message[] = [];
+	readonly #listeners = new Map<string, ((event: { data?: unknown }) => void)[]>();
+	addEventListener(type: string, listener: (event: { data?: unknown }) => void): void {
+		this.#listeners.set(type, [...(this.#listeners.get(type) ?? []), listener]);
+	}
+	send(data: string): void {
+		this.sent.push(JSON.parse(data) as Message);
+	}
+	close(): void {
+		this.readyState = 3;
+	}
+	emit(type: string, event: { data?: unknown } = {}): void {
+		for (const listener of this.#listeners.get(type) ?? []) listener(event);
+	}
+}
+
+// The service has begun to close the socket (it is CLOSING) and its close
+// event has not come yet: a frame sent now goes nowhere. The call used to
+// wait for its deadline; it fails at once.
+test("a module call that cannot go out fails at once, not at its deadline", async () => {
+	const socket = new HandSocket();
+	const logged: string[] = [];
+	const link = new HostLink({
+		url: "ws://service.invalid/host",
+		hostId: "scriptorium",
+		token: TOKEN,
+		gitSha: "abc123",
+		versions: () => ({ prime_agent_client: null, prime_agent_daemon: null, daemon_protocol: null }),
+		command: async () => ({}),
+		sessions: () => [],
+		describe: async () => null,
+		heartbeatMs: 60_000,
+		connect: () => socket,
+		log: (message) => logged.push(message),
+	});
+	try {
+		link.start();
+		socket.readyState = 1;
+		socket.emit("open");
+		socket.emit("message", { data: JSON.stringify({ type: "welcome", epoch: 1, protocol: 1, cursors: {} }) });
+		await until(() => socket.sent.some((m) => m.type === "synced"));
+		socket.readyState = 2;
+		const started = Date.now();
+		assert.deepEqual(await link.relayModuleCall("a1", "tok", "display", { action: { op: "clear" } }, 5_000), { status: "failed", reason: "failed" });
+		assert.ok(Date.now() - started < 1_000, "answered at once");
+		assert.equal(socket.sent.filter((m) => m.type === "module_call").length, 0);
+		assert.deepEqual(logged, ["module call display not sent: the link's socket is not open"]);
+	} finally {
+		link.stop();
+	}
+});
+
+test("a frame the host agent cannot use is logged with the reason", async () => {
+	const service = await FakeService.start();
+	const logged: string[] = [];
+	const { link } = makeLink(service, { heartbeatMs: 60_000, log: (message) => logged.push(message) });
+	try {
+		link.start();
+		const l = await service.link(0);
+		await l.next((m) => m.type === "synced");
+		l.socket.send("not json");
+		l.socket.send("null");
+		l.send({ type: "news" });
+		// A reply for a call that already failed at its deadline.
+		const late = link.relayModuleCall("a1", "tok", "view", {}, 20);
+		const call = await l.next((m) => m.type === "module_call");
+		assert.deepEqual(await late, { status: "failed", reason: "failed" });
+		l.send({ type: "module_reply", id: call.id, status: "delivered", reason: null });
+		const odd = link.relayModuleCall("a1", "tok", "view", {}, 2_000);
+		const oddCall = await l.next((m) => m.type === "module_call");
+		l.send({ type: "module_reply", id: oddCall.id, status: "maybe", reason: null });
+		assert.deepEqual(await odd, { status: "failed", reason: "failed" });
+		await until(() => logged.length >= 5);
+		assert.match(logged[0], /^dropped a frame from the service that is not JSON \(.+\)$/);
+		assert.deepEqual(logged.slice(1), [
+			"dropped a frame from the service that is not a JSON object",
+			'ignored a frame of no known type from the service ("news")',
+			`dropped a module reply for ${String(call.id)}: no call is waiting for it`,
+			`module reply for ${String(oddCall.id)} has no known status ("maybe"); the call failed`,
+		]);
+		// The link is still up and answering.
+		assert.equal((await command(l, 1, "c1", "list_sessions")).ok, true);
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
+
+// serde_json refuses a lone surrogate, and the service lost the whole frame
+// that carried one: an event, or a command's reply (list_saved_sessions
+// failed on every try for a first message cut inside an emoji).
+test("every frame goes out with a lone surrogate written as U+FFFD", async () => {
+	const service = await FakeService.start();
+	const { link } = makeLink(service, {
+		heartbeatMs: 60_000,
+		command: async () => ({ sessions: [{ first_message: "fix the parser \ud83d" }] }),
+	});
+	try {
+		link.start();
+		const l = await service.link(0);
+		await l.next((m) => m.type === "synced");
+		const raw: string[] = [];
+		l.socket.on("message", (data) => raw.push(String(data)));
+		link.publish("a1", { kind: "text", text: "half \ude00 and whole \ud83d\ude00" });
+		const event = await l.next((m) => m.type === "event");
+		assert.equal((event.event as Message).text, "half \ufffd and whole \ud83d\ude00");
+		// A key is mended too: a tool's result object goes out with the keys
+		// the daemon gave it, and one cut inside an emoji used to keep its
+		// escape, so the service refused the frame and lost the event.
+		link.publish("a1", { kind: "tool_end", tool: "read", result: { ["k\ud83d"]: "v\ud83d", nested: [{ ["\ude00"]: 1 }] } } as unknown as Parameters<typeof link.publish>[1]);
+		const tool = await l.next((m) => m.type === "event" && (m.event as Message).kind === "tool_end");
+		assert.deepEqual((tool.event as { result: unknown }).result, { ["k\ufffd"]: "v\ufffd", nested: [{ ["\ufffd"]: 1 }] });
+		const reply = await command(l, 1, "c1", "list_saved_sessions", { cwd: "/srv/homelab" });
+		assert.deepEqual(reply.result, { sessions: [{ first_message: "fix the parser \ufffd" }] });
+		assert.ok(raw.every((frame) => !/\\ud[89a-f]/i.test(frame)), "no surrogate escape on the wire");
 	} finally {
 		link.stop();
 		await service.close();

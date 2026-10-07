@@ -1,15 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
+import { GEOMETRIES } from './helpers';
 
 // The listening signal below the glyph is wider than the presence on narrow
 // geometries. It must overflow around the presence's centre, never widen the
 // column the glyph is sized from: that is what made the glyph grow and drift
 // off-centre each time listening started or stopped.
-const geometries = [
-  { name: 'portrait-phone', width: 390, height: 844 },
-  { name: 'portrait-tablet', width: 820, height: 1180 },
-  { name: 'landscape', width: 1440, height: 900 },
-  { name: 'ultrawide', width: 2560, height: 1080 },
-] as const;
 
 async function glyphGeometry(page: Page) {
   return page.evaluate(() => {
@@ -27,7 +22,7 @@ async function glyphGeometry(page: Page) {
   });
 }
 
-for (const geometry of geometries) {
+for (const geometry of GEOMETRIES) {
   test(`presence keeps its glyph geometry across listening / ${geometry.name}`, async ({ page }) => {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
     await page.goto('/?scene=architecture&chrome=0');
@@ -111,4 +106,43 @@ test('presence stays centred on the sword through a continuous resize', async ({
       }
     }
   }
+});
+
+// Under reduced motion a scene is drawn where it ends from its first frame.
+// The presence used to slide in from the centre (a layout animation, which
+// Playwright's `animations: 'disabled'` does not stop), so a golden was
+// compared with a frame from the middle of that move or with the settled
+// page, whichever came first: portrait-tablet code passed or failed by that.
+test('under reduced motion the presence is already in place on the first frame', async ({ page }) => {
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await page.goto('/?scene=code&chrome=0');
+  await page.waitForSelector('[data-scene="code"]', { state: 'visible' });
+  const stage = page.locator('.stage');
+  const first = await stage.screenshot({ animations: 'disabled', caret: 'hide' });
+  await page.waitForTimeout(1000);
+  const settled = await stage.screenshot({ animations: 'disabled', caret: 'hide' });
+  expect(first.equals(settled)).toBe(true);
+});
+
+// Under reduced motion Damocles has no layout identity to hand from scene to
+// scene (hooks/useLayoutMotion.ts), and a leaving scene fades out over the
+// next one: the leaving scene lets Damocles go at once, so there is one, as
+// there was when the shared identity hid the leaving copy.
+test('under reduced motion a scene change shows one Damocles at a time', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/?scene=idle&chrome=0');
+  await page.waitForSelector('[data-testid="damocles-presence"]');
+  await page.waitForTimeout(600);
+  await page.evaluate(() => window.SwitchboardController.load('code'));
+  const seen: number[] = [];
+  for (let sample = 0; sample < 12; sample += 1) {
+    seen.push(await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('[data-testid="damocles-presence"]')].filter((presence) => {
+      if (getComputedStyle(presence).visibility === 'hidden') return false;
+      let opacity = 1;
+      for (let element: HTMLElement | null = presence; element; element = element.parentElement) opacity *= Number(getComputedStyle(element).opacity);
+      return opacity > 0.02;
+    }).length));
+    await page.waitForTimeout(30);
+  }
+  expect(Math.max(...seen)).toBe(1);
 });

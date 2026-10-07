@@ -1,9 +1,10 @@
-import { AnimatePresence, LayoutGroup } from "motion/react";
+import { AnimatePresence, LayoutGroup, MotionConfig } from "motion/react";
 import { buildCompositionModel, sceneKind } from "../app/sceneModel";
 import type { ControllerState } from "../controller/types";
 import { useController } from "../controller/context";
+import { FocusedObject } from "../hooks/useLayoutMotion";
 import { DamoclesPresence } from "../primitives/DamoclesPresence";
-import { FocusLayer } from "./FocusLayer";
+import { FocusLayer, focusNotes } from "./FocusLayer";
 import { SurfaceBoundary } from "./SurfaceBoundary";
 import { TranscriptDrawer } from "./TranscriptDrawer";
 import { SceneShell } from "./Scenes";
@@ -39,25 +40,31 @@ function SceneContent({
     // An explanation offers the history only when there is one to open.
     onOpenHistory: conversation ? () => setTranscriptOpen(true) : undefined,
     setTranscriptOpen,
+    behindFocus: focusedObject !== null,
   };
 
   return (
     <LayoutGroup id="switchboard-layout">
+      <FocusedObject.Provider value={focusedObject?.id ?? null}>
       <main className="stage" data-scene-kind={kind}>
         <AnimatePresence mode="sync" initial={false}>
           <SceneShell key={kind} kind={kind} {...shared} />
         </AnimatePresence>
         <TranscriptDrawer
           open={transcriptOpen}
+          behindFocus={focusedObject !== null}
           lines={conversation?.data.transcript ?? []}
           onClose={() => setTranscriptOpen(false)}
           onSend={voiceRuntime?.sendText}
         />
         <FocusLayer
           object={focusedObject}
+          objects={state.agentObjects}
+          notes={focusNotes(state, focusedObject)}
           onClose={() => dispatch({ op: "focus", id: null })}
         />
       </main>
+      </FocusedObject.Provider>
     </LayoutGroup>
   );
 }
@@ -91,25 +98,36 @@ export function SceneRenderer() {
       ? voiceRuntime.toggleTurn()
       : dispatch({ op: "listen", on: !state.listening });
 
+  // Under prefers-reduced-motion, motion's transform and layout animations
+  // are skipped: the presence no longer slides in from the centre and an
+  // object no longer moves to its new slot, they are drawn where they end.
+  // Opacity still fades. Without it every layout animation ignored the
+  // setting (DESIGN_SYSTEM.md, "Respect prefers-reduced-motion"), and the
+  // visual goldens, taken under reduced motion, were compared with a frame
+  // from the middle of the move or with the settled page, by chance. The
+  // elements that move take no layout props at all then (useLayoutMotion):
+  // motion's instant layout animation could leave a box at its old size.
   return (
-    <SurfaceBoundary
-      surfaceId="display"
-      resetKey={state.objects}
-      fallback={
-        <UnavailableStage
+    <MotionConfig reducedMotion="user">
+      <SurfaceBoundary
+        surfaceId="display"
+        resetKey={state.objects}
+        fallback={
+          <UnavailableStage
+            state={state}
+            onToggleListening={onToggleListening}
+          />
+        }
+      >
+        <SceneContent
           state={state}
+          dispatch={dispatch}
+          transcriptOpen={transcriptOpen}
+          setTranscriptOpen={setTranscriptOpen}
+          voiceRuntime={voiceRuntime}
           onToggleListening={onToggleListening}
         />
-      }
-    >
-      <SceneContent
-        state={state}
-        dispatch={dispatch}
-        transcriptOpen={transcriptOpen}
-        setTranscriptOpen={setTranscriptOpen}
-        voiceRuntime={voiceRuntime}
-        onToggleListening={onToggleListening}
-      />
-    </SurfaceBoundary>
+      </SurfaceBoundary>
+    </MotionConfig>
   );
 }

@@ -203,6 +203,35 @@ async fn view_reports_the_object_with_role_primary_even_when_shown_first() {
     assert_eq!(response["screen"]["title"], "document-title");
 }
 
+// A refused reason or view target is worded as the display validators word
+// a refused name, and as the skill module raises it before sending: the
+// field and every name it takes, in the skill's order.
+#[tokio::test]
+async fn a_refused_reason_or_target_lists_the_names_it_takes() {
+    let state = state();
+    for args in [
+        json!({"message": "Done"}),
+        json!({"message": "Done", "reason": "later"}),
+        json!({"message": "Done", "reason": null}),
+    ] {
+        let response = request_to_speak(state.clone(), "background-token", args).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(
+            body,
+            json!({"detail": "invalid reason: expected one of finished, needs_decision, problem"})
+        );
+    }
+    let (code, body) = agent_call_json(&state, "/view", json!({"target": "screen"})).await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"})
+    );
+}
+
 #[tokio::test]
 async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
     let (code, body) =
@@ -421,24 +450,9 @@ async fn display_protocol_validation_and_composition() {
     let state = state();
     let mut events = state.0.events.subscribe();
 
-    // 1. Conformance check against canonical fixtures
-    let fixtures_str = std::fs::read_to_string("apps/frontend/tests/fixtures/display-actions.json")
-        .expect("canonical display-actions.json fixtures must load");
-    let fixtures: Value = serde_json::from_str(&fixtures_str).unwrap();
-
-    for case in fixtures["valid"].as_array().unwrap() {
-        let name = case["name"].as_str().unwrap();
-        let action = &case["action"];
-        let expected = &case["normalized"];
-        let validated = crate::visual_protocol::validate_action(action)
-            .unwrap_or_else(|e| panic!("valid case '{name}' failed validation: {e}"));
-        assert_eq!(
-            &validated, expected,
-            "normalized mismatch for valid case '{name}'"
-        );
-    }
-
-    // 2. Composed scene HTTP intake and replay
+    // What `validate_action` makes of each action is the shared corpus's to
+    // pin (`agrees_with_the_shared_validator_corpus`). A composed scene
+    // arrives through display calls and is replayed.
     let show = json!({
         "token": "operator",
         "action": {
@@ -498,35 +512,30 @@ async fn display_protocol_validation_and_composition() {
     assert!(matches!(events.recv().await.unwrap(), Event::Json(_)));
 }
 
+// A refused action comes back to the agent with the validator's error,
+// word for word (docs/display-tool.md): every action the shared corpus says
+// both validators refuse is refused by a display call with its exact error.
 #[tokio::test]
 async fn display_protocol_rejects_invalid_actions() {
     let state = state();
-
-    let fixtures_str = std::fs::read_to_string("apps/frontend/tests/fixtures/display-actions.json")
-        .expect("canonical display-actions.json fixtures must load");
-    let fixtures: Value = serde_json::from_str(&fixtures_str).unwrap();
-
-    for case in fixtures["invalid"].as_array().unwrap() {
+    let mut failures = Vec::new();
+    for case in crate::visual_protocol::validator_corpus() {
+        let Some(error) = case["error"].as_str() else {
+            continue;
+        };
         let name = case["name"].as_str().unwrap();
-        let action = &case["action"];
-        let result = crate::visual_protocol::validate_action(action);
-        assert!(
-            result.is_err(),
-            "invalid case '{name}' should have been rejected by validate_action"
-        );
-
-        let (code, _) = agent_call_json(
+        let (code, body) = agent_call_json(
             &state,
             "/display",
-            json!({"token": "operator", "action": action.clone()}),
+            json!({"token": "operator", "action": case["action"].clone()}),
         )
         .await;
-        assert_eq!(
-            code,
-            StatusCode::BAD_REQUEST,
-            "HTTP /display should reject invalid case '{name}'"
-        );
+        let wanted = json!({"delivered": false, "detail": error});
+        if code != StatusCode::BAD_REQUEST || body != wanted {
+            failures.push(format!("{name}: {code} {body}"));
+        }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 
     let oversized =
         json!({"token": "operator", "action": {"op": "say", "text": "x".repeat(50_001)}});
@@ -534,6 +543,84 @@ async fn display_protocol_rejects_invalid_actions() {
         agent_call_json(&state, "/display", oversized).await.0,
         StatusCode::BAD_REQUEST
     );
+}
+
+// The stage is bounded (`MAX_STAGE_OBJECTS`, `MAX_STAGE_IMAGES`): a show
+// that would add past either bound is refused in words the agent can act
+// on, and nothing reaches the screen; an update in place and a hide are
+// always taken, so the agent can make room.
+#[tokio::test]
+async fn display_refuses_a_show_past_the_stage_bound_and_takes_updates_and_hides() {
+    use crate::display::{MAX_STAGE_IMAGES, MAX_STAGE_OBJECTS};
+    let state = state();
+    let call = |action: Value| {
+        let state = state.clone();
+        async move {
+            agent_call_json(
+                &state,
+                "/display",
+                json!({"token": "operator", "action": action}),
+            )
+            .await
+        }
+    };
+    let metric = |id: &str| json!({"op": "show", "id": id, "type": "metric", "data": {"label": id, "value": "1"}});
+    let image = |id: &str| json!({"op": "show", "id": id, "type": "image", "data": {"format": "png", "bytes": "iVBORw0KGgoAAAAA", "alt": id}});
+    let on_stage = || {
+        let state = state.clone();
+        async move { state.0.display_gate.lock().await.projection.objects.len() }
+    };
+
+    for n in 0..MAX_STAGE_IMAGES {
+        assert_eq!(call(image(&format!("img{n}"))).await.0, StatusCode::OK);
+    }
+    let images_full = json!({"delivered": false, "detail": format!("the stage holds {MAX_STAGE_IMAGES} images, the most it takes: hide one, or update one by its id")});
+    assert_eq!(
+        call(image("one-more")).await,
+        (StatusCode::BAD_REQUEST, images_full.clone())
+    );
+    // An object that would become an image is one more image too.
+    assert_eq!(call(metric("m0")).await.0, StatusCode::OK);
+    assert_eq!(
+        call(image("m0")).await,
+        (StatusCode::BAD_REQUEST, images_full)
+    );
+    // An image updated in place is not one more.
+    assert_eq!(call(image("img0")).await.0, StatusCode::OK);
+
+    for n in on_stage().await..MAX_STAGE_OBJECTS {
+        assert_eq!(call(metric(&format!("m{n}"))).await.0, StatusCode::OK);
+    }
+    assert_eq!(on_stage().await, MAX_STAGE_OBJECTS);
+    let mut events = state.0.events.subscribe();
+    let (code, body) = call(metric("one-too-many")).await;
+    assert_eq!(
+        (code, body),
+        (
+            StatusCode::BAD_REQUEST,
+            json!({"delivered": false, "detail": format!("the stage holds {MAX_STAGE_OBJECTS} objects, the most it takes: hide one, or update one by its id")})
+        )
+    );
+    assert!(
+        events.try_recv().is_err(),
+        "a refused show never reaches the screen"
+    );
+    assert_eq!(on_stage().await, MAX_STAGE_OBJECTS);
+
+    // An update in place is taken on a full stage, and a hide makes room.
+    assert_eq!(call(metric("m5")).await.0, StatusCode::OK);
+    assert_eq!(
+        call(json!({"op": "hide", "id": "img1"})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(call(metric("one-too-many")).await.0, StatusCode::OK);
+    assert_eq!(on_stage().await, MAX_STAGE_OBJECTS);
+    // And the hidden image left room for an image.
+    assert_eq!(
+        call(json!({"op": "hide", "id": "m5"})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(call(image("img-new")).await.0, StatusCode::OK);
 }
 
 #[tokio::test]

@@ -4,14 +4,14 @@
 // a point on the chart runs a leader from its card to that point, straight
 // and at 45 degrees like the frames; a note that names none is attached
 // without one.
-import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { ChartNotes, type ChartNote } from '../../src/components/ChartNotes';
 import { SceneShell } from '../../src/components/Scenes';
 import { ControllerProvider } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
-import type { ControllerAction, ControllerState } from '../../src/controller/types';
-import { chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import type { ChartData, ControllerAction, ControllerState, SceneObject } from '../../src/controller/types';
+import { chartBarCallout, chartSeriesPoint } from '../../src/primitives/chartGeometry';
+import { mount as mountNode, rerender, stubResizeObserver } from './sceneHarness';
 
 const chart: ControllerAction = {
   op: 'show',
@@ -45,18 +45,14 @@ const SVG_TOP = 60;
 const CARD = { width: 300, height: 80 };
 
 let host: HTMLDivElement;
-let root: Root;
 let svgWidth = 1000;
 
+stubResizeObserver();
+
 beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
   Element.prototype.getBoundingClientRect = function (this: Element) {
-    if (this instanceof HTMLElement && this.classList.contains('chart-notes')) return rect(0, 0, 1000, 600);
+    // The layer's frame, the box the cards are placed in.
+    if (this instanceof HTMLElement && this.classList.contains('chart-notes__frame')) return rect(0, 0, 1000, 600);
     if (this instanceof HTMLElement && this.classList.contains('chart-note')) return rect(0, 0, CARD.width, CARD.height);
     if (this instanceof SVGSVGElement && this.closest('.chart-primitive')) return rect(0, SVG_TOP, svgWidth, 500);
     if (this instanceof SVGSVGElement && this.closest('.chart-object')) return rect(-40, -60, 1080, 700);
@@ -69,26 +65,22 @@ afterAll(() => {
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
   svgWidth = 1000;
+  CARD.height = 80;
 });
 
+const shell = (state: ControllerState) => (
+  <ControllerProvider>
+    <SceneShell kind="training" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
+  </ControllerProvider>
+);
+
 function render(state: ControllerState) {
-  act(() =>
-    root.render(
-      <ControllerProvider>
-        <SceneShell kind="training" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
-      </ControllerProvider>,
-    ),
-  );
+  rerender(host, shell(state));
 }
 
 function mount(actions: ControllerAction[]) {
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
-  render(reduceActions(createInitialState(), actions));
+  host = mountNode(shell(reduceActions(createInitialState(), actions)));
 }
 
 function card(id: string) {
@@ -133,6 +125,9 @@ describe('chart notes', () => {
     expect(panel.classList.contains('chart-object--noted')).toBe(false);
   });
 
+  // A line chart's leader ends on the line itself, as the approved training
+  // goldens show, not past a value printed by the ringed point: that rule
+  // was tried for line charts and taken back as harder to read.
   it('runs a leader from the card\'s border to the point on the line', () => {
     mount([chart, note('loss-note', { target: 'loss', x: 30, series: 'VAL LOSS' })]);
     const box = card('loss-note')!;
@@ -143,10 +138,11 @@ describe('chart notes', () => {
     expect(points[0].y).toBeCloseTo(box.bottom - 0.5, 0);
     expect(points[0].x).toBeGreaterThanOrEqual(box.left);
     expect(points[0].x).toBeLessThanOrEqual(box.right);
-    // ...and ends on the drawn point, on the half pixel.
+    // ...and ends on the drawn point, on the half pixel, with no value printed there.
     const end = points[points.length - 1];
     expect(Math.abs(end.x - point.x)).toBeLessThanOrEqual(0.5);
     expect(Math.abs(end.y - (SVG_TOP + point.y))).toBeLessThanOrEqual(0.5);
+    expect(host.querySelector('.chart-marker__value')).toBeNull();
     // Every run is straight or at 45 degrees, and at least one is at 45.
     const runs = points.slice(1).map((p, index) => ({ dx: p.x - points[index].x, dy: p.y - points[index].y }));
     for (const { dx, dy } of runs) {
@@ -165,6 +161,7 @@ describe('chart notes', () => {
     ]);
     // The colour comes from the stylesheet's shared edge token, not inline.
     for (const stop of stops) expect(stop.getAttribute('stop-color')).toBeNull();
+    expect(host.querySelector('.chart-note-leader')!.classList.contains('chart-note-leader--bar')).toBe(false);
   });
 
   it('never covers the point it names', () => {
@@ -230,6 +227,136 @@ describe('chart notes', () => {
     expect(panel.querySelector('.chart-note[data-note="loss-note"]')).not.toBeNull();
     expect(panel.querySelector('.chart-note-leader[data-note="loss-note"]')).not.toBeNull();
     expect(host.querySelector('.chart-object[data-chart-id="loss"] .chart-notes')).toBeNull();
+  });
+
+  it('hands the rail a note the chart has no place for clear of its bars, and rings the point it names', () => {
+    // Every bar stands to the top of the domain the chart gives (a domain
+    // the page chooses leaves headroom), the gaps between them are
+    // narrower than a card, and the card is taller than the band above the
+    // plot: no place on the chart is clear of the data.
+    CARD.height = 120;
+    const bars = {
+      kind: 'bar' as const,
+      labels: ['us-east', 'us-west', 'eu-west', 'eu-north'],
+      yMax: 100,
+      series: [{ name: 'UPTIME', values: [100, 100, 100, 100] }],
+    };
+    mount([
+      { op: 'show', id: 'uptime', type: 'chart', role: 'primary', data: bars },
+      note('uptime-note', { target: 'uptime', x: 2, series: 'UPTIME' }, 'eu-west held a full month.'),
+    ]);
+
+    const rail = host.querySelector('.content-rail .rail-note');
+    expect(rail?.textContent).toContain('eu-west held a full month.');
+    // The rail card still names what it is about, in the chart's own words.
+    expect(rail?.querySelector('.annotation-card')?.getAttribute('data-anchor-target')).toBe('uptime');
+    expect(rail?.querySelector('.annotation-card__anchor')?.textContent).toBe('TARGET / eu-west / UPTIME');
+    // On the chart its card is out of view, with no leader, and the bar it
+    // names still marked as a bar.
+    expect(card('uptime-note')!.element.classList.contains('chart-note--away')).toBe(true);
+    expect(leader('uptime-note')).toBeNull();
+    expect(host.querySelector('.chart-note-ring')).toBeNull();
+    const callout = host.querySelector('.chart-object[data-chart-id="uptime"] .chart-callout');
+    expect(callout?.getAttribute('data-index')).toBe('2');
+    expect(callout?.getAttribute('data-series')).toBe('UPTIME');
+  });
+
+  it('rings the point a note it hands the rail names on a line chart', () => {
+    CARD.height = 560;
+    mount([chart, note('loss-note', { target: 'loss', x: 20 })]);
+    expect(card('loss-note')!.element.classList.contains('chart-note--away')).toBe(true);
+    expect(leader('loss-note')).toBeNull();
+    // The chart draws it, hollow, where it draws its marker: in its own frame.
+    const ring = host.querySelector('.chart-object[data-chart-id="loss"] .chart-primitive .chart-note-ring');
+    const point = chartSeriesPoint(chartData, 20)!;
+    expect(Number(ring?.getAttribute('cx'))).toBeCloseTo(point.x, 3);
+    expect(Number(ring?.getAttribute('cy'))).toBeCloseTo(point.y, 3);
+    expect(host.querySelector('.chart-marker__value')).toBeNull();
+  });
+
+  it('keeps the note in the rail when a new primary chart leaves out the same note the old one did', () => {
+    CARD.height = 120;
+    const bars = (values: number[]) => ({ kind: 'bar' as const, labels: ['a', 'b', 'c', 'd'], yMax: 100, series: [{ name: 'UPTIME', values }] });
+    const show = (id: string, values: number[]): ControllerAction => ({ op: 'show', id, type: 'chart', role: 'primary', data: bars(values) });
+    mount([show('march', [100, 100, 100, 100]), note('uptime-note', { target: 'march', x: 2 }, 'Held a full month.')]);
+    expect(host.querySelector('.content-rail .rail-note')?.textContent).toContain('Held a full month.');
+    // The chart is replaced, and the note now names the new one.
+    render(reduceActions(createInitialState(), [show('april', [100, 100, 100, 100]), note('uptime-note', { target: 'april', x: 2 }, 'Held a full month.')]));
+    expect(host.querySelector('.content-rail .rail-note')?.textContent).toContain('Held a full month.');
+    expect(host.querySelector('.chart-object[data-chart-id="april"] .chart-note--away[data-note="uptime-note"]')).not.toBeNull();
+  });
+
+  // A scene that shows one note elsewhere (the band under the chart) still
+  // has the chart mark its point, with a ring: the layer reads the chart's
+  // own list of what it marks, and lands each of its own leaders on its
+  // point on the line.
+  it('lands a leader on its point on the line, whatever else the chart marks', () => {
+    const flat = { xMax: 40, yMin: 0, yMax: 10, series: [{ name: 'A', values: [5.25, 5.25, 5.25, 5.25, 5.25] }] };
+    const object = { id: 'flat', type: 'chart', role: 'primary', data: flat } as unknown as SceneObject<ChartData>;
+    const named = [{ x: 20 }, { x: 21 }];
+    const shown: ChartNote = { key: 'second', data: { tag: 'SECOND', anchor: { target: 'flat', x: 21 }, segments: [{ text: 'The second point.' }] } };
+    host = mountNode(
+      <div className="chart-object">
+        <div className="chart-primitive"><svg /></div>
+        <ChartNotes chart={object} objects={{ flat: object }} notes={[shown]} named={named} onFocus={() => {}} />
+      </div>,
+    );
+    const point = chartSeriesPoint(flat, 21)!;
+    const end = leader('second')!.at(-1)!;
+    expect(Math.abs(end.x - point.x)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(end.y - (SVG_TOP + point.y))).toBeLessThanOrEqual(0.5);
+  });
+
+  // The tag read "TARGET / DURATIONS / X 2 / THIS RUN": an object id and an
+  // index the caller never sees.
+  it('names the category a note points at on a labelled chart, not its index', () => {
+    const suite: ControllerAction = {
+      op: 'show', id: 'durations', type: 'chart', role: 'primary',
+      data: { kind: 'bar', labels: ['backend', 'frontend unit', 'frontend visual'], series: [{ name: 'THIS RUN', values: [41.8, 3.3, 96.4] }] },
+    };
+    mount([suite, note('suite-note', { target: 'durations', x: 2, series: 'THIS RUN' })]);
+    expect(card('suite-note')!.element.querySelector('.annotation-card__anchor')!.textContent).toBe('TARGET / frontend visual / THIS RUN');
+  });
+
+  it("draws a bar note's leader onto the bar's printed value, from above it", () => {
+    const data = { kind: 'bar' as const, labels: ['backend', 'frontend unit', 'frontend visual'], series: [{ name: 'THIS RUN', values: [41.8, 3.3, 96.4] }] };
+    mount([{ op: 'show', id: 'durations', type: 'chart', role: 'primary', data }, note('suite-note', { target: 'durations', x: 2, series: 'THIS RUN' })]);
+    const callout = chartBarCallout(data, { x: 2, series: 'THIS RUN' })!;
+    const points = leader('suite-note')!;
+    const [a, b] = points.slice(-2);
+    expect(Math.abs(b.x - callout.point.x)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(b.y - (SVG_TOP + callout.point.y))).toBeLessThanOrEqual(0.5);
+    expect(b.x - a.x).toBeCloseTo(0, 6);
+    expect(b.y).toBeGreaterThan(a.y);
+    expect(host.querySelector('.chart-note-leader[data-note="suite-note"]')!.classList.contains('chart-note-leader--bar')).toBe(true);
+  });
+
+  // The tag read "TARGET / LOSS / X 32 / VAL LOSS": the chart's object id,
+  // which the caller never sees, where the axis below says EPOCH.
+  it('names the x axis and the value a note points at on a chart with a numeric x, as the caller reads them', () => {
+    mount([{ ...chart, data: { ...chartData, xLabel: 'EPOCH' } } as ControllerAction, note('loss-note', { target: 'loss', x: 30, series: 'VAL LOSS' })]);
+    expect(card('loss-note')!.element.querySelector('.annotation-card__anchor')!.textContent).toBe('TARGET / EPOCH 30 / VAL LOSS');
+  });
+
+  it('keeps a note on its chart, and the rail empty, while the chart has a clear place for it', () => {
+    CARD.height = 120;
+    mount([chart, note('loss-note', { target: 'loss', x: 30 })]);
+    expect(card('loss-note')!.element.classList.contains('chart-note--away')).toBe(false);
+    expect(host.querySelector('.content-rail .rail-note')).toBeNull();
+    expect(host.querySelector('.chart-note-ring')).toBeNull();
+    expect(leader('loss-note')).not.toBeNull();
+  });
+
+  it('puts a note about a visual that is not a chart in the rail, not on a chart', () => {
+    const table: ControllerAction = {
+      op: 'show',
+      id: 'results',
+      type: 'table',
+      data: { columns: [{ label: 'SUITE' }, { label: 'SECONDS' }], rows: [['backend', 41.8]] },
+    };
+    mount([chart, table, note('table-note', { target: 'results' }, 'The backend suite is the long pole.')]);
+    expect(host.querySelector('.chart-note[data-note="table-note"]')).toBeNull();
+    expect(host.querySelector('.content-rail .rail-note')?.textContent).toContain('The backend suite is the long pole.');
   });
 
   it('puts a note aimed at nothing on the chart on the primary', () => {

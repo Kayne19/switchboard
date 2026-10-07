@@ -1,0 +1,26 @@
+{
+  // The Playwright specs (tests/visual, tests/integration), checked as
+  // strictly as the app's own tests: CI's test job runs no browser, and the
+  // pixel goldens run only on the dev box, so a spec that no longer
+  // compiles would otherwise go unseen there.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    // The specs import the fixture server, plain JavaScript (.mjs): its
+    // types are inferred from it, and it is not itself checked.
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["tests/visual", "tests/integration", "src/global.d.ts"]
+}

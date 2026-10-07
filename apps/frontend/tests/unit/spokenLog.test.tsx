@@ -3,30 +3,22 @@
 // added at the bottom, it stays pinned there while they arrive, and the
 // caller can scroll back up to read earlier lines.
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MessageData, SpokenLine } from '../../src/controller/types';
 import { LiveChatCard } from '../../src/primitives/LiveChatCard';
 import { SpokenLog } from '../../src/primitives/SpokenLog';
+import { mount, rerender, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement;
-let root: Root;
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 beforeEach(() => {
   height = () => 40;
   layOut();
-  host = document.createElement('div');
-  document.body.appendChild(host);
-  root = createRoot(host);
+  host = mount(null);
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
+  unmountAll();
   vi.restoreAllMocks();
 });
 
@@ -63,7 +55,7 @@ function layOut() {
 }
 
 function render(lines: SpokenLine[]) {
-  act(() => root.render(<SpokenLog message={message(lines)} className="log" />));
+  rerender(host, <SpokenLog message={message(lines)} className="log" />);
   return host.querySelector<HTMLElement>('[data-testid="spoken-log"]')!;
 }
 
@@ -87,11 +79,7 @@ describe('SpokenLog', () => {
   });
 
   it('shows the segments before any line is heard', () => {
-    act(() =>
-      root.render(
-        <SpokenLog message={{ segments: [{ text: 'Line open.' }] }} className="log" />,
-      ),
-    );
+    rerender(host, <SpokenLog message={{ segments: [{ text: 'Line open.' }] }} className="log" />);
     expect(host.querySelector('.spoken-log')).toBeNull();
     expect(host.textContent).toBe('Line open.');
   });
@@ -133,19 +121,32 @@ describe('SpokenLog', () => {
   });
 
   it('leaves a message that is not a log where the reader put it', () => {
-    act(() =>
-      root.render(<SpokenLog message={{ segments: [{ text: 'An agent message.' }] }} className="log" />),
-    );
+    rerender(host, <SpokenLog message={{ segments: [{ text: 'An agent message.' }] }} className="log" />);
     const log = host.querySelector<HTMLElement>('[data-testid="spoken-log"]')!;
     expect(log.scrollTop).toBe(0);
   });
 
   it("is the live chat card's own text area, not a second card", () => {
-    act(() => root.render(<LiveChatCard message={message(said(2))} />));
+    rerender(host, <LiveChatCard message={message(said(2))} />);
     expect(host.querySelectorAll('[data-testid="live-chat"]')).toHaveLength(1);
     const text = host.querySelector('.live-chat-card__text')!;
     expect(text.querySelector('[role="log"]')).not.toBeNull();
     expect(text.getAttribute('data-testid')).toBe('spoken-log');
     expect(text.querySelectorAll('.spoken-log__line')).toHaveLength(2);
+  });
+
+  it('fades each edge its text continues past, where the card asks for it', async () => {
+    rerender(host, <SpokenLog message={message(said(6))} className="log" edges />);
+    const log = host.querySelector<HTMLElement>('[data-testid="spoken-log"]')!;
+    // Pinned to the newest line, the text goes on above it only.
+    expect(host.querySelector('.scroll-rim__fade--top')).not.toBeNull();
+    expect(host.querySelector('.scroll-rim__fade--bottom')).toBeNull();
+    scrollTo(log, 0);
+    await act(() => new Promise((done) => requestAnimationFrame(() => done(undefined))));
+    expect(host.querySelector('.scroll-rim__fade--top')).toBeNull();
+    expect(host.querySelector('.scroll-rim__fade--bottom')).not.toBeNull();
+    // Without `edges`, none.
+    rerender(host, <SpokenLog message={message(said(6))} className="log" />);
+    expect(host.querySelector('.scroll-rim__fade--top, .scroll-rim__fade--bottom')).toBeNull();
   });
 });

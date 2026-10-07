@@ -15,6 +15,16 @@ use std::collections::HashMap;
 /// apps/frontend/src/controller/reducer.ts. Keep the two equal.
 pub(crate) const MAX_PRIMARY_METRICS: usize = 9;
 
+/// The most objects the stage holds, and the most of them that may be
+/// images. The projection keeps every object's data and replays all of it to
+/// a page that reconnects, and the page keeps each image as a data URL, so an
+/// agent that showed new ids and never hid one grew both without limit; an
+/// image alone may be 12 MiB (`MAX_IMAGE_ACTION_BYTES`). The bound has one
+/// owner, this projection: the page's stage holds only what the service
+/// admitted, and a reconnect replays only what the projection holds.
+pub(crate) const MAX_STAGE_OBJECTS: usize = 32;
+pub(crate) const MAX_STAGE_IMAGES: usize = 4;
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SceneObject {
     pub(crate) id: String,
@@ -46,6 +56,37 @@ pub(crate) struct DisplayProjection {
 }
 
 impl DisplayProjection {
+    /// Why the stage cannot take `action`, or None. Only a `show` that adds
+    /// to the stage can be refused: a new object past `MAX_STAGE_OBJECTS`,
+    /// or an image (a new one, or an object that becomes one) past
+    /// `MAX_STAGE_IMAGES`. An update in place, a hide, a clear and every
+    /// other op are always taken, so the agent can always make room.
+    pub(crate) fn refusal(&self, action: &Value) -> Option<String> {
+        if action.get("op").and_then(Value::as_str) != Some("show") {
+            return None;
+        }
+        let id = action.get("id").and_then(Value::as_str)?;
+        let existing = self.objects.get(id);
+        if existing.is_none() && self.objects.len() >= MAX_STAGE_OBJECTS {
+            return Some(format!(
+                "the stage holds {MAX_STAGE_OBJECTS} objects, the most it takes: hide one, or update one by its id"
+            ));
+        }
+        let becomes_image = action.get("type").and_then(Value::as_str) == Some("image")
+            && existing.is_none_or(|object| object.object_type != "image");
+        let images = self
+            .objects
+            .values()
+            .filter(|object| object.object_type == "image")
+            .count();
+        if becomes_image && images >= MAX_STAGE_IMAGES {
+            return Some(format!(
+                "the stage holds {MAX_STAGE_IMAGES} images, the most it takes: hide one, or update one by its id"
+            ));
+        }
+        None
+    }
+
     pub(crate) fn apply(&mut self, action: &Value, sequence: u64) {
         self.watermark = sequence;
         let Some(op) = action.get("op").and_then(Value::as_str) else {
@@ -301,6 +342,10 @@ impl DisplayProjection {
                 .get("title")
                 .or_else(|| o.data.get("subject"))
                 .or_else(|| o.data.get("label"))
+                // An image's alt text is its title when it has none.
+                .or_else(|| o.data.get("alt"))
+                // So is a forecast's place.
+                .or_else(|| o.data.get("location"))
                 .and_then(Value::as_str)
                 .map(String::from)
         });

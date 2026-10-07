@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import Ajv, { type ValidateFunction } from 'ajv';
 import schema from '../../../../docs/display-action-v1.schema.json';
-import fixtures from '../fixtures/display-actions.json';
-import { validateControllerAction } from '../../src/controller/validation';
+import { nonFiniteActions } from '../fixtures/nonFiniteActions';
+import { corpusCases, expandCorpusValue, type CorpusCase } from '../fixtures/validatorCorpus';
 
 // docs/display-action-v1.schema.json is described (docs/display-tool.md) as
-// the canonical DisplayAction contract, exercised by this same fixture file.
-// Nothing previously checked the schema itself against it, so it could (and
-// did) drift from the two validators that actually run: the TypeScript
-// controller (src/controller/validation.ts) and the Rust backend
-// (apps/backend/src/visual_protocol.rs). This test is that check.
+// the canonical DisplayAction contract. Nothing previously checked the schema
+// itself, so it could (and did) drift from the two validators that actually
+// run: the TypeScript controller (src/controller/validation.ts) and the Rust
+// backend (apps/backend/src/visual_protocol.rs). This test holds it to the
+// shared validator corpus (validator-corpus.json), the record of what both
+// validators make of an action, and to the actions JSON cannot hold
+// (display-actions.json: a NaN or an infinity).
 //
 // The schema declares draft-07 ("$schema": "http://json-schema.org/draft-07/schema#"),
 // so it is compiled with plain `ajv`, not the draft 2019-09/2020-12 builds.
@@ -28,147 +30,263 @@ function errorSummary(): string {
   return ajv.errorsText(validate.errors, { separator: '; ' });
 }
 
-// Fixtures below are real, understood disagreements between the schema and
-// the validators that JSON Schema cannot close without either a
-// non-standard vendor keyword or a data model JSON Schema does not have
-// access to. Each is a deliberate, documented exception, not an oversight:
-// this set is asserted against directly so that closing a gap (or a fixture
-// change that no longer needs the exception) fails the test until this list
-// is updated, instead of the mismatch silently vanishing.
-const KNOWN_SCHEMA_GAPS: Record<string, string> = {
-  // Node/edge referential integrity and uniqueness are checks over
-  // *relationships between sibling array items* (duplicate ids, an edge
-  // endpoint that names no node, a self-loop, a duplicate edge pair).
-  // Standard JSON Schema (any draft) validates each item's own shape; it
-  // has no keyword for a computed property across an array's other items
-  // without a vendor extension (e.g. ajv-keywords' uniqueItemProperties, or
-  // an Ajv-only $data reference). The graph invariants stay enforced only
-  // by visual_protocol.rs and validation.ts.
-  diagram_duplicate_node_id: 'node id uniqueness is a cross-item invariant, not a per-node shape rule',
-  diagram_edge_missing_endpoint: 'edge endpoints referencing nodes[] is cross-array referential integrity',
-  diagram_edge_self_loop: 'from === to is an equality check between two sibling fields',
-  diagram_edge_duplicate_pair: 'duplicate (from, to) pairs is a cross-item uniqueness invariant',
-  // The 48,000 UTF-8 byte cap bounds the serialized envelope on the wire
-  // (see docs/display-tool.md, "Action size"). JSON Schema validates the
-  // shape of the parsed instance, not the byte length of its serialization;
-  // there is no keyword for "the JSON text you were decoded from is short
-  // enough". This stays an application/transport-level check.
-  oversized_action_bytes: 'total serialized byte size is a transport-level property, not part of the parsed instance',
-  // `maxLength` counts Unicode code points, per the JSON Schema
-  // specification (RFC 8259's definition of a JSON string's length) and
-  // Ajv's default (spec-compliant) behavior. The app's own `id`/text caps
-  // are deliberately defined in UTF-16 code units (docs/display-tool.md:
-  // "String caps (UTF-16 code units)"), so an astral character (one code
-  // point, two UTF-16 units) is cheaper against the schema's cap than
-  // against the app's. This fixture's id is 97 code points / 130 UTF-16
-  // units: under the schema's 128-code-point cap, over the app's 128-unit
-  // one. Reproducing UTF-16-unit counting in the schema is only possible by
-  // replacing `maxLength` with a hand-rolled, non-unicode `pattern`, which
-  // itself only counts UTF-16 units under Ajv's non-default
-  // `unicodeRegExp: false` option — i.e. by making the schema's meaning
-  // depend on a specific validator's non-default configuration. Left as an
-  // open contract question rather than silently patched over.
-  oversized_id_astral_utf16: 'maxLength is Unicode-code-point-based per spec; the app caps UTF-16 code units',
+/** A schema node, as far as these tests read one. A `$ref` names a definition. */
+interface SchemaNode {
+  $ref?: string;
+  enum?: string[];
+  required?: string[];
+  properties?: Record<string, SchemaNode>;
+  oneOf?: SchemaNode[];
+  anyOf?: SchemaNode[];
+}
+const contract = schema as unknown as { oneOf: SchemaNode[]; definitions: Record<string, SchemaNode> };
+const definitions = contract.definitions;
+/** The definition a node's `$ref` names, or the node itself. */
+const resolve = (node: SchemaNode): SchemaNode => (node.$ref ? definitions[node.$ref.split('/').pop()!] : node);
+/** The properties of every action the schema lists: one entry per op, one per show type. */
+const actions = contract.oneOf.map((variant) => resolve(variant).properties!);
+
+/**
+ * Every show type's data shapes: one per type, or (a diagram's) one per
+ * `mode`, named `type` or `type/mode`. `required` is the keys the shape
+ * requires; a shape with an `anyOf` of `required` branches (progress: value
+ * or steps) needs one branch met, and `branches` lists them.
+ */
+interface ShowShape { name: string; type: string; mode?: string; required: string[]; branches: string[][] }
+const showShapes: ShowShape[] = actions.flatMap((properties) => {
+  const type = properties.type?.enum?.[0];
+  if (!type) return [];
+  const data = resolve(properties.data);
+  return (data.oneOf ? data.oneOf.map(resolve) : [data]).map((shape) => {
+    const mode = shape.properties?.mode?.enum?.[0];
+    return { name: mode ? `${type}/${mode}` : type, type, mode, required: shape.required ?? [], branches: (shape.anyOf ?? []).map((branch) => branch.required ?? []) };
+  });
+});
+
+// The corpus cases both validators refuse and the schema accepts: each breaks
+// a rule JSON Schema cannot state (docs/display-tool.md, "Canonical schema &
+// validation rules"), grouped by why. The list is exact both ways: a refused
+// case the schema accepts must be named here, and a case named here must be
+// one the schema still accepts, so closing a gap, or a corpus change that no
+// longer needs one, fails until this list follows it.
+const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
+  items: {
+    why:
+      'a relationship between the items of a list (an id or a series name unique in its list, an endpoint naming a node or ' +
+      "an actor, a self-loop, an edge pair, a row with one cell per column, a highlight naming a row): JSON Schema checks " +
+      "each item's own shape and has no keyword for a property computed across the others without a vendor extension",
+    cases: [
+      'graph_node_id_duplicate', 'graph_edge_from_unknown', 'graph_edge_to_unknown', 'graph_edge_self_loop',
+      'graph_edge_duplicate_pair', 'graph_edge_order_from_before_to', 'graph_edge_order_endpoints_before_self_loop',
+      'sequence_actor_id_duplicate', 'sequence_message_from_unknown', 'sequence_message_to_unknown',
+      'table_row_ragged', 'table_row_too_long', 'table_highlight_past_the_rows', 'table_highlight_with_no_rows',
+      'calendar_event_duplicate_id', 'tasks_item_duplicate_id', 'timer_duplicate_id', 'weather_hour_duplicate_time',
+      'weather_day_duplicate_date', 'inbox_message_duplicate_id', 'chart_series_name_duplicate',
+      'chart_series_name_duplicate_empty',
+    ],
+  },
+  fields: {
+    why: "a series' value count against the chart's label count, and yMin against yMax, compare two sibling fields",
+    cases: [
+      'chart_series_longer_than_labels', 'chart_series_longer_than_labels_names_its_series', 'chart_y_ends_equal',
+      'chart_y_ends_inverted',
+    ],
+  },
+  times: {
+    why: 'two times compared as times (an end before its start, `now` off `today`, a timer started at or after its end, offsets applied); a pattern reads one string',
+    cases: [
+      'calendar_now_after_today', 'calendar_now_before_today', 'calendar_event_end_a_minute_before_its_start',
+      'calendar_event_end_the_day_before_its_start', 'calendar_event_end_on_an_earlier_day_at_a_later_hour',
+      'timer_started_at_its_end', 'timer_started_at_its_end_in_another_offset', 'timer_started_after_its_end',
+      'timer_started_after_its_end_by_its_offset', 'timer_started_a_nanosecond_after',
+    ],
+  },
+  size: {
+    why: 'the action-size caps bound the action as JSON.stringify writes it, a transport-level property, not the parsed instance',
+    cases: [
+      'size_one_byte_over_the_cap', 'size_counts_utf8_bytes', 'size_cap_is_general_for_a_non_image_type',
+      'size_counts_long_numbers_as_javascript_writes_them', 'size_counts_exponents_as_javascript_writes_them',
+      'size_say_normalized_over_the_cap',
+    ],
+  },
+  utf16: {
+    // Reproducing UTF-16-unit counting in the schema would take a hand-rolled
+    // `pattern` that counts units only under Ajv's non-default
+    // `unicodeRegExp: false`: the schema's meaning would hang on one
+    // validator's configuration.
+    why: "maxLength counts code points (the JSON Schema specification, and Ajv's default); the caps count UTF-16 code units, so an astral character is cheaper against the schema",
+    cases: [
+      'show_id_65_astral', 'chart_label_33_astral', 'calendar_event_id_65_astral', 'note_anchor_item_65_astral',
+      'tasks_item_tag_17_astral', 'inbox_message_channel_17_astral',
+    ],
+  },
+  signature: {
+    why:
+      "an image's bytes must start with the signature its format names, a cross-field check over decoded bytes, and " +
+      'their base64 must be a multiple of four characters long, which a pattern states only with a repeated group: ' +
+      "Ajv's regular expression then overflows its stack on an image of about 3 MiB, under the 8 MiB cap (the schema " +
+      'pins the base64 alphabet, the padding and the length cap)',
+    cases: [
+      'image_bytes_jpeg_named_png', 'image_bytes_png_named_jpeg', 'image_bytes_riff_wave_named_webp',
+      'image_bytes_not_a_multiple_of_four',
+    ],
+  },
 };
 
-describe('display-action-v1.schema.json', () => {
-  it('accepts every canonical valid fixture', () => {
-    for (const testCase of fixtures.valid) {
-      const ok = validate(testCase.action);
-      expect(ok, `expected schema to accept valid fixture "${testCase.name}": ${errorSummary()}`).toBe(true);
-    }
+// The schema describes what the validators accept, so it must never be the
+// stricter of the two, and it refuses what they refuse wherever JSON Schema
+// can say why. The text of an error and the order of the checks are the
+// corpus's to pin, not the schema's.
+describe('display-action-v1.schema.json and the validator corpus', () => {
+  it('accepts every action both validators accept', () => {
+    const refused = corpusCases
+      .filter((testCase) => testCase.accepted)
+      .filter((testCase) => !validate(expandCorpusValue(testCase.action)))
+      .map((testCase) => testCase.name);
+    expect(refused).toEqual([]);
   });
 
-  it('rejects every canonical invalid fixture, except the documented schema gaps', () => {
-    for (const testCase of fixtures.invalid) {
-      const ok = validate(testCase.action);
-      const gapReason = KNOWN_SCHEMA_GAPS[testCase.name];
-      if (gapReason !== undefined) {
-        expect(
-          ok,
-          `"${testCase.name}" is tracked in KNOWN_SCHEMA_GAPS (${gapReason}) and expected to ` +
-            `still (wrongly) validate against the schema; if the schema now rejects it, drop it from that list`,
-        ).toBe(true);
-      } else {
-        expect(
-          ok,
-          `expected schema to reject invalid fixture "${testCase.name}" (${testCase.reason}), but it validated`,
-        ).toBe(false);
-      }
-    }
+  it('refuses every action both validators refuse, but for the rules it cannot state', () => {
+    const gaps = new Set(Object.values(SCHEMA_GAPS).flatMap((gap) => gap.cases));
+    const accepted = corpusCases
+      .filter((testCase) => testCase.error !== undefined)
+      .filter((testCase) => validate(expandCorpusValue(testCase.action)))
+      .map((testCase) => testCase.name);
+    expect(accepted.filter((name) => !gaps.has(name)), 'refused by both validators, accepted by the schema').toEqual([]);
+    expect([...gaps].filter((name) => !accepted.includes(name)), 'in SCHEMA_GAPS, but not a refused case the schema accepts').toEqual([]);
   });
 
-  it('rejects every non-finite mutation (NaN, Infinity, -Infinity)', () => {
-    for (const mutation of fixtures.nonFiniteMutations) {
-      const cloned = JSON.parse(JSON.stringify(mutation.baseAction));
-      let target: any = cloned;
-      for (let i = 0; i < mutation.path.length - 1; i++) {
-        target = target[mutation.path[i]];
-      }
-      const lastKey = mutation.path[mutation.path.length - 1];
-      if (mutation.value === 'Infinity') {
-        target[lastKey] = Number.POSITIVE_INFINITY;
-      } else if (mutation.value === '-Infinity') {
-        target[lastKey] = Number.NEGATIVE_INFINITY;
-      } else if (mutation.value === 'NaN') {
-        target[lastKey] = Number.NaN;
-      }
-
-      const ok = validate(cloned);
-      expect(ok, `expected schema to reject non-finite mutation "${mutation.name}"`).toBe(false);
-    }
+  // The time patterns state the whole of the time rules, real days and
+  // leap years included, so every corpus case refused only for how a time
+  // is written is refused by the schema too.
+  it('refuses every time the validators refuse for how it is written', () => {
+    const accepted = corpusCases
+      .filter((testCase) => testCase.name.startsWith('time_') && testCase.error !== undefined)
+      .filter((testCase) => validate(expandCorpusValue(testCase.action)))
+      .map((testCase) => testCase.name);
+    expect(accepted).toEqual([]);
   });
 
-  it('has no stale entries in KNOWN_SCHEMA_GAPS', () => {
-    const invalidNames = new Set(fixtures.invalid.map((c) => c.name));
-    for (const name of Object.keys(KNOWN_SCHEMA_GAPS)) {
-      expect(invalidNames.has(name), `KNOWN_SCHEMA_GAPS references "${name}", which is not in fixtures.invalid`).toBe(
-        true,
-      );
+  // A refused name lists every name its field takes (docs/display-tool.md,
+  // "How the two validators agree"). Each field's list is the one the schema
+  // states for that field, in its order, so the error and the contract name
+  // the same set; two sets with the same names in another order (a task's
+  // state and a progress step's) cannot stand in for each other.
+  it('lists, in every refusal of a name, the set the schema states for that field, in its order', () => {
+    const property = (definition: string, key: string): string[] => {
+      const shape = resolve(definitions[definition]);
+      // A table cell is a string, a number or an object; the object has the semantic.
+      const object = shape.oneOf?.find((branch) => branch.properties) ?? shape;
+      return resolve(object.properties![key]).enum!;
+    };
+    const stated: Record<string, string[]> = {
+      // The op, the show type and the diagram mode are stated one per action
+      // or shape, across the schema's `oneOf`s.
+      op: [...new Set(actions.map((properties) => properties.op.enum![0]))],
+      'show.type': [...new Set(showShapes.map((shape) => shape.type))],
+      'diagram.mode': showShapes.filter((shape) => shape.type === 'diagram').map((shape) => shape.mode!),
+      'show.role': property('ShowChartAction', 'role'),
+      'chart.kind': property('ChartData', 'kind'),
+      'series.semantic': property('ChartSeries', 'semantic'),
+      'metric.semantic': property('MetricData', 'semantic'),
+      'metric.trend': property('MetricData', 'trend'),
+      'progress step.state': property('ProgressStep', 'state'),
+      'diagram node.semantic': property('DiagramNode', 'semantic'),
+      'diagram node.state': property('DiagramNode', 'state'),
+      'diagram edge.semantic': property('DiagramEdge', 'semantic'),
+      'diagram actor.semantic': property('SequenceActor', 'semantic'),
+      'diagram message.kind': property('SequenceMessage', 'kind'),
+      'document.kind': property('DocumentData', 'kind'),
+      'table column.semantic': property('TableColumn', 'semantic'),
+      'table.rows[][].semantic': property('TableCell', 'semantic'),
+      'image.format': property('ImageData', 'format'),
+      'note segment.semantic': property('RichSegment', 'semantic'),
+      'calendar.view': property('CalendarData', 'view'),
+      'calendar event.semantic': property('CalendarEvent', 'semantic'),
+      'calendar event.status': property('CalendarEvent', 'status'),
+      'task.state': property('TaskItem', 'state'),
+      'task.priority': property('TaskItem', 'priority'),
+      'timer.state': property('Timer', 'state'),
+      'weather.units': property('WeatherData', 'units'),
+      'weather current.condition': property('WeatherCurrent', 'condition'),
+      'weather hour.condition': property('WeatherHour', 'condition'),
+      'weather day.condition': property('WeatherDay', 'condition'),
+      'inbox message.semantic': property('InboxMessage', 'semantic'),
+    };
+    const listed: Array<[string, string]> = [];
+    for (const testCase of corpusCases) {
+      const match = /^invalid ([^:]+): expected one of (.+?)(?: \(.*\))?$/.exec(testCase.error ?? '');
+      // A table cell's refusal names its place (`table.rows[3][2].semantic`); the set is the cell's.
+      if (match) listed.push([match[1].replace(/\[\d+\]/g, '[]'), match[2]]);
+    }
+    // Every field the corpus refuses a name for is mapped above, and each
+    // mapped field has a refusal in the corpus.
+    expect([...new Set(listed.map(([field]) => field))].sort()).toEqual(Object.keys(stated).sort());
+    for (const [field, names] of listed) expect(names.split(', '), field).toEqual(stated[field]);
+  });
+
+  // JSON cannot hold a NaN or an infinity, so these are not corpus cases.
+  it('refuses every non-finite mutation (NaN, Infinity, -Infinity)', () => {
+    for (const { name, action } of nonFiniteActions) {
+      expect(validate(action), `expected schema to reject non-finite mutation "${name}"`).toBe(false);
     }
   });
 });
 
-// The browser validator is held to the same source: it accepts every show type
-// the schema lists with exactly the data the schema requires, and refuses each
-// when a required key is missing.
-describe('validateControllerAction follows display-action-v1.schema.json', () => {
-  const definitions = schema.definitions as Record<string, any>;
-  const requiredByType: Record<string, string[]> = {};
-  for (const variant of schema.oneOf as Array<{ $ref: string }>) {
-    const action = definitions[variant.$ref.split('/').pop()!];
-    const kind: string | undefined = action.properties.type?.enum?.[0];
-    if (!kind) continue;
-    const dataRef: string | undefined = action.properties.data.$ref;
-    const data = dataRef ? definitions[dataRef.split('/').pop()!] : action.properties.data;
-    requiredByType[kind] = [...data.required].sort();
-  }
-  // The smallest data the validator accepts for each type; each carries
-  // exactly the schema's required keys, checked below.
-  const smallest: Record<string, Record<string, unknown>> = {
-    chart: { series: [{ name: 'a', values: [1] }] },
-    metric: { label: 'L', value: '1' },
-    progress: { label: 'L', value: 50 },
-    diagram: { mode: 'graph', nodes: [{ id: 'n', label: 'N' }], edges: [] },
-    document: { subject: 'S', paragraphs: ['p'] },
-    code: { source: { text: 'x' } },
-    note: { segments: [{ text: 't' }] },
+// Both validators are held to the same source through the corpus, which
+// both run (validatorCorpus.test.ts, and agrees_with_the_shared_validator_corpus
+// in apps/backend/tests/test_visual_protocol.rs): for each show type the
+// schema lists, the corpus accepts its smallest data, exactly the keys the
+// schema requires, and for each of those keys refuses a case that holds the
+// others but not it, with an error that names the key. Each side once kept
+// its own copy of these samples.
+describe('the corpus holds what display-action-v1.schema.json requires of each show type', () => {
+  const shown = (testCase: CorpusCase) => {
+    const action = testCase.action as { op?: unknown; type?: unknown; data?: unknown };
+    if (action === null || typeof action !== 'object' || action.op !== 'show' || typeof action.data !== 'object' || action.data === null) return null;
+    return { type: action.type, data: action.data as Record<string, unknown> };
   };
+  const ofShape = (shape: ShowShape, testCase: CorpusCase, modeSent = true) => {
+    const show = shown(testCase);
+    if (!show || show.type !== shape.type) return null;
+    return !modeSent || show.data.mode === shape.mode ? show.data : null;
+  };
+  const keys = (data: Record<string, unknown>) => Object.keys(data).sort();
+  /** The accepted case whose data is exactly `wanted`'s keys. */
+  const acceptedWith = (shape: ShowShape, wanted: string[]) =>
+    corpusCases.find((testCase) => {
+      const data = testCase.accepted && ofShape(shape, testCase);
+      return data && keys(data).join() === [...wanted].sort().join();
+    });
 
-  it('knows exactly the schema\'s show types', () => {
-    expect(Object.keys(smallest).sort()).toEqual(Object.keys(requiredByType).sort());
+  it("knows exactly the schema's show types and their shapes", () => {
+    const named = new Set(corpusCases.filter((testCase) => testCase.accepted).flatMap((testCase) => {
+      const show = shown(testCase);
+      return show ? [show.data.mode === undefined ? `${show.type}` : `${show.type}/${show.data.mode}`] : [];
+    }));
+    expect([...named].sort()).toEqual(showShapes.map((shape) => shape.name).sort());
   });
 
-  for (const [kind, required] of Object.entries(requiredByType)) {
-    it(`accepts the smallest ${kind} and refuses it without each required key`, () => {
-      const data = smallest[kind];
-      expect(Object.keys(data).sort()).toEqual(required);
-      const action = { op: 'show', id: 'x', type: kind, data };
-      expect(validateControllerAction(action).ok, `${kind}: ${JSON.stringify(validateControllerAction(action))}`).toBe(true);
+  for (const shape of showShapes) {
+    it(`accepts the smallest ${shape.name} and refuses it without each required key`, () => {
+      // The first `anyOf` branch is the one the smallest data carries.
+      const required = [...shape.required, ...(shape.branches[0] ?? [])];
+      expect(acceptedWith(shape, required)?.name, `${shape.name}: an accepted case with exactly ${required.join(', ')}`).toBeDefined();
       for (const key of required) {
-        const { [key]: _dropped, ...rest } = data;
-        expect(validateControllerAction({ ...action, data: rest }).ok, `${kind} without ${key}`).toBe(false);
+        const refused = corpusCases.find((testCase) => {
+          const data = testCase.error !== undefined && ofShape(shape, testCase, key !== 'mode');
+          return data && !(key in data) && required.every((other) => other === key || other in data) && new RegExp(`\\b${key}\\b`).test(testCase.error!);
+        });
+        expect(refused?.name, `${shape.name} without ${key}: a refused case whose error names it`).toBeDefined();
       }
     });
   }
+
+  it("accepts a progress with steps in place of value, the schema's other anyOf branch", () => {
+    const progress = showShapes.find((shape) => shape.name === 'progress')!;
+    expect(progress.branches).toEqual([['value'], ['steps']]);
+    const steps = acceptedWith(progress, [...progress.required, 'steps']);
+    expect(steps?.name).toBeDefined();
+    expect(validate(expandCorpusValue(steps!.action)), errorSummary()).toBe(true);
+  });
 });

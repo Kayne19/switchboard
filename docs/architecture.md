@@ -435,7 +435,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `prewarm.rs` | per-host setup and launch plans: catalogs, prepare | routing decisions, model policy |
 | `pi_client.rs` | the operator's Pi process/RPC transport, project sessions over the host link, process-tree cleanup | route authority or deployment registry |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
-| `display.rs` | the stage projection (`DisplayProjection`), the display gate state, and the display-precedence rule for `/view` and the snapshot | generation checks, HTTP/WebSocket handling |
+| `display.rs` | the stage projection (`DisplayProjection`), the display gate state, and the display-precedence rule for `view` and the snapshot | generation checks, HTTP/WebSocket handling |
 | `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |
 | `models.rs` | catalog parsing and spoken model/thinking resolution | where catalogs come from |
 | `registry.rs` | the project registry and spoken-name resolution | agent reasoning |
@@ -552,8 +552,8 @@ Switchboard is not currently a perfect hexagonal implementation:
     }
 
 - The display precedence rule is implemented twice, in `DisplayProjection`
-  (`display.rs`, for `/view` and the snapshot) and in the browser's
-  `sceneModel.ts`, on purpose: the server answers `/view` without asking the
+  (`display.rs`, for `view` and the snapshot) and in the browser's
+  `sceneModel.ts`, on purpose: the server answers `view` without asking the
   browser, and the browser renders without a round trip. This is now a
   checked duplication rather than an unchecked one: both are held to
   `apps/frontend/tests/fixtures/display-precedence.json`, read by a Rust test

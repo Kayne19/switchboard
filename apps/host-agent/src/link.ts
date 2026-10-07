@@ -59,6 +59,8 @@ export interface HostLinkOptions {
 	bootId?: string;
 	connect?: (url: string) => SocketLike;
 	onStatus?: (status: HostLinkStatus) => void;
+	/** Says why a frame was dropped or a call could not go out. */
+	log?: (message: string) => void;
 }
 
 interface Buffered {
@@ -73,6 +75,37 @@ interface SessionBuffer {
 }
 
 const OPEN = 1;
+
+/**
+ * A JSON.stringify replacer that writes a lone surrogate in a string, a
+ * value or a key, as U+FFFD. JSON.stringify would write it as a `\uXXXX` escape, which the
+ * service's serde_json refuses, and the whole frame would be lost: an
+ * event, a snapshot, or a command's reply (a saved session's first message
+ * cut inside an emoji failed `list_saved_sessions` on every try). The skill
+ * module refuses a lone surrogate before it sends one, so a relayed call is
+ * not changed in practice. (`isWellFormed` and `toWellFormed` are ES2024,
+ * in Node since 20; the type library here is ES2023.)
+ */
+function wellFormed(_key: string, value: unknown): unknown {
+	if (typeof value === "string") return mended(value);
+	// A key is written as it is, so an object with a key that is not well
+	// formed is written as a copy with that key mended (a tool's `args` and
+	// `result` keep the keys the daemon gave them). Two keys that mend to
+	// one keep the later value, as a JSON object with a repeated key does.
+	if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+		const keys = Object.keys(value);
+		if (keys.some((key) => mended(key) !== key)) {
+			return Object.fromEntries(keys.map((key) => [mended(key), (value as Record<string, unknown>)[key]]));
+		}
+	}
+	return value;
+}
+
+/** `text` with each lone surrogate written as U+FFFD. */
+function mended(text: string): string {
+	const wide = text as unknown as { isWellFormed(): boolean; toWellFormed(): string };
+	return wide.isWellFormed() ? text : wide.toWellFormed();
+}
 
 export function formatCursor(bootId: string, seq: number): string {
 	return `${bootId}:${seq}`;
@@ -95,7 +128,7 @@ function errorOf(error: unknown): { code: string; message: string } {
 
 export class HostLink {
 	readonly bootId: string;
-	readonly #o: Required<Omit<HostLinkOptions, "onStatus" | "bootId">> & Pick<HostLinkOptions, "onStatus">;
+	readonly #o: Required<Omit<HostLinkOptions, "onStatus" | "bootId" | "log">> & Pick<HostLinkOptions, "onStatus" | "log">;
 	#ws: SocketLike | null = null;
 	#epoch: number | null = null;
 	#seq = 0;
@@ -187,7 +220,11 @@ export class HostLink {
 		}
 	}
 
-	/** Relay a module call to the service and wait for its reply, bounded. */
+	/**
+	 * Relay a module call to the service and wait for its reply, bounded. A
+	 * call that cannot go out (no link, or a socket already closing) fails at
+	 * once rather than at the deadline.
+	 */
 	relayModuleCall(handle: string, token: string, call: string, args: Record<string, unknown>, timeoutMs: number, turnId?: string | null, turnCause?: string | null): Promise<ModuleReply> {
 		if (this.#epoch === null) return Promise.resolve({ status: "failed", reason: "failed" });
 		const id = `m${++this.#moduleSeq}`;
@@ -197,7 +234,7 @@ export class HostLink {
 				resolve({ status: "failed", reason: "failed" });
 			}, timeoutMs);
 			this.#pendingModule.set(id, { resolve, timer });
-			this.#send({
+			const sent = this.#send({
 				type: "module_call",
 				id,
 				session: handle,
@@ -207,6 +244,12 @@ export class HostLink {
 				...(turnId ? { turn_id: turnId } : {}),
 				...(turnCause ? { cause: turnCause } : {}),
 			});
+			if (!sent) {
+				this.#log(`module call ${call} not sent: the link's socket is not open`);
+				clearTimeout(timer);
+				this.#pendingModule.delete(id);
+				resolve({ status: "failed", reason: "failed" });
+			}
 		});
 	}
 
@@ -214,9 +257,16 @@ export class HostLink {
 		this.#o.onStatus?.(status);
 	}
 
-	#send(message: Record<string, unknown>): void {
+	#log(message: string): void {
+		this.#o.log?.(message);
+	}
+
+	/** Sends one frame if the socket is open; says whether it went out. */
+	#send(message: Record<string, unknown>): boolean {
 		const ws = this.#ws;
-		if (ws && ws.readyState === OPEN) ws.send(JSON.stringify(message));
+		if (!ws || ws.readyState !== OPEN) return false;
+		ws.send(JSON.stringify(message, wellFormed));
+		return true;
 	}
 
 	#dial(): void {
@@ -251,7 +301,13 @@ export class HostLink {
 			let message: Record<string, unknown>;
 			try {
 				message = JSON.parse(String(event.data)) as Record<string, unknown>;
-			} catch {
+			} catch (error) {
+				// Nothing in it can be answered: a command's id is inside.
+				this.#log(`dropped a frame from the service that is not JSON (${error instanceof Error ? error.message : String(error)})`);
+				return;
+			}
+			if (typeof message !== "object" || message === null || Array.isArray(message)) {
+				this.#log("dropped a frame from the service that is not a JSON object");
 				return;
 			}
 			void this.#onMessage(ws, message);
@@ -313,11 +369,16 @@ export class HostLink {
 				return;
 			case "module_reply": {
 				const pending = this.#pendingModule.get(String(message.id));
-				if (!pending) return;
+				if (!pending) {
+					// Its call already failed at its deadline, or the link it went out on closed.
+					this.#log(`dropped a module reply for ${String(message.id)}: no call is waiting for it`);
+					return;
+				}
 				this.#pendingModule.delete(String(message.id));
 				clearTimeout(pending.timer);
 				const status = message.status as ModuleStatus;
 				if (!MODULE_STATUSES.includes(status)) {
+					this.#log(`module reply for ${String(message.id)} has no known status (${JSON.stringify(message.status)}); the call failed`);
 					pending.resolve({ status: "failed", reason: "failed" });
 					return;
 				}
@@ -327,6 +388,8 @@ export class HostLink {
 				return;
 			}
 			default:
+				// A frame of a newer service, not acted on.
+				this.#log(`ignored a frame of no known type from the service (${JSON.stringify(message.type)})`);
 				return;
 		}
 	}

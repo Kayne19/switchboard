@@ -2,33 +2,25 @@
 // Every tool call registers on the activity panel (#27): a run of calls to
 // one tool must read as a run of calls, not as one call still running.
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivityState } from '../../src/controller/types';
 import { activitySummary, ToolActivity } from '../../src/primitives/ToolActivity';
+import { mount, rerender, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement;
-let root: Root;
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 beforeEach(() => {
   vi.useFakeTimers();
-  host = document.createElement('div');
-  document.body.append(host);
-  root = createRoot(host);
+  host = mount(null);
 });
 
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
+  unmountAll();
   vi.useRealTimers();
 });
 
 const read = (call: number, detail = 'apps/backend/src/api.rs'): ActivityState => ({ label: 'switchboard', tool: 'read', detail, call });
-const show = (activity: ActivityState | null) => act(() => root.render(<ToolActivity activity={activity} reserveSpace />));
+const show = (activity: ActivityState | null) => rerender(host, <ToolActivity activity={activity} reserveSpace />);
 const panel = () => host.querySelector<HTMLElement>('[data-testid="tool-activity"]');
 const callLine = () => host.querySelector<HTMLElement>('.tool-activity__call');
 const sweep = () => host.querySelector<HTMLElement>('.tool-activity__sweep');

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { clampAudioLevel, smoothAudioLevel } from '../runtime/audioLevel';
+import { prefersReducedMotion } from './reducedMotion';
 
 const heights = [5,10,16,8,19,12,7,17,11,6,15,9,18,7,12,5];
 const barProfiles = [0.55, 0.82, 1, 0.68, 1, 0.76, 0.58, 0.92, 0.72, 0.55, 0.88, 0.66, 0.96, 0.6, 0.78, 0.52];
@@ -18,7 +19,7 @@ export function VoiceIndicator({ compact = false, getLevel }: { compact?: boolea
 
   useEffect(() => {
     if (!getLevel) return;
-    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (prefersReducedMotion()) return;
     let frame: number | null = null;
     let smoothed = 0;
     const update = () => {

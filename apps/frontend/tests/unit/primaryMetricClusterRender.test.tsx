@@ -1,37 +1,18 @@
 // @vitest-environment jsdom
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ControllerAction, ControllerState, MetricData, SceneObject } from '../../src/controller/types';
 import { controllerReducer, createInitialState } from '../../src/controller/reducer';
 import { MetricsPrimitive } from '../../src/primitives/MetricsPrimitive';
 import { SceneShell } from '../../src/components/Scenes';
 import { ControllerProvider } from '../../src/controller/context';
+import { mount, stubResizeObserver } from './sceneHarness';
 
 function reduceActions(state: ControllerState, actions: ControllerAction[]): ControllerState {
   return actions.reduce(controllerReducer, state);
 }
 
-let host: HTMLDivElement;
-let root: Root;
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  globalThis.ResizeObserver ??= class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  };
-});
-
-afterEach(() => {
-  if (root) {
-    act(() => root.unmount());
-  }
-  if (host) {
-    host.remove();
-  }
-});
+stubResizeObserver();
 
 const m1: SceneObject<MetricData> = {
   id: 'm1',
@@ -65,13 +46,7 @@ const m3: SceneObject<MetricData> = {
 
 describe('primary metric cluster rendering', () => {
   it('renders a single metric as primary without cluster class', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-
-    act(() => {
-      root.render(<MetricsPrimitive metrics={[m1]} variant="primary" />);
-    });
+    const host = mount(<MetricsPrimitive metrics={[m1]} slot="primary" />);
 
     const metricsEl = host.querySelector('.metrics');
     expect(metricsEl).not.toBeNull();
@@ -86,13 +61,7 @@ describe('primary metric cluster rendering', () => {
   });
 
   it('renders multiple metrics as a cluster with data-count attribute', () => {
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-
-    act(() => {
-      root.render(<MetricsPrimitive metrics={[m1, m2, m3]} variant="primary" />);
-    });
+    const host = mount(<MetricsPrimitive metrics={[m1, m2, m3]} slot="primary" />);
 
     const metricsEl = host.querySelector('.metrics');
     expect(metricsEl).not.toBeNull();
@@ -109,13 +78,7 @@ describe('primary metric cluster rendering', () => {
 
   it('triggers onFocus with clicked metric id in a cluster', () => {
     const onFocus = vi.fn();
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-
-    act(() => {
-      root.render(<MetricsPrimitive metrics={[m1, m2, m3]} variant="primary" onFocus={onFocus} />);
-    });
+    const host = mount(<MetricsPrimitive metrics={[m1, m2, m3]} slot="primary" onFocus={onFocus} />);
 
     const rows = host.querySelectorAll<HTMLDivElement>('.metric-row');
     act(() => {
@@ -133,23 +96,17 @@ describe('primary metric cluster rendering', () => {
     ];
     const state = reduceActions(createInitialState(), actions);
 
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-
-    act(() => {
-      root.render(
-        <ControllerProvider>
-          <SceneShell
-            kind="composed"
-            state={state}
-            onToggleListening={() => {}}
-            onFocus={() => {}}
-            setTranscriptOpen={() => {}}
-          />
-        </ControllerProvider>,
-      );
-    });
+    const host = mount(
+      <ControllerProvider>
+        <SceneShell
+          kind="composed"
+          state={state}
+          onToggleListening={() => {}}
+          onFocus={() => {}}
+          setTranscriptOpen={() => {}}
+        />
+      </ControllerProvider>,
+    );
 
     // Check cluster in main
     const mainCluster = host.querySelector('.composed-primary-object--cluster');
@@ -175,16 +132,11 @@ describe('primary metric cluster rendering', () => {
     }));
     const state = reduceActions(createInitialState(), actions);
 
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
-    act(() => {
-      root.render(
-        <ControllerProvider>
-          <SceneShell kind="composed" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
-        </ControllerProvider>,
-      );
-    });
+    const host = mount(
+      <ControllerProvider>
+        <SceneShell kind="composed" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
+      </ControllerProvider>,
+    );
 
     const cluster = host.querySelector('.composed-primary-object--cluster .metrics--primary');
     expect(cluster?.getAttribute('data-count')).toBe('8');

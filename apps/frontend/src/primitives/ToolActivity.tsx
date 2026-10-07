@@ -1,6 +1,7 @@
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import type { ActivityState } from '../controller/types';
 import { ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS, useLingeringValue } from '../hooks/useLingeringValue';
+import { SHARP } from './ObjectMotion';
 
 // What a call of each of the agent's own tools works on, to count a burst of
 // them by: twenty reads are twenty files. Any other tool counts calls.
@@ -68,10 +69,13 @@ export function ToolActivity({
   activity,
   placement = 'rail',
   reserveSpace = false,
+  away = false,
 }: {
   activity: ActivityState | null;
   placement?: 'rail' | 'conversation';
   reserveSpace?: boolean;
+  /** The rail's column has no room for the panel whole: its slot is set aside, out of the column's flow and unseen, still measured. */
+  away?: boolean;
 }) {
   const reduced = useReducedMotion();
   const shown = useLingeringValue(activity, ACTIVITY_LINGER_MS, ACTIVITY_MINIMUM_MS);
@@ -113,7 +117,7 @@ export function ToolActivity({
             key={`call-${shown.call ?? 0}`}
             className="tool-activity__call"
             initial={reduced ? false : { opacity: 0.2, y: 5, filter: 'blur(3px)' }}
-            animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+            animate={{ opacity: 1, y: 0, ...SHARP }}
             transition={{ duration: 0.18, ease: [0.22, 0.61, 0.36, 1] }}
           >
             <div className="tool-activity__tool tech" title={summary.title}>
@@ -131,7 +135,7 @@ export function ToolActivity({
   );
   if (placement !== 'rail') return panel;
   return (
-    <div className="tool-activity-slot">
+    <div className={`tool-activity-slot${away ? ' tool-activity-slot--away' : ''}`}>
       {reserveSpace ? (
         // The panel's own three lines, unseen, so the reserved height is
         // exactly the panel's at every geometry.

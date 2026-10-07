@@ -3,6 +3,7 @@
   "$id": "https://switchboard.internal/schemas/display-action-v1.json",
   "title": "DisplayAction",
   "description": "Canonical Switchboard DisplayAction v1 specification.",
+  "$comment": "Both validators (validation.ts, visual_protocol.rs) also follow rules JSON Schema cannot state: the order of their checks and of an object's keys (code point order), the relations between sibling items and fields (unique ids, endpoints, a row's cells, times compared as times), the size as JSON.stringify writes the action, string caps in UTF-16 code units, an image's signature and base64 length, and the exact error text. docs/display-tool.md, 'How the two validators agree' and 'Canonical schema & validation rules', lists them; apps/frontend/tests/fixtures/validator-corpus.json pins them. This schema accepts every action that corpus accepts and refuses every action it refuses, but for those it cannot state (SCHEMA_GAPS in apps/frontend/tests/unit/schema.test.ts).",
   "oneOf": [
     {
       "$ref": "#/definitions/ShowChartAction"
@@ -23,7 +24,28 @@
       "$ref": "#/definitions/ShowCodeAction"
     },
     {
+      "$ref": "#/definitions/ShowTableAction"
+    },
+    {
       "$ref": "#/definitions/ShowNoteAction"
+    },
+    {
+      "$ref": "#/definitions/ShowImageAction"
+    },
+    {
+      "$ref": "#/definitions/ShowCalendarAction"
+    },
+    {
+      "$ref": "#/definitions/ShowTasksAction"
+    },
+    {
+      "$ref": "#/definitions/ShowTimerAction"
+    },
+    {
+      "$ref": "#/definitions/ShowWeatherAction"
+    },
+    {
+      "$ref": "#/definitions/ShowInboxAction"
     },
     {
       "$ref": "#/definitions/HideAction"
@@ -48,7 +70,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^(?!__runtime/).+$"
+      "pattern": "^(?!__runtime/)[\\s\\S]*[^\\t\\n\\u000b\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
     },
     "Role": {
       "type": "string",
@@ -78,7 +100,7 @@
       "then": {
         "type": "string",
         "not": {
-          "pattern": "<[sS][cC][rR][iI][pP][tT]|<[iI][fF][rR][aA][mM][eE]|<[hH][tT][mM][lL]|<[sS][tT][yY][lL][eE]|<[sS][vV][gG]|<[oO][bB][jJ][eE][cC][tT]|<[eE][mM][bB][eE][dD]|[jJ][aA][vV][aA][sS][cC][rR][iI][pP][tT]:|[dD][aA][tT][aA]:[tT][eE][xX][tT]/[hH][tT][mM][lL]|[hH][tT][tT][pP][sS]?://|[fF][tT][pP]://|^//|//[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+          "pattern": "<[sS][cC][rR][iI][pP][tT]|<[iI][fF][rR][aA][mM][eE]|<[hH][tT][mM][lL]|<[sS][tT][yY][lL][eE]|<[sS][vV][gG]|<[oO][bB][jJ][eE][cC][tT]|<[eE][mM][bB][eE][dD]|[jJ][aA][vV][aA][sS][cC][rR][iI][pP][tT]:|[dD][aA][tT][aA]:[tT][eE][xX][tT]/[hH][tT][mM][lL]|://|^//|//[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
         }
       },
       "else": {
@@ -162,6 +184,24 @@
           "type": "string",
           "maxLength": 128
         },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "line",
+            "bar",
+            "area",
+            "scatter"
+          ]
+        },
+        "labels": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 100,
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
         "xLabel": {
           "type": "string",
           "maxLength": 128
@@ -215,11 +255,49 @@
         "caption": {
           "type": "string",
           "maxLength": 128
+        },
+        "trend": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "flat"
+          ]
+        },
+        "delta": {
+          "type": "string",
+          "maxLength": 32
         }
       },
       "required": [
         "label",
         "value"
+      ],
+      "additionalProperties": false
+    },
+    "ProgressStep": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "done",
+            "active",
+            "todo",
+            "blocked"
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "label"
       ],
       "additionalProperties": false
     },
@@ -244,21 +322,38 @@
         "caption": {
           "type": "string",
           "maxLength": 128
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProgressStep"
+          },
+          "minItems": 1,
+          "maxItems": 30
         }
       },
       "required": [
-        "label",
-        "value"
+        "label"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "value"
+          ]
+        },
+        {
+          "required": [
+            "steps"
+          ]
+        }
+      ]
     },
     "DiagramNode": {
       "type": "object",
       "properties": {
         "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "$ref": "#/definitions/ItemId"
         },
         "label": {
           "type": "string",
@@ -321,7 +416,7 @@
       ],
       "additionalProperties": false
     },
-    "DiagramData": {
+    "GraphDiagramData": {
       "type": "object",
       "properties": {
         "title": {
@@ -368,6 +463,124 @@
         "edges"
       ],
       "additionalProperties": false
+    },
+    "SequenceActor": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/ItemId"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "sub": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "SequenceMessage": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "call",
+            "return",
+            "async"
+          ]
+        },
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "SequenceDiagramData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "sequence"
+          ]
+        },
+        "actors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SequenceActor"
+          },
+          "minItems": 1,
+          "maxItems": 12
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/SequenceMessage"
+          },
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "mode",
+        "actors",
+        "messages"
+      ],
+      "additionalProperties": false
+    },
+    "DiagramData": {
+      "oneOf": [
+        {
+          "$ref": "#/definitions/GraphDiagramData"
+        },
+        {
+          "$ref": "#/definitions/SequenceDiagramData"
+        }
+      ]
     },
     "DocumentData": {
       "type": "object",
@@ -431,7 +644,7 @@
         "highlight": {
           "type": "array",
           "items": {
-            "type": "integer"
+            "type": "number"
           }
         }
       },
@@ -465,6 +678,104 @@
       },
       "required": [
         "source"
+      ],
+      "additionalProperties": false
+    },
+    "TableColumn": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "TableCell": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 256
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "semantic": {
+              "$ref": "#/definitions/Semantic"
+            },
+            "bold": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TableData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TableColumn"
+          },
+          "minItems": 1,
+          "maxItems": 12
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/definitions/TableCell"
+            },
+            "maxItems": 12
+          },
+          "maxItems": 200
+        },
+        "highlight": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "required": [
+        "columns",
+        "rows"
       ],
       "additionalProperties": false
     },
@@ -532,6 +843,12 @@
         "node": {
           "type": "string",
           "maxLength": 128
+        },
+        "item": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "[^\\t\\n\\u000b\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
         }
       },
       "required": [
@@ -737,6 +1054,120 @@
       ],
       "additionalProperties": false
     },
+    "ShowTableAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "table"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/TableData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ImageData": {
+      "description": "A raster image carried inline as standard base64. The bytes must start with the format's file signature and be a multiple of four characters long (both checked by both validators, not here), decode to at most 8 MiB, and the whole action to at most 12 MiB. SVG is refused: it is markup, not raster bytes.",
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": [
+            "png",
+            "jpeg",
+            "webp"
+          ]
+        },
+        "bytes": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 11184812,
+          "pattern": "^[A-Za-z0-9+/]*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$"
+        },
+        "alt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "[^\\t\\n\\u000b\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "format",
+        "bytes",
+        "alt"
+      ],
+      "additionalProperties": false
+    },
+    "ShowImageAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "image"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/ImageData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
     "ShowNoteAction": {
       "type": "object",
       "properties": {
@@ -760,6 +1191,809 @@
         },
         "data": {
           "$ref": "#/definitions/NoteData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "DateValue": {
+      "description": "YYYY-MM-DD: a real day in the years 1970-2199 (docs/display-tool.md, 'Time values'). The pattern holds each month's days and the leap years of those years.",
+      "type": "string",
+      "pattern": "^(?:(?:19[7-9][0-9]|20[0-9]{2}|21[0-9]{2})-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|(?:19(?:7[26]|8[048]|9[26])|20(?:[02468][048]|[13579][26])|21(?:0[48]|[2468][048]|[13579][26]))-02-29)$"
+    },
+    "WallTimeValue": {
+      "description": "YYYY-MM-DDTHH:MM: the caller's wall clock, 24 h, no seconds and no offset, drawn as written.",
+      "type": "string",
+      "pattern": "^(?:(?:19[7-9][0-9]|20[0-9]{2}|21[0-9]{2})-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|(?:19(?:7[26]|8[048]|9[26])|20(?:[02468][048]|[13579][26])|21(?:0[48]|[2468][048]|[13579][26]))-02-29)T(?:[01][0-9]|2[0-3]):[0-5][0-9]$"
+    },
+    "InstantValue": {
+      "description": "RFC 3339 with seconds and an offset (Z or +HH:MM/-HH:MM), upper-case T and Z, a fraction of 1 to 9 digits. Only a timer takes one.",
+      "type": "string",
+      "pattern": "^(?:(?:19[7-9][0-9]|20[0-9]{2}|21[0-9]{2})-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|(?:19(?:7[26]|8[048]|9[26])|20(?:[02468][048]|[13579][26])|21(?:0[48]|[2468][048]|[13579][26]))-02-29)T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,9})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])$"
+    },
+    "DateOrWallTime": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DateValue"
+        },
+        {
+          "$ref": "#/definitions/WallTimeValue"
+        }
+      ]
+    },
+    "ItemId": {
+      "description": "An item's id inside its object: non-blank, at most 128 UTF-16 code units, unique in its list (uniqueness is checked by both validators, not here).",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "[^\\t\\n\\u000b\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]"
+    },
+    "CalendarEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/ItemId"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "start": {
+          "$ref": "#/definitions/DateOrWallTime"
+        },
+        "end": {
+          "$ref": "#/definitions/DateOrWallTime"
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "confirmed",
+            "tentative",
+            "cancelled"
+          ]
+        },
+        "active": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "start"
+      ],
+      "additionalProperties": false,
+      "$comment": "end is written like start (both dates or both wall times); that it is not before start is checked by both validators, not here.",
+      "if": {
+        "properties": {
+          "start": {
+            "$ref": "#/definitions/DateValue"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "end": {
+            "$ref": "#/definitions/DateValue"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "end": {
+            "$ref": "#/definitions/WallTimeValue"
+          }
+        }
+      }
+    },
+    "CalendarData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "view": {
+          "type": "string",
+          "enum": [
+            "day",
+            "week",
+            "month",
+            "agenda"
+          ]
+        },
+        "start": {
+          "$ref": "#/definitions/DateValue"
+        },
+        "days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 31
+        },
+        "today": {
+          "$ref": "#/definitions/DateValue"
+        },
+        "now": {
+          "$ref": "#/definitions/WallTimeValue"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/CalendarEvent"
+          },
+          "maxItems": 200
+        }
+      },
+      "required": [
+        "view",
+        "start",
+        "events"
+      ],
+      "additionalProperties": false,
+      "$comment": "now falls on today when both are given: checked by both validators, not here.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "view": {
+                "const": "week"
+              }
+            },
+            "required": [
+              "view"
+            ]
+          },
+          "then": {
+            "properties": {
+              "days": {
+                "type": "integer",
+                "maximum": 7
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "view": {
+                "enum": [
+                  "day",
+                  "month"
+                ]
+              }
+            },
+            "required": [
+              "view"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "days"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "TaskItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/ItemId"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "active",
+            "done",
+            "blocked"
+          ]
+        },
+        "due": {
+          "$ref": "#/definitions/DateOrWallTime"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "high",
+            "low"
+          ]
+        },
+        "group": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "maxItems": 4
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "TasksData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "today": {
+          "$ref": "#/definitions/DateValue"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TaskItem"
+          },
+          "minItems": 1,
+          "maxItems": 100
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "additionalProperties": false
+    },
+    "Timer": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/ItemId"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "endsAt": {
+          "$ref": "#/definitions/InstantValue"
+        },
+        "startedAt": {
+          "$ref": "#/definitions/InstantValue"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "running",
+            "paused"
+          ]
+        },
+        "remaining": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 7258118400
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "endsAt"
+      ],
+      "additionalProperties": false,
+      "$comment": "startedAt is before endsAt: checked by both validators, not here. remaining is given for a paused timer and only for one.",
+      "if": {
+        "properties": {
+          "state": {
+            "const": "paused"
+          }
+        },
+        "required": [
+          "state"
+        ]
+      },
+      "then": {
+        "required": [
+          "remaining"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "remaining"
+          ]
+        }
+      }
+    },
+    "TimerData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "timers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Timer"
+          },
+          "minItems": 1,
+          "maxItems": 8
+        }
+      },
+      "required": [
+        "timers"
+      ],
+      "additionalProperties": false
+    },
+    "WeatherCondition": {
+      "type": "string",
+      "enum": [
+        "clear",
+        "partly-cloudy",
+        "cloudy",
+        "fog",
+        "drizzle",
+        "rain",
+        "heavy-rain",
+        "thunder",
+        "snow",
+        "sleet",
+        "hail",
+        "wind",
+        "haze"
+      ]
+    },
+    "WeatherCurrent": {
+      "type": "object",
+      "properties": {
+        "temp": {
+          "type": "number"
+        },
+        "condition": {
+          "$ref": "#/definitions/WeatherCondition"
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "high": {
+          "type": "number"
+        },
+        "low": {
+          "type": "number"
+        },
+        "feelsLike": {
+          "type": "number"
+        },
+        "humidity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "precip": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "wind": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "temp",
+        "condition"
+      ],
+      "additionalProperties": false
+    },
+    "WeatherHour": {
+      "type": "object",
+      "properties": {
+        "time": {
+          "$ref": "#/definitions/WallTimeValue"
+        },
+        "temp": {
+          "type": "number"
+        },
+        "condition": {
+          "$ref": "#/definitions/WeatherCondition"
+        },
+        "precip": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "time",
+        "temp",
+        "condition"
+      ],
+      "additionalProperties": false
+    },
+    "WeatherDay": {
+      "type": "object",
+      "properties": {
+        "date": {
+          "$ref": "#/definitions/DateValue"
+        },
+        "high": {
+          "type": "number"
+        },
+        "low": {
+          "type": "number"
+        },
+        "condition": {
+          "$ref": "#/definitions/WeatherCondition"
+        },
+        "precip": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "date",
+        "high",
+        "low",
+        "condition"
+      ],
+      "additionalProperties": false
+    },
+    "WeatherData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "units": {
+          "type": "string",
+          "enum": [
+            "C",
+            "F"
+          ]
+        },
+        "current": {
+          "$ref": "#/definitions/WeatherCurrent"
+        },
+        "today": {
+          "$ref": "#/definitions/DateValue"
+        },
+        "hourly": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WeatherHour"
+          },
+          "maxItems": 48
+        },
+        "daily": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/WeatherDay"
+          },
+          "maxItems": 14
+        },
+        "alert": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "location",
+        "units",
+        "current"
+      ],
+      "additionalProperties": false,
+      "$comment": "No two hours share a time and no two days a date (a note names one by it): checked by both validators, not here."
+    },
+    "InboxMessage": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/ItemId"
+        },
+        "from": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "subject": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "snippet": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "time": {
+          "$ref": "#/definitions/DateOrWallTime"
+        },
+        "channel": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "unread": {
+          "type": "boolean"
+        },
+        "flagged": {
+          "type": "boolean"
+        },
+        "semantic": {
+          "$ref": "#/definitions/Semantic"
+        }
+      },
+      "required": [
+        "id",
+        "from",
+        "time"
+      ],
+      "additionalProperties": false
+    },
+    "InboxData": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "subtitle": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "context": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "today": {
+          "$ref": "#/definitions/DateValue"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/InboxMessage"
+          },
+          "minItems": 1,
+          "maxItems": 50
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "additionalProperties": false
+    },
+    "ShowCalendarAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "calendar"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/CalendarData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowTasksAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "tasks"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/TasksData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowTimerAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "timer"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/TimerData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowWeatherAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "weather"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/WeatherData"
+        }
+      },
+      "required": [
+        "op",
+        "id",
+        "type",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ShowInboxAction": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "type": "string",
+          "enum": [
+            "show"
+          ]
+        },
+        "id": {
+          "$ref": "#/definitions/Identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "inbox"
+          ]
+        },
+        "role": {
+          "$ref": "#/definitions/Role"
+        },
+        "data": {
+          "$ref": "#/definitions/InboxData"
         }
       },
       "required": [
@@ -848,7 +2082,14 @@
           "maxLength": 50000
         },
         "target": {
-          "$ref": "#/definitions/Identifier"
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Identifier"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "at": {
           "oneOf": [

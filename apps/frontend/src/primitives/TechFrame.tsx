@@ -8,6 +8,8 @@
 // non-scaling, and the dash pattern Motion writes to trace them breaks on
 // exactly that mismatch.
 
+import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
+
 interface FramePath {
   d: string;
   stroke: string;
@@ -20,7 +22,7 @@ interface FrameSpec {
 }
 
 const ORANGE = (alpha: number) => `rgba(var(--orange-rgb), ${alpha})`;
-const PAPER = (alpha: number) => `rgba(232, 230, 223, ${alpha})`;
+const PAPER = (alpha: number) => `rgba(var(--paper-rgb), ${alpha})`;
 
 const frames = {
   // #training .frame: the chart instrument frame, also the default content frame.
@@ -69,10 +71,11 @@ export type FrameVariant = keyof typeof frames | 'answer';
 // #conversation .answer-shell: the one closed frame, cut at two corners, with
 // an edge that runs from orange to green and a dark fill of its own.
 function AnswerFrame({ className }: { className?: string }) {
+  const ids = useSvgIds();
   return (
     <svg className={`tech-frame tech-frame--answer ${className ?? ''}`} viewBox="0 0 1000 500" preserveAspectRatio="none" aria-hidden="true">
       <defs>
-        <linearGradient id="tech-frame-answer-edge" x1="0" y1="0" x2="1" y2="1">
+        <linearGradient id={ids('edge')} x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" style={{ stopColor: ORANGE(0.62) }} />
           <stop offset="0.42" style={{ stopColor: ORANGE(0.18) }} />
           <stop offset="0.7" style={{ stopColor: PAPER(0.25) }} />
@@ -82,7 +85,7 @@ function AnswerFrame({ className }: { className?: string }) {
       <path
         className="tech-frame__path"
         d="M0 0 H952 L1000 65 V500 H54 L0 425 Z"
-        style={{ fill: 'rgba(4, 4, 4, 0.76)', stroke: 'url(#tech-frame-answer-edge)' }}
+        style={{ fill: 'rgba(4, 4, 4, 0.76)', stroke: svgUrl(ids('edge')) }}
       />
     </svg>
   );

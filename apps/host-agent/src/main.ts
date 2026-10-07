@@ -110,6 +110,7 @@ export async function main(argv: string[]): Promise<void> {
 			if (s.state === "closed" || s.state === "refused") manager.clearCalls();
 			log(`link ${s.state}${s.reason ? ` (${s.reason})` : ""}${s.epoch !== undefined ? ` epoch ${s.epoch}` : ""}`);
 		},
+		log: (message) => log(`link: ${message}`),
 	});
 	const manager = new SessionManager({
 		port,

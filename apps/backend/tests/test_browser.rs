@@ -731,6 +731,57 @@ async fn a_snapshot_names_the_adoption_only_while_the_adopted_leg_is_on_the_line
     );
 }
 
+/// The standard base64 of an 8 MiB "PNG": its signature, then zeros. The
+/// backend has no base64 encoder, and this one is all the test needs: the
+/// first 12 bytes encode to `iVBORw0KGgoAAAAA`, every 3 zero bytes after
+/// them to `AAAA`, and the last 2 to `AAA=`.
+fn eight_mib_png_base64() -> String {
+    let rest = crate::visual_protocol::MAX_IMAGE_BYTES - 12;
+    assert_eq!(rest % 3, 2);
+    format!("iVBORw0KGgoAAAAA{}AAA=", "AAAA".repeat(rest / 3))
+}
+
+#[tokio::test]
+async fn a_reconnect_replays_two_eight_mebibyte_images_one_frame_each() {
+    // Each image action is at most 12 MiB and the socket's frames at most
+    // 16 MiB, so the snapshot must never put two images in one frame: every
+    // replayed action is its own message.
+    let state = state();
+    let token = state.0.coordinator.current_identity().token;
+    let bytes = eight_mib_png_base64();
+    for id in ["fig-1", "fig-2"] {
+        let (code, body) = agent_call_json(
+            &state,
+            "/display",
+            json!({"token": token, "action": {"op": "show", "id": id, "type": "image",
+                "data": {"format": "png", "bytes": bytes, "alt": id}}}),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{body}");
+    }
+
+    let served = Served::start(&state).await;
+    let mut browser = served.connect().await;
+    json_until(&mut browser, "history").await;
+    for id in ["fig-1", "fig-2"] {
+        let Wire::Text(text) = next_wire(&mut browser).await else {
+            panic!("expected a text frame")
+        };
+        assert!(
+            text.len() <= MAX_WEBSOCKET_MESSAGE_BYTES,
+            "a {} byte frame",
+            text.len()
+        );
+        let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+        assert_eq!(frame["type"], "display");
+        assert_eq!(frame["action"]["id"], id);
+        assert_eq!(
+            frame["action"]["data"]["bytes"].as_str(),
+            Some(bytes.as_str())
+        );
+    }
+}
+
 type Browser =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 

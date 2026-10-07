@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const skipped = new Set(["node_modules", "dist", "target", ".git", "static", "static-debug"]);
+const skipped = new Set(["node_modules", "dist", "target", ".git", "static", "static-debug", "test-results"]);
 const findings = [];
 
 function* files(entry, exts) {
@@ -72,18 +72,147 @@ for (const file of files(path.join(root, "apps/backend/tests"), new Set([".rs"])
 	else if (tsPath !== pyParts.join("/")) findings.push(`skill socket path differs: host agent ~/${tsPath}, skill ~/${pyParts.join("/")}`);
 }
 
+// The markdown the doc checks read: the docs and every markdown file in
+// the tree (READMEs, AGENTS.md, ARCHITECTURE.md, DESIGN_SYSTEM.md, SKILL.md).
+const markdown = () => ["AGENTS.md", "README.md", "docs", "apps", "skills", "extensions"].flatMap((start) => [...files(path.join(root, start), new Set([".md"]))]);
+
 // 7. Every repo path a doc names exists. A bare `src/` or `tests/` is
 //    relative to the prose, not the root, and is skipped.
-for (const start of ["AGENTS.md", "README.md", "docs"]) {
-	for (const file of files(path.join(root, start), new Set([".md"]))) {
+for (const file of markdown()) {
+	lines(file).forEach((line, index) => {
+		for (const m of line.matchAll(/(?<![\w/.-])((?:apps|docs|skills|extensions|scripts|static|static-debug)\/[\w./-]*)/g)) {
+			const target = m[1].replace(/[.,;:)]+$/, "").replace(/\/$/, "");
+			if (target.includes("*") || target.includes("<") || !target.includes("/")) continue;
+			if (!existsSync(path.join(root, target))) findings.push(`${rel(file)}:${index + 1}: names ${target}, which does not exist`);
+		}
+	});
+}
+
+// 8. Every HTTP route a doc names in a code span, with its method
+//    (`POST /connect`), is one the service routes. Agents' display, view
+//    and speak calls once had routes; they come over the host link now, and
+//    a doc that still names `POST /display` sends a reader to a 404. A route
+//    in prose or in a fenced block is not read.
+{
+	const routes = new Set();
+	const methods = /\b(get|post|put|patch|delete)\(/g;
+	for (const file of files(path.join(root, "apps/backend/src"), new Set([".rs"]))) {
+		// Each `.route("/path", ...)` up to the next route or the end of the
+		// chain, so `get(a).post(b)` gives both methods.
+		const source = readFileSync(file, "utf8");
+		for (const m of source.matchAll(/\.route\(\s*"([^"]+)",([\s\S]*?)(?=\.route\(|\.with_state\(|\.fallback|;)/g)) {
+			for (const method of m[2].matchAll(methods)) routes.add(`${method[1].toUpperCase()} ${m[1]}`);
+		}
+	}
+	if (routes.size === 0) findings.push("routes: found none in apps/backend/src (the check needs updating)");
+	for (const file of markdown()) {
 		lines(file).forEach((line, index) => {
-			for (const m of line.matchAll(/(?<![\w/.-])((?:apps|docs|skills|extensions|scripts|static|static-debug)\/[\w./-]*)/g)) {
-				const target = m[1].replace(/[.,;:)]+$/, "").replace(/\/$/, "");
-				if (target.includes("*") || target.includes("<") || !target.includes("/")) continue;
-				if (!existsSync(path.join(root, target))) findings.push(`${rel(file)}:${index + 1}: names ${target}, which does not exist`);
+			for (const m of line.matchAll(/`(GET|POST|PUT|PATCH|DELETE) (\/[^`\s?#]*)/g)) {
+				const route = `${m[1]} ${m[2]}`;
+				if (!routes.has(route)) findings.push(`${rel(file)}:${index + 1}: names ${route}, which the service does not route`);
 			}
 		});
 	}
+}
+
+// 9. Every SWITCHBOARD_ name a doc names is one docs/environment.md names,
+//    exactly: it writes the live ones in full and the retired ones without
+//    the prefix. A doc that names a retired setting in full
+//    (`SWITCHBOARD_DISPLAY_URL`) tells a reader to set something nothing
+//    reads.
+{
+	const name = /\bSWITCHBOARD_[A-Z0-9][A-Z0-9_]*/g;
+	const documented = new Set(readFileSync(path.join(root, "docs/environment.md"), "utf8").match(name) ?? []);
+	for (const file of markdown()) {
+		lines(file).forEach((line, index) => {
+			for (const m of line.matchAll(name)) {
+				if (!documented.has(m[0])) findings.push(`${rel(file)}:${index + 1}: names ${m[0]}, which docs/environment.md does not list`);
+			}
+		});
+	}
+}
+
+// 10. The depth a host-link frame may nest is one number on both sides: the
+//     service's MAX_FRAME_DEPTH (serde_json's limit; a test in
+//     test_hosts.rs pins it) and the skill module's _MAX_FRAME_DEPTH, which
+//     holds a display call to it before sending.
+{
+	const rs = readFileSync(path.join(root, "apps/backend/src/hosts.rs"), "utf8").match(/const MAX_FRAME_DEPTH: usize = (\d+);/)?.[1];
+	const py = readFileSync(path.join(root, "skills/switchboard/src/switchboard/__init__.py"), "utf8").match(/^_MAX_FRAME_DEPTH = (\d+)$/m)?.[1];
+	if (!rs || !py) findings.push("frame depth: could not read it from hosts.rs or __init__.py (the check needs updating)");
+	else if (rs !== py) findings.push(`frame depth differs: service MAX_FRAME_DEPTH ${rs}, skill _MAX_FRAME_DEPTH ${py}`);
+}
+
+// 11. The size caps are one set of numbers wherever they are written. The
+//     raw image cap is in both validators, in the skill module (which
+//     refuses a larger file before sending) and in the schema (as the
+//     base64 length of that many bytes); the action caps, general and
+//     image, are in both validators and in the skill module, which names
+//     them with the skill socket's line cap when a request is too large.
+//     Each link the action crosses leaves room around it: the
+//     skill socket's line holds the action and 1 MiB of envelope, and the
+//     host link's frame holds that line and 1 MiB more. The corpus pins what
+//     the validators make of the caps; this pins the copies it cannot run.
+{
+	// A cap as the source writes it: an integer or a product of integers (`8 * 1024 * 1024`).
+	const cap = (file, pattern) => {
+		const text = readFileSync(path.join(root, file), "utf8").match(pattern)?.[1];
+		if (!text || !/^\d[\d_]*(?:\s*\*\s*\d[\d_]*)*$/.test(text.trim())) {
+			findings.push(`image caps: could not read ${pattern.source} from ${file} (the check needs updating)`);
+			return NaN;
+		}
+		return text.split("*").reduce((product, factor) => product * Number(factor.trim().replaceAll("_", "")), 1);
+	};
+	const mib = 1024 * 1024;
+	const image = {
+		"validation.ts": cap("apps/frontend/src/controller/validation.ts", /^export const MAX_IMAGE_BYTES = ([^;]+);$/m),
+		"visual_protocol.rs": cap("apps/backend/src/visual_protocol.rs", /^pub const MAX_IMAGE_BYTES: usize = ([^;]+);$/m),
+		"__init__.py": cap("skills/switchboard/src/switchboard/__init__.py", /^_MAX_IMAGE_BYTES = (.+)$/m),
+	};
+	const action = {
+		"validation.ts": cap("apps/frontend/src/controller/validation.ts", /^export const MAX_IMAGE_ACTION_BYTES = ([^;]+);$/m),
+		"visual_protocol.rs": cap("apps/backend/src/visual_protocol.rs", /^pub const MAX_IMAGE_ACTION_BYTES: usize = ([^;]+);$/m),
+		"__init__.py": cap("skills/switchboard/src/switchboard/__init__.py", /^_MAX_IMAGE_ACTION_BYTES = (.+)$/m),
+	};
+	// The general action cap, which the skill module names in its words for
+	// a request too large to send.
+	const general = {
+		"validation.ts": cap("apps/frontend/src/controller/validation.ts", /^const MAX_ACTION_BYTES = ([^;]+);$/m),
+		"visual_protocol.rs": cap("apps/backend/src/visual_protocol.rs", /^pub const MAX_ACTION_BYTES: usize = ([^;]+);$/m),
+		"__init__.py": cap("skills/switchboard/src/switchboard/__init__.py", /^_MAX_ACTION_BYTES = (.+)$/m),
+	};
+	const lineCaps = {
+		"skill_socket.ts": cap("apps/host-agent/src/skill_socket.ts", /^export const MAX_LINE_BYTES = ([^;]+);$/m),
+		"__init__.py": cap("skills/switchboard/src/switchboard/__init__.py", /^_MAX_LINE_BYTES = (.+)$/m),
+	};
+	const line = lineCaps["skill_socket.ts"];
+	const frame = cap("apps/backend/src/hosts.rs", /^const MAX_HOST_FRAME_BYTES: usize = ([^;]+);$/m);
+	const schema = JSON.parse(readFileSync(path.join(root, "docs/display-action-v1.schema.json"), "utf8"));
+	const base64 = schema.definitions?.ImageData?.properties?.bytes?.maxLength;
+	const read = [...Object.values(image), ...Object.values(action), ...Object.values(general), ...Object.values(lineCaps), frame].every((value) => !Number.isNaN(value));
+	const same = (what, values) => {
+		if (new Set(Object.values(values)).size > 1) findings.push(`${what} differs: ${Object.entries(values).map(([file, value]) => `${file} ${value}`).join(", ")}`);
+	};
+	if (read) {
+		same("raw image cap (MAX_IMAGE_BYTES)", image);
+		same("image action cap (MAX_IMAGE_ACTION_BYTES)", action);
+		same("action cap (MAX_ACTION_BYTES)", general);
+		same("skill socket line cap (MAX_LINE_BYTES)", lineCaps);
+		const raw = image["validation.ts"];
+		if (base64 !== 4 * Math.ceil(raw / 3)) findings.push(`docs/display-action-v1.schema.json: ImageData.bytes maxLength ${base64} is not the base64 length of ${raw} bytes (${4 * Math.ceil(raw / 3)})`);
+		if (line < action["validation.ts"] + mib) findings.push(`apps/host-agent/src/skill_socket.ts: MAX_LINE_BYTES ${line} leaves less than 1 MiB around a ${action["validation.ts"]}-byte image action`);
+		if (frame < line + mib) findings.push(`apps/backend/src/hosts.rs: MAX_HOST_FRAME_BYTES ${frame} leaves less than 1 MiB around a ${line}-byte skill socket line`);
+	}
+}
+
+// 12. A unit-test time budget measures the test thread's CPU time with
+//     leastCpuMs (apps/frontend/tests/unit/cpuTime.ts), never the wall
+//     clock, which under load measures the machine: wall-clock budgets
+//     failed 17 times in 7 loaded runs
+//     (docs/concurrency-and-test-hazards.md).
+for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set([".ts", ".tsx"]))) {
+	if (path.basename(file) === "cpuTime.ts") continue;
+	scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
 }
 
 if (findings.length > 0) {
@@ -91,4 +220,4 @@ if (findings.length > 0) {
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets");

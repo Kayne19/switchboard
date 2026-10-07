@@ -24,6 +24,18 @@ const shortLandscapes = [
   { width: 1536, height: 730 },
 ] as const;
 
+// Under the main column (a portrait stage) a rail with no room at its foot
+// for the panel whole sets it aside, unseen, and Damocles's caption names
+// the tool (Scenes.tsx useRailFit).
+async function setAside(page: Page) {
+  return (await page.locator('.content-rail__details .tool-activity-slot--away').count()) > 0;
+}
+
+// Set aside, the panel is unseen (left to assistive technology).
+async function unseen(page: Page) {
+  return page.locator('.content-rail__details .tool-activity-slot').evaluate((slot) => getComputedStyle(slot).opacity === '0');
+}
+
 function overlap(first: Box, second: Box) {
   return !(
     first.x + first.width <= second.x
@@ -121,13 +133,18 @@ test('the shared content rail keeps one semantic surface order', async ({ page }
         return child.className;
       })
     ));
-    expect(surfaces).toEqual(['metrics', 'chat', 'note', 'progress', 'activity']);
+    // Telemetry first: the metrics, then the progress read as they are
+    // read, then the live response, the note, and the activity.
+    expect(surfaces).toEqual(['metrics', 'progress', 'chat', 'note', 'activity']);
   } finally {
     await fixtureServer.stop();
   }
 });
 
-test('rail progress uses spacing instead of a top border', async ({ page }) => {
+// The rail's progress is a module like the metrics above it, so it is
+// headed by the same rule (it once had none, #31, when it was a bare bar
+// that read as one more panel edge), and it sits above the note.
+test('rail progress is headed by a rule, as the rail metrics are', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/?scene=architecture&chrome=0');
   await page.evaluate(() => {
@@ -157,8 +174,8 @@ test('rail progress uses spacing instead of a top border', async ({ page }) => {
   const progressBox = await progress.boundingBox();
   expect(noteBox).not.toBeNull();
   expect(progressBox).not.toBeNull();
-  expect(await progress.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe('0px');
-  expect(progressBox!.y - (noteBox!.y + noteBox!.height)).toBeGreaterThan(0);
+  expect(await progress.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe('1px');
+  expect(noteBox!.y - (progressBox!.y + progressBox!.height)).toBeGreaterThan(0);
 });
 
 test('rail metrics are headed by a rule in the content rail, with no header line and no rule under the last metric', async ({ page }) => {
@@ -267,14 +284,25 @@ for (const viewport of viewports) {
         detail: 'ping 10.0.0.1',
       });
 
-      await expect(page.locator('.content-rail__details .tool-activity')).toBeVisible();
+      await expect(page.locator('.content-rail__details .tool-activity')).toBeAttached();
       await page.waitForTimeout(300);
 
       const metricsBoxDuring = await page.locator('.content-rail__details .metrics').boundingBox();
       const chatBoxDuring = await page.locator('.content-rail__details .live-chat-card').boundingBox();
-      const activityBox = await page.locator('.content-rail__details .tool-activity').boundingBox();
-      expect(overlap(activityBox!, metricsBoxDuring!), 'activity covers the metrics').toBe(false);
-      expect(overlap(activityBox!, chatBoxDuring!), 'activity covers the live response').toBe(false);
+      // Under the column (a portrait stage) a live response and a metric leave
+      // no room for the panel whole; beside it there always is.
+      const aside = await setAside(page);
+      expect(aside).toBe(viewport.height > viewport.width);
+      if (aside) {
+        // Damocles names the tool.
+        expect(await unseen(page)).toBe(true);
+        await expect(page.locator('.content-rail [data-testid="damocles-presence"]')).toContainText(/WORKING \/ route_check/i);
+      } else {
+        await expect(page.locator('.content-rail__details .tool-activity')).toBeVisible();
+        const activityBox = await page.locator('.content-rail__details .tool-activity').boundingBox();
+        expect(overlap(activityBox!, metricsBoxDuring!), 'activity covers the metrics').toBe(false);
+        expect(overlap(activityBox!, chatBoxDuring!), 'activity covers the live response').toBe(false);
+      }
 
       expect(metricsBoxDuring!.x).toBeCloseTo(metricsBoxBefore!.x, 1);
       expect(metricsBoxDuring!.y).toBeCloseTo(metricsBoxBefore!.y, 1);
@@ -370,12 +398,57 @@ for (const viewport of viewports) {
       await page.waitForTimeout(300);
 
       const during = await settledBoxes();
+      // Crowded under the column (a portrait stage), the panel is set aside; beside it, never.
+      const aside = await setAside(page);
+      expect(aside).toBe(viewport.height > viewport.width);
+      if (aside) expect(await unseen(page)).toBe(true);
       const activityBox = (await page.locator('.content-rail__details .tool-activity').boundingBox())!;
       surfaces.forEach((selector, index) => {
-        expect(overlap(activityBox, during[index]), `activity covers ${selector}`).toBe(false);
+        if (!aside) expect(overlap(activityBox, during[index]), `activity covers ${selector}`).toBe(false);
         expect(during[index].y, `${selector} moved when activity appeared`).toBeCloseTo(before[index].y, 1);
         expect(during[index].height, `${selector} resized when activity appeared`).toBeCloseTo(before[index].height, 1);
       });
+    } finally {
+      await fixtureServer.stop();
+    }
+  });
+}
+
+// A live response used as the explanation grows into the column's free
+// space and scrolls inside its own box; it streams, so it is never "whole".
+// Where it continues past an edge, that edge fades as every scroller's does
+// (ScrollRim), so a line cut there reads as more to come, not as broken.
+// On a 390x844 phone its last visible line was cut in half with no cue.
+for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
+  test(`a live response cut by its box fades at the cut at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    const fixtureServer = new DisplayFixtureServer({ initialGeneration: testInfo.workerIndex + 90 });
+    const { wsUrl } = await fixtureServer.start();
+    try {
+      await page.goto(`/?ws=${encodeURIComponent(wsUrl)}&chrome=0`);
+      await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+      fixtureServer.broadcast({
+        type: 'display',
+        action: { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { mode: 'graph', title: 'ROUTE', nodes: [{ id: 'a', label: 'CALLER' }, { id: 'b', label: 'PBX' }], edges: [{ from: 'a', to: 'b' }] } },
+      });
+      fixtureServer.broadcast({ type: 'display', action: { op: 'show', id: 'legs', type: 'metric', role: 'secondary', data: { label: 'LEGS', value: '2' } } });
+      fixtureServer.broadcast({
+        type: 'spoken',
+        entry: transcriptEntry({ role: 'agent', id: 'reply-1', text: 'The route held through the deploy, and the second leg came up clean. The operator is on the line and the project agent has the call; it is reading the source now and will answer in a moment.' }),
+      });
+      const text = page.locator('.content-rail .live-chat-card__text');
+      await expect(text).toBeVisible();
+      await page.waitForTimeout(400);
+      const cut = await text.evaluate((element) => element.scrollHeight > element.clientHeight + 1);
+      expect(cut, 'the response is longer than its box here').toBe(true);
+      const fade = page.locator('.content-rail .live-chat-card .scroll-rim__fade--bottom');
+      await expect(fade).toBeVisible();
+      const [box, faded] = await Promise.all([text.boundingBox(), fade.boundingBox()]);
+      expect(Math.abs(faded!.y + faded!.height - (box!.y + box!.height))).toBeLessThanOrEqual(1);
+      // Read to its end, the response no longer continues below: the fade moves to the top.
+      await text.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+      await expect(page.locator('.content-rail .live-chat-card .scroll-rim__fade--top')).toBeVisible();
+      await expect(fade).toHaveCount(0);
     } finally {
       await fixtureServer.stop();
     }

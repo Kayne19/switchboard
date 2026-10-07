@@ -4,7 +4,7 @@
 // the real runtime adapter with the frames the backend sends for a transfer.
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sceneKind, type SceneKind } from '../../src/app/sceneModel';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import type { ControllerState, MessageData } from '../../src/controller/types';
@@ -134,10 +134,6 @@ async function adoptTheProjectLeg() {
   await receive({ type: 'epoch', generation: 2 });
   await receive(projectStatus);
 }
-
-beforeAll(() => {
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-});
 
 beforeEach(async () => {
   vi.stubGlobal('WebSocket', FakeSocket);

@@ -95,8 +95,10 @@ keeps tool definitions out of every request, and can combine `speak` and
 ## Showing rather than saying
 
 Some answers are a shape, not a sentence. Project agents push structured
-display actions (`show`, `hide`, `say`, `focus`, `clear`) across seven content
-types (`chart`, `metric`, `progress`, `diagram`, `document`, `code`, `note`)
+display actions (`show`, `hide`, `say`, `focus`, `clear`) across fourteen content
+types (`chart`, `metric`, `progress`, `diagram`, `document`, `code`, `table`,
+`note`, `image`, and the personal-assistant `calendar`, `tasks`, `timer`,
+`weather`, `inbox`)
 to the caller's page mid-turn. They arrive as module calls over the host link,
 just as `speak` does, and reach the page over the browser's existing
 WebSocket; display output does not change routing or speech synthesis.
@@ -389,7 +391,9 @@ cargo clippy --locked --all-targets -- -D warnings
 
 These are the CI gates (`.github/workflows/ci.yml`). `static/` and
 `static-debug/` are committed build output, so a change that alters them
-commits the rebuild too.
+commits the rebuild too. The browser unit tests need Node 22.19 or later
+(their time budgets read the thread's CPU time, `process.threadCpuUsage`);
+the host agent itself runs on 22.18.
 
 `build.rs` stamps the binary with the commit it was built from, logged at
 startup as `git=` and reported by `/healthz` as `git`. It takes
