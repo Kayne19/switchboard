@@ -450,7 +450,7 @@ describe('note placement over the data', () => {
 });
 
 
-// Kayne, round 3: the note on a bar chart still read oddly -- its card
+// The note on a bar chart read oddly when its card lay
 // across the plot's border or jammed under the frame's rail, its leader
 // ending by the grey bar beside the one it named. On a bar chart a card lies
 // wholly inside the plot or wholly outside it, and its leader comes onto
@@ -614,9 +614,9 @@ describe('a note on a bar chart', () => {
 });
 
 
-// Kayne, round 6: "I'm not sure that the line chart needed new note rules
-// ... I think I liked the way it looked before." A note on a line, area or
-// scatter chart is placed as the approved training goldens show it, by the
+// A line chart's notes keep the look the training goldens were approved
+// with; a bar chart's stricter rules made them read worse, not better, and
+// were taken back. A note on a line, area or scatter chart is placed as the approved training goldens show it, by the
 // rules above: its card in the top row, centred over its point as far as
 // the layer lets it, across the plot's top border where that is clear of
 // the lines; its leader out of the card's facing edge and straight onto the
@@ -732,7 +732,7 @@ describe('a card narrower than its own width', () => {
 });
 
 // The rail holds one note, and is for a card the chart has no place for.
-// Round 3 sent a note that names no point there first wherever its absence
+// A note that names no point was once sent there first wherever its absence
 // left no more cards astray, even where that cleared none: the observation
 // then stayed over the data so that a general note could go (review
 // finding). A note leaves only where its absence leaves fewer cards astray:

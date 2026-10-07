@@ -143,7 +143,7 @@ describe('a diagram in focus keeps its note', () => {
 
 // Focus kept only a diagram's note (and a list's): a chart's notes, and the
 // note about a table, code, a document or a figure, went with the rail the
-// moment their object took the stage (polish row 11).
+// moment their object took the stage, and the caller lost what the note said.
 describe('any object in focus keeps the notes about it', () => {
   const early: ControllerAction = {
     op: 'show', id: 'early-note', type: 'note',

@@ -1,7 +1,8 @@
 {
   // The Playwright specs (tests/visual, tests/integration), checked as
-  // strictly as the app's own tests: CI runs no Playwright, so a spec that
-  // no longer compiles would otherwise go unseen.
+  // strictly as the app's own tests: CI's test job runs no browser, and the
+  // pixel goldens run only on the dev box, so a spec that no longer
+  // compiles would otherwise go unseen there.
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
