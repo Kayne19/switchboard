@@ -33,6 +33,20 @@ export const MAX_LINE_BYTES = 13 * 1024 * 1024;
 /** The answer to a request line longer than MAX_LINE_BYTES. */
 const TOO_LARGE = { status: "refused", reason: "too_large" } as const;
 
+/**
+ * The most requests one connection may have read and not yet answered, the
+ * one being handled included, and the most bytes of request text they may
+ * hold together (one line's cap). The module writes a request and waits for
+ * its answer, so it never has more than one waiting; a client that writes
+ * more without reading is refused rather than held. Without the bound a
+ * connection could queue any number of 13 MiB lines behind a call waiting
+ * on the service (up to its 30 s relay timeout), and each one was held.
+ */
+export const MAX_WAITING_REQUESTS = 8;
+
+/** The answer to a request past MAX_WAITING_REQUESTS or the bytes they may hold. */
+const QUEUE_FULL = { status: "refused", reason: "queue_full" } as const;
+
 export interface SkillSocketOptions {
 	socketPath: string;
 	/** The call and turn state of the tracked session with this persisted id. */
@@ -105,6 +119,9 @@ export class SkillSocket {
 		// dropped as it arrives, and the connection ends where it does.
 		let refused = false;
 		let ended = false;
+		// The requests read and not yet answered, and their bytes.
+		let waiting = 0;
+		let waitingBytes = 0;
 		conn.on("data", (chunk: Buffer) => {
 			let from = 0;
 			while (!ended && from < chunk.length) {
@@ -134,13 +151,30 @@ export class SkillSocket {
 					});
 					return;
 				}
+				const bytes = openBytes;
+				if (waiting >= MAX_WAITING_REQUESTS || waitingBytes + bytes > MAX_LINE_BYTES) {
+					// Refused in its turn, and the connection ends after the
+					// answer; lines after it are not read.
+					ended = true;
+					queue = queue.then(() => {
+						answer(QUEUE_FULL);
+						if (!conn.destroyed) conn.end(() => conn.destroy());
+					});
+					return;
+				}
 				// A line ends at "\n"; a "\r" before it is part of the break.
 				const line = Buffer.concat(open, openBytes).toString("utf8").replace(/\r$/, "");
 				open = [];
 				openBytes = 0;
+				waiting += 1;
+				waitingBytes += bytes;
 				// A handler failure answers that one request and leaves the
 				// connection's queue alive for the next line.
-				queue = queue.then(async () => answer(await this.handle(line).catch(() => ({ status: "refused", reason: "bad_request" }))));
+				queue = queue.then(async () => {
+					answer(await this.handle(line).catch(() => ({ status: "refused", reason: "bad_request" })));
+					waiting -= 1;
+					waitingBytes -= bytes;
+				});
 			}
 		});
 	}

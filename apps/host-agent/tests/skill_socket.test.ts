@@ -7,7 +7,7 @@ import { test } from "node:test";
 import type { ModuleReply } from "../src/link.ts";
 import type { CallState } from "../src/sessions.ts";
 import { SessionManager } from "../src/sessions.ts";
-import { MAX_LINE_BYTES, SkillSocket } from "../src/skill_socket.ts";
+import { MAX_LINE_BYTES, MAX_WAITING_REQUESTS, SkillSocket } from "../src/skill_socket.ts";
 import { FakeDaemon } from "./fake_daemon.ts";
 
 interface Relayed {
@@ -18,7 +18,7 @@ interface Relayed {
 	timeoutMs: number;
 }
 
-async function withSocket(fn: (ctx: { ask: (m: unknown) => Promise<Record<string, unknown>>; connect: () => Promise<net.Socket>; manager: SessionManager; handle: string; sessionId: string; relayed: Relayed[]; socketPath: string; setReply: (r: ModuleReply | Error) => void }) => Promise<void>) {
+async function withSocket(fn: (ctx: { ask: (m: unknown) => Promise<Record<string, unknown>>; connect: () => Promise<net.Socket>; hold: () => () => void; manager: SessionManager; handle: string; sessionId: string; relayed: Relayed[]; socketPath: string; setReply: (r: ModuleReply | Error) => void }) => Promise<void>) {
 	const home = mkdtempSync(path.join(os.tmpdir(), "sb-sk-"));
 	const socketPath = path.join(home, ".cache", "switchboard", "host-agent.sock");
 	const daemon = new FakeDaemon();
@@ -26,11 +26,22 @@ async function withSocket(fn: (ctx: { ask: (m: unknown) => Promise<Record<string
 	const info = (await manager.createSession("homelab", { cwd: "/srv/homelab" })) as { session: string; session_id: string };
 	const relayed: Relayed[] = [];
 	let reply: ModuleReply | Error = { status: "delivered", reason: null };
+	// While held, a relayed call waits, as one waits on the service.
+	let held: Promise<void> | null = null;
+	const hold = () => {
+		let release = () => {};
+		held = new Promise<void>((resolve) => (release = resolve));
+		return () => {
+			held = null;
+			release();
+		};
+	};
 	const socket = new SkillSocket({
 		socketPath,
 		lookup: (id) => manager.bySessionId(id),
 		relay: async (handle, token, call, args, timeoutMs) => {
 			relayed.push({ handle, token, call, args, timeoutMs });
+			if (held) await held;
 			if (reply instanceof Error) throw reply;
 			return reply;
 		},
@@ -67,7 +78,7 @@ async function withSocket(fn: (ctx: { ask: (m: unknown) => Promise<Record<string
 		return other;
 	};
 	try {
-		await fn({ ask, connect, manager, handle: info.session, sessionId: info.session_id, relayed, socketPath, setReply: (r) => (reply = r) });
+		await fn({ ask, connect, hold, manager, handle: info.session, sessionId: info.session_id, relayed, socketPath, setReply: (r) => (reply = r) });
 	} finally {
 		conn.destroy();
 		for (const other of others) other.destroy();
@@ -287,5 +298,73 @@ test("a 64 MiB and a 600 MiB line are each refused at the cap and dropped, and t
 		}
 		assert.equal(relayed.length, 0, "an over-long line is never relayed");
 		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: false });
+	});
+});
+
+/** The answer lines `conn` has sent so far, parsed. */
+const answers = (text: string) => text.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+
+const QUEUE_FULL_ANSWER = { status: "refused", reason: "queue_full" };
+
+test("a connection that writes requests without reading the answers is refused past the queue's bound", { timeout: 30_000 }, async () => {
+	await withSocket(async ({ connect, hold, manager, handle, sessionId, relayed }) => {
+		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
+		const release = hold();
+		const conn = await connect();
+		const heard = listen(conn);
+		// A call that waits on the service, then more hellos behind it than
+		// the queue holds, all written before any answer is read. They used
+		// to be held, however many came, until the call ahead answered.
+		const call = { op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: "display", args: { action: { op: "clear" } } };
+		const hello = { op: "hello", session_id: sessionId, depth: 0 };
+		conn.write([call, ...Array.from({ length: MAX_WAITING_REQUESTS + 1 }, () => hello)].map((request) => `${JSON.stringify(request)}\n`).join(""));
+		await within(5000, new Promise<void>((resolve) => {
+			const wait = () => (relayed.length > 0 ? resolve() : setTimeout(wait, 5));
+			wait();
+		}), "relayed call");
+		release();
+		await within(5000, heard.closed, "close after the request past the bound");
+		const onCall = { on_call: true, token: CALL.token, persona: CALL.persona, speech_deadline_ms: CALL.speech_deadline_ms };
+		// In order: the call, the hellos that fit beside it, the refusal; the
+		// hello after it is not read.
+		assert.deepEqual(answers(heard.text()), [
+			{ status: "delivered", reason: null },
+			...Array.from({ length: MAX_WAITING_REQUESTS - 1 }, () => onCall),
+			QUEUE_FULL_ANSWER,
+		]);
+	});
+});
+
+test("requests waiting on one connection hold at most one line's cap of text between them", { timeout: 30_000 }, async () => {
+	await withSocket(async ({ ask, connect, hold, manager, handle, sessionId, relayed }) => {
+		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
+		const release = hold();
+		const conn = await connect();
+		const heard = listen(conn);
+		// Two lines each a little over half the cap: each is within it, but
+		// the second, waiting behind the first, would hold more than one
+		// line's cap between them.
+		const half = Math.floor(MAX_LINE_BYTES / 2) + 1024;
+		const line = (pad: string) => `${JSON.stringify({ op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: "display", args: { pad } })}\n`;
+		// Released only once the server has read both lines: the write's
+		// callback comes when the kernel has taken the last byte, and a Unix
+		// socket's buffer holds at most a few hundred KiB the server has not
+		// read, which its next reads take. Released sooner, the first call
+		// could be answered before the second line is whole, and then the two
+		// never wait together.
+		await new Promise<void>((resolve) => conn.write(line("A".repeat(half)) + line("B".repeat(half)), () => resolve()));
+		for (let turn = 0; turn < 5; turn += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(relayed.length, 1, "the first call is waiting on the service");
+		release();
+		await within(5000, heard.closed, "close after the request past the bound");
+		assert.deepEqual(answers(heard.text()), [{ status: "delivered", reason: null }, QUEUE_FULL_ANSWER]);
+		assert.equal(relayed.length, 1, "the refused request is never relayed");
+		// One line that size at a time is answered, as the module sends it.
+		const mod = await connect();
+		const one = listen(mod);
+		mod.write(line("C".repeat(half)));
+		await within(5000, one.firstLine, "answer to one line");
+		assert.deepEqual(answers(one.text()), [{ status: "delivered", reason: null }]);
+		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: true, ...CALL });
 	});
 });
