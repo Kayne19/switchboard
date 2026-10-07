@@ -5,7 +5,7 @@ import { previousRunAction } from '../fixtures/scenes';
 
 const delay = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-export function ControllerPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ControllerPanel({ open, onClose, behindFocus = false }: { open: boolean; onClose: () => void; behindFocus?: boolean }) {
   const { state, dispatch, loadFixture } = useController();
   const [input, setInput] = useState('{"op":"show","id":"gpu","type":"metric","data":{"label":"GPU","value":"94%"}}');
   const [error, setError] = useState<string | null>(null);
@@ -40,8 +40,9 @@ export function ControllerPanel({ open, onClose }: { open: boolean; onClose: () 
 
   return (
     // Closed, the panel is off the screen and out of reach: `inert` keeps its
-    // controls out of the tab order, as aria-hidden alone did not.
-    <aside className={`controller-panel${open ? ' controller-panel--open' : ''}`} aria-hidden={!open} inert={!open}>
+    // controls out of the tab order, as aria-hidden alone did not. Open, it
+    // is inert behind the focus layer, a modal.
+    <aside className={`controller-panel${open ? ' controller-panel--open' : ''}`} aria-hidden={!open} inert={!open || behindFocus}>
       <div className="controller-panel__head tech micro">
         <span>V17.2 / CONTROLLER</span>
         <button type="button" onClick={onClose}>CLOSE</button>

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useRef, type MouseEvent } from 'react';
+import { useLayoutEffect, useRef, type MouseEvent } from 'react';
 import type { ControllerState, NoteData, SceneObject } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
@@ -96,29 +96,54 @@ export function FocusLayer({
  * The focus layer is a modal dialog, and focus acts as one: it moves to
  * RETURN as the layer opens, stays in the layer (everything behind it is
  * `inert` while it is open: the scene, SceneShell `behindFocus`; the
- * history, TranscriptDrawer; the demo page's own controls, App), and goes
- * back to what held it before (the surface that was activated) when the
- * layer closes. Focus opened by the agent, with nothing held, gives focus
- * back to nothing. Before, the layer only said it was modal: Tab walked on
- * into the stage behind the backdrop.
+ * history, TranscriptDrawer; on the demo page the CTRL button, both panels
+ * and the scene keys, App), and goes back to what held it before when the
+ * layer closes: the surface that was activated, or the field the caller was
+ * typing in when the agent opened it. Focus opened with nothing held gives
+ * focus back to nothing. Before, the layer only said it was modal: Tab
+ * walked on into the stage behind the backdrop.
+ *
+ * The holder is read in a layout effect, in the commit that opens the
+ * layer: that commit makes it inert (or hides it), and the browser then
+ * moves focus to the body before a passive effect would run for an
+ * update the agent sent.
  */
 function useModalFocus(open: boolean) {
   const returnButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!open) return;
     const held = document.activeElement;
     const opener = held instanceof HTMLElement && held !== document.body ? held : null;
     // RETURN draws the page's ring only when the keyboard opened the layer:
-    // focus the agent opened, or a tap, leaves the ring off until a key.
-    const keyed = opener?.matches(':focus-visible') ?? false;
+    // focus the agent opened, or a tap, leaves the ring off until a key. A
+    // text field always matches :focus-visible, so it says nothing of a key.
+    const keyed = Boolean(opener?.matches(':focus-visible') && !opener.matches('input, textarea'));
     returnButton.current?.focus({ preventScroll: true, focusVisible: keyed } as FocusOptions);
     return () => {
-      if (!opener?.isConnected) return;
-      opener.focus({ preventScroll: true });
-      // Where the slot copy is hidden by motion's shared identity, it is
-      // shown again in motion's next frame, not in this commit.
-      if (document.activeElement !== opener) requestAnimationFrame(() => opener.focus({ preventScroll: true }));
+      if (!opener) return;
+      // Where motion's shared identity hides the slot copy, it shows again
+      // when the layout animation lets it go, a frame or the rest of the
+      // animation later: try each frame until it takes focus, while focus
+      // has gone nowhere else, for at most a second.
+      let frames = 0;
+      const giveBack = () => {
+        if (!opener.isConnected || leaving(opener)) return;
+        const active = document.activeElement;
+        if (active && active !== document.body && !active.closest('.focus-layer')) return;
+        opener.focus({ preventScroll: true });
+        if (document.activeElement !== opener && (frames += 1) < 60) requestAnimationFrame(giveBack);
+      };
+      // After the commit: React puts back the focus it saw before a commit's
+      // DOM changes once they are made, and a layout effect's cleanup runs
+      // among them, so a focus given here would be undone.
+      queueMicrotask(giveBack);
     };
   }, [open]);
   return returnButton;
+}
+
+/** Whether `element` is in a scene that is leaving: the stage draws the scene it goes to after it. */
+function leaving(element: Element): boolean {
+  const scene = element.closest('.stage > [data-scene]');
+  return scene !== null && scene !== [...document.querySelectorAll('.stage > [data-scene]')].at(-1);
 }

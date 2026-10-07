@@ -69,6 +69,8 @@ export default function App() {
       }
 
       if (!demoMode) return;
+      // The focus layer is modal: the scene keys wait behind it (FocusLayer `useModalFocus`).
+      if (state.focusId) return;
 
       const index = Number(event.key) - 1;
       if (index >= 0 && index < sceneOrder.length) {
@@ -115,10 +117,10 @@ export default function App() {
     <div className="app-shell">
       <SceneRenderer />
       {demoMode ? <>
-        {/* Behind the focus layer, a modal, the demo page's controls are inert too (FocusLayer `useModalFocus`). */}
+        {/* Behind the focus layer, a modal, the demo page's controls are inert too (FocusLayer `useModalFocus`): CTRL and both panels. */}
         <button className="dev-toggle tech micro" type="button" onClick={() => setControllerOpen(true)} inert={Boolean(state.focusId)}>CTRL</button>
-        <ControllerPanel open={controllerOpen} onClose={() => setControllerOpen(false)} />
-        <IRDrawer open={irOpen} onClose={() => setIrOpen(false)} />
+        <ControllerPanel open={controllerOpen} onClose={() => setControllerOpen(false)} behindFocus={Boolean(state.focusId)} />
+        <IRDrawer open={irOpen} onClose={() => setIrOpen(false)} behindFocus={Boolean(state.focusId)} />
       </> : <RuntimeIntegration />}
     </div>
   );
