@@ -64,12 +64,14 @@ function topLevel(selector: string, property: string): string | undefined {
 
 describe('the aux row', () => {
   it('scrolls inside itself when its cells do not fit, rather than squeezing one', () => {
-    expect(topLevel('.composed-aux', 'overflow-y')).toBe('auto');
+    // It is a list's viewport (Scenes.tsx AuxRow), whose scroll scrolls and draws the rim.
+    expect(readFileSync(new URL('../../src/components/Scenes.tsx', import.meta.url), 'utf8')).toMatch(/<ListViewport\b.*className="composed-aux-viewport" scrollClassName="composed-aux"/);
+    expect(topLevel('.list-viewport__scroll', 'overflow-y')).toBe('auto');
   });
 
   it('gives every visual a readable floor, never zero', () => {
     expect(topLevel('.composed-aux-object--visual', 'min-height')).toBe('var(--aux-visual-floor)');
-    const floor = topLevel('.composed-aux', '--aux-visual-floor') ?? '';
+    const floor = topLevel('.composed-aux-viewport', '--aux-visual-floor') ?? '';
     const least = /^clamp\((\d+)px,/.exec(floor);
     expect(least, floor).not.toBeNull();
     expect(Number(least![1])).toBeGreaterThanOrEqual(100);

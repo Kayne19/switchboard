@@ -162,6 +162,9 @@ describe('chart category layout', () => {
     const path = wrapLabel('apps/backend/tests/test_visual_protocol.rs', 16, 2);
     expect(path.truncated).toBe(true);
     expect(path.lines).toEqual(['…test_visual_', 'protocol.rs']);
+    // A run of spaces or a tab cuts as a single space would.
+    expect(wrapLabel('alpha  beta gamma delta epsilon zeta eta theta', 10, 2).lines[1]).toMatch(/^gamma/);
+    expect(wrapLabel('alpha\tbeta gamma delta epsilon zeta eta theta', 10, 2).lines[1]).toMatch(/^gamma/);
     const cut = wrapLabel('one two three four five six', 8, 2);
     expect(cut.truncated).toBe(true);
     expect(cut.lines[0]).toBe('one two');

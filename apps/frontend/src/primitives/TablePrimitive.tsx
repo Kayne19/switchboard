@@ -5,10 +5,10 @@ import { MetaTitle } from './MetaTitle';
 import type { Slot } from './slot';
 import { TechFrame } from './TechFrame';
 
-export type ColumnAlignment = 'start' | 'end';
+type ColumnAlignment = 'start' | 'end';
 
 // A cell's text once a number is drawn: the page shows what the agent sent.
-export function cellText(cell: TableCell): string {
+function cellText(cell: TableCell): string {
   if (typeof cell === 'number') return String(cell);
   if (typeof cell === 'string') return cell;
   return cell.text;
@@ -75,7 +75,7 @@ export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; sl
   const alignment = inferColumnAlignment(data);
   const highlighted = new Set(data.highlight ?? []);
   const meta = (
-    <div className="table-viewport__meta tech micro">
+    <div className="table-viewport__meta meta-line tech micro">
       <MetaTitle title={data.title ?? 'TABLE'} slot={slot} />
       <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
     </div>

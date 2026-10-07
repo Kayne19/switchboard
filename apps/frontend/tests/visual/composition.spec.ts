@@ -216,3 +216,26 @@ for (const scene of auxScenes) {
     }
   }
 }
+
+// An aux row with more cells than room scrolls inside itself; at rest the
+// cell its edge cuts reads as the next one coming, under the rim every
+// scroller draws (a fade, the cut line, a count of the cells wholly past
+// it), not as a strip. The today scene at 390x844 showed only the to-do
+// list's head under the forecast, with no sign the row went on.
+test('a crowded aux row draws a rim where it cuts a cell / 390x844', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openScene(page, 'today');
+  await page.waitForTimeout(800);
+  const row = page.locator('.composed-aux');
+  expect(await row.evaluate((element) => element.scrollHeight > element.clientHeight + 1)).toBe(true);
+  const count = page.locator('.composed-aux-viewport > .list-viewport__port > .scroll-rim__count--bottom').first();
+  await expect(count).toBeVisible();
+  await expect(count).toHaveText(/^\d{2} PANELS?$/);
+  await expect(page.locator('.composed-aux-viewport > .list-viewport__port > .scroll-rim__fade--bottom').first()).toBeVisible();
+  // Paged to its end, the rim moves to the top.
+  await count.click();
+  await page.waitForTimeout(400);
+  await row.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await page.waitForTimeout(300);
+  await expect(page.locator('.composed-aux-viewport > .list-viewport__port > .scroll-rim__count--top').first()).toBeVisible();
+});

@@ -14,6 +14,7 @@
 //   its own beside the drawing, which is laid out for the rest of the
 //   viewport, so the map covers none of it (`mapStrip`, `viewWithMap`).
 
+import { textCells } from '../design/textCells';
 import { monoAdvance } from '../design/tokens';
 import type { Noun } from './countText';
 import type { Box, Point, Rect, Size } from './geometry';
@@ -422,7 +423,7 @@ export function findExits(parts: readonly View[], links: DrawingMap['links'], la
 // The rails
 
 
-/** The length, in CSS pixels, a tag takes along its rail for `chars` characters of the rail face (the mono face at 9px, 0.08em tracking), its chevron and padding. */
+/** The length, in CSS pixels, a tag takes along its rail for `chars` cells of the rail face (the mono face at 9px, 0.08em tracking), its chevron and padding. */
 export function tagLength(chars: number): number {
   return (chars + 2) * TAG_ADVANCE + 2 * TAG_PAD;
 }
@@ -461,7 +462,7 @@ export function placeExits(
     const blocked = [...avoid[side]].sort((a, b) => a[0] - b[0]);
     const mine = exits
       .filter((exit) => exit.side === side)
-      .map((exit) => ({ exit, length: tagLength(Math.min(exit.label.length, EXIT_CHARS)), centre: exit.at - (vertical ? scroll.top : scroll.left) }))
+      .map((exit) => ({ exit, length: tagLength(Math.min(textCells(exit.label), EXIT_CHARS)), centre: exit.at - (vertical ? scroll.top : scroll.left) }))
       .sort((a, b) => a.centre - b.centre);
     let cursor = start;
     for (const { exit, length, centre } of mine) {

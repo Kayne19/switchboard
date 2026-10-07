@@ -2,6 +2,7 @@
 // sequence (SequencePrimitive + sequenceLayout) draw alike, said once. Each
 // drawing keeps its own sizes (its frames' cuts, its arrowheads).
 
+import { textCells } from '../design/textCells';
 import { monoAdvance } from '../design/tokens';
 import type { Point, Size } from './geometry';
 
@@ -25,9 +26,18 @@ export const LABEL_BACKING = 4;
 /** The backing a label drawn on `lines` paints over. */
 export function labelBox(lines: readonly string[]): Size {
   return {
-    width: Math.max(...lines.map((line) => line.length)) * LABEL_ADVANCE + 2 * LABEL_BACKING,
+    width: Math.max(...lines.map(textCells)) * LABEL_ADVANCE + 2 * LABEL_BACKING,
     height: lines.length * LABEL_HEIGHT + 2 * LABEL_BACKING,
   };
+}
+
+// A drawing's parts come in one after another, `step` ms apart, but a large
+// one is not made to wait on them: the step shrinks so the last of `count`
+// starts within ENTRANCE_SPAN ms (about a second, with the lead-in).
+const ENTRANCE_SPAN = 900;
+/** The ms between two parts' entrances, for `count` of them drawn `step` ms apart. */
+export function entranceStep(count: number, step: number): number {
+  return Math.min(step, Math.floor(ENTRANCE_SPAN / Math.max(1, count)));
 }
 
 /** A drawing is composed in portrait once its viewport is a little taller than wide. */

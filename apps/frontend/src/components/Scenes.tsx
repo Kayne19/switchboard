@@ -19,9 +19,9 @@ import { AnnotationCard, type NoteTarget } from '../primitives/AnnotationCard';
 import { calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
-import { countText } from '../primitives/countText';
+import { countText, type Noun } from '../primitives/countText';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
-import { fadeDepth } from '../primitives/ListViewport';
+import { ListViewport, continuesPast, fadeDepth } from '../primitives/ListViewport';
 import { LiveChatCard } from '../primitives/LiveChatCard';
 import { SpokenLog } from '../primitives/SpokenLog';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
@@ -252,12 +252,10 @@ function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFlo
     // to it are not observed), and where its scroll stands.
     let decided: Pick<RailFit, 'leads' | 'away'> = FITS;
     let flow = 0;
-    const edges = (): RailFit => ({
-      ...decided,
-      above: column.scrollTop > 1,
-      below: column.scrollTop + column.clientHeight < flow - 1,
-      fade: fadeDepth(column.clientHeight),
-    });
+    const edges = (): RailFit => {
+      const goes = continuesPast(column.scrollTop, column.clientHeight, flow);
+      return { ...decided, above: goes.top, below: goes.bottom, fade: fadeDepth(column.clientHeight) };
+    };
     const measure = () => {
       const children = Array.from(column.children) as HTMLElement[];
       const slot = children.find((child) => child.classList.contains('tool-activity-slot'));
@@ -690,6 +688,8 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
 
 // ---- The aux row: every visual a main slot does not draw ----
 
+const PANEL: Noun = ['PANEL', 'PANELS'];
+
 // The row under a primary: each object the main slot does not draw and the
 // rail does not carry gets a framed cell of its own, so an accepted object is
 // never lost to the layout. A visual keeps a readable floor in its cell; a
@@ -709,8 +709,11 @@ function AuxRow({
   /** The note the rail draws: each cell marks what it names in its object. */
   drawn: NoteData | null;
 }) {
+  // A row with no room for every cell scrolls under the rim every scroller
+  // draws, counting the cells wholly past each edge (ListViewport); it opens
+  // at its top, whatever its cells lead with.
   return (
-    <div className="composed-aux">
+    <ListViewport noun={PANEL} lead={null} countSelector=":scope > .composed-aux-object" className="composed-aux-viewport" scrollClassName="composed-aux" label="More on stage">
       {objects.map((object) => (
         <ObjectMotion
           key={object.id}
@@ -725,7 +728,7 @@ function AuxRow({
           </ObjectSurface>
         </ObjectMotion>
       ))}
-    </div>
+    </ListViewport>
   );
 }
 

@@ -20,7 +20,7 @@ interface FrameSpec {
 }
 
 const ORANGE = (alpha: number) => `rgba(var(--orange-rgb), ${alpha})`;
-const PAPER = (alpha: number) => `rgba(232, 230, 223, ${alpha})`;
+const PAPER = (alpha: number) => `rgba(var(--paper-rgb), ${alpha})`;
 
 const frames = {
   // #training .frame: the chart instrument frame, also the default content frame.
