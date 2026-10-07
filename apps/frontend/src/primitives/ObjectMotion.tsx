@@ -1,6 +1,6 @@
 import { motion, type HTMLMotionProps } from 'motion/react';
 import type { ReactNode } from 'react';
-import { useLayoutMotion } from '../hooks/useLayoutMotion';
+import { useFocusCopyHidden, useLayoutMotion } from '../hooks/useLayoutMotion';
 
 /**
  * Where an entrance that resolves out of a blur ends: sharp, and with no
@@ -19,7 +19,9 @@ function ObjectBox({ layout, layoutId, ...props }: HTMLMotionProps<'div'>) {
 }
 
 export function ObjectMotion({ objectId, children, className, ...props }: Omit<HTMLMotionProps<'div'>,'children'> & { objectId: string; children: ReactNode; className?: string }) {
+  // The slot copy of the focused object stands aside under reduced motion (`useFocusCopyHidden`).
+  const focusCopy = useFocusCopyHidden(objectId);
   return (
-    <ObjectBox className={className} layout layoutId={`switchboard-object-${objectId}`} initial={{ opacity: 0, filter: 'blur(8px)', clipPath: 'inset(48% 0 48% 0)' }} animate={{ opacity: 1, ...SHARP, clipPath: 'inset(0% 0 0% 0)' }} exit={{ opacity: 0, filter: 'blur(7px)', clipPath: 'inset(48% 0 48% 0)' }} transition={{ opacity: { duration: 0.22 }, filter: { duration: 0.28 }, clipPath: { duration: 0.34, ease: [0.22,0.61,0.36,1] }, layout: { duration: 0.42, ease: [0.22,0.61,0.36,1] } }} {...props}>{children}</ObjectBox>
+    <ObjectBox className={className} data-focus-copy={focusCopy ? '' : undefined} layout layoutId={`switchboard-object-${objectId}`} initial={{ opacity: 0, filter: 'blur(8px)', clipPath: 'inset(48% 0 48% 0)' }} animate={{ opacity: 1, ...SHARP, clipPath: 'inset(0% 0 0% 0)' }} exit={{ opacity: 0, filter: 'blur(7px)', clipPath: 'inset(48% 0 48% 0)' }} transition={{ opacity: { duration: 0.22 }, filter: { duration: 0.28 }, clipPath: { duration: 0.34, ease: [0.22,0.61,0.36,1] }, layout: { duration: 0.42, ease: [0.22,0.61,0.36,1] } }} {...props}>{children}</ObjectBox>
   );
 }
