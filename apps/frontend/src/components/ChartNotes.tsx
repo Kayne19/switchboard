@@ -7,6 +7,7 @@ import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
   chartFrame,
   chartObstacles,
+  chartRingBox,
   chartScales,
   chartNoteTarget,
   type ChartAnchor,
@@ -408,6 +409,9 @@ export function ChartNotes({
           from: target?.from,
           bar: target?.bar && rectToLayer(target.bar),
           value: target?.value && rectToLayer(target.value),
+          // Shown in the rail, a point on a line, area or scatter chart
+          // keeps a ring (`chartRings`), which the other cards keep off.
+          ring: target && !target.from ? rectToLayer(chartRingBox(target.point)) : undefined,
         });
       }
       const options = { spill, leaderOverlap: 1 };

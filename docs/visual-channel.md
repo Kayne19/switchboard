@@ -677,7 +677,8 @@ others least. So a general note goes only where that gives a card it crowded a
 clear place, and an observation with no clear place goes itself rather than
 stay over the data while a general note keeps its corner. Every bar the notes
 name stays marked while its note is in the rail, and a point on a line, area
-or scatter chart gets a hollow ring; the rail card still names its target. A note anchored to a visual on a chart page that
+or scatter chart gets a hollow ring, which the cards left on the chart keep
+clear of as they keep clear of the data; the rail card still names its target. A note anchored to a visual on a chart page that
 is not a chart (one in the aux row) is shown in the rail too. The rail holds
 one note, so: only the primary chart hands one over; only the first note about
 a visual off the charts goes there (later ones lie on the primary chart, as

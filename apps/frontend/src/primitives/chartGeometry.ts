@@ -952,6 +952,12 @@ export const CHART_POINT_RADIUS = 4;
 export const CHART_MARKER_RADIUS = 5;
 export const CHART_MARKER_STROKE = 2;
 
+/** The box a ring round `point` covers, its stroke included, in viewBox units. */
+export function chartRingBox(point: Point): Rect {
+  const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
+  return { left: point.x - r, top: point.y - r, right: point.x + r, bottom: point.y + r };
+}
+
 /** What a note laid over a chart keeps clear of: everything the chart draws, as it draws it, in viewBox units. */
 export interface ChartObstacles {
   /**
@@ -1048,8 +1054,7 @@ export function chartObstacles(
   } else {
     // The marker's ring, and one round each point named elsewhere, drawn whole past the plot's edge.
     const rings = chartRings(data, notes.named, notes.led, scales);
-    const r = CHART_MARKER_RADIUS + CHART_MARKER_STROKE / 2;
-    for (const point of [...(rings.marker ? [rings.marker] : []), ...rings.named]) marks.push({ left: point.x - r, top: point.y - r, right: point.x + r, bottom: point.y + r });
+    for (const point of [...(rings.marker ? [rings.marker] : []), ...rings.named]) marks.push(chartRingBox(point));
   }
   return { marks, lines, fills, labels: [chartLegendBox(data, scales.frame), ...chartAxisBoxes(plot, scales.frame)] };
 }

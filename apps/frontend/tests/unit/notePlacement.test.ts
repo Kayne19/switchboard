@@ -14,7 +14,7 @@ import {
   type NoteToPlace,
   type PlaceOptions,
 } from '../../src/primitives/notePlacement';
-import { hiddenTraceLength, type Point, type Rect } from '../../src/primitives/geometry';
+import { hiddenTraceLength, overlapArea, type Point, type Rect } from '../../src/primitives/geometry';
 import { leastCpuMs } from './cpuTime';
 
 // Each card's box, as most of these cases read it.
@@ -780,6 +780,27 @@ describe('the note left out for the rail', () => {
       { id: 'general', width: 280, height: 100 },
     ];
     expect([...layoutNotes(notes, { area }, { spill: true }).keys()].sort()).toEqual(['general', 'observation']);
+  });
+
+  // REPORT-line-notes-revert Open 4: the others were placed against the
+  // left-out note's point (6 px clear) but not the ring the chart then draws
+  // round it, so a card could touch or cover the ring.
+  it('keeps the other cards off the ring the chart draws round the point of the note it leaves out', () => {
+    const area = box(0, 0, 400, 200);
+    const point = { x: 108, y: 20 };
+    const ring = box(point.x - 6, point.y - 6, 12, 12);
+    // `named` covers its own point wherever it goes, so the rail takes it;
+    // the general note settles into the top-left corner, 8 px from that point.
+    const notes: NoteToPlace[] = [
+      { id: 'general', width: 100, height: 40 },
+      { id: 'named', width: 380, height: 190, point, ring },
+    ];
+    const placed = layoutNotes(notes, { area }, { spill: true });
+    expect([...placed.keys()]).toEqual(['general']);
+    expect(overlapArea(inflate(placed.get('general')!.rect, DATA_CLEARANCE), ring)).toBe(0);
+    // Without a ring to keep off, the corner is its place: the ring is what moves it.
+    const unringed = layoutNotes(notes.map(({ ring: _, ...note }) => note), { area }, { spill: true });
+    expect(unringed.get('general')!.rect).toEqual(box(0, 0, 100, 40));
   });
 
   it('counts a card over another card astray, and gives the rail the one that has no place', () => {

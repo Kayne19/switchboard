@@ -82,6 +82,12 @@ export interface NoteToPlace {
   /** The value the bar prints, beside the point: what its leader lands by, not in its way. */
   value?: Rect;
   /**
+   * What the chart draws round the point once this note is shown elsewhere
+   * (a line, area or scatter chart's ring, `chartRings`): left out for the
+   * rail, the note's ring stands in the other cards' way as a mark.
+   */
+  ring?: Rect;
+  /**
    * Narrower sizes the card may take, widest first, each with the height
    * its text needs there: tried, in turn, only where the card's own size
    * has no clear place or runs a long leader to its bar, and only on a
@@ -306,7 +312,7 @@ export interface PlaceOptions {
    * out, its card not placed: the one whose absence leaves the fewest
    * astray; of those a note naming no point first, then one astray itself,
    * then the cheapest for the others. Its point still stands in the other
-   * cards' way. Only on a chart placed in full (`placedInFull`): past
+   * cards' way, and so does its `ring`. Only on a chart placed in full (`placedInFull`): past
    * that, no note is left out.
    */
   spill?: boolean;
@@ -376,7 +382,14 @@ export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: Pla
     };
     let best: { placements: Map<string, Placement>; rank: number[] } | undefined;
     for (const note of notes) {
-      const placements = placeInOrder(notes, prepared, gap, full, note.id, all);
+      // A note left out keeps its point marked: on a line, area or scatter
+      // chart by a ring, which the others are placed clear of. A card placed
+      // with every note that the ring would touch is placed again, and with
+      // it every card after it: none keeps its place from that run.
+      const ring = note.ring;
+      const field = ring ? withMark(prepared, ring) : prepared;
+      const touched = ring !== undefined && [...all.values()].some((placement) => overlapArea(inflate(placement.rect, DATA_CLEARANCE), ring) > 0);
+      const placements = placeInOrder(notes, field, gap, full, note.id, touched ? undefined : all);
       const astray = over(placements);
       if (astray >= over(all)) continue;
       const rank = [
@@ -535,6 +548,21 @@ function prepare(field: NoteField, leaderOverlap = 0): Prepared {
       SEGMENTS_BUCKETED_FROM,
     ),
     marksNear: bucketed(marks, (mark) => mark, area, MARKS_BUCKETED_FROM),
+    across: new Map(),
+  };
+}
+
+// The field with one more mark, read as the chart draws it: a ring round
+// the point of a note left out for the rail.
+function withMark(field: Prepared, mark: Rect): Prepared {
+  const meets = (near: Rect) => mark.left <= near.right && mark.right >= near.left && mark.top <= near.bottom && mark.bottom >= near.top;
+  return {
+    ...field,
+    marks: [...field.marks, mark],
+    marksNear: (near, visit) => {
+      field.marksNear(near, visit);
+      if (meets(near)) visit(mark);
+    },
     across: new Map(),
   };
 }
