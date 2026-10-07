@@ -6,6 +6,7 @@
 // still to come -- are pinned as the page draws them.
 import { act } from 'react';
 import { flushSync } from 'react-dom';
+import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TimerData } from '../../src/controller/types';
 import { TimerPrimitive } from '../../src/primitives/TimerPrimitive';
@@ -73,6 +74,78 @@ describe('the page clock', () => {
     flushSync(() => rootOf(host).render(<TimerPrimitive data={resumed} slot="aux" />));
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     expect(digits(host, 'bread')).toBe('21:00');
+  });
+
+  // The skill writes an end from the agent's clock, to the microsecond
+  // (`datetime.now(...) + timedelta(minutes=9)`), so nearly every timer
+  // ends a fraction past a second. Its digits change a whole number of
+  // seconds before that end, at the same fraction: a clock ticking on the
+  // whole second showed one too many for up to a second, and the end late.
+  it('turns a countdown over on the fraction of a second its end falls on, and is done at that end', () => {
+    // 18:33:03.250, written as the skill writes it; the page opens at 18:33:00.000.
+    const host = render({ timers: [{ id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:03.250000+00:00' }] });
+    expect(digits(host, 'tea')).toBe('00:04');
+    tick(249);
+    expect(digits(host, 'tea')).toBe('00:04');
+    tick(1);
+    expect(digits(host, 'tea')).toBe('00:03');
+    tick(2999);
+    expect(digits(host, 'tea')).toBe('00:01');
+    expect(item(host, 'tea').dataset.phase).toBe('running');
+    tick(1);
+    expect(digits(host, 'tea')).toBe('00:00');
+    expect(item(host, 'tea').dataset.phase).toBe('done');
+    tick(61_000);
+    expect(item(host, 'tea').querySelector('.timer__meta')!.textContent).toBe('ENDED 01:33 UTC / +01:01');
+  });
+
+  it('turns each countdown on its own fraction, still on one timeout', () => {
+    const host = render({ timers: [kitchen.timers[2], { id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:03.250Z' }] });
+    expect(vi.getTimerCount()).toBe(1);
+    expect([digits(host, 'eggs'), digits(host, 'tea')]).toEqual(['00:03', '00:04']);
+    tick(250);
+    expect([digits(host, 'eggs'), digits(host, 'tea')]).toEqual(['00:03', '00:03']);
+    tick(750);
+    expect([digits(host, 'eggs'), digits(host, 'tea')]).toEqual(['00:02', '00:03']);
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('a timer shown while another runs reads the time now, not the last tick', () => {
+    render(kitchen);
+    // 600 ms on, the kitchen's clock has not ticked since the page opened.
+    vi.setSystemTime(NOW + 600);
+    const host = render({ timers: [{ id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:03.250Z' }] });
+    // 2650 ms to go.
+    expect(digits(host, 'tea')).toBe('00:03');
+  });
+
+  // A view of timers joins or leaves the page in a task of its own (a new
+  // display's commit, focus opening, an exit animation ending). A browser
+  // may run that task after a turn is due but before the clock's timeout:
+  // the turn must still reach every view, not be cancelled for the next.
+  it('a view that leaves in the task before a turn does not hold the others back', () => {
+    const eggs = render({ timers: [kitchen.timers[2]] });
+    const tea = render({ timers: [{ id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:09.250Z' }] });
+    // Due at the eggs' end, and queued before the clock's own timeout for it.
+    setTimeout(() => unmount(tea), 3000);
+    tick(3000);
+    expect(item(eggs, 'eggs').dataset.phase).toBe('done');
+  });
+
+  it('a view that joins in the task before a turn does not hold the others back', () => {
+    // Committed in the task itself, as the page commits a new display (in
+    // act() a render would wait for the end of the whole tick).
+    const tea = document.createElement('div');
+    document.body.append(tea);
+    const root = createRoot(tea);
+    // Queued before the clock's timeout for the eggs' turn at one second.
+    setTimeout(() => flushSync(() => root.render(<TimerPrimitive data={{ timers: [{ id: 'tea', label: 'Tea', endsAt: '2026-10-08T01:33:09.250Z' }] }} slot="aux" />)), 1000);
+    const eggs = render({ timers: [kitchen.timers[2]] });
+    tick(1000);
+    expect(digits(tea, 'tea')).toBe('00:09');
+    expect(digits(eggs, 'eggs')).toBe('00:02');
+    act(() => root.unmount());
+    tea.remove();
   });
 
   it('turns every countdown over on the same whole second', () => {

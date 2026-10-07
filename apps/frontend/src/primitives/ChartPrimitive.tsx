@@ -190,7 +190,7 @@ export function ChartPrimitive({
   // left; the legend's own anchor (`CHART_PAD.top`) never does -- its rows
   // grow downward from there instead.
   const plotWidth=plot.right-plot.left;
-  const legend=useMemo(()=>chartLegendLayout(data,plotWidth),[data,plotWidth]);
+  const legend=useMemo(()=>chartLegendLayout(data,plotWidth,{width,height}),[data,plotWidth,width,height]);
   const drawn=useMemo(()=>{
     const bars=chartBars(data,scales);
     const baseY=valueAt(baseline);
@@ -278,8 +278,13 @@ export function ChartPrimitive({
       <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{(horizontal ? data.xLabel : data.yLabel) ?? (horizontal ? 'X' : 'Y')}</text>
       {/* Rows grow downward from the one-row anchor (`CHART_PAD.top`, not
           the possibly-grown plot top): `chartPad` already grew the plot's
-          own top padding to keep the last row clear of it. */}
-      <g className="chart-legend" transform={`translate(${plot.left+8} ${CHART_PAD.top+12})`}>{legend.items.map((item,index)=><g transform={`translate(${item.x} ${item.row*CHART_LEGEND_ROW_HEIGHT})`} key={item.name}><LegendKey kind={kind} color={chartSeriesColor(data.series[index], index)}/><text x={CHART_LEGEND_TEXT_X} y="4">{item.text}</text>{item.truncated?<title>{item.name}</title>:null}</g>)}</g>
+          own top padding to keep the last row clear of it. The series past
+          the rows the frame gives the legend are counted in its last item,
+          a label with no key, its title naming them. */}
+      <g className="chart-legend" transform={`translate(${plot.left+8} ${CHART_PAD.top+12})`}>
+        {legend.items.map((item,index)=><g transform={`translate(${item.x} ${item.row*CHART_LEGEND_ROW_HEIGHT})`} key={item.name}><LegendKey kind={kind} color={chartSeriesColor(data.series[index], index)}/><text x={CHART_LEGEND_TEXT_X} y="4">{item.text}</text>{item.truncated?<title>{item.name}</title>:null}</g>)}
+        {legend.more ? <g className="chart-legend__more" transform={`translate(${legend.more.x} ${legend.more.row*CHART_LEGEND_ROW_HEIGHT})`}><text y="4">{legend.more.text}</text><title>{legend.more.names.join('\n')}</title></g> : null}
+      </g>
     </svg>
   );
   // The category a note names, or the marker's, is the row it opens on.

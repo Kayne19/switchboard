@@ -13,7 +13,7 @@ import {
   type ChartScales,
   type ChartSide,
 } from '../primitives/chartGeometry';
-import { layoutNotes, NOTE_CARD_CUT, routeLeader, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
+import { layoutNotes, NOTE_CARD_CUT, placedInFull, routeLeader, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
 import { crispLine, type Point, type Rect, type Size } from '../primitives/geometry';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
@@ -44,12 +44,14 @@ const MAX_CARD_SHARE = 0.8;
 
 // The notes are placed again at most once a step of this many pixels of
 // the layer's size or the chart's, as a graph is laid out once a step
-// (diagramLayout's FRAME_STEP): a placement costs a few milliseconds on a
-// line chart and up to 200-250 ms on a dense bar chart (four series of 40
-// with five notes and the rail), and a resize measures every frame. Within
-// a step the cards follow their points, and once the size has held still
-// for `REST_MS` the notes are placed for it, so where they come to rest is
-// where they would stand had the page opened at that size.
+// (diagramLayout's FRAME_STEP): a placement of a few notes costs tens of
+// milliseconds of CPU on a line chart and up to 200-250 ms on a dense bar
+// chart (four series of 40 with five notes and the rail), more in the page,
+// and a resize measures every frame. Past `NOTES_PLACED_IN_FULL` notes it
+// is bounded (`placedInFull`): sixteen on that bar chart cost about 40 ms.
+// Within a step the cards follow their points, and once the size has held
+// still for `REST_MS` the notes are placed for it, so where they come to
+// rest is where they would stand had the page opened at that size.
 const PLACE_STEP = 16;
 const REST_MS = 150;
 
@@ -158,18 +160,20 @@ function sameLayout(a: NotesLayout | null, b: NotesLayout): boolean {
  * one that names none sits in a corner. The layer measures the cards, the
  * chart's drawn geometry and itself, and `layoutNotes` decides where each
  * card goes, so no card covers another, its own point, or the data the
- * chart draws where a clear place exists.
+ * chart draws where a clear place exists -- on a chart with at most
+ * `NOTES_PLACED_IN_FULL` notes; past that the placement is bounded
+ * (`placedInFull`), and a later card may cover them.
  *
  * Where the scene gives it `onRailNote` and some card has no place that
  * keeps those rules -- every bar standing to the top, say -- one note is
  * handed to the rail instead, where that leaves fewer cards astray
  * (`layoutNotes`' `spill`: the one whose absence leaves the fewest, a note
- * naming no point first among those). The layer names it through
- * `onRailNote` and keeps its card out of view (still measured, so it comes
- * back the moment the chart has room). The chart keeps the point it names
- * marked: a bar by its callout, a point on a line by a ring once the scene
- * no longer counts it among the points a leader reaches (`ChartPrimitive
- * led`).
+ * naming no point first among those), on a chart placed in full. The
+ * layer names it through `onRailNote` and keeps its card out of view (still
+ * measured, so it comes back the moment the chart has room). The chart
+ * keeps the point it names marked: a bar by its callout, a point on a line
+ * by a ring once the scene no longer counts it among the points a leader
+ * reaches (`ChartPrimitive led`).
  */
 export function ChartNotes({
   chart,
@@ -407,7 +411,8 @@ export function ChartNotes({
       }
       const options = { spill, leaderOverlap: 1 };
       let placed = layoutNotes(toPlace, field, options);
-      if (toPlace.some((note) => !placed.get(note.id)?.settled)) {
+      // Past a few notes no card tries a narrower size, so none is measured.
+      if (placedInFull(toPlace.length) && toPlace.some((note) => !placed.get(note.id)?.settled)) {
         for (const note of toPlace) {
           if (placed.get(note.id)?.settled) continue;
           const element = cardRefs.current.get(note.id)!;

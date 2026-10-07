@@ -40,8 +40,8 @@ npm run dev              # development server on the local network
 npm run build            # typecheck and fully bundled production build
 npm run preview          # serve the production build
 npm run typecheck        # TypeScript only: the app and its unit tests, the Playwright specs, the configs, the host agent
-npm test                 # reducer tests and design-lock checks
-npm run test:visual      # canonical scene screenshots
+npm test                 # every CI gate but Rust and the static diff: build, skill, node, syntax, unit, design lock, host agent, no-ssh, hygiene
+npm run test:visual      # browser specs (Playwright): the pixel goldens and the geometry checks; CI does not run them
 npm run build:cdn        # dependency-light browser preview using pinned CDN modules
 ```
 

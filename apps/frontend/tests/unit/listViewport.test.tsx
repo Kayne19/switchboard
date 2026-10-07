@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { drawnScale } from '../../src/hooks/watchElement';
 import { keyStop } from '../../src/primitives/drawingScroll';
-import { continuesPast, countPast, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
+import { continuesPast, countPast, keyScrollLeft, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
 
 let host: HTMLDivElement | undefined;
@@ -80,6 +80,23 @@ describe('countPast', () => {
     const grid = [{ top: 0, bottom: 20 }, { top: 0, bottom: 20 }, { top: 200, bottom: 260 }, { top: 210, bottom: 240 }];
     expect(countPast(grid, { top: 30, bottom: 190 })).toEqual({ above: 2, below: 2 });
   });
+
+  // An agenda draws an event on every day it runs (a three-day trip is
+  // three rows), and a time grid draws one cut at midnight in two columns.
+  // The count is of events: the agenda's rim said 14 EVENTS of a 13-event
+  // calendar, 12 of them one stay's rows.
+  it('counts an item drawn as several boxes (one name) once, and only when every box lies past the edge', () => {
+    const trip = [0, 100, 200, 300].map((top) => ({ top, bottom: top + 30, name: 'trip' }));
+    const talks = [130, 230, 330].map((top, index) => ({ top, bottom: top + 30, name: `talk-${index}` }));
+    // The trip's first row in view: it is not past the bottom, whatever its others are.
+    expect(countPast([...trip, ...talks], { top: 0, bottom: 120 })).toEqual({ above: 0, below: 3 });
+    // Every row of it past the bottom: one trip.
+    expect(countPast([...trip, ...talks].map((item) => ({ ...item, top: item.top + 500, bottom: item.bottom + 500 })), { top: 0, bottom: 120 })).toEqual({ above: 0, below: 4 });
+    // Rows of it past both edges and none in view: it lies neither way.
+    expect(countPast([...trip, ...talks], { top: 140, bottom: 190 })).toEqual({ above: 0, below: 2 });
+    // Items with no name are each their own.
+    expect(countPast([{ top: 200, bottom: 230 }, { top: 200, bottom: 230 }], { top: 0, bottom: 120 })).toEqual({ above: 0, below: 2 });
+  });
 });
 
 describe('continuesPast', () => {
@@ -133,15 +150,48 @@ describe('ListViewport', () => {
     expect(scroll.tabIndex).toBe(-1);
   });
 
-  it('stays a tab stop when it overflows only sideways, and leaves Space to the surface', async () => {
+  // A list clips what sticks out sideways (.list-viewport__scroll is
+  // overflow-x: hidden), and scrollWidth still counts it. Taken as a pane
+  // that scrolls across, it was an empty tab stop, and its keys slid the
+  // clipped rows sideways with nothing to slide them back; in a paged week
+  // the hours took the keys that turn the days.
+  it('a list that clips what sticks out sideways is no tab stop, and leaves its keys to what is around it', async () => {
     const scroll = render(rows(3));
     layOut(scroll, 0);
+    scroll.style.overflowX = 'hidden';
+    Object.defineProperty(scroll, 'clientWidth', { configurable: true, value: 200 });
+    Object.defineProperty(scroll, 'scrollWidth', { configurable: true, value: 600 });
+    await measured(scroll);
+    expect(scroll.tabIndex).toBe(-1);
+    const calls: ScrollToOptions[] = [];
+    scroll.scrollTo = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollTo;
+    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true })));
+    expect(calls).toEqual([]);
+    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })));
+    expect(surfaceClicks).toBe(1);
+  });
+
+  it('stays a tab stop when it overflows only sideways, and takes the keys across; Space does not expand the object', async () => {
+    const scroll = render(rows(3));
+    layOut(scroll, 0);
+    // A pane that scrolls across (a table's, source's or document's).
+    scroll.style.overflowX = 'auto';
     Object.defineProperty(scroll, 'clientWidth', { configurable: true, value: 200 });
     Object.defineProperty(scroll, 'scrollWidth', { configurable: true, value: 600 });
     await measured(scroll);
     expect(scroll.tabIndex).toBe(0);
     expect(page().querySelector('.scroll-rim__count')).toBeNull();
-    act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })));
+    const calls: ScrollToOptions[] = [];
+    scroll.scrollTo = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollTo;
+    const press = (key: string) => act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));
+    press(' ');
+    press('ArrowRight');
+    press('End');
+    // The arrows up and down are not its keys: they go on, unmarked.
+    press('ArrowDown');
+    expect(calls.map((call) => [call.left, call.top])).toEqual([[175, undefined], [40, undefined], [400, undefined]]);
+    expect(surfaceClicks).toBe(0);
+    press('Enter');
     expect(surfaceClicks).toBe(1);
   });
 
@@ -191,6 +241,25 @@ describe('ListViewport', () => {
       unmountAll();
     }
     expect(counts).toEqual([['04 TASKS'], ['04 TASKS']]);
+  });
+
+  it('counts an item once however many rows draw it, and only where none of them is in view', async () => {
+    // Ten rows: a stay drawn on rows 1, 3 and 6 (one item), the rest each its own.
+    const names = ['a', 'stay', 'b', 'stay', 'c', 'd', 'stay', 'e', 'f', 'g'];
+    const scroll = render(names.map((name, index) => <div key={index} data-item={name}>{name}</div>));
+    const rims = () => Array.from(page().querySelectorAll('.scroll-rim__count')).map((rim) => rim.textContent);
+    layOut(scroll, 0);
+    await measured(scroll);
+    // Rows 3-9 lie below (10px of row 3 shows), but the stay's row 1 is in view: c, d, e, f and g.
+    expect(rims()).toEqual(['05 TASKS']);
+    layOut(scroll, 40);
+    await measured(scroll);
+    // Row 0 above, rows 5-9 below; the stay's row 1 shows 20px.
+    expect(rims()).toEqual(['01 TASK', '04 TASKS']);
+    layOut(scroll, 200);
+    await measured(scroll);
+    // Rows 0-6 above (10px of row 6 shows): a, the stay, b, c and d.
+    expect(rims()).toEqual(['05 TASKS']);
   });
 
   it('counts only what countSelector picks', async () => {
@@ -322,6 +391,24 @@ describe('ListViewport', () => {
     expect(surfaceClicks).toBe(0);
     press('Enter');
     expect(surfaceClicks).toBe(1);
+  });
+});
+
+describe('keyScrollLeft', () => {
+  it('takes the keys a drawing that scrolls only across takes, by the one rule (scrollMove, across)', () => {
+    for (const key of [' ', 'PageDown', 'PageUp', 'Home', 'End', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Enter', 'Tab', 'a']) {
+      expect(keyScrollLeft(key, false, 0, 200, 600) === null, key).toBe(keyStop(key, false, true, [0, 300], 0, 200) === null);
+    }
+  });
+
+  it('moves a line, a page, or to either side, and no further', () => {
+    expect(keyScrollLeft('ArrowRight', false, 0, 100, 400)).toBe(40);
+    expect(keyScrollLeft('ArrowLeft', false, 10, 100, 400)).toBe(0);
+    expect(keyScrollLeft(' ', false, 250, 100, 400)).toBe(300);
+    expect(keyScrollLeft(' ', true, 200, 100, 400)).toBe(112);
+    expect(keyScrollLeft('Home', false, 200, 100, 400)).toBe(0);
+    expect(keyScrollLeft('End', false, 0, 100, 400)).toBe(300);
+    expect(keyScrollLeft('ArrowDown', false, 0, 100, 400)).toBeNull();
   });
 });
 

@@ -220,7 +220,11 @@ as long as the rows fit the plot; otherwise its labels are staggered or thinned
 like any other chart's. Down the left a label takes at most three tenths of
 the width: a longer one wraps onto as many lines as its row holds (up to
 three), after a space or a path separator where it can, and is cut only past
-them -- a path at its start, so its file name stays. There is no pie chart and
+them -- a path at its start, so its file name stays. The legend wraps onto as
+many rows as its series need, up to a quarter of the chart's height and never
+so many that the plot is left less than six rows of tick text tall; past those
+rows it counts the rest in one last item (`+12 SERIES`), whose title names
+them. There is no pie chart and
 no sparkline: a single series with no axes is a `metric`, and a share of a
 whole reads better as a bar per part.
 
@@ -436,10 +440,18 @@ what the list viewport counts.
 
 A timer is the only thing on the page that reads the time, and it reads
 it from one clock (`apps/frontend/src/hooks/usePageClock.ts`): one
-timeout for the whole page, ticking on the wall clock's whole seconds
-while a countdown on screen is running, and none while every timer is
-paused or none is shown. Two timers therefore turn over on the same tick,
-and a page with eight timers runs one timeout, not eight. What a timer
+timeout for the whole page while a countdown on screen is running, and
+none while every timer is paused or none is shown, so a page with eight
+timers runs one timeout, not eight. It ticks where a countdown's reading
+changes: a whole number of seconds before or after its `endsAt`, so on
+the fraction of a second that end falls on (`timerPhase`; an end at
+`18:42:00.368277` turns the digits 368 ms past each second). An agent's
+end is rarely on a whole second (the skill adds minutes to its clock's
+now, to the microsecond), so a clock on the whole second would show a
+digit too many for up to a second and reach `00:00` late. The timeout is
+set for the soonest turn of every countdown shown, and two that end on
+the same fraction turn over on the same tick. A timer shown while
+another runs reads the time now, not the last tick. What a timer
 reads at a moment is pure (`readTimer`): the digits round up, so they show
 `00:01` until the end and `00:00` only at `endsAt`; from that moment it is
 done, in the warning colour, and counts how long ago it ended; a paused
@@ -447,7 +459,7 @@ timer is held at `remaining` whatever the clock does; a `startedAt` still
 to come (the agent's clock ahead of the page's) reads as nothing gone yet,
 and the countdown still runs to `endsAt`. The share gone is a bar that
 sweeps from tick to tick by a CSS transition; with reduced motion the
-transition goes and the bar steps with the digits. Tests drive the clock:
+transition goes and the bar steps at each tick. Tests drive the clock:
 Vitest's fake timers in the unit tests, Playwright's clock in the browser.
 
 ### Timers and forecasts in their slot
@@ -520,15 +532,21 @@ draws the same fade, dashed cut line and tag (one `ScrollRim`), the tag
 counting the items that lie that way in two digits at least, as every rim
 counts ("06 TASKS", "33 ROWS", "54 LINES", "04 PARAGRAPHS", a week's
 hidden days "MON-TUE / 07 EVENTS"); a row of which no more than a sliver
-shows counts as past the edge; it says MORE where none does. A table's
-rows pass under its header: they are counted, and its top edge drawn,
-below the header. A tap on the tag turns a page and does not expand the
-object. A focused list takes the keys a drawing takes (an arrow moves it
-a line, Space and Page Down a page on, Shift+Space and Page Up a page
-back, Home and End to the ends), each marked handled so Space never
-expands the object; Enter still does. It opens on the item a note names,
-never under the fade, and keeps the reader's place through an update.
-Focus gives the list the whole stage.
+shows counts as past the edge; an item drawn as several rows (an event
+on each day it runs, or cut at midnight across two columns: one
+`data-item` name) counts once, and only where every one of them lies
+past that edge; it says MORE where none does. A table's rows pass under
+its header: they are counted, and its top edge drawn, below the header.
+A tap on the tag turns a page and does not expand the object. A focused
+list takes the keys a drawing takes (an arrow moves it a line, Space and
+Page Down a page on, Shift+Space and Page Up a page back, Home and End
+to the ends), each marked handled so Space never expands the object;
+Enter still does. A pane that scrolls only across (a wide table on a
+phone, source with long lines) takes them across, as a drawing that
+scrolls only across does: the left and right arrows a line, Space and
+the page keys a page, Home and End to either side. It opens on the item
+a note names, never under the fade, and keeps the reader's place through
+an update. Focus gives the list the whole stage.
 
 ### Composition & focus
 
@@ -667,6 +685,18 @@ chart's size, as a graph is laid out again once a step: between steps each
 card moves with the point it names (one naming none keeps its corner), and
 once the size holds still for a moment the notes are placed for it, where
 they would stand had the page opened at that size.
+
+A chart with more than five notes on it is placed with bounded work, so a
+chart the agent keeps adding notes to never holds the page for seconds: the
+rail takes none of its notes, no card tries a narrower width, and only the
+first five cards placed (the notes naming no point first, then the rest in the
+order they were shown) look for a clear place anywhere within reach of their
+points. Each card after them takes the best of the rows -- along the top and
+the bottom of the layer, and beside the cards and labels already there -- and,
+where none of those clears its point, of the places straight above, below or
+beside it, and may lie over the data or another card. Up to five notes are
+placed as above; five on a dense bar chart is the costliest placement, a few
+hundred milliseconds.
 
 The note a chart hands over stays readable beside it. Where the rail stands
 under a chart (a portrait stage), the note is drawn in a band under it, full
