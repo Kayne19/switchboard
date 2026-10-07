@@ -840,8 +840,10 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
     mainVariant: isMetricPrimary ? 'composed-main--metric-primary' : undefined,
     main: (
       <ObjectMotion
+        // The object's identity, shared with its focus as every object's is
+        // (ObjectMotion's switchboard-object-<id>); a cluster is named by its
+        // own id, so focusing one of its metrics grows from nothing in it.
         objectId={primaryMetrics.length > 1 ? 'primary-metric-cluster' : primary.id}
-        layoutId={primaryMetrics.length > 1 ? 'switchboard-primary-metric-cluster' : undefined}
         className={`composed-primary-object composed-primary-object--${primary.type}${primaryMetrics.length > 1 ? ' composed-primary-object--cluster' : ''}`}
       >
         <TechFrame variant="panel" />
