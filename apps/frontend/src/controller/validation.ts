@@ -1621,15 +1621,27 @@ function actionSizeCap(value: Record<string, unknown>): number {
  */
 export function validateControllerAction(value: unknown): ActionValidationResult {
   const result = validateActionFields(value);
-  if (result.ok && isRecord(value) && serializedSize(result.action) > actionSizeCap(value)) {
-    return { ok: false, error: 'action exceeds size limit' };
+  if (result.ok && isRecord(value)) {
+    const size = serializedSize(result.action);
+    if (size > actionSizeCap(value)) return { ok: false, error: sizeRefusal(size, actionSizeCap(value), true) };
   }
   return result;
 }
 
+/**
+ * The refusal of an action of `size` bytes over `cap`, with both numbers so
+ * the agent knows how much to cut; `normalized` when it is the normalized
+ * action that is over (a say's added `at: null`). The backend's
+ * `size_refusal` writes the same words.
+ */
+function sizeRefusal(size: number, cap: number, normalized: boolean): string {
+  return `action exceeds size limit${normalized ? ' once normalized' : ''}: ${size} bytes, the cap is ${cap}`;
+}
+
 function validateActionFields(value: unknown): ActionValidationResult {
   if (!isRecord(value)) return { ok: false, error: 'action must be an object' };
-  if (serializedSize(value) > actionSizeCap(value)) return { ok: false, error: 'action exceeds size limit' };
+  const size = serializedSize(value);
+  if (size > actionSizeCap(value)) return { ok: false, error: sizeRefusal(size, actionSizeCap(value), false) };
   if (!isName(value.op, OPERATIONS)) {
     return { ok: false, error: invalidName('op', OPERATIONS) };
   }

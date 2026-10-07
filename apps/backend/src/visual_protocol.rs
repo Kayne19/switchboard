@@ -2071,8 +2071,9 @@ fn js_number_len(n: &serde_json::Number) -> usize {
 pub fn validate_action(action: &Value) -> Result<Value, String> {
     let map = action.as_object().ok_or("action must be an object")?;
     let size_cap = action_size_cap(action);
-    if json_len(action) > size_cap {
-        return Err("action exceeds size limit".into());
+    let size = json_len(action);
+    if size > size_cap {
+        return Err(size_refusal(size, size_cap, false));
     }
     let op = read_name(map.get("op"), &OPS, "op")?;
 
@@ -2202,10 +2203,20 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
     }
 
     let normalized = Value::Object(out);
-    if json_len(&normalized) > size_cap {
-        return Err("action exceeds size limit".into());
+    let size = json_len(&normalized);
+    if size > size_cap {
+        return Err(size_refusal(size, size_cap, true));
     }
     Ok(normalized)
+}
+
+/// The refusal of an action of `size` bytes over `cap`, with both numbers
+/// so the agent knows how much to cut; `normalized` when it is the
+/// normalized action that is over (a say's added `at: null`). The browser's
+/// `sizeRefusal` writes the same words.
+fn size_refusal(size: usize, cap: usize, normalized: bool) -> String {
+    let when = if normalized { " once normalized" } else { "" };
+    format!("action exceeds size limit{when}: {size} bytes, the cap is {cap}")
 }
 
 /// The shared validator corpus, `apps/frontend/tests/fixtures/validator-corpus.json`:
