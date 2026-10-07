@@ -5506,9 +5506,15 @@ button {
     --presence-width: min(29cqw, 21cqh, 220px);
     --signal-height: clamp(38px, 5.5cqh, 52px);
   }
+  /* Damocles in the rail under the column: his size is the scene's, so
+     the grid can hold a rail as tall as he is (.content-grid). */
+  .scene--content {
+    --rail-presence-width: min(25cqw, 18cqh, 185px);
+    --rail-signal-height: clamp(34px, 4.6cqh, 44px);
+  }
   .damocles-presence--rail {
-    --presence-width: min(25cqw, 18cqh, 185px);
-    --signal-height: clamp(34px, 4.6cqh, 44px);
+    --presence-width: var(--rail-presence-width);
+    --signal-height: var(--rail-signal-height);
   }
 
   .scene--conversation {
@@ -5584,14 +5590,16 @@ button {
     left: var(--edge);
   }
   /* The rail under the column is at least as tall as its note reads whole
-     in (--rail-floor, measured by RailDetails), up to half the grid: the
-     main column keeps its 59% where the note fits in the rest, and gives up
-     what the note needs, keeping the larger share. */
+     in (--rail-floor, measured by RailDetails) and as Damocles stands (his
+     glyph, 944 by 1133, over his signal row), up to half the grid: the
+     main column keeps its 59% where both fit in the rest, and gives up
+     what they need, keeping the larger share. */
   .content-grid {
+    --rail-presence-height: calc(var(--rail-presence-width) * 1133 / 944 + var(--rail-signal-height));
     top: 9.2cqh;
     bottom: 9.2cqh;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 59cqh) minmax(min(var(--rail-floor, 0px), (100% - var(--scene-gap)) / 2), 1fr);
+    grid-template-rows: minmax(0, 59cqh) minmax(min(max(var(--rail-floor, 0px), var(--rail-presence-height)), (100% - var(--scene-gap)) / 2), 1fr);
     gap: var(--scene-gap);
   }
   .content-rail {
