@@ -410,8 +410,9 @@ same way. A module call for a session whose listener has gone is refused
 `not_on_call`, as one for a session nobody listens to.
 
 The host agent writes every frame well-formed: a lone surrogate in any
-string it sends (daemon text, a saved session's first message, a relayed
-call's arguments) goes out as U+FFFD, so the frame is not lost to it. A
+string it sends, a value or an object's key (daemon text, a saved session's
+first message, a tool's `args` and `result` keys, a relayed call's
+arguments), goes out as U+FFFD, so the frame is not lost to it. A
 clipped tool `args` or `result` preview is cut between whole characters, so
 it makes none. The skill module refuses a lone surrogate before sending, so a
 relayed call is not changed in practice. It holds a display call to the depth
