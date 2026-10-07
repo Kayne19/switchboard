@@ -223,18 +223,18 @@ export function ChartNotes({
   // frame -- the box the cards and leaders are placed in -- is the canvas's
   // size, moved by the scroll, so the cards are laid out over the whole
   // chart and keep to the bars they name. Found from the panel the layer
-  // stands in; found in the same frame the chart starts or stops scrolling.
+  // stands in; found in the same frame the chart starts or stops scrolling:
+  // at mount the layout effect's own update is committed before the frame
+  // is painted, and a later change the observer reports is committed at once
+  // (flushSync), which React allows outside a lifecycle method only.
   const outerRef = useRef<HTMLDivElement>(null);
   const [canvas, setCanvas] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => {
     const panel = outerRef.current?.parentElement;
     if (!panel) return undefined;
-    const find = () => {
-      const found = panel.querySelector<HTMLElement>('.chart-primitive__canvas');
-      flushSync(() => setCanvas(found));
-    };
-    find();
-    const watcher = new MutationObserver(find);
+    const find = () => panel.querySelector<HTMLElement>('.chart-primitive__canvas');
+    setCanvas(find());
+    const watcher = new MutationObserver(() => flushSync(() => setCanvas(find())));
     watcher.observe(panel, { childList: true, subtree: true });
     return () => watcher.disconnect();
   }, []);
