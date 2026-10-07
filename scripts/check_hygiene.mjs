@@ -72,23 +72,21 @@ for (const file of files(path.join(root, "apps/backend/tests"), new Set([".rs"])
 	else if (tsPath !== pyParts.join("/")) findings.push(`skill socket path differs: host agent ~/${tsPath}, skill ~/${pyParts.join("/")}`);
 }
 
+// The markdown the doc checks read: the docs and every markdown file in
+// the tree (READMEs, AGENTS.md, ARCHITECTURE.md, DESIGN_SYSTEM.md, SKILL.md).
+const markdown = () => ["AGENTS.md", "README.md", "docs", "apps", "skills", "extensions"].flatMap((start) => [...files(path.join(root, start), new Set([".md"]))]);
+
 // 7. Every repo path a doc names exists. A bare `src/` or `tests/` is
 //    relative to the prose, not the root, and is skipped.
-for (const start of ["AGENTS.md", "README.md", "docs"]) {
-	for (const file of files(path.join(root, start), new Set([".md"]))) {
-		lines(file).forEach((line, index) => {
-			for (const m of line.matchAll(/(?<![\w/.-])((?:apps|docs|skills|extensions|scripts|static|static-debug)\/[\w./-]*)/g)) {
-				const target = m[1].replace(/[.,;:)]+$/, "").replace(/\/$/, "");
-				if (target.includes("*") || target.includes("<") || !target.includes("/")) continue;
-				if (!existsSync(path.join(root, target))) findings.push(`${rel(file)}:${index + 1}: names ${target}, which does not exist`);
-			}
-		});
-	}
+for (const file of markdown()) {
+	lines(file).forEach((line, index) => {
+		for (const m of line.matchAll(/(?<![\w/.-])((?:apps|docs|skills|extensions|scripts|static|static-debug)\/[\w./-]*)/g)) {
+			const target = m[1].replace(/[.,;:)]+$/, "").replace(/\/$/, "");
+			if (target.includes("*") || target.includes("<") || !target.includes("/")) continue;
+			if (!existsSync(path.join(root, target))) findings.push(`${rel(file)}:${index + 1}: names ${target}, which does not exist`);
+		}
+	});
 }
-
-// The markdown the checks below read: the docs and every README and
-// AGENTS.md in the tree.
-const markdown = () => ["AGENTS.md", "README.md", "docs", "apps", "skills", "extensions"].flatMap((start) => [...files(path.join(root, start), new Set([".md"]))]);
 
 // 8. Every HTTP route a doc names in a code span, with its method
 //    (`POST /connect`), is one the service routes. Agents' display, view
