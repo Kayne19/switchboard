@@ -5172,6 +5172,13 @@ button {
 }
 
 /* Focus layer */
+/* The focused object's slot copy under reduced motion: hidden, as motion
+   hides it where the copy and the focus share one identity
+   (useFocusCopyHidden). It keeps its box; nothing in the slot moves. */
+[data-focus-copy],
+[data-focus-copy] .drawing-viewport__pinned--shown {
+  visibility: hidden;
+}
 .focus-layer {
   position: fixed;
   inset: 0;

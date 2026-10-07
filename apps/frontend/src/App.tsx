@@ -9,6 +9,18 @@ import { assertControllerAction } from './controller/validation';
 import { sceneOrder } from './design/tokens';
 import { RuntimeIntegration } from './integration/runtime';
 
+// What takes a swipe itself, so a demo page's swipe to the next fixture
+// leaves it alone: a control, a layer over the stage, the scrollers of code,
+// a document's body and a table, a list or a drawing while it scrolls, and
+// an element that turns its own pages by a swipe (`data-swipe`: a
+// calendar's paged days). The list named only the first scrollers, and a
+// swipe in a paged calendar or a scrolling list loaded the next fixture.
+const OWN_SWIPE = [
+  'button', 'input', 'textarea', '[data-swipe]',
+  '.code-viewport__scroll', '.document-viewport__body', '.table-viewport__scroll', '.list-viewport--scrolling', '.drawing-viewport--scrolling',
+  '.focus-layer', '.controller-panel', '.ir-drawer', '.transcript',
+].join(',');
+
 const isFixture = (value: string | null): value is FixtureName => Boolean(value && sceneOrder.includes(value as FixtureName));
 
 export default function App() {
@@ -57,6 +69,8 @@ export default function App() {
       }
 
       if (!demoMode) return;
+      // The focus layer is modal: the scene keys wait behind it (FocusLayer `useModalFocus`).
+      if (state.focusId) return;
 
       const index = Number(event.key) - 1;
       if (index >= 0 && index < sceneOrder.length) {
@@ -77,7 +91,7 @@ export default function App() {
       if (!demoMode) return;
       if (event.touches.length !== 1) return;
       const target = event.target as HTMLElement | null;
-      if (target?.closest('button,input,textarea,.code-viewport__scroll,.document-viewport__body,.table-viewport__scroll,.drawing-viewport--scrolling,.focus-layer,.controller-panel,.ir-drawer,.transcript')) return;
+      if (target?.closest(OWN_SWIPE)) return;
       touchStart.current = { x: event.touches[0].clientX, y: event.touches[0].clientY, target: event.target };
     };
     const onTouchEnd = (event: TouchEvent) => {
@@ -103,9 +117,10 @@ export default function App() {
     <div className="app-shell">
       <SceneRenderer />
       {demoMode ? <>
-        <button className="dev-toggle tech micro" type="button" onClick={() => setControllerOpen(true)}>CTRL</button>
-        <ControllerPanel open={controllerOpen} onClose={() => setControllerOpen(false)} />
-        <IRDrawer open={irOpen} onClose={() => setIrOpen(false)} />
+        {/* Behind the focus layer, a modal, the demo page's controls are inert too (FocusLayer `useModalFocus`): CTRL and both panels. */}
+        <button className="dev-toggle tech micro" type="button" onClick={() => setControllerOpen(true)} inert={Boolean(state.focusId)}>CTRL</button>
+        <ControllerPanel open={controllerOpen} onClose={() => setControllerOpen(false)} behindFocus={Boolean(state.focusId)} />
+        <IRDrawer open={irOpen} onClose={() => setIrOpen(false)} behindFocus={Boolean(state.focusId)} />
       </> : <RuntimeIntegration />}
     </div>
   );
