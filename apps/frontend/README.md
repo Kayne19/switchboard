@@ -42,7 +42,6 @@ npm run preview          # serve the production build
 npm run typecheck        # TypeScript only: the app and its unit tests, the Playwright specs, the configs, the host agent
 npm test                 # every CI gate but Rust and the static diff: build, skill, node, syntax, unit, design lock, host agent, no-ssh, hygiene
 npm run test:visual      # browser specs (Playwright): the pixel goldens and the geometry checks, on their own server (port 4183, or PLAYWRIGHT_PORT)
-npm run build:cdn        # dependency-light browser preview using pinned CDN modules
 ```
 
 ## Controls
@@ -125,15 +124,3 @@ Read these files before modifying the implementation:
 2. [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md)
 3. [ARCHITECTURE.md](./ARCHITECTURE.md)
 4. [INTEGRATION.md](./INTEGRATION.md)
-
-## Prebuilt preview
-
-`dist/` contains a prebuilt browser preview of the same TypeScript source. It uses pinned ESM CDN modules so it can be generated without a local package install. Serve it rather than opening it through `file://`:
-
-```bash
-python3 -m http.server 8000 --directory dist
-```
-
-Then open `http://localhost:8000`.
-
-The normal `npm run build` creates the preferred fully local Vite bundle.
