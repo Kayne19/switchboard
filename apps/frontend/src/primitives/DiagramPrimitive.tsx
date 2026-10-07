@@ -324,7 +324,7 @@ export function DiagramPrimitive({
                 vectorEffect="non-scaling-stroke"
               />
               {note.tag ? (
-                <text x="14" y="20" className="diagram-callout__tag tech micro" fill="rgba(232, 230, 223, 0.4)" fontSize="9" letterSpacing="0.08em">
+                <text x="14" y="20" className="diagram-callout__tag tech micro" fill="rgba(var(--paper-rgb), 0.4)" fontSize="9" letterSpacing="0.08em">
                   {note.tag}
                 </text>
               ) : null}
