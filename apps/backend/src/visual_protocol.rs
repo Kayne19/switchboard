@@ -510,6 +510,15 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
     for k in ["xMax", "yMin", "yMax"] {
         copy_number(data, &mut out, k, &format!("chart.{k}"), false)?;
     }
+    // Ends that leave no span draw an empty plot with every point off it.
+    if let (Some(low), Some(high)) = (
+        out.get("yMin").and_then(Value::as_f64),
+        out.get("yMax").and_then(Value::as_f64),
+    ) {
+        if low >= high {
+            return Err("chart.yMin must be below chart.yMax".into());
+        }
+    }
 
     if let Some(marker_val) = data.get("marker") {
         let mm = marker_val

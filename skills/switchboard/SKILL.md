@@ -90,7 +90,8 @@ Types and their `data` shapes (each type takes only its own shape):
   `labels: [str]`, categorical x
   labels (at most 100, each at most 64 characters; no series may be longer
   than them). Bars group per category; the page decides whether they run up
-  or across.
+  or across. `yMin` and `yMax` fix the value axis's ends; with both, `yMin`
+  must be below `yMax`.
 - metric: `{label, value}`, plus `trend` (`up`, `down` or `flat`) and
   `delta` (a short string such as `-12 ms`) to show how it moved
 - progress: `{label, value}` (value is a percent, 0-100) and/or

@@ -86,8 +86,11 @@ const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
     ],
   },
   fields: {
-    why: "a series' value count against the chart's label count compares two sibling fields",
-    cases: ['chart_series_longer_than_labels', 'chart_series_longer_than_labels_names_its_series'],
+    why: "a series' value count against the chart's label count, and yMin against yMax, compare two sibling fields",
+    cases: [
+      'chart_series_longer_than_labels', 'chart_series_longer_than_labels_names_its_series', 'chart_y_ends_equal',
+      'chart_y_ends_inverted',
+    ],
   },
   times: {
     why: 'two times compared as times (an end before its start, `now` off `today`, a timer started at or after its end, offsets applied); a pattern reads one string',

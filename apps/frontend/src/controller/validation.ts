@@ -450,6 +450,10 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     copyNumber(data, result, 'yMin', 'chart.yMin', false) ??
     copyNumber(data, result, 'yMax', 'chart.yMax', false);
   if (err) return { ok: false, error: err };
+  // Ends that leave no span draw an empty plot with every point off it.
+  if (result.yMin !== undefined && result.yMax !== undefined && result.yMin >= result.yMax) {
+    return { ok: false, error: 'chart.yMin must be below chart.yMax' };
+  }
   if (data.marker !== undefined) {
     if (!isRecord(data.marker)) return { ok: false, error: 'chart.marker must be an object' };
     const markerAllowed = new Set(['x', 'series']);
