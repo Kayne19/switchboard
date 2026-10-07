@@ -488,3 +488,16 @@ describe('an edge drawn as stubs', () => {
     expect(notes.length).toBeGreaterThan(0);
   });
 });
+
+describe('the graph entrance', () => {
+  it('has every edge, node and label in within about a second, however large the graph', () => {
+    const nodes = Array.from({ length: 100 }, (_, index) => ({ id: `n${index}`, label: `NODE ${index}` }));
+    // 197 edges: each node to the next two, some labelled.
+    const edges = nodes.flatMap((_, index) => [1, 2].filter((step) => index + step < nodes.length).map((step) => ({ from: `n${index}`, to: `n${index + step}`, label: index % 7 === 0 ? `e${index}` : undefined })));
+    host = mount(<DiagramPrimitive data={{ mode: 'graph', nodes, edges }} id="big-diagram" />);
+    const delays = [...host.querySelectorAll<SVGElement>('[style*="animation-delay"]')].map((element) => parseFloat(element.style.animationDelay));
+    expect(delays.length).toBeGreaterThan(100);
+    // The sequence's bound (SequencePrimitive): the last part starts 120 ms plus 900 ms in.
+    expect(Math.max(...delays)).toBeLessThanOrEqual(1020);
+  });
+});

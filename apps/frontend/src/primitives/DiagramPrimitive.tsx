@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, wrapGreedy, type DiagramLayout, type EdgeLabel, type EdgeStub } from './diagramLayout';
-import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
+import { GlowFilters, LABEL_HEIGHT, entranceStep, pathThrough } from './drawingKit';
 import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
@@ -165,6 +165,11 @@ export function DiagramPrimitive({
     }
     return [...drawn.values()];
   })();
+  // Edges, then nodes, then labels come in one after another, the last of
+  // each within about a second however large the graph (entranceStep).
+  const edgeStep = entranceStep(edges.length, 60);
+  const nodeStep = entranceStep(layout.nodes.length, 50);
+  const labelsDelay = 120 + edges.length * entranceStep(edges.length, 50);
 
   return (
     <div ref={hostRef} className={`diagram-primitive${slot === 'focus' ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
@@ -196,7 +201,7 @@ export function DiagramPrimitive({
               <path
                 key={edge.key}
                 className={`diagram-edge${edge.active ? ' diagram-edge--active' : ''}`}
-                style={{ animationDelay: `${index * 60}ms` }}
+                style={{ animationDelay: `${index * edgeStep}ms` }}
                 d={pathThrough(edge.points)}
                 fill="none"
                 stroke={edge.color}
@@ -216,7 +221,7 @@ export function DiagramPrimitive({
             <path
               key={stub.key}
               className={`diagram-edge diagram-edge--stub${stub.active ? ' diagram-edge--active' : ''}`}
-              style={{ animationDelay: `${stub.index * 60}ms` }}
+              style={{ animationDelay: `${stub.index * edgeStep}ms` }}
               d={pathThrough(stub.points)}
               fill="none"
               stroke={stub.color}
@@ -250,7 +255,7 @@ export function DiagramPrimitive({
               <g key={node.id} transform={`translate(${box.x} ${box.y})`} data-state={state}>
                 <g
                   className={`diagram-node__body diagram-node__body--${state}${isAnchored ? ' diagram-node__body--anchored' : ''}`}
-                  style={{ animationDelay: `${120 + index * 50}ms` }}
+                  style={{ animationDelay: `${120 + index * nodeStep}ms` }}
                 >
                   <path
                     className="diagram-node__frame"
@@ -336,9 +341,9 @@ export function DiagramPrimitive({
         {/* Labels paint last, each on a backing of its own, so no node or
             crossing edge can cover the words on an edge. */}
         <g className="diagram-edge-labels">
-          {edges.map((edge) => (edge.label ? <EdgeLabelText key={edge.key} label={edge.label} color={edge.color} align="middle" delay={120 + edges.length * 50} /> : null))}
+          {edges.map((edge) => (edge.label ? <EdgeLabelText key={edge.key} label={edge.label} color={edge.color} align="middle" delay={labelsDelay} /> : null))}
           {stubs.map((stub) => (
-            <EdgeLabelText key={`${stub.key}-names`} label={stub.label} color={stub.color} align={stub.align} delay={120 + edges.length * 50} quiet={stub.quiet} />
+            <EdgeLabelText key={`${stub.key}-names`} label={stub.label} color={stub.color} align={stub.align} delay={labelsDelay} quiet={stub.quiet} />
           ))}
         </g>
       </DrawingViewport>

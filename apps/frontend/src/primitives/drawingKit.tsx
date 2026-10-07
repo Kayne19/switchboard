@@ -31,6 +31,15 @@ export function labelBox(lines: readonly string[]): Size {
   };
 }
 
+// A drawing's parts come in one after another, `step` ms apart, but a large
+// one is not made to wait on them: the step shrinks so the last of `count`
+// starts within ENTRANCE_SPAN ms (about a second, with the lead-in).
+const ENTRANCE_SPAN = 900;
+/** The ms between two parts' entrances, for `count` of them drawn `step` ms apart. */
+export function entranceStep(count: number, step: number): number {
+  return Math.min(step, Math.floor(ENTRANCE_SPAN / Math.max(1, count)));
+}
+
 /** A drawing is composed in portrait once its viewport is a little taller than wide. */
 export function drawingOrientation(viewport: Size): 'landscape' | 'portrait' {
   return viewport.height > viewport.width * 1.05 ? 'portrait' : 'landscape';
