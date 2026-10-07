@@ -205,9 +205,19 @@ for (const file of markdown()) {
 	}
 }
 
+// 12. A unit-test time budget measures the test thread's CPU time with
+//     leastCpuMs (apps/frontend/tests/unit/cpuTime.ts), never the wall
+//     clock, which under load measures the machine: wall-clock budgets
+//     failed 17 times in 7 loaded runs
+//     (docs/concurrency-and-test-hazards.md).
+for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set([".ts", ".tsx"]))) {
+	if (path.basename(file) === "cpuTime.ts") continue;
+	scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets");
