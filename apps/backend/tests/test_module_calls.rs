@@ -545,6 +545,84 @@ async fn display_protocol_rejects_invalid_actions() {
     );
 }
 
+// The stage is bounded (`MAX_STAGE_OBJECTS`, `MAX_STAGE_IMAGES`): a show
+// that would add past either bound is refused in words the agent can act
+// on, and nothing reaches the screen; an update in place and a hide are
+// always taken, so the agent can make room.
+#[tokio::test]
+async fn display_refuses_a_show_past_the_stage_bound_and_takes_updates_and_hides() {
+    use crate::display::{MAX_STAGE_IMAGES, MAX_STAGE_OBJECTS};
+    let state = state();
+    let call = |action: Value| {
+        let state = state.clone();
+        async move {
+            agent_call_json(
+                &state,
+                "/display",
+                json!({"token": "operator", "action": action}),
+            )
+            .await
+        }
+    };
+    let metric = |id: &str| json!({"op": "show", "id": id, "type": "metric", "data": {"label": id, "value": "1"}});
+    let image = |id: &str| json!({"op": "show", "id": id, "type": "image", "data": {"format": "png", "bytes": "iVBORw0KGgoAAAAA", "alt": id}});
+    let on_stage = || {
+        let state = state.clone();
+        async move { state.0.display_gate.lock().await.projection.objects.len() }
+    };
+
+    for n in 0..MAX_STAGE_IMAGES {
+        assert_eq!(call(image(&format!("img{n}"))).await.0, StatusCode::OK);
+    }
+    let images_full = json!({"delivered": false, "detail": format!("the stage holds {MAX_STAGE_IMAGES} images, the most it takes: hide one, or update one by its id")});
+    assert_eq!(
+        call(image("one-more")).await,
+        (StatusCode::BAD_REQUEST, images_full.clone())
+    );
+    // An object that would become an image is one more image too.
+    assert_eq!(call(metric("m0")).await.0, StatusCode::OK);
+    assert_eq!(
+        call(image("m0")).await,
+        (StatusCode::BAD_REQUEST, images_full)
+    );
+    // An image updated in place is not one more.
+    assert_eq!(call(image("img0")).await.0, StatusCode::OK);
+
+    for n in on_stage().await..MAX_STAGE_OBJECTS {
+        assert_eq!(call(metric(&format!("m{n}"))).await.0, StatusCode::OK);
+    }
+    assert_eq!(on_stage().await, MAX_STAGE_OBJECTS);
+    let mut events = state.0.events.subscribe();
+    let (code, body) = call(metric("one-too-many")).await;
+    assert_eq!(
+        (code, body),
+        (
+            StatusCode::BAD_REQUEST,
+            json!({"delivered": false, "detail": format!("the stage holds {MAX_STAGE_OBJECTS} objects, the most it takes: hide one, or update one by its id")})
+        )
+    );
+    assert!(
+        events.try_recv().is_err(),
+        "a refused show never reaches the screen"
+    );
+    assert_eq!(on_stage().await, MAX_STAGE_OBJECTS);
+
+    // An update in place is taken on a full stage, and a hide makes room.
+    assert_eq!(call(metric("m5")).await.0, StatusCode::OK);
+    assert_eq!(
+        call(json!({"op": "hide", "id": "img1"})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(call(metric("one-too-many")).await.0, StatusCode::OK);
+    assert_eq!(on_stage().await, MAX_STAGE_OBJECTS);
+    // And the hidden image left room for an image.
+    assert_eq!(
+        call(json!({"op": "hide", "id": "m5"})).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(call(image("img-new")).await.0, StatusCode::OK);
+}
+
 #[tokio::test]
 async fn display_projection_hide_clears_focus() {
     let state = state();

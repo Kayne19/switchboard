@@ -72,7 +72,7 @@ const showShapes: ShowShape[] = actions.flatMap((properties) => {
 const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
   items: {
     why:
-      'a relationship between the items of a list (an id unique in its list, an endpoint naming a node or ' +
+      'a relationship between the items of a list (an id or a series name unique in its list, an endpoint naming a node or ' +
       "an actor, a self-loop, an edge pair, a row with one cell per column, a highlight naming a row): JSON Schema checks " +
       "each item's own shape and has no keyword for a property computed across the others without a vendor extension",
     cases: [
@@ -81,12 +81,16 @@ const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
       'sequence_actor_id_duplicate', 'sequence_message_from_unknown', 'sequence_message_to_unknown',
       'table_row_ragged', 'table_row_too_long', 'table_highlight_past_the_rows', 'table_highlight_with_no_rows',
       'calendar_event_duplicate_id', 'tasks_item_duplicate_id', 'timer_duplicate_id', 'weather_hour_duplicate_time',
-      'weather_day_duplicate_date', 'inbox_message_duplicate_id',
+      'weather_day_duplicate_date', 'inbox_message_duplicate_id', 'chart_series_name_duplicate',
+      'chart_series_name_duplicate_empty',
     ],
   },
   fields: {
-    why: "a series' value count against the chart's label count compares two sibling fields",
-    cases: ['chart_series_longer_than_labels'],
+    why: "a series' value count against the chart's label count, and yMin against yMax, compare two sibling fields",
+    cases: [
+      'chart_series_longer_than_labels', 'chart_series_longer_than_labels_names_its_series', 'chart_y_ends_equal',
+      'chart_y_ends_inverted',
+    ],
   },
   times: {
     why: 'two times compared as times (an end before its start, `now` off `today`, a timer started at or after its end, offsets applied); a pattern reads one string',
@@ -117,9 +121,14 @@ const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
     ],
   },
   signature: {
-    why: "an image's bytes must start with the signature its format names: a cross-field check over decoded bytes (the schema pins the base64 alphabet, padding and length)",
+    why:
+      "an image's bytes must start with the signature its format names, a cross-field check over decoded bytes, and " +
+      'their base64 must be a multiple of four characters long, which a pattern states only with a repeated group: ' +
+      "Ajv's regular expression then overflows its stack on an image of about 3 MiB, under the 8 MiB cap (the schema " +
+      'pins the base64 alphabet, the padding and the length cap)',
     cases: [
       'image_bytes_jpeg_named_png', 'image_bytes_png_named_jpeg', 'image_bytes_riff_wave_named_webp',
+      'image_bytes_not_a_multiple_of_four',
     ],
   },
 };
@@ -189,7 +198,7 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
       'diagram message.kind': property('SequenceMessage', 'kind'),
       'document.kind': property('DocumentData', 'kind'),
       'table column.semantic': property('TableColumn', 'semantic'),
-      'table cell.semantic': property('TableCell', 'semantic'),
+      'table.rows[][].semantic': property('TableCell', 'semantic'),
       'image.format': property('ImageData', 'format'),
       'note segment.semantic': property('RichSegment', 'semantic'),
       'calendar.view': property('CalendarData', 'view'),
@@ -207,7 +216,8 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
     const listed: Array<[string, string]> = [];
     for (const testCase of corpusCases) {
       const match = /^invalid ([^:]+): expected one of (.+?)(?: \(.*\))?$/.exec(testCase.error ?? '');
-      if (match) listed.push([match[1], match[2]]);
+      // A table cell's refusal names its place (`table.rows[3][2].semantic`); the set is the cell's.
+      if (match) listed.push([match[1].replace(/\[\d+\]/g, '[]'), match[2]]);
     }
     // Every field the corpus refuses a name for is mapped above, and each
     // mapped field has a refusal in the corpus.

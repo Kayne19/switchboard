@@ -477,6 +477,16 @@ async fn display(
     if let Err(refusal) = authority.recheck_at_the_screen(&state) {
         return refusal.into_response();
     }
+    // Checked under the gate, so no other display fills the stage between
+    // this answer and the apply below.
+    if let Some(detail) = gate.projection.refusal(&normalized_action) {
+        tracing::info!(%detail, "refused: the stage is full");
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"delivered":false, "detail":detail})),
+        )
+            .into_response();
+    }
 
     let value = ServerMessage::Display {
         action: normalized_action.clone(),

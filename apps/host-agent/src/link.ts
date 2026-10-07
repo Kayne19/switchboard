@@ -77,8 +77,8 @@ interface SessionBuffer {
 const OPEN = 1;
 
 /**
- * A JSON.stringify replacer that writes a lone surrogate in a string as
- * U+FFFD. JSON.stringify would write it as a `\uXXXX` escape, which the
+ * A JSON.stringify replacer that writes a lone surrogate in a string, a
+ * value or a key, as U+FFFD. JSON.stringify would write it as a `\uXXXX` escape, which the
  * service's serde_json refuses, and the whole frame would be lost: an
  * event, a snapshot, or a command's reply (a saved session's first message
  * cut inside an emoji failed `list_saved_sessions` on every try). The skill
@@ -87,9 +87,24 @@ const OPEN = 1;
  * in Node since 20; the type library here is ES2023.)
  */
 function wellFormed(_key: string, value: unknown): unknown {
-	if (typeof value !== "string") return value;
-	const text = value as unknown as { isWellFormed(): boolean; toWellFormed(): string };
-	return text.isWellFormed() ? value : text.toWellFormed();
+	if (typeof value === "string") return mended(value);
+	// A key is written as it is, so an object with a key that is not well
+	// formed is written as a copy with that key mended (a tool's `args` and
+	// `result` keep the keys the daemon gave them). Two keys that mend to
+	// one keep the later value, as a JSON object with a repeated key does.
+	if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+		const keys = Object.keys(value);
+		if (keys.some((key) => mended(key) !== key)) {
+			return Object.fromEntries(keys.map((key) => [mended(key), (value as Record<string, unknown>)[key]]));
+		}
+	}
+	return value;
+}
+
+/** `text` with each lone surrogate written as U+FFFD. */
+function mended(text: string): string {
+	const wide = text as unknown as { isWellFormed(): boolean; toWellFormed(): string };
+	return wide.isWellFormed() ? text : wide.toWellFormed();
 }
 
 export function formatCursor(bootId: string, seq: number): string {

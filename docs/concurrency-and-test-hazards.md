@@ -408,6 +408,34 @@ make it private: another test can send the same kind of message. If no
 per-test seam exists, add one that production also uses, as the debug bus is,
 rather than a `#[cfg(test)]` global.
 
+## A time budget measured on the wall clock
+
+Some unit tests hold work to a time budget: a layout that went quadratic, a
+note placement that routed every place it tried. They used to measure with the
+wall clock (`performance.now`). The wall clock also counts every moment the
+scheduler gives the core to another process, so on a busy runner it measures
+the machine, not the work. The budgets passed alone and failed with two or
+three copies of the suite running at once (load average 10 to 50): 17 failures
+in 7 loaded runs. The dense bar chart's note placement took 1394 ms of wall
+time against its 600 ms budget, for some 200 ms of work.
+
+A budget now measures the test thread's own CPU time with `leastCpuMs`
+(`apps/frontend/tests/unit/cpuTime.ts`), the least of a few tries, so the
+waiting is left out and so is a one-off pause in one try (the first compile,
+a major collection). The thread's figure, not the process's: V8 collects and
+compiles on threads of its own. A busy core still runs the work slower, up to
+about 2x at load 50, so each budget is at least twice what its work costs at
+that load, and, where the regression it was written to catch was measured,
+still under its cost. `cpuTime.ts` says how each number was set.
+
+The rule: a unit-test time budget measures with `leastCpuMs`, never the wall
+clock. `scripts/check_hygiene.mjs` refuses `performance.now`, `Date.now` and
+`process.hrtime` anywhere in `apps/frontend/tests/unit` but `cpuTime.ts`. A
+test about the page clock uses vitest's fake timers
+(`vi.setSystemTime`, `vi.advanceTimersByTime`), never the real one, and reads
+the fake time with `vi.getMockedSystemTime()` or `new Date()`, since the gate
+refuses `Date.now` whatever clock it reads.
+
 ## A broken pipe reported instead of the error that caused it
 
 With the `ETXTBSY` noise gone, a second failure appeared at roughly two runs in
