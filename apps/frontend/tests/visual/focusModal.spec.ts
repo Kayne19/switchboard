@@ -40,6 +40,8 @@ for (const geometry of FRAME_GEOMETRIES) {
       await page.keyboard.press('Enter');
       await expect(page.locator('.focus-layer')).toBeVisible();
       await expect(page.locator('.focus-layer__return')).toBeFocused();
+      // Opened from the keyboard, RETURN draws the page's ring.
+      expect(await page.locator('.focus-layer__return').evaluate((element) => element.matches(':focus-visible'))).toBe(true);
       // Two walks round the layer's controls: Tab never reaches behind it
       // (past its last control focus leaves for the browser, as a native
       // modal dialog's does, and comes back into the layer).
@@ -63,6 +65,8 @@ for (const geometry of FRAME_GEOMETRIES) {
       await openScene(page, 'results');
       await runActions(page, [{ op: 'focus', id: 'test-matrix' }]);
       await expect(page.locator('.focus-layer__return')).toBeFocused();
+      // No key was pressed: no ring on RETURN until one is.
+      expect(await page.locator('.focus-layer__return').evaluate((element) => element.matches(':focus-visible'))).toBe(false);
       await page.locator('.focus-layer__return').click();
       await expect(page.locator('.focus-layer')).toHaveCount(0);
       expect(await where(page)).toBe('nowhere');

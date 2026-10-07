@@ -108,7 +108,10 @@ function useModalFocus(open: boolean) {
     if (!open) return;
     const held = document.activeElement;
     const opener = held instanceof HTMLElement && held !== document.body ? held : null;
-    returnButton.current?.focus({ preventScroll: true });
+    // RETURN draws the page's ring only when the keyboard opened the layer:
+    // focus the agent opened, or a tap, leaves the ring off until a key.
+    const keyed = opener?.matches(':focus-visible') ?? false;
+    returnButton.current?.focus({ preventScroll: true, focusVisible: keyed } as FocusOptions);
     return () => {
       if (!opener?.isConnected) return;
       opener.focus({ preventScroll: true });
