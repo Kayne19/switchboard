@@ -1,5 +1,5 @@
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub const MAX_ACTION_BYTES: usize = 48_000;
 /// An image action carries raster bytes, so it gets its own cap: the raw
@@ -459,12 +459,20 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         .as_array()
         .ok_or("chart.series must be an array")?;
     let mut clean_series = Vec::new();
+    // A series is known by its name (the legend, `marker.series`, a note's
+    // `anchor.series`, `say at.series`), so no two may share one.
+    let mut series_names = HashMap::new();
 
     for (index, s) in series_arr.iter().enumerate() {
         let sm = s.as_object().ok_or("chart series item must be an object")?;
         check_unknown_keys(sm, &["name", "semantic", "values"], "chart series item")?;
 
         let name = required_string(sm, "name", 128, "series.name")?;
+        if let Some(first) = series_names.insert(name, index) {
+            return Err(format!(
+                "duplicate chart series name \"{name}\": chart.series[{first}] and chart.series[{index}]"
+            ));
+        }
 
         let values = sm
             .get("values")

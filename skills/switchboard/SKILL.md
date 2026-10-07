@@ -79,8 +79,9 @@ data.events[3].location`.
 
 Types and their `data` shapes (each type takes only its own shape):
 
-- chart: `{series: [{name, values: [n]}]}`; optional `kind` (`line`, the
-  default, `bar`, `area` or `scatter`) and `labels: [str]`, categorical x
+- chart: `{series: [{name, values: [n]}]}`, each series with its own name;
+  optional `kind` (`line`, the default, `bar`, `area` or `scatter`) and
+  `labels: [str]`, categorical x
   labels (at most 100, each at most 64 characters; no series may be longer
   than them). Bars group per category; the page decides whether they run up
   or across.

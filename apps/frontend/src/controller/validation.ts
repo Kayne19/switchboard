@@ -410,12 +410,21 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     return { ok: false, error: 'chart.series must be an array' };
   }
   const seriesAllowed = new Set(['name', 'semantic', 'values']);
+  // A series is known by its name (the legend, `marker.series`, a note's
+  // `anchor.series`, `say at.series`), so no two may share one.
+  const seriesNames = new Map<string, number>();
   for (const [index, s] of data.series.entries()) {
     if (!isRecord(s)) return { ok: false, error: 'chart series item must be an object' };
     const sUnknown = checkUnknownKeys(s, seriesAllowed, 'chart series item');
     if (sUnknown) return { ok: false, error: sUnknown };
     const nameErr = checkString(s.name, 128, 'series.name');
     if (nameErr) return { ok: false, error: nameErr };
+    const name = s.name as string;
+    const first = seriesNames.get(name);
+    if (first !== undefined) {
+      return { ok: false, error: `duplicate chart series name "${name}": chart.series[${first}] and chart.series[${index}]` };
+    }
+    seriesNames.set(name, index);
     if (!Array.isArray(s.values)) return { ok: false, error: 'series.values must be an array' };
     for (const v of s.values) {
       if (typeof v !== 'number' || !Number.isFinite(v)) return { ok: false, error: 'series.values must contain finite numbers' };

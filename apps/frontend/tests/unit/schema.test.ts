@@ -72,7 +72,7 @@ const showShapes: ShowShape[] = actions.flatMap((properties) => {
 const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
   items: {
     why:
-      'a relationship between the items of a list (an id unique in its list, an endpoint naming a node or ' +
+      'a relationship between the items of a list (an id or a series name unique in its list, an endpoint naming a node or ' +
       "an actor, a self-loop, an edge pair, a row with one cell per column, a highlight naming a row): JSON Schema checks " +
       "each item's own shape and has no keyword for a property computed across the others without a vendor extension",
     cases: [
@@ -81,7 +81,8 @@ const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
       'sequence_actor_id_duplicate', 'sequence_message_from_unknown', 'sequence_message_to_unknown',
       'table_row_ragged', 'table_row_too_long', 'table_highlight_past_the_rows', 'table_highlight_with_no_rows',
       'calendar_event_duplicate_id', 'tasks_item_duplicate_id', 'timer_duplicate_id', 'weather_hour_duplicate_time',
-      'weather_day_duplicate_date', 'inbox_message_duplicate_id',
+      'weather_day_duplicate_date', 'inbox_message_duplicate_id', 'chart_series_name_duplicate',
+      'chart_series_name_duplicate_empty',
     ],
   },
   fields: {
