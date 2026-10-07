@@ -12,7 +12,7 @@
 // element carries `data-item` (the name a note uses for it), and the marked
 // one holds a `.note-badge`. Focus keeps the note beside the object.
 import { describe, expect, it } from 'vitest';
-import { itemTargetText, markedItem, noteTarget, objectName } from '../../src/app/noteItems';
+import { itemTargetText, markedItem, markingNote, noteTarget, objectName, railNoteTarget } from '../../src/app/noteItems';
 import type { ControllerAction, NoteData, SceneObject, SceneObjectType } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { chartSeriesPoint } from '../../src/primitives/chartGeometry';
@@ -101,6 +101,28 @@ describe('itemTargetText', () => {
 
   it('a type without items names nothing', () => {
     expect(itemTargetText({ id: 'grid', type: 'table', data: {}, createdAt: 0, updatedAt: 0 }, 'x')).toBeUndefined();
+  });
+});
+
+// An object marks one part: of the notes the page draws, the first about it
+// (review-fix-charts M4).
+describe('markingNote and railNoteTarget', () => {
+  const list: SceneObject = { id: 'list', type: 'tasks', data: lists.tasks.data, createdAt: 0, updatedAt: 0 };
+  const on = (item: string): NoteData => ({ segments: [], anchor: { target: 'list', item } });
+  const general: NoteData = { segments: [] };
+  const first = on('passport');
+  const second = on('pr');
+
+  it('picks the first note about the object, past notes about none', () => {
+    expect(markingNote([general, first, second], 'list')).toBe(first);
+    expect(markingNote([general], 'list')).toBeUndefined();
+  });
+
+  it('keeps the badge on the marking note only, and names both', () => {
+    const drawn = [first, second];
+    expect(railNoteTarget({ list }, drawn, first)).toEqual(noteTarget({ list }, first));
+    expect(railNoteTarget({ list }, drawn, first).marked).toBe(true);
+    expect(railNoteTarget({ list }, drawn, second)).toEqual({ target: noteTarget({ list }, second).target, marked: false });
   });
 });
 

@@ -197,6 +197,8 @@ interface RailDetailsProps {
   noteObject?: SceneObject<NoteData>;
   /** The notes the rail carries after `note` (`RailMoreNotes`). */
   moreNotes?: Array<SceneObject<NoteData>>;
+  /** Every note the page draws about the scene's objects, in order -- the rail's, and its note where a diagram carries it as a callout instead: an object marks what the first about it names, and only that card carries the badge. */
+  pageNotes?: NoteData[];
   progressList: Array<SceneObject<ProgressData>>;
   onFocus: (id: string | null) => void;
   onOpenHistory?: () => void;
@@ -371,7 +373,7 @@ const NO_NOTES: Array<SceneObject<NoteData>> = [];
 // unmounting it first. Its children stand in one order in every state; a
 // note that leads a crowded column does so by its order there, so leading
 // moves nothing in or out of the page, and nothing is drawn afresh.
-function RailDetails({ state, metrics, note, noteObject, moreNotes = NO_NOTES, progressList, onFocus, onOpenHistory, noteLeads = false, under = false, onFloor = noFloor, floor = null }: RailDetailsProps) {
+function RailDetails({ state, metrics, note, noteObject, moreNotes = NO_NOTES, pageNotes, progressList, onFocus, onOpenHistory, noteLeads = false, under = false, onFloor = noFloor, floor = null }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
   const columnRef = useRef<HTMLDivElement>(null);
   const crowded = useCrowded(columnRef, !under && noteLeads && (note !== null || moreNotes.length > 0));
@@ -385,9 +387,9 @@ function RailDetails({ state, metrics, note, noteObject, moreNotes = NO_NOTES, p
   // the top and are not moved by a panel below them.
   const reserveActivity = liveMessage !== null || note !== null || moreNotes.length > 0;
   const leads = under ? fit.leads : crowded;
-  // Every note the rail draws, in order: an object marks what the first
+  // Every note the page draws, in order: an object marks what the first
   // about it names, and only that card carries the badge.
-  const drawn = [...(note ? [note] : []), ...moreNotes.map((object) => object.data)];
+  const drawn = pageNotes ?? [...(note ? [note] : []), ...moreNotes.map((object) => object.data)];
   return (
     <>
       <div ref={columnRef} className="content-rail__details">
@@ -1067,6 +1069,8 @@ export function SceneShell(props: SceneProps) {
     if (banding && chartRailNote?.chart === banding.chart) setChartBand(chartRailNote);
   }, [banding, bandHeld, chartBand, chartRailNote]);
   const railNote = calloutPlaced ? null : (content?.note ?? null);
+  // The note a diagram carries as a callout still marks its node first.
+  const pageNotes = [...(content?.note ? [content.note] : []), ...(content?.moreNotes ?? []).map((object) => object.data)];
   const railMotion = useLayoutMotion({ layout: true });
   const presence = (
     <DamoclesPresence
@@ -1094,7 +1098,7 @@ export function SceneShell(props: SceneProps) {
             <div className="scene-heading__sub tech micro">{content.subtitle}</div>
           </div>
           <div className="content-grid" style={railFloor !== null ? ({ '--rail-floor': `${railFloor}px` } as CSSProperties) : undefined}>
-            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} drawn={[...(calloutPlaced || !content.note ? [] : [content.note]), ...(content.moreNotes ?? []).map((object) => object.data)]}>
+            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} drawn={pageNotes}>
               {content.main}
             </MainWithAux>
             <motion.aside ref={railRef} className="content-rail" {...railMotion}>
@@ -1105,6 +1109,7 @@ export function SceneShell(props: SceneProps) {
                 note={railNote}
                 noteObject={calloutPlaced ? undefined : content.noteObject}
                 moreNotes={content.moreNotes}
+                pageNotes={pageNotes}
                 progressList={content.progressList}
                 onFocus={onFocus}
                 onOpenHistory={onOpenHistory}

@@ -37,3 +37,22 @@ for (const size of FRAME_GEOMETRIES) {
     expect(seen.fadeBelow).toBe(seen.overflows);
   });
 }
+
+// A diagram that carries its note as a callout marks that note's node; a
+// second note about another node of it, in the rail, must not carry the
+// badge, for its node is not marked (review-fix-charts M1).
+test('a second note about a diagram whose first is a callout carries no badge', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openScene(page, 'idle');
+  await runActions(page, [
+    { op: 'show', id: 'flow', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'gate', label: 'GATE' }, { id: 'planner', label: 'PLANNER' }, { id: 'pool', label: 'POOL' }], edges: [{ from: 'gate', to: 'planner' }, { from: 'planner', to: 'pool' }] } },
+    { op: 'show', id: 'gate-note', type: 'note', data: { tag: 'GATE', anchor: { target: 'flow', node: 'gate' }, segments: [{ text: 'The gate stamps each action.' }] } },
+  ]);
+  await expect(page.locator('.diagram-callout')).toBeVisible();
+  await runActions(page, [{ op: 'show', id: 'planner-note', type: 'note', data: { tag: 'PLANNER', anchor: { target: 'flow', node: 'planner' }, segments: [{ text: 'The planner writes the plan.' }] } }]);
+  const card = page.locator('.content-rail .annotation-card');
+  await expect(card).toHaveCount(1);
+  await expect(card.locator('.annotation-card__tag')).toHaveText('PLANNER');
+  await expect(card.locator('.note-badge')).toHaveCount(0);
+  await expect(page.locator('.diagram-node__body--anchored')).toHaveCount(1);
+});
