@@ -740,13 +740,23 @@ button {
   --scene-gap: clamp(42px, 4.6cqw, 96px);
   --footer-y: 6.7cqh;
 }
+/* The heading runs to the stage's far edge and no further: a long title
+   (up to 128 characters) or subtitle is cut there with an ellipsis. */
 .scene-heading {
   position: absolute;
   z-index: 3;
   left: var(--edge);
+  right: var(--edge);
   top: 6.2cqh;
   display: grid;
   gap: 0.45cqh;
+}
+.scene-heading__title,
+.scene-heading__sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .scene-heading__title {
   color: var(--orange);

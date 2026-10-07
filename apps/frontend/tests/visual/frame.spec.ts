@@ -148,3 +148,25 @@ for (const geometry of FRAME_GEOMETRIES) {
     });
   });
 }
+
+// The scene's heading names the primary by its title, up to 128 characters:
+// a long one is cut with an ellipsis at the stage's edge. An unbroken one
+// ran off the screen.
+for (const geometry of FRAME_GEOMETRIES) {
+  test(`a long title stays inside the stage / ${geometry.name}`, async ({ page }) => {
+    await page.setViewportSize({ width: geometry.width, height: geometry.height });
+    await openScene(page, 'idle');
+    for (const title of ['P'.repeat(128), 'WORD '.repeat(25).trim()]) {
+      await runActions(page, [{ op: 'clear' }, { op: 'show', id: 'grid', type: 'table', role: 'primary', data: { title, subtitle: title, columns: [{ label: 'A' }], rows: [['x']] } }]);
+      await page.waitForTimeout(300);
+      const boxes = await page.evaluate(() => {
+        const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+        const title = document.querySelector<HTMLElement>('.scene-heading__title')!;
+        return { title: box('.scene-heading__title'), sub: box('.scene-heading__sub'), stage: box('.stage'), grid: box('.content-grid'), clipped: title.scrollWidth > title.clientWidth };
+      });
+      expect(boxes.title.right, title).toBeLessThanOrEqual(boxes.stage.right);
+      expect(boxes.sub.right, title).toBeLessThanOrEqual(boxes.stage.right);
+      expect(boxes.sub.bottom, title).toBeLessThanOrEqual(boxes.grid.top);
+    }
+  });
+}
