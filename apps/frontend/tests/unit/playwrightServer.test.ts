@@ -31,6 +31,8 @@ describe('the browser suite server', () => {
     expect(server.command).toContain(`--port ${portOf(baseURL)}`);
     // Vite moves to the next port when its own is taken; the suite must fail instead.
     expect(server.command).toContain('--strictPort');
+    // The dev server listens on every interface; the suite's own stays local.
+    expect(server.command).toContain('--host 127.0.0.1');
   });
 
   it('moves to the port PLAYWRIGHT_PORT names', async () => {

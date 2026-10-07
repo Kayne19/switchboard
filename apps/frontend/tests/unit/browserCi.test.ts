@@ -49,14 +49,14 @@ describe('the pixel goldens', () => {
   const specs = readdirSync(dir).filter((file) => file.endsWith('.spec.ts'));
 
   it('are taken in visual.spec.ts alone, so the tag there is what keeps them out of CI', () => {
-    const taking = specs.filter((file) => readFileSync(path.join(dir, file), 'utf8').includes('toHaveScreenshot'));
+    const taking = specs.filter((file) => /toHaveScreenshot|toMatchSnapshot/.test(readFileSync(path.join(dir, file), 'utf8')));
     expect(taking).toEqual(['visual.spec.ts']);
   });
 
   // Each outermost test or describe (a test inside a describe takes its tag).
   it('are each tagged @golden', () => {
     const source = readFileSync(path.join(dir, 'visual.spec.ts'), 'utf8');
-    const declarations = [...source.matchAll(/^ {0,2}test(?:\.describe)?\((.*)$/gm)].map((m) => m[1]);
+    const declarations = [...source.matchAll(/^ {0,2}test(?:\.\w+)*\((.*)$/gm)].filter((m) => !/^ {0,2}test\.use\(/.test(m[0])).map((m) => m[1]);
     expect(declarations.length).toBeGreaterThan(0);
     for (const declaration of declarations) expect(declaration).toMatch(/, GOLDEN, /);
     expect(source).toContain("const GOLDEN = { tag: '@golden' } as const;");

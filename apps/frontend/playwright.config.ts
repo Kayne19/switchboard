@@ -21,7 +21,14 @@ export default defineConfig({
   use: {
     baseURL: origin,
     colorScheme: 'dark',
+    // The zone the fixtures are written in (their "now" is Pacific), so a run
+    // on a runner in UTC reads the page as the dev box does.
+    timezoneId: 'America/Los_Angeles',
     contextOptions: { reducedMotion: 'reduce' },
+    // What a failed run leaves to read: a screenshot always, and on CI, where
+    // nobody can rerun it by hand, the trace.
+    screenshot: 'only-on-failure',
+    trace: process.env.CI ? 'retain-on-failure' : 'off',
     launchOptions: executablePath ? {
       executablePath,
       args: ['--no-sandbox', '--disable-dev-shm-usage'],
