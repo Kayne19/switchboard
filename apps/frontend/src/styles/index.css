@@ -1674,6 +1674,20 @@ button {
 .rail-note--leads .annotation-card {
   height: auto;
 }
+/* A rail with more than one note reads each whole, at its own height, one
+   after another; the column scrolls where they do not all fit, its edges
+   fading as a scroller's do. */
+.content-rail__details > .rail-note--stacked {
+  flex: none;
+  min-height: 0;
+}
+.rail-note--stacked .annotation-card {
+  height: auto;
+}
+.content-rail > .scroll-rim__fade {
+  grid-column: 1;
+  grid-row: 2;
+}
 .content-rail__details > .rail-progress {
   flex: none;
   min-width: 0;

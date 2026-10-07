@@ -679,11 +679,10 @@ stay over the data while a general note keeps its corner. Every bar the notes
 name stays marked while its note is in the rail, and a point on a line, area
 or scatter chart gets a hollow ring, which the cards left on the chart keep
 clear of as they keep clear of the data; the rail card still names its target. A note anchored to a visual on a chart page that
-is not a chart (one in the aux row) is shown in the rail too. The rail holds
-one note, so: only the primary chart hands one over; only the first note about
-a visual off the charts goes there (later ones lie on the primary chart, as
-before); while it does, the primary hands none over; and a compare chart's
-notes stay on it, over its data where it has no clear place.
+is not a chart (one in the aux row) is shown in the rail too, every one of
+them, and never on a chart it does not describe. Only the primary chart hands
+a note over; a compare chart's notes stay on it, over its data where it has
+no clear place.
 
 A resize places the notes again at most once a step of 16 pixels of the
 chart's size, as a graph is laid out again once a step: between steps each
@@ -691,17 +690,25 @@ card moves with the point it names (one naming none keeps its corner), and
 once the size holds still for a moment the notes are placed for it, where
 they would stand had the page opened at that size.
 
-A chart with more than five notes on it is placed with bounded work, so a
-chart the agent keeps adding notes to never holds the page for seconds: the
-rail takes none of its notes, no card tries a narrower width, and only the
-first five cards placed (the notes naming no point first, then the rest in the
-order they were shown) look for a clear place anywhere within reach of their
-points. Each card after them takes the best of the rows -- along the top and
-the bottom of the layer, and beside the cards and labels already there -- and,
-where none of those clears its point, of the places straight above, below or
-beside it, and may lie over the data or another card. Up to five notes are
-placed as above; five on a dense bar chart is the costliest placement, some
-70 ms of CPU.
+A chart lays at most five notes over itself, the first five it was shown, so
+a chart the agent keeps adding notes to never holds the page for seconds nor
+buries its data under cards: the rail carries the rest, in the order they were
+shown, and the chart keeps the point each names marked (its bar outlined, or
+a ring). Five on a dense bar chart is the costliest placement, some 70 ms of
+CPU. (`layoutNotes` itself, given more than five, places them with bounded
+work: no note goes to the rail, no card tries a narrower width, and only the
+first five cards placed look for a clear place anywhere within reach of their
+points; each card after them takes the best of the rows and of the places
+straight above, below or beside its point.)
+
+**Every note is shown.** The rail carries every note on stage the page does
+not draw elsewhere (on a chart, in a band, as the primary, in the aux row):
+first the one about the primary (or, on a chart page, the first about a visual
+off the charts), then the rest in the order they were shown, each read whole
+at its own height. Where they do not all fit, the rail's column scrolls and an
+edge it continues past fades, as a scroller's does. An object marks the node,
+actor or item the first of them about it names, and only that card carries
+the NOTE badge, so a badge always has its mark on screen.
 
 The note a chart hands over stays readable beside it. Where the rail stands
 under a chart (a portrait stage), the note is drawn in a band under it, full

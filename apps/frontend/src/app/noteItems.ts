@@ -19,6 +19,23 @@ import { cast, nameFields } from './sceneModel';
 // not hold marks nothing either.
 
 /** The item of a list the drawn note names (`markedPart`). */
+/**
+ * Of the notes the page draws in one place (the rail's, in order), the one
+ * whose node, actor or item `objectId` marks: the first about it. An object
+ * marks one part, so a later note about the same object marks nothing, and
+ * its card carries no badge (`railNoteTarget`).
+ */
+export function markingNote(notes: readonly NoteData[], objectId: string): NoteData | undefined {
+  return notes.find((note) => note.anchor?.target === objectId);
+}
+
+/** A rail card's target (`noteTarget`), its badge kept only where its object marks what it names: where it is the first of `drawn` about that object (`markingNote`). */
+export function railNoteTarget(objects: Readonly<Record<string, SceneObject | undefined>>, drawn: readonly NoteData[], note: NoteData | null | undefined): NoteTarget {
+  const named = noteTarget(objects, note);
+  const target = note?.anchor?.target;
+  return named.marked && target !== undefined && markingNote(drawn, target) !== note ? { ...named, marked: false } : named;
+}
+
 export function markedItem(note: NoteData | null | undefined, objectId: string): string | undefined {
   return markedPart(note, objectId).item;
 }
