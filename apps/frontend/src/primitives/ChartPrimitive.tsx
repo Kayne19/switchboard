@@ -67,7 +67,7 @@ function formatValueTick(value: number, decimals: number): string {
 // stays closed where an end the chart gives falls between round values.
 function valueGridLines(scales: ChartScales): Array<{ value: number; tick: boolean }> {
   const { valueTicks, yMin, yMax } = scales;
-  const near = (a: number, b: number) => Math.abs(a - b) <= Math.abs(yMax - yMin) * 1e-9;
+  const near = (a: number, b: number) => Math.abs(a / 2 - b / 2) <= Math.abs(yMax / 2 - yMin / 2) * 1e-9;
   const ends = [yMax, yMin].filter((end) => !valueTicks.some((tick) => near(tick, end)));
   return [...valueTicks.map((value) => ({ value, tick: true })), ...ends.map((value) => ({ value, tick: false }))];
 }

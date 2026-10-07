@@ -233,7 +233,10 @@ The value axis is read off round numbers. An end the agent gives (`yMin`,
 `yMax`) is kept; an end the page chooses is rounded out to a step of 1, 2, 2.5
 or 5 times a power of ten, and a bar or area chart first leaves a tenth of its
 span past its tallest value, room for a note inside the plot. A chart that
-gives both ends is labelled at four even divisions of it, as before. A
+gives both ends is labelled at four even divisions of it, as before; ends
+that leave no domain between them (`yMin` at or past `yMax`) are set aside,
+and values so near the largest a number holds that no round step reads them
+are labelled at four even divisions of their own ends. A
 percentage that must stop at 100 says `yMax: 100`.
 
 A bar that a `marker` or a note names is marked as a bar: outlined in the

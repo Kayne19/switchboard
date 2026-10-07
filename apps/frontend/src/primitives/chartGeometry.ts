@@ -595,7 +595,11 @@ function decimalsOf(step: number): number {
  * that gives both ends is labelled at four even divisions of it, ends
  * included, as it always was: its domain is the agent's, not a round one.
  */
-export function chartValueAxis(data: ChartData): ChartValueAxis {
+export function chartValueAxis(chart: ChartData): ChartValueAxis {
+  // Ends that leave no domain between them (`yMin` at or past `yMax`) are
+  // not a domain: the page chooses both, as if neither were given, rather
+  // than draw an empty plot with every value off it (review-drawing L4).
+  const data = chart.yMin !== undefined && chart.yMax !== undefined && !(chart.yMin < chart.yMax) ? { ...chart, yMin: undefined, yMax: undefined } : chart;
   const kind = chartKind(data);
   const values = data.series.flatMap((series) => series.values).filter((value) => Number.isFinite(value));
   // Bars and areas are read against their baseline, so their y domain
@@ -603,6 +607,19 @@ export function chartValueAxis(data: ChartData): ChartValueAxis {
   const grounded = kind === 'bar' || kind === 'area';
   const low = data.yMin ?? (values.length === 0 ? 0 : grounded ? Math.min(0, ...values) : Math.min(...values));
   const high = data.yMax ?? (values.length === 0 ? 1 : grounded ? Math.max(0, ...values) : Math.max(...values));
+  // Values near the largest a number holds leave no round step to read
+  // them by: their span, its headroom or the step rounded out past it is
+  // no longer a finite number, and the axis printed NaN. Such an axis is
+  // the data's own ends, labelled at even divisions.
+  const axis = roundAxis(data, grounded, low, high);
+  if ([axis.min, axis.max, ...axis.ticks].every(Number.isFinite) && axis.min < axis.max) return axis;
+  // A flat series of such values stands in the upper half of its domain.
+  const [min, max] = low < high ? [low, high] : low > 0 ? [low / 2, low] : [low, low / 2];
+  const ticks = Array.from({ length: 4 }, (_, index) => (max / 3) * (3 - index) + (min / 3) * index);
+  return { min, max, ticks, decimals: 2 };
+}
+
+function roundAxis(data: ChartData, grounded: boolean, low: number, high: number): ChartValueAxis {
   if (data.yMin !== undefined && data.yMax !== undefined) {
     const ticks = Array.from({ length: 4 }, (_, index) => high - ((high - low) * index) / 3);
     return { min: low, max: high, ticks, decimals: 2 };
@@ -694,7 +711,9 @@ export function chartScales(data: ChartData, frame: ChartFrame = CHART_FRAME): C
     if (band > 0) return axisStart + (x + 0.5) * band;
     return axisStart + (spread > 0 ? x / spread : 0) * axisLength;
   };
-  const share = (value: number) => (value - yMin) / Math.max(0.000001, yMax - yMin);
+  // Halved first, so a domain near the largest a number holds still has a
+  // finite span (review-drawing L4).
+  const share = (value: number) => (value / 2 - yMin / 2) / Math.max(0.0000005, yMax / 2 - yMin / 2);
   const valueAt = (value: number): number =>
     horizontal ? plot.left + share(value) * plotWidth : plot.top + (1 - share(value)) * plotHeight;
   return {
