@@ -251,7 +251,7 @@ const ROW_GAP = 24;
 // whose side is too short for its ports grows along that side.
 const PORT_PITCH = 16;
 const LINE_PORT_PITCH = 10;
-export const ARROW_PORT_PITCH = ARROW_LENGTH + 3;
+const ARROW_PORT_PITCH = ARROW_LENGTH + 3;
 const PORT_INSET = 14;
 const SELF_LOOP = 18;
 // A run of more than this many long edges side by side through a layer,
@@ -1963,7 +1963,7 @@ const FLOW_SWITCH = 1.25;
 // scrolls one way.
 const BOTH_WAYS = 2;
 
-export interface DiagramView {
+interface DiagramView {
   orientation: DiagramOrientation;
   layout: DiagramLayout;
   fit: DrawingFit;
@@ -2056,7 +2056,7 @@ function boxesOverlap(a: Box, b: Box, clearance = 10): boolean {
   );
 }
 
-export function placeCallout(
+function placeCallout(
   nodes: LaidOutNode[],
   edges: LaidOutEdge[],
   targetNodeId: string,
