@@ -46,3 +46,29 @@ export const arrowhead = (points: Point[]): Box => {
   const back = end.y - Math.sign(end.y - before.y) * ARROW_LENGTH;
   return { x: end.x - ARROW_LENGTH / 2, y: Math.min(end.y, back), width: ARROW_LENGTH, height: ARROW_LENGTH };
 };
+
+/**
+ * Which way an arrow glyph points, read from its path (absolute M, L, H, V):
+ * the tip is the point where the shaft and both arms of the head meet, and
+ * the heading runs from the shaft's other end to it, as a unit step on each
+ * axis (-1, 0 or 1; y grows down, as in SVG).
+ */
+export const arrowHeading = (d: string): Point => {
+  const segments: Array<[Point, Point]> = [];
+  let at: Point = { x: 0, y: 0 };
+  for (const [, op, args] of d.matchAll(/([MLHV])([^MLHV]*)/g)) {
+    const n = args.trim().split(/\s+/).map(Number);
+    const next = op === 'H' ? { x: n[0], y: at.y } : op === 'V' ? { x: at.x, y: n[0] } : { x: n[0], y: n[1] };
+    if (op !== 'M') segments.push([at, next]);
+    at = next;
+  }
+  const key = (p: Point) => `${p.x},${p.y}`;
+  const degree = new Map<string, number>();
+  for (const [a, b] of segments) for (const p of [a, b]) degree.set(key(p), (degree.get(key(p)) ?? 0) + 1);
+  const tips = [...degree].filter(([, count]) => count >= 3);
+  if (tips.length !== 1) throw new Error(`not an arrow: ${d}`);
+  const length = ([a, b]: [Point, Point]) => Math.hypot(a.x - b.x, a.y - b.y);
+  const shaft = segments.filter(([a, b]) => key(a) === tips[0][0] || key(b) === tips[0][0]).sort((s, t) => length(t) - length(s))[0];
+  const [tail, tip] = key(shaft[1]) === tips[0][0] ? shaft : [shaft[1], shaft[0]];
+  return { x: Math.sign(tip.x - tail.x), y: Math.sign(tip.y - tail.y) };
+};

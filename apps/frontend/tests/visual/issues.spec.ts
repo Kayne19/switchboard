@@ -380,7 +380,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 720
   });
 }
 
-// Kayne, round 3: the note on a bar chart still read oddly. Its card sat
+// The note on a bar chart read oddly when its card sat
 // across the plot's border (half in the plot, half above it) or jammed in
 // the band under the frame's rail, its leader ended by the grey bar beside
 // the one it named, and that bar was marked only by a ring on its edge. A
@@ -484,10 +484,9 @@ for (const { viewport, two } of barNoteCases) {
   });
 }
 
-// Kayne, round 6: "I'm not sure that the line chart needed new note
-// rules ... I think I liked the way it looked before." A note on a line,
-// area or scatter chart takes the rules the training goldens were approved
-// with again (round 4 gave it the bar chart's; that is reverted). Its card
+// A note on a line, area or scatter chart takes the rules the training
+// goldens were approved with (the bar chart's stricter rules were tried
+// for line charts and taken back: they read worse there). Its card
 // may lie across the plot's border; its leader leaves the card's border,
 // fades on its way and ends on the point it names -- on the drawn line, or
 // a scatter's point -- where no value is printed; its tag names the x and

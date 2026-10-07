@@ -2,7 +2,7 @@
 // A week whose days turn to pages, or back, keeps its hours viewport, and
 // with it the reader's place there. Before, the grid stood in a plain box
 // when it did not page and in PagedDays when it did, so a turn to pages
-// mounted the viewport afresh (REPORT-polish row 24).
+// mounted the viewport afresh and lost the reader's place.
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterAll, beforeAll, expect, it } from 'vitest';
