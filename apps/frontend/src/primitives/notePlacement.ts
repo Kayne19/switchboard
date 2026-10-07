@@ -57,8 +57,9 @@
 // where no note's absence helps, each card takes the place that hides the
 // least.
 //
-// Past `NOTES_PLACED_IN_FULL` notes the work is bounded, so a chart an
-// agent keeps adding notes to never holds the page for seconds: no note is
+// The scene lays at most `NOTES_PLACED_IN_FULL` notes on one chart and the
+// rail carries the rest (Scenes.tsx `trainingContent`). Given more, as a
+// guard, the work is bounded, so no caller holds the page for seconds: no note is
 // left out for the rail, no card tries a narrower size, and only the first
 // that many cards placed search every place within reach of their points;
 // each card after them takes the best of the rows (along the top and the
@@ -383,12 +384,13 @@ export function layoutNotes(notes: NoteToPlace[], field: NoteField, options: Pla
     let best: { placements: Map<string, Placement>; rank: number[] } | undefined;
     for (const note of notes) {
       // A note left out keeps its point marked: on a line, area or scatter
-      // chart by a ring, which the others are placed clear of. A card placed
-      // with every note that the ring would touch is placed again, and with
-      // it every card after it: none keeps its place from that run.
+      // chart by a ring, which the others are placed clear of. Where another
+      // card placed with every note would touch the ring, the run places
+      // every card again: none keeps its place from that run. (Its own card
+      // stands by its point, so it always meets its ring; it is left out.)
       const ring = note.ring;
       const field = ring ? withMark(prepared, ring) : prepared;
-      const touched = ring !== undefined && [...all.values()].some((placement) => overlapArea(inflate(placement.rect, DATA_CLEARANCE), ring) > 0);
+      const touched = ring !== undefined && [...all].some(([id, placement]) => id !== note.id && overlapArea(inflate(placement.rect, DATA_CLEARANCE), ring) > 0);
       const placements = placeInOrder(notes, field, gap, full, note.id, touched ? undefined : all);
       const astray = over(placements);
       if (astray >= over(all)) continue;

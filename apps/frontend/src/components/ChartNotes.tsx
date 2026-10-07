@@ -49,8 +49,10 @@ const MAX_CARD_SHARE = 0.8;
 // (diagramLayout's FRAME_STEP): a placement of a few notes costs tens of
 // milliseconds of CPU on a line chart and up to some 70 ms on a dense bar
 // chart (four series of 40 with five notes and the rail), more in the page,
-// and a resize measures every frame. Past `NOTES_PLACED_IN_FULL` notes it
-// is bounded (`placedInFull`): sixteen on that bar chart cost about 40 ms.
+// and a resize measures every frame. The scene lays at most
+// `NOTES_PLACED_IN_FULL` notes on a chart (the rail takes the rest); past
+// that many `layoutNotes` would bound its work (`placedInFull`), a guard
+// the page does not reach.
 // Within a step the cards follow their points, and once the size has held
 // still for `REST_MS` the notes are placed for it, so where they come to
 // rest is where they would stand had the page opened at that size.
@@ -163,7 +165,8 @@ function sameLayout(a: NotesLayout | null, b: NotesLayout): boolean {
  * chart's drawn geometry and itself, and `layoutNotes` decides where each
  * card goes, so no card covers another, its own point, or the data the
  * chart draws where a clear place exists -- on a chart with at most
- * `NOTES_PLACED_IN_FULL` notes; past that the placement is bounded
+ * `NOTES_PLACED_IN_FULL` notes, as many as the scene lays on one chart
+ * (the rail takes the rest); given more, the placement is bounded
  * (`placedInFull`), and a later card may cover them.
  *
  * Where the scene gives it `onRailNote` and some card has no place that
