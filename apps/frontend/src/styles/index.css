@@ -3,6 +3,12 @@
   --red: #c61522;
   --orange: #f15a24;
   --orange-rgb: 241, 90, 36;
+  /* The item a note names (a task, a message, a timer, a forecast day or
+     hour) is marked alike: an orange edge on the side it is read from and
+     a wash fading away from it, its name in orange, and the NOTE badge. */
+  --marked-edge: rgba(var(--orange-rgb), 0.7);
+  --marked-wash-from: rgba(var(--orange-rgb), 0.1);
+  --marked-wash-to: rgba(var(--orange-rgb), 0.02);
   --amber: #ffb000;
   --green: #7fd63d;
   --cyan: #5ed6d8;
@@ -2408,7 +2414,7 @@ button {
 }
 .timer-cell--marked > .timer__body,
 .timer-row--marked > .timer__body {
-  border-top-color: rgba(var(--orange-rgb), 0.7);
+  border-top-color: var(--marked-edge);
 }
 /* A cell stands its timer in its middle, rule and all. */
 .timer-cell {
@@ -2717,7 +2723,6 @@ button {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: rgba(var(--orange-rgb), 0.9);
   text-overflow: ellipsis;
 }
 /* The alert's tag, where its line has given way (weatherLayout alertLine):
@@ -2890,8 +2895,8 @@ button {
 }
 
 .weather-outlook__day--marked {
-  border-top-color: var(--orange);
-  background: linear-gradient(180deg, rgba(var(--orange-rgb), 0.12), transparent 80%);
+  border-top-color: var(--marked-edge);
+  background: linear-gradient(180deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
 }
 
 .weather-outlook__day--marked > .weather-outlook__name {
@@ -3115,7 +3120,7 @@ button {
   bottom: calc(var(--time-row) + var(--precip-row));
   left: calc(50% - 0.5px);
   width: 1px;
-  background: rgba(var(--orange-rgb), 0.55);
+  background: var(--marked-edge);
 }
 .weather-hour--marked > .weather-hour__temp,
 .weather-hour--marked > .weather-hour__time {
@@ -3206,8 +3211,8 @@ button {
   clip-path: inset(0 calc(100% - var(--to)) 0 var(--from));
 }
 .weather-day--marked {
-  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.085), rgba(var(--orange-rgb), 0.018) 76%, transparent);
-  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.64);
+  background: linear-gradient(90deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+  box-shadow: inset 2px 0 0 var(--marked-edge);
 }
 .weather-day--marked .weather-day__name {
   padding-left: 8px;
@@ -3398,7 +3403,6 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr auto;
   gap: 18px;
-  color: rgba(var(--paper-rgb), 0.37);
 }
 .document-viewport h1 {
   width: min(88%, 900px);
@@ -3638,7 +3642,6 @@ button {
   gap: clamp(18px, 2.4cqw, 36px);
   margin-bottom: clamp(10px, 1.6cqh, 18px);
   padding: var(--mask-top) clamp(28px, 3cqw, 52px) 0;
-  color: rgba(var(--paper-rgb), 0.37);
 }
 .table-grid {
   width: 100%;
@@ -3766,7 +3769,6 @@ button {
   gap: 2px clamp(12px, 1.8cqw, 28px);
   padding: 0 0 clamp(6px, 1cqh, 10px) 10px;
   border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
-  color: rgba(var(--paper-rgb), 0.42);
 }
 
 .tasks-primitive__title,
@@ -3777,7 +3779,6 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(var(--orange-rgb), 0.85);
 }
 
 /* The counts wrap part by part where the list is too narrow for them on
@@ -3790,6 +3791,15 @@ button {
   text-align: right;
 }
 
+/* Every object's meta line (a table's, a document's, a list's, a
+   calendar's) is inked alike, and so is the title it leads with where no
+   frame shows one (MetaTitle); each primitive keeps its own layout. */
+.meta-line {
+  color: rgba(var(--paper-rgb), 0.42);
+}
+.meta-line__title {
+  color: rgba(var(--orange-rgb), 0.85);
+}
 .meta-count {
   white-space: nowrap;
 }
@@ -4033,8 +4043,8 @@ button {
    the rail card carries. */
 .task-row--marked,
 .inbox-row--marked {
-  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.1), rgba(var(--orange-rgb), 0.02) 76%, transparent);
-  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7);
+  background: linear-gradient(90deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+  box-shadow: inset 2px 0 0 var(--marked-edge);
 }
 
 .task-row__note,
@@ -4285,8 +4295,8 @@ button {
 /* A tinted message a note names keeps both: the marked row's orange on
    its edge and accent, its own tint just inside the edge. */
 .inbox-row--marked.inbox-row--tint {
-  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.1), rgba(var(--orange-rgb), 0.02) 76%, transparent);
-  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7), inset 4px 0 0 var(--tone);
+  background: linear-gradient(90deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+  box-shadow: inset 2px 0 0 var(--marked-edge), inset 4px 0 0 var(--tone);
 }
 
 /* Calendar (CalendarPrimitive): the same instrument as the table and the
@@ -4362,16 +4372,12 @@ button {
   gap: clamp(12px, 2cqw, 32px);
   min-width: 0;
   margin-bottom: clamp(8px, 1.4cqh, 16px);
-  color: rgba(var(--paper-rgb), 0.37);
 }
 .calendar__meta > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.calendar__meta-title {
-  color: rgba(var(--orange-rgb), 0.8);
 }
 .calendar__meta-range {
   margin-left: auto;

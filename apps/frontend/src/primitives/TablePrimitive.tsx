@@ -75,7 +75,7 @@ export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; sl
   const alignment = inferColumnAlignment(data);
   const highlighted = new Set(data.highlight ?? []);
   const meta = (
-    <div className="table-viewport__meta tech micro">
+    <div className="table-viewport__meta meta-line tech micro">
       <MetaTitle title={data.title ?? 'TABLE'} slot={slot} />
       <span>{data.rows.length} ROWS / {data.columns.length} COLS</span>
     </div>

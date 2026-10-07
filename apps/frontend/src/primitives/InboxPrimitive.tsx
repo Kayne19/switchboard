@@ -147,7 +147,7 @@ export function InboxPrimitive({ data, slot = 'primary', marked }: { data: Inbox
   const { width, em } = useListMeasure(boxRef, scrollRef);
   const layout = inboxLayout(slot, width, em);
   const head = (
-    <div className="inbox-primitive__meta tech micro">
+    <div className="inbox-primitive__meta meta-line tech micro">
       <MetaTitle title={data.title ?? 'INBOX'} slot={slot} className="inbox-primitive__title" />
       {/* Each count whole: a narrow list wraps between them. */}
       <span className="inbox-primitive__counts">

@@ -203,7 +203,7 @@ export function TasksPrimitive({ data, slot = 'primary', marked }: { data: Tasks
   );
   const head =
     slot === 'primary' && !counted ? undefined : (
-      <div className="tasks-primitive__meta tech micro">
+      <div className="tasks-primitive__meta meta-line tech micro">
         <MetaTitle title={data.title ?? 'TASKS'} slot={slot} className="tasks-primitive__title" />
         {counted}
       </div>

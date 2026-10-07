@@ -950,7 +950,7 @@ export function CalendarPrimitive({ data, marked, slot = 'primary' }: { data: Ca
   // The meta line: what is shown and how much, led by the title only where
   // no scene frame shows it already (MetaTitle).
   const meta = (
-    <div className="calendar__meta tech micro">
+    <div className="calendar__meta meta-line tech micro">
       <MetaTitle title={data.title ?? `${VIEW_NAMES[data.view]} / ${rangeText(data)}`} slot={slot} className="calendar__meta-title" />
       <span className="calendar__meta-range">
         {(slot === 'primary' || data.title) && model.days.length > 1 ? `${rangeText(data)} / ` : ''}
