@@ -88,9 +88,14 @@ jobs:
         run: npx playwright install-deps chromium
 
       # The fonts the page's stacks resolve to on the dev box, where the
-      # geometry in the specs was measured.
+      # geometry in the specs was measured: Liberation Sans Narrow for the
+      # root face ("Arial Narrow" first), Liberation Sans for Arial, DejaVu
+      # for the mono and sans fallbacks. Without the narrow face the labels
+      # fall back to a much wider one and the frames measure differently.
       - name: Install fonts
-        run: sudo apt-get install -y --no-install-recommends fonts-dejavu-core fonts-liberation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-liberation-sans-narrow fonts-liberation fonts-dejavu-core fonts-dejavu-mono
 
       - name: Browser specs (geometry, not the pixel goldens)
         run: npm run test:browser
