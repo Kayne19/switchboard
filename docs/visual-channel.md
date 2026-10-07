@@ -584,7 +584,10 @@ drawn alone. Every other visual on stage (`chart`, `diagram`, `document`,
 Under a chart, diagram, document, code, table, image, progress or note
 primary, the aux row takes what its cells need up to two fifths of the main
 column, so the primary keeps the larger share. Under a metric primary the
-card keeps its own height and the row takes the rest. Each visual keeps a
+card keeps its own height and the row takes the rest, scrolling inside it
+when that is not enough; on a stage twice as wide as tall (a phone on its
+side) the row stands beside the card instead, as tall as the column, where
+a chart's cell under it would run past the column's foot. Each visual keeps a
 readable floor in its cell (the head of a table and its first rows, a chart's
 plot, a figure and its caption). A drawing that scrolls in its cell (a
 dense graph, a long sequence) asks for no more than that floor: it is laid

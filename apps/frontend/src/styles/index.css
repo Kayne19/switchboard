@@ -1513,7 +1513,10 @@ button {
 }
 .composed-main--metric-primary {
   grid-template-rows: auto;
-  grid-auto-rows: auto;
+  /* As tall as its cells ask, but no taller than what the card leaves: on
+     a short stage (844x390) a chart's cell under the card ran past the
+     column and the stage's foot, its x axis out of view. */
+  grid-auto-rows: minmax(0, auto);
   align-content: center;
 }
 /* A metric card keeps its height; the aux row under it takes the rest of
@@ -5854,6 +5857,23 @@ button {
     --edge: clamp(20px, 3.4cqw, 66px);
     --rail: clamp(190px, 15cqw, 300px);
     --scene-gap: clamp(32px, 3.7cqw, 72px);
+  }
+  /* A stage twice as wide as tall has the width a metric card does not use
+     and not the height for a visual's cell under it: on a phone on its
+     side a chart's cell ran past the column's foot, its x axis out of
+     view. The aux row stands beside the card instead, as tall as the
+     column. */
+  .composed-main--metric-primary {
+    grid-template-columns: fit-content(60%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    align-content: stretch;
+  }
+  .composed-main--metric-primary > .composed-primary-object--metric {
+    align-self: center;
+  }
+  .composed-main--metric-primary > .composed-aux {
+    grid-row: 1;
+    grid-column: 2;
   }
   .content-grid {
     top: 13cqh;
