@@ -12,6 +12,7 @@ import {
   CHART_TICK_BASELINE,
   CHART_TICK_ROW_HEIGHT,
   chartAxisNames,
+  chartBarCallout,
   chartBarCallouts,
   chartBars,
   chartCategoryLabelX,
@@ -293,7 +294,10 @@ export function ChartPrimitive({
     </svg>
   );
   // The category a note names, or the marker's, is the row it opens on.
-  const lead = [...(named ?? []), ...(data.marker ? [data.marker] : [])][0];
+  // The bar it marks, as its callout does: an x past the last category
+  // marks the last bar, and the chart opens there too (review-drawing L5).
+  const leadAnchor = [...(named ?? []), ...(data.marker ? [data.marker] : [])][0];
+  const lead = leadAnchor ? (kind === 'bar' ? chartBarCallout(data, leadAnchor, scales)?.bar.index : Math.round(leadAnchor.x)) : undefined;
   const drawnScale = size.width / width;
   return <div ref={hostRef} className={`chart-primitive${slot==='focus'?' chart-primitive--focused':''}${scroll===null?'':' chart-primitive--scrolls'}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     {scroll===null ? svg : (
@@ -302,7 +306,7 @@ export function ChartPrimitive({
       <ListViewport
         noun={data.series.length > 1 ? ['GROUP', 'GROUPS'] : ['BAR', 'BARS']}
         countSelector=".chart-grid__category"
-        lead={lead ? String(Math.round(lead.x)) : undefined}
+        lead={lead === undefined ? undefined : String(lead)}
         head={<ValueAxisHead scales={scales} width={width} scale={drawnScale}/>}
         className="chart-primitive__viewport"
         scrollClassName="chart-primitive__scroll"
