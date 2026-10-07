@@ -1516,7 +1516,8 @@
         },
         "remaining": {
           "type": "number",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 7258118400
         }
       },
       "required": [

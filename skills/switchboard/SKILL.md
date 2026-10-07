@@ -125,7 +125,7 @@ Types and their `data` shapes (each type takes only its own shape):
 - timer: `{timers: [{id, label, endsAt}]}` (1 to 8). `endsAt` is an
   instant; the screen counts down to it and shows it done at zero, with no
   sound, so tell the caller yourself. Add `startedAt`, or
-  `state: "paused"` with `remaining` (seconds left).
+  `state: "paused"` with `remaining` (seconds left, 0 to 7258118400).
 - weather: `{location, units: "C" or "F", current: {temp, condition}}`,
   plus `hourly: [{time, temp, condition}]` (up to 48), `daily: [{date, high,
   low, condition}]` (up to 14) and an `alert`. `condition` is one of

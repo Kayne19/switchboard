@@ -1593,6 +1593,10 @@ fn validate_tasks_data(data: &Map<String, Value>) -> Result<Value, String> {
 }
 
 const MAX_TIMERS: usize = 8;
+/// The most seconds a paused timer may have left: the span of the instants
+/// a timer takes (1970 to 2199, 84,006 days), so a reading is always a time
+/// the page can draw. The browser's `MAX_TIMER_REMAINING_S`.
+const MAX_TIMER_REMAINING_S: f64 = 7_258_118_400.0;
 const TIMER_STATES: [&str; 2] = ["running", "paused"];
 
 fn validate_timer(timer: &Value, seen: &mut HashSet<String>) -> Result<Value, String> {
@@ -1627,9 +1631,11 @@ fn validate_timer(timer: &Value, seen: &mut HashSet<String>) -> Result<Value, St
         Some(remaining) => {
             if !remaining
                 .as_f64()
-                .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
+                .is_some_and(|seconds| (0.0..=MAX_TIMER_REMAINING_S).contains(&seconds))
             {
-                return Err("timer.remaining must be a number of seconds, 0 or more".into());
+                return Err(format!(
+                    "timer.remaining must be a number of seconds, 0 to {MAX_TIMER_REMAINING_S}"
+                ));
             }
             out.insert("remaining".into(), remaining.clone());
         }

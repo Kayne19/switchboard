@@ -1296,6 +1296,12 @@ function validateTasksData(data: Fields): { ok: true; data: TasksData } | { ok: 
 }
 
 const MAX_TIMERS = 8;
+/**
+ * The most seconds a paused timer may have left: the span of the instants a
+ * timer takes (1970 to 2199, 84,006 days), so a reading is always a time the
+ * page can draw. The backend's `MAX_TIMER_REMAINING_S`.
+ */
+const MAX_TIMER_REMAINING_S = 7_258_118_400;
 const TIMER_STATES = ['running', 'paused'];
 
 function validateTimer(t: unknown, seen: Set<string>): { ok: true; timer: Timer } | { ok: false; error: string } {
@@ -1326,8 +1332,8 @@ function validateTimer(t: unknown, seen: Set<string>): { ok: true; timer: Timer 
     if (paused) return { ok: false, error: 'timer.remaining is required when the timer is paused' };
   } else {
     if (!paused) return { ok: false, error: 'timer.remaining is only for a paused timer' };
-    if (typeof t.remaining !== 'number' || !Number.isFinite(t.remaining) || t.remaining < 0) {
-      return { ok: false, error: 'timer.remaining must be a number of seconds, 0 or more' };
+    if (typeof t.remaining !== 'number' || !(t.remaining >= 0 && t.remaining <= MAX_TIMER_REMAINING_S)) {
+      return { ok: false, error: `timer.remaining must be a number of seconds, 0 to ${MAX_TIMER_REMAINING_S}` };
     }
     out.remaining = t.remaining;
   }
