@@ -313,8 +313,9 @@ class CallsTest(ModuleTestCase):
             "switchboard.display: Too large; nothing was sent. The host agent reads a request of at most 13 MiB, "
             "and a display action is at most 48,000 bytes as JSON (an image's 12 MiB). Send less.",
         )
+        # Any call can be too large; only a display's words name the display caps.
         _, spoken = self.run_call(switchboard.speak, "Hi.")
-        self.assertIn("Too large; nothing was sent.", spoken)
+        self.assertEqual(spoken, "switchboard.speak: Too large; nothing was sent. The host agent reads a request of at most 13 MiB. Send less.")
 
     def test_array_likes_are_sent_as_lists(self):
         host = self.host()

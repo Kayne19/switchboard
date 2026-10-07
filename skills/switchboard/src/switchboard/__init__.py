@@ -291,11 +291,7 @@ def _common(result):
     if result.reason == "caller_away":
         return "The caller is on other work; nothing was played. If it matters to them, send it with request_to_speak."
     if result.reason == "too_large":
-        return (
-            f"Too large; nothing was sent. The host agent reads a request of at most {_MAX_LINE_BYTES // _MIB} MiB, "
-            f"and a display action is at most {_MAX_ACTION_BYTES:,} bytes as JSON (an image's {_MAX_IMAGE_ACTION_BYTES // _MIB} MiB). "
-            "Send less."
-        )
+        return f"Too large; nothing was sent. The host agent reads a request of at most {_MAX_LINE_BYTES // _MIB} MiB. Send less."
     return None
 
 
@@ -536,7 +532,13 @@ def display(action=None, **fields):
             if data.get("rendered") is False:
                 return "Sent, but the caller's screen has not confirmed it; it may not be visible yet."
             return "On screen."
-        if result.status == "refused" and result.reason not in ("not_on_call", "subagent", "caller_away", "too_large"):
+        if result.reason == "too_large":
+            return (
+                f"Too large; nothing was sent. The host agent reads a request of at most {_MAX_LINE_BYTES // _MIB} MiB, "
+                f"and a display action is at most {_MAX_ACTION_BYTES:,} bytes as JSON (an image's "
+                f"{_MAX_IMAGE_ACTION_BYTES // _MIB} MiB). Send less."
+            )
+        if result.status == "refused" and result.reason not in ("not_on_call", "subagent", "caller_away"):
             return (
                 f"The switchboard rejected it: {result.reason or 'invalid payload'}. "
                 "Adjust the payload and try again."
