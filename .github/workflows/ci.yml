@@ -49,3 +49,60 @@ jobs:
 
       - name: Rust lint
         run: cargo clippy --locked --all-targets -- -D warnings
+
+  browser:
+    # The browser specs (apps/frontend/tests/visual) check geometry in a real
+    # browser: frames, focus rings, the rail, the lists, the calendar. jsdom
+    # lays nothing out, so without this job a regression there passes CI.
+    # The pixel goldens (tagged @golden) are left out: they are drawn on the
+    # dev box, and the runner's fonts raster differently. Its own job, so the
+    # required `test` check keeps its name and its speed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install browser build dependencies
+        run: npm ci
+
+      # The browser is keyed by the lockfile, which pins @playwright/test and
+      # with it the Chromium build. A hit restores the browser; its system
+      # libraries are not in the cache, so they are installed either way.
+      - name: Cache Playwright's Chromium
+        id: playwright-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Chromium's system libraries
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      # The fonts the page's stacks resolve to on the dev box, where the
+      # geometry in the specs was measured.
+      - name: Install fonts
+        run: sudo apt-get install -y --no-install-recommends fonts-dejavu-core fonts-liberation
+
+      - name: Browser specs (geometry, not the pixel goldens)
+        run: npm run test:browser
+
+      - name: Production build in the browser
+        run: npm run test:integration
+
+      - name: Keep the failure traces
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-test-results
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

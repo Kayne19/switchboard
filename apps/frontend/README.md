@@ -42,6 +42,7 @@ npm run preview          # serve the production build
 npm run typecheck        # TypeScript only: the app and its unit tests, the Playwright specs, the configs, the host agent
 npm test                 # every CI gate but Rust and the static diff: build, skill, node, syntax, unit, design lock, host agent, no-ssh, hygiene
 npm run test:visual      # browser specs (Playwright): the pixel goldens and the geometry checks, on their own server (port 4183, or PLAYWRIGHT_PORT)
+npm run test:browser     # the browser specs CI runs: all but the pixel goldens (@golden)
 ```
 
 ## Controls
