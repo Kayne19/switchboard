@@ -81,8 +81,22 @@ _ONE_OF = {
 # ---- image ------------------------------------------------------------------
 
 # The service and the page take at most this many raw image bytes
-# (MAX_IMAGE_BYTES in visual_protocol.rs and validation.ts).
+# (MAX_IMAGE_BYTES in visual_protocol.rs and validation.ts);
+# scripts/check_hygiene.mjs keeps the numbers equal.
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+# ---- size -------------------------------------------------------------------
+
+# The caps a request is held to, named when one is too large: a display
+# action as JSON, an image's action (MAX_ACTION_BYTES and
+# MAX_IMAGE_ACTION_BYTES in visual_protocol.rs and validation.ts, which
+# measure it), and the request line the host agent reads (MAX_LINE_BYTES in
+# apps/host-agent/src/skill_socket.ts, which answers a longer one
+# `too_large` unread). scripts/check_hygiene.mjs keeps the numbers equal.
+_MAX_ACTION_BYTES = 48_000
+_MAX_IMAGE_ACTION_BYTES = 12 * 1024 * 1024
+_MAX_LINE_BYTES = 13 * 1024 * 1024
+_MIB = 1024 * 1024
 
 
 class _Result:
@@ -276,6 +290,8 @@ def _common(result):
         return f"Could not reach the switchboard{f': {detail}' if detail else ''}. Nothing was sent."
     if result.reason == "caller_away":
         return "The caller is on other work; nothing was played. If it matters to them, send it with request_to_speak."
+    if result.reason == "too_large":
+        return f"Too large; nothing was sent. The host agent reads a request of at most {_MAX_LINE_BYTES // _MIB} MiB. Send less."
     return None
 
 
@@ -449,8 +465,9 @@ def _wire_instant(value, key):
     offset = value.utcoffset()
     if offset is None:
         raise ValueError(
-            f"{key} is an instant: give an aware datetime, such as "
-            "datetime.now(timezone.utc) + timedelta(minutes=9), or text like 2026-10-05T18:42:00-07:00"
+            f"{key} is an instant: give an aware datetime in the caller's zone, such as "
+            "datetime.now(zone) + timedelta(minutes=9) with zone the caller's ZoneInfo, "
+            "or text like 2026-10-05T18:42:00-07:00"
         )
     if offset.seconds % 60 or offset.microseconds:
         value = value.astimezone(_datetime.timezone.utc)
@@ -515,6 +532,12 @@ def display(action=None, **fields):
             if data.get("rendered") is False:
                 return "Sent, but the caller's screen has not confirmed it; it may not be visible yet."
             return "On screen."
+        if result.reason == "too_large":
+            return (
+                f"Too large; nothing was sent. The host agent reads a request of at most {_MAX_LINE_BYTES // _MIB} MiB, "
+                f"and a display action is at most {_MAX_ACTION_BYTES:,} bytes as JSON (an image's "
+                f"{_MAX_IMAGE_ACTION_BYTES // _MIB} MiB). Send less."
+            )
         if result.status == "refused" and result.reason not in ("not_on_call", "subagent", "caller_away"):
             return (
                 f"The switchboard rejected it: {result.reason or 'invalid payload'}. "

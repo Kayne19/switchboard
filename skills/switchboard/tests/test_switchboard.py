@@ -301,6 +301,22 @@ class CallsTest(ModuleTestCase):
         self.assertEqual(result.reason, "metric value must be a string")
         self.assertIn("rejected it: metric value must be a string", line)
 
+    def test_a_request_too_large_for_the_host_agent_names_the_caps(self):
+        # The host agent answers a line past its cap `too_large` unread. The
+        # line used to read "The switchboard rejected it: too_large. Adjust
+        # the payload and try again.", which named no number to aim under.
+        self.host(reply=lambda request: {"status": "refused", "reason": "too_large"})
+        result, line = self.run_call(switchboard.display, op="show", id="d", type="document", data={"subject": "log", "paragraphs": ["x"]})
+        self.assertEqual((result.status, result.reason), ("refused", "too_large"))
+        self.assertEqual(
+            line,
+            "switchboard.display: Too large; nothing was sent. The host agent reads a request of at most 13 MiB, "
+            "and a display action is at most 48,000 bytes as JSON (an image's 12 MiB). Send less.",
+        )
+        # Any call can be too large; only a display's words name the display caps.
+        _, spoken = self.run_call(switchboard.speak, "Hi.")
+        self.assertEqual(spoken, "switchboard.speak: Too large; nothing was sent. The host agent reads a request of at most 13 MiB. Send less.")
+
     def test_array_likes_are_sent_as_lists(self):
         host = self.host()
 

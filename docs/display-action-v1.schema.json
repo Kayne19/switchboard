@@ -3,7 +3,7 @@
   "$id": "https://switchboard.internal/schemas/display-action-v1.json",
   "title": "DisplayAction",
   "description": "Canonical Switchboard DisplayAction v1 specification.",
-  "$comment": "Both validators (validation.ts, visual_protocol.rs) also follow rules JSON Schema cannot state: the order of their checks and of an object's keys (code point order), the relations between sibling items and fields (unique ids, endpoints, a row's cells, times compared as times), the size as JSON.stringify writes the action, string caps in UTF-16 code units, an image's signature, and the exact error text. docs/display-tool.md, 'How the two validators agree' and 'Canonical schema & validation rules', lists them; apps/frontend/tests/fixtures/validator-corpus.json pins them. This schema accepts every action that corpus accepts and refuses every action it refuses, but for those it cannot state (SCHEMA_GAPS in apps/frontend/tests/unit/schema.test.ts).",
+  "$comment": "Both validators (validation.ts, visual_protocol.rs) also follow rules JSON Schema cannot state: the order of their checks and of an object's keys (code point order), the relations between sibling items and fields (unique ids, endpoints, a row's cells, times compared as times), the size as JSON.stringify writes the action, string caps in UTF-16 code units, an image's signature and base64 length, and the exact error text. docs/display-tool.md, 'How the two validators agree' and 'Canonical schema & validation rules', lists them; apps/frontend/tests/fixtures/validator-corpus.json pins them. This schema accepts every action that corpus accepts and refuses every action it refuses, but for those it cannot state (SCHEMA_GAPS in apps/frontend/tests/unit/schema.test.ts).",
   "oneOf": [
     {
       "$ref": "#/definitions/ShowChartAction"
@@ -1088,7 +1088,7 @@
       "additionalProperties": false
     },
     "ImageData": {
-      "description": "A raster image carried inline as standard base64. The bytes must start with the format's file signature (checked by both validators, not expressible here), decode to at most 8 MiB, and the whole action to at most 12 MiB. SVG is refused: it is markup, not raster bytes.",
+      "description": "A raster image carried inline as standard base64. The bytes must start with the format's file signature and be a multiple of four characters long (both checked by both validators, not here), decode to at most 8 MiB, and the whole action to at most 12 MiB. SVG is refused: it is markup, not raster bytes.",
       "type": "object",
       "properties": {
         "format": {
@@ -1103,7 +1103,7 @@
           "type": "string",
           "minLength": 16,
           "maxLength": 11184812,
-          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$"
+          "pattern": "^[A-Za-z0-9+/]*(?:[A-Za-z0-9+/]{4}|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{2}==)$"
         },
         "alt": {
           "type": "string",
@@ -1516,7 +1516,8 @@
         },
         "remaining": {
           "type": "number",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 7258118400
         }
       },
       "required": [

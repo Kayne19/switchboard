@@ -173,25 +173,26 @@ fn an_image_is_capped_at_eight_mebibytes_and_its_action_at_twelve() {
         ))
     );
     // Past the action cap, the size check answers before the image is read.
-    let oversized = image_show("fig", "png", MAX_IMAGE_ACTION_BYTES);
-    assert_eq!(
-        validate_action(&oversized),
-        Err("action exceeds size limit".into())
+    let over = |action: &Value, cap: usize| {
+        let error = validate_action(action).unwrap_err();
+        assert!(
+            error.starts_with("action exceeds size limit: ")
+                && error.ends_with(&format!(" bytes, the cap is {cap}")),
+            "{error}"
+        );
+    };
+    over(
+        &image_show("fig", "png", MAX_IMAGE_ACTION_BYTES),
+        MAX_IMAGE_ACTION_BYTES,
     );
     // Only an image show gets the larger cap: the same bytes under another
     // type, or in a note, are held to the general one.
     let mut as_document = image_show("fig", "png", 100_000);
     as_document["type"] = json!("document");
-    assert_eq!(
-        validate_action(&as_document),
-        Err("action exceeds size limit".into())
-    );
+    over(&as_document, MAX_ACTION_BYTES);
     let note = json!({"op": "show", "id": "n", "type": "note",
         "data": {"segments": [{"text": "x".repeat(49_000)}]}});
-    assert_eq!(
-        validate_action(&note),
-        Err("action exceeds size limit".into())
-    );
+    over(&note, MAX_ACTION_BYTES);
 }
 
 /// `WHITE_SPACE` is Unicode White_Space exactly, which `char::is_whitespace`

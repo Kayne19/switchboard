@@ -64,8 +64,9 @@ commit.
   `scripts/check_hygiene.mjs`, which enforces the structural rules below that
   a grep can check (private modules, no lint allowances, one `Config`, a
   documented environment, one fake-executable writer, one skill socket path,
-  one frame depth, live paths, routes and settings in the docs); a new rule of
-  that kind gets a check there.
+  one frame depth, one set of size caps, CPU-time budgets, live paths,
+  routes and settings in the docs); a new rule of that kind gets a check
+  there.
 - CI's `browser` job runs the Playwright specs in Chromium: `npm run
   test:browser` (every spec in `apps/frontend/tests/visual` but the pixel
   goldens, which are tagged `@golden`) and `npm run test:integration` (the
@@ -93,6 +94,13 @@ commit.
   epoch is stamped where it is, why fake executables must go through
   `write_executable_script`, and why a broken pipe is never the error worth
   reporting.
+- A unit-test time budget measures the test thread's CPU time with
+  `leastCpuMs` (`apps/frontend/tests/unit/cpuTime.ts`), never the wall clock:
+  under load the wall clock measures the machine, and wall-clock budgets
+  failed 17 times in 7 loaded runs (`docs/concurrency-and-test-hazards.md`,
+  "A time budget measured on the wall clock"). `scripts/check_hygiene.mjs`
+  refuses `performance.now`, `Date.now` and `process.hrtime` in
+  `apps/frontend/tests/unit` outside `cpuTime.ts`.
 - Keep the backend module layout: one concern per file in `apps/backend/src/`,
   no new module layers until something concrete needs one.
 - The backend's modules are private (`mod`, not `pub mod`, in `main.rs`), and

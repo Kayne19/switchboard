@@ -65,19 +65,33 @@ arrays, are sent as lists.
 Show semantic content; the page owns layout, pixels and styling. Never send
 markup, CSS, pixel geometry or styling.
 
+No string may hold a URL (`https://...`, any `scheme://`, or `//host.tld`)
+or an HTML tag such as `<script>` or `<svg>`. Write a link as its host and
+path, without the scheme (`meet.google.com/abc-defg-hij`), or leave it out.
+The refusal names the string: `external resource URL is forbidden in
+data.events[3].location`.
+
 - `show` (`id`, `type`, optional `role`, `data`) creates an object, or
   updates it in place when the `id` is reused.
 - `hide` and `focus` take an `id`; `clear` takes nothing.
+- A display action is at most 48,000 bytes as JSON (an image's 12 MiB, its
+  picture at most 8 MiB). A refusal for size gives the action's bytes and
+  the cap, so you know how much to cut.
+- The stage holds at most 32 objects, 4 of them images. A `show` with a new
+  id past that is refused; hide what the caller is done with, or update an
+  object by its id.
 - `say` (`text`, optional `target`, optional `at: {x?, series?}`) anchors
   speech to an object.
 
 Types and their `data` shapes (each type takes only its own shape):
 
-- chart: `{series: [{name, values: [n]}]}`; optional `kind` (`line`, the
-  default, `bar`, `area` or `scatter`) and `labels: [str]`, categorical x
+- chart: `{series: [{name, values: [n]}]}`, each series with its own name;
+  optional `kind` (`line`, the default, `bar`, `area` or `scatter`) and
+  `labels: [str]`, categorical x
   labels (at most 100, each at most 64 characters; no series may be longer
   than them). Bars group per category; the page decides whether they run up
-  or across.
+  or across. `yMin` and `yMax` fix the value axis's ends; with both, `yMin`
+  must be below `yMax`.
 - metric: `{label, value}`, plus `trend` (`up`, `down` or `flat`) and
   `delta` (a short string such as `-12 ms`) to show how it moved
 - progress: `{label, value}` (value is a percent, 0-100) and/or
@@ -115,7 +129,7 @@ Types and their `data` shapes (each type takes only its own shape):
 - timer: `{timers: [{id, label, endsAt}]}` (1 to 8). `endsAt` is an
   instant; the screen counts down to it and shows it done at zero, with no
   sound, so tell the caller yourself. Add `startedAt`, or
-  `state: "paused"` with `remaining` (seconds left).
+  `state: "paused"` with `remaining` (seconds left, 0 to 7258118400).
 - weather: `{location, units: "C" or "F", current: {temp, condition}}`,
   plus `hourly: [{time, temp, condition}]` (up to 48), `daily: [{date, high,
   low, condition}]` (up to 14) and an `alert`. `condition` is one of
@@ -135,8 +149,11 @@ never converts zones or reads its own clock, so give `today` and `now`
 yourself. A Python `date` or `datetime` is converted for you: a date to a
 date, and a datetime to a wall time on its own clock, so give it in the
 caller's zone (`dt.astimezone(zone)`). A timer's `endsAt` and `startedAt`
-take an aware datetime (`datetime.now(timezone.utc) + timedelta(minutes=9)`)
-and become instants; a naive one raises.
+take an aware datetime in the caller's zone too
+(`datetime.now(zone) + timedelta(minutes=9)`, `zone` the caller's
+`ZoneInfo`) and become instants; a naive one raises. The screen shows an
+end's time of day as written, so one in UTC reads `ENDS 17:42 UTC`, not the
+caller's clock.
 
 ```python
 switchboard.display(op="show", id="week", type="calendar", role="primary", data={

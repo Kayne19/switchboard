@@ -191,11 +191,12 @@ describe('image validation', () => {
     expect(validateControllerAction(imageShow('png', MAX_IMAGE_BYTES)).ok).toBe(true);
     expect(validateControllerAction(imageShow('png', MAX_IMAGE_BYTES + 1)))
       .toEqual({ ok: false, error: `image.bytes decode to more than ${MAX_IMAGE_BYTES} bytes` });
-    expect(validateControllerAction(imageShow('png', MAX_IMAGE_ACTION_BYTES))).toEqual({ ok: false, error: 'action exceeds size limit' });
+    const over = (cap: number) => ({ ok: false, error: expect.stringMatching(new RegExp(`^action exceeds size limit: \\d+ bytes, the cap is ${cap}$`)) });
+    expect(validateControllerAction(imageShow('png', MAX_IMAGE_ACTION_BYTES))).toEqual(over(MAX_IMAGE_ACTION_BYTES));
     // Only an image show gets the larger cap: the same bytes under another
     // type, or in a note, are held to the general one.
-    expect(validateControllerAction({ ...imageShow('png', 100_000), type: 'document' })).toEqual({ ok: false, error: 'action exceeds size limit' });
+    expect(validateControllerAction({ ...imageShow('png', 100_000), type: 'document' })).toEqual(over(48_000));
     expect(validateControllerAction({ op: 'show', id: 'n', type: 'note', data: { segments: [{ text: 'x'.repeat(49_000) }] } }))
-      .toEqual({ ok: false, error: 'action exceeds size limit' });
+      .toEqual(over(48_000));
   });
 });
