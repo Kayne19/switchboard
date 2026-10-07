@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openScene, runActions } from './helpers';
+import { FRAME_GEOMETRIES, openScene, runActions } from './helpers';
 
 // A stepped progress where the unit tests cannot see it: jsdom draws no
 // boxes. As the primary it is framed to its own height; in the rail it reads
@@ -81,5 +81,24 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     expect(Math.abs(rows.headHeight - rows.metricHeight)).toBeLessThanOrEqual(1);
     expect(rows.headLabel).toEqual(rows.metricLabel);
     expect(rows.stepRule).toBe('1px');
+  });
+}
+
+// A label with no space to break at (a path, a long name) wraps inside its
+// column: it ran out of it, under the bar and past the frame (a 74-character
+// path reached 754 px of a 390 px phone).
+for (const geometry of FRAME_GEOMETRIES) {
+  test(`an unbroken progress label stays in its column / ${geometry.name}`, async ({ page }) => {
+    await page.setViewportSize({ width: geometry.width, height: geometry.height });
+    for (const label of ['/home/kayne19/projects/switchboard/apps/frontend/src/primitives/notePlacement.ts', 'P'.repeat(128)]) {
+      await show(page, [{ op: 'show', id: 'run', type: 'progress', role: 'primary', data: { label, value: 27 } }]);
+      const boxes = await page.evaluate(() => {
+        const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+        return { label: box('.scene .progress-primitive__label'), strong: box('.scene .progress-primitive__label strong'), track: box('.scene .progress-primitive__track'), frame: box('.scene [data-testid="progress"]') };
+      });
+      expect(boxes.strong.right, label).toBeLessThanOrEqual(boxes.label.right + 1);
+      expect(boxes.strong.right, label).toBeLessThanOrEqual(boxes.track.left);
+      expect(boxes.strong.left, label).toBeGreaterThanOrEqual(boxes.frame.left - 1);
+    }
   });
 }

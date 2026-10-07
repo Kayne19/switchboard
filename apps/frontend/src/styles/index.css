@@ -1249,12 +1249,17 @@ button {
   min-height: 64px;
   padding-top: clamp(10px, 1.2cqh, 16px);
 }
+/* A label with no space to break at (a path, a long name) wraps inside
+   its column rather than running under the bar and out of the frame. */
 .progress-primitive__label {
   display: grid;
   gap: 4px;
+  min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 .progress-primitive__label strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: clamp(18px, 1.8cqw, 31px);
   font-weight: 500;
   color: var(--paper);
