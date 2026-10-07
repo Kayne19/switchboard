@@ -97,7 +97,7 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 
 ### Chart v1 rules
 - `kind` is how the series are drawn: `line` (the default), `bar`, `area` or `scatter`. Anything else is rejected.
-- `labels`: 1 to 100 categorical x labels, each a string of at most 64 UTF-16 code units. When present the x domain is the label indices (`0` to `labels.length - 1`), the x ticks are the labels, and `xMax` is ignored. Every `series.values` must be no longer than `labels`; a shorter series ends early.
+- `labels`: 1 to 100 categorical x labels, each a string of at most 64 UTF-16 code units. When present the x domain is the label indices (`0` to `labels.length - 1`), the x ticks are the labels, and `xMax` is ignored. Every `series.values` must be no longer than `labels`; a shorter series ends early. A refused label names its index (`chart.labels[3] must be a string`), and a series longer than the labels names the series and both counts (`chart.series[1].values is longer than chart.labels (3 values, 2 labels)`).
 - `marker.x`, a note's `anchor.x` and `say at.x` name a label index on a labelled chart, and the numeric x otherwise.
 - Bars are grouped per category across the series. A bar chart without `labels` takes the value indices as its categories, so `xMax` is ignored there too. Whether bars run up or across is the page's decision (`docs/visual-channel.md`); a bar chart with more categories than its slot holds a row each for, even on a phone's stage, runs across and scrolls in its frame, every category named, so send all of them rather than a sample.
 - The legend takes at most a quarter of the chart's height; the series past its rows are counted in one last item (`+12 SERIES`), so a chart with many series keeps its plot but names only the first few.
@@ -124,7 +124,7 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 
 ### Table v1 rules
 - `columns`: 1 to 12 items, each `{ label, semantic? }` with `label` <= 64 UTF-16 code units. A column's `semantic` colours its header; a cell's `semantic` colours that cell.
-- `rows`: 0 to 200 items. Every row is an array of exactly `columns.length` cells; a ragged row is rejected with its index.
+- `rows`: 0 to 200 items. Every row is an array of exactly `columns.length` cells. A refusal inside the rows names its place, a row as `table.rows[3]` (`table.rows[3] has 2 cells; the table has 3 columns`) and a cell as `table.rows[3][2]` (`table.rows[3][2].text exceeds maximum length of 256 UTF-16 code units`), counted from 0.
 - A cell is a string (<= 256 UTF-16 code units), a finite number, or `{ text, semantic?, bold? }` with `text` <= 256. A number is shown as its text.
 - `highlight`: row indices (integers in `0..rows.length`) the page draws with the accent. An index naming no row is rejected.
 - There is no `align`: the page right-aligns a column whose cells are all numeric (a number, or text that reads as one with a unit or a currency sign, such as `12.4s`, `91%` or `$1,200`), and left-aligns the rest.

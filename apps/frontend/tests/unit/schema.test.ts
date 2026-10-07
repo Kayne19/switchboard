@@ -86,7 +86,7 @@ const SCHEMA_GAPS: Record<string, { why: string; cases: string[] }> = {
   },
   fields: {
     why: "a series' value count against the chart's label count compares two sibling fields",
-    cases: ['chart_series_longer_than_labels'],
+    cases: ['chart_series_longer_than_labels', 'chart_series_longer_than_labels_names_its_series'],
   },
   times: {
     why: 'two times compared as times (an end before its start, `now` off `today`, a timer started at or after its end, offsets applied); a pattern reads one string',
@@ -194,7 +194,7 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
       'diagram message.kind': property('SequenceMessage', 'kind'),
       'document.kind': property('DocumentData', 'kind'),
       'table column.semantic': property('TableColumn', 'semantic'),
-      'table cell.semantic': property('TableCell', 'semantic'),
+      'table.rows[][].semantic': property('TableCell', 'semantic'),
       'image.format': property('ImageData', 'format'),
       'note segment.semantic': property('RichSegment', 'semantic'),
       'calendar.view': property('CalendarData', 'view'),
@@ -212,7 +212,8 @@ describe('display-action-v1.schema.json and the validator corpus', () => {
     const listed: Array<[string, string]> = [];
     for (const testCase of corpusCases) {
       const match = /^invalid ([^:]+): expected one of (.+?)(?: \(.*\))?$/.exec(testCase.error ?? '');
-      if (match) listed.push([match[1], match[2]]);
+      // A table cell's refusal names its place (`table.rows[3][2].semantic`); the set is the cell's.
+      if (match) listed.push([match[1].replace(/\[\d+\]/g, '[]'), match[2]]);
     }
     // Every field the corpus refuses a name for is mapped above, and each
     // mapped field has a refusal in the corpus.

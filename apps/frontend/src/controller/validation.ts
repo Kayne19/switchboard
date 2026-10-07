@@ -399,8 +399,8 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     if (!Array.isArray(data.labels) || data.labels.length < 1 || data.labels.length > MAX_CHART_LABELS) {
       return { ok: false, error: `chart.labels must be an array of 1 to ${MAX_CHART_LABELS} strings` };
     }
-    for (const label of data.labels) {
-      const err = checkString(label, MAX_CHART_LABEL_UTF16, 'chart label');
+    for (const [index, label] of data.labels.entries()) {
+      const err = checkString(label, MAX_CHART_LABEL_UTF16, `chart.labels[${index}]`);
       if (err) return { ok: false, error: err };
     }
     result.labels = data.labels as string[];
@@ -410,7 +410,7 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     return { ok: false, error: 'chart.series must be an array' };
   }
   const seriesAllowed = new Set(['name', 'semantic', 'values']);
-  for (const s of data.series) {
+  for (const [index, s] of data.series.entries()) {
     if (!isRecord(s)) return { ok: false, error: 'chart series item must be an object' };
     const sUnknown = checkUnknownKeys(s, seriesAllowed, 'chart series item');
     if (sUnknown) return { ok: false, error: sUnknown };
@@ -421,7 +421,10 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
       if (typeof v !== 'number' || !Number.isFinite(v)) return { ok: false, error: 'series.values must contain finite numbers' };
     }
     if (result.labels && s.values.length > result.labels.length) {
-      return { ok: false, error: 'series.values is longer than chart.labels' };
+      return {
+        ok: false,
+        error: `chart.series[${index}].values is longer than chart.labels (${s.values.length} values, ${result.labels.length} labels)`,
+      };
     }
     const series: ChartSeries = { name: s.name as string, values: s.values as number[] };
     const semanticErr = copyOptionalName(s, series, 'semantic', SEMANTICS, 'series.semantic');
@@ -835,32 +838,34 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
   const cellAllowed = new Set(['text', 'semantic', 'bold']);
   const rows: TableCell[][] = [];
   for (const [rowIndex, r] of data.rows.entries()) {
-    if (!Array.isArray(r)) return { ok: false, error: `table row ${rowIndex} must be an array` };
+    if (!Array.isArray(r)) return { ok: false, error: `table.rows[${rowIndex}] must be an array` };
     if (r.length !== columns.length) {
-      return { ok: false, error: `table row ${rowIndex} has ${r.length} cells; the table has ${columns.length} columns` };
+      return { ok: false, error: `table.rows[${rowIndex}] has ${r.length} cells; the table has ${columns.length} columns` };
     }
     const row: TableCell[] = [];
-    for (const cell of r) {
+    for (const [cellIndex, cell] of r.entries()) {
+      // Every refusal names its cell: a 200 by 12 table is 2,400 of them.
+      const at = `table.rows[${rowIndex}][${cellIndex}]`;
       if (typeof cell === 'number') {
-        if (!Number.isFinite(cell)) return { ok: false, error: 'table cell must be a finite number' };
+        if (!Number.isFinite(cell)) return { ok: false, error: `${at} must be a finite number` };
         row.push(cell);
         continue;
       }
       if (typeof cell === 'string') {
-        const err = checkString(cell, MAX_TABLE_CELL_UTF16, 'table cell');
+        const err = checkString(cell, MAX_TABLE_CELL_UTF16, at);
         if (err) return { ok: false, error: err };
         row.push(cell);
         continue;
       }
-      if (!isRecord(cell)) return { ok: false, error: 'table cell must be a string, a number or an object' };
-      const cellUnknown = checkUnknownKeys(cell, cellAllowed, 'table cell');
+      if (!isRecord(cell)) return { ok: false, error: `${at} must be a string, a number or an object` };
+      const cellUnknown = checkUnknownKeys(cell, cellAllowed, at);
       if (cellUnknown) return { ok: false, error: cellUnknown };
-      const textErr = checkString(cell.text, MAX_TABLE_CELL_UTF16, 'table cell.text');
+      const textErr = checkString(cell.text, MAX_TABLE_CELL_UTF16, `${at}.text`);
       if (textErr) return { ok: false, error: textErr };
       const cellObj: TableCellObject = { text: cell.text as string };
       const cellErr =
-        copyOptionalName(cell, cellObj, 'semantic', SEMANTICS, 'table cell.semantic') ??
-        copyOptionalBoolean(cell, cellObj, 'bold', 'table cell.bold');
+        copyOptionalName(cell, cellObj, 'semantic', SEMANTICS, `${at}.semantic`) ??
+        copyOptionalBoolean(cell, cellObj, 'bold', `${at}.bold`);
       if (cellErr) return { ok: false, error: cellErr };
       row.push(cellObj);
     }

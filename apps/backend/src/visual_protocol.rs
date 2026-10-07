@@ -443,8 +443,12 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
                 .ok_or(format!(
                     "chart.labels must be an array of 1 to {MAX_CHART_LABELS} strings"
                 ))?;
-            for label in arr {
-                check_string(Some(label), MAX_CHART_LABEL_UTF16, "chart label")?;
+            for (index, label) in arr.iter().enumerate() {
+                check_string(
+                    Some(label),
+                    MAX_CHART_LABEL_UTF16,
+                    &format!("chart.labels[{index}]"),
+                )?;
             }
             Some(arr)
         }
@@ -456,7 +460,7 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         .ok_or("chart.series must be an array")?;
     let mut clean_series = Vec::new();
 
-    for s in series_arr {
+    for (index, s) in series_arr.iter().enumerate() {
         let sm = s.as_object().ok_or("chart series item must be an object")?;
         check_unknown_keys(sm, &["name", "semantic", "values"], "chart series item")?;
 
@@ -471,8 +475,12 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
                 return Err("series.values must contain finite numbers".into());
             }
         }
-        if labels.is_some_and(|labels| values.len() > labels.len()) {
-            return Err("series.values is longer than chart.labels".into());
+        if let Some(labels) = labels.filter(|labels| values.len() > labels.len()) {
+            return Err(format!(
+                "chart.series[{index}].values is longer than chart.labels ({} values, {} labels)",
+                values.len(),
+                labels.len()
+            ));
         }
 
         let mut item = Map::new();
@@ -944,28 +952,29 @@ fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
-fn validate_table_cell(cell: &Value) -> Result<Value, String> {
+/// One table cell, refused by its place `at` (`table.rows[3][2]`).
+fn validate_table_cell(cell: &Value, at: &str) -> Result<Value, String> {
     match cell {
         Value::Number(n) => {
             if !n.as_f64().is_some_and(f64::is_finite) {
-                return Err("table cell must be a finite number".into());
+                return Err(format!("{at} must be a finite number"));
             }
             Ok(cell.clone())
         }
         Value::String(_) => {
-            check_string(Some(cell), MAX_TABLE_CELL_UTF16, "table cell")?;
+            check_string(Some(cell), MAX_TABLE_CELL_UTF16, at)?;
             Ok(cell.clone())
         }
         Value::Object(cm) => {
-            check_unknown_keys(cm, &["text", "semantic", "bold"], "table cell")?;
-            let text = required_string(cm, "text", MAX_TABLE_CELL_UTF16, "table cell.text")?;
+            check_unknown_keys(cm, &["text", "semantic", "bold"], at)?;
+            let text = required_string(cm, "text", MAX_TABLE_CELL_UTF16, &format!("{at}.text"))?;
             let mut cell_out = Map::new();
             cell_out.insert("text".into(), text.into());
-            copy_optional_semantic(cm, &mut cell_out, "table cell.semantic")?;
-            copy_optional_bool(cm, &mut cell_out, "bold", "table cell.bold")?;
+            copy_optional_semantic(cm, &mut cell_out, &format!("{at}.semantic"))?;
+            copy_optional_bool(cm, &mut cell_out, "bold", &format!("{at}.bold"))?;
             Ok(Value::Object(cell_out))
         }
-        _ => Err("table cell must be a string, a number or an object".into()),
+        _ => Err(format!("{at} must be a string, a number or an object")),
     }
 }
 
@@ -1020,17 +1029,19 @@ fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
     for (row_index, r) in rows_arr.iter().enumerate() {
         let cells = r
             .as_array()
-            .ok_or(format!("table row {row_index} must be an array"))?;
+            .ok_or(format!("table.rows[{row_index}] must be an array"))?;
         if cells.len() != clean_columns.len() {
             return Err(format!(
-                "table row {row_index} has {} cells; the table has {} columns",
+                "table.rows[{row_index}] has {} cells; the table has {} columns",
                 cells.len(),
                 clean_columns.len()
             ));
         }
         let mut clean_cells = Vec::new();
-        for cell in cells {
-            clean_cells.push(validate_table_cell(cell)?);
+        for (cell_index, cell) in cells.iter().enumerate() {
+            // Every refusal names its cell: a 200 by 12 table is 2,400 of them.
+            let at = format!("table.rows[{row_index}][{cell_index}]");
+            clean_cells.push(validate_table_cell(cell, &at)?);
         }
         clean_rows.push(Value::Array(clean_cells));
     }
