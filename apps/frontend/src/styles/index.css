@@ -5908,15 +5908,15 @@ button {
      side a chart's cell ran past the column's foot, its x axis out of
      view. The aux row stands beside the card instead, as tall as the
      column; a card with no row keeps the column to itself. */
-  .composed-main--metric-primary:has(> .composed-aux) {
+  .composed-main--metric-primary:has(> .composed-aux-viewport) {
     grid-template-columns: fit-content(60%) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
     align-content: stretch;
   }
-  .composed-main--metric-primary:has(> .composed-aux) > .composed-primary-object {
+  .composed-main--metric-primary:has(> .composed-aux-viewport) > .composed-primary-object {
     align-self: center;
   }
-  .composed-main--metric-primary > .composed-aux {
+  .composed-main--metric-primary > .composed-aux-viewport {
     grid-row: 1;
     grid-column: 2;
   }
