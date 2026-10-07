@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import type { TableCell, TableData } from '../controller/types';
 import type { Noun } from './countText';
 import { ListViewport } from './ListViewport';
@@ -17,8 +18,11 @@ function cellText(cell: TableCell): string {
 // Text that reads as a quantity: a sign, a currency symbol, digits with
 // separators, a fraction or exponent, then a short unit such as `s`, `ms`,
 // `%`, `GB`, `req/s`; a compound duration such as `1m 48s`; or a clock time
-// such as `01:42:18`.
-const QUANTITY = /^(?:[-+\u2212]?(?:[$\u20ac\u00a3\u00a5\u20b9]\s?)?(?:\d[\d,_ ]*(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?\s*(?:[%\u2030\u00b0]|[a-z\u00b5]{1,4}(?:\/[a-z]{1,4})?)?(?:\s+\d+(?:\.\d+)?\s*[a-z\u00b5]{1,4})*|\d{1,2}(?::\d{2}){1,2})$/i;
+// such as `01:42:18`. A space inside the digits stands only between two of
+// them (`1 000`), and the space before a unit belongs to the unit: three
+// patterns that each took a run of spaces made a cell of a digit and 254
+// spaces cost some 25 ms to refuse, every render (review-drawing L8).
+const QUANTITY = /^(?:[-+\u2212]?(?:[$\u20ac\u00a3\u00a5\u20b9]\s?)?(?:\d(?:[\d,_]| (?=\d))*(?:\.\d+)?|\.\d+)(?:e[-+]?\d+)?(?:\s*(?:[%\u2030\u00b0]|[a-z\u00b5]{1,4}(?:\/[a-z]{1,4})?))?(?:\s+\d+(?:\.\d+)?\s*[a-z\u00b5]{1,4})*|\d{1,2}(?::\d{2}){1,2})$/i;
 // A cell with nothing to align: empty, a dash, or a placeholder.
 const BLANK = /^(?:|[-\u2013\u2014]|n\/a|\u2026)$/i;
 
@@ -72,7 +76,7 @@ const ROW: Noun = ['ROW', 'ROWS'];
 // below the header and pages it by the keys every scroller takes. In the
 // main slot the scene frame above shows the title (MetaTitle).
 export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; slot?: Slot }) {
-  const alignment = inferColumnAlignment(data);
+  const alignment = useMemo(() => inferColumnAlignment(data), [data]);
   const highlighted = new Set(data.highlight ?? []);
   const meta = (
     <div className="table-viewport__meta meta-line tech micro">

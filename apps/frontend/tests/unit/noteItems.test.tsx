@@ -12,7 +12,7 @@
 // element carries `data-item` (the name a note uses for it), and the marked
 // one holds a `.note-badge`. Focus keeps the note beside the object.
 import { describe, expect, it } from 'vitest';
-import { itemTargetText, markedItem, noteTarget, objectName } from '../../src/app/noteItems';
+import { itemTargetText, markedItem, markingNote, noteTarget, objectName, railNoteTarget } from '../../src/app/noteItems';
 import type { ControllerAction, NoteData, SceneObject, SceneObjectType } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { chartSeriesPoint } from '../../src/primitives/chartGeometry';
@@ -104,6 +104,28 @@ describe('itemTargetText', () => {
   });
 });
 
+// An object marks one part: of the notes the page draws, the first about it
+// (review-fix-charts M4).
+describe('markingNote and railNoteTarget', () => {
+  const list: SceneObject = { id: 'list', type: 'tasks', data: lists.tasks.data, createdAt: 0, updatedAt: 0 };
+  const on = (item: string): NoteData => ({ segments: [], anchor: { target: 'list', item } });
+  const general: NoteData = { segments: [] };
+  const first = on('passport');
+  const second = on('pr');
+
+  it('picks the first note about the object, past notes about none', () => {
+    expect(markingNote([general, first, second], 'list')).toBe(first);
+    expect(markingNote([general], 'list')).toBeUndefined();
+  });
+
+  it('keeps the badge on the marking note only, and names both', () => {
+    const drawn = [first, second];
+    expect(railNoteTarget({ list }, drawn, first)).toEqual(noteTarget({ list }, first));
+    expect(railNoteTarget({ list }, drawn, first).marked).toBe(true);
+    expect(railNoteTarget({ list }, drawn, second)).toEqual({ target: noteTarget({ list }, second).target, marked: false });
+  });
+});
+
 describe('the item a note names is marked wherever its object is drawn', () => {
   it.each(types)('a %s primary marks the item, and the rail card names it with the badge', (type) => {
     renderScene([object(type, 'primary'), noteOn(lists[type].item)]);
@@ -141,11 +163,27 @@ describe('the item a note names is marked wherever its object is drawn', () => {
     expect(card?.querySelectorAll('.note-badge')).toHaveLength(0);
   });
 
-  it('marks nothing in the aux row while the rail shows the primary\'s note', () => {
+  // The rail showed one note, so the aux row's item went unmarked and its
+  // note unseen (pr/issues.md, "The rail shows one note"). It shows every
+  // note now, the primary's first, and the item is marked beside its card.
+  it('marks the item in the aux row while the rail shows its note after the primary\'s', () => {
     const onGrid: ControllerAction = { op: 'show', id: 'grid-note', type: 'note', data: { tag: 'GRID', anchor: { target: 'grid' }, segments: [{ text: 'About the table.' }] } };
     renderScene([table, object('inbox', 'secondary'), onGrid, noteOn('ci')]);
-    expect(badges(scene().querySelector('.composed-aux'), 'inbox')).toHaveLength(0);
-    expect(scene().querySelector('.content-rail .annotation-card__tag')?.textContent).toBe('GRID');
+    expect(badges(scene().querySelector('.composed-aux'), 'inbox')).toHaveLength(1);
+    const cards = [...scene().querySelectorAll('.content-rail .annotation-card')];
+    expect(cards.map((card) => card.querySelector('.annotation-card__tag')?.textContent)).toEqual(['GRID', 'NOTE']);
+    expect(cards.map((card) => card.querySelectorAll('.annotation-card__header .note-badge').length)).toEqual([0, 1]);
+  });
+
+  // An object marks one part: a second note about another item of the same
+  // list is shown, named, but carries no badge, so a badge always has its mark.
+  it('marks the first of two items notes name in one list, and badges only its card', () => {
+    const second: ControllerAction = { op: 'show', id: 'second-note', type: 'note', data: { tag: 'SECOND', anchor: { target: 'list', item: 'pr' }, segments: [{ text: 'And this one.' }] } };
+    renderScene([object('tasks', 'primary'), noteOn(lists.tasks.item), second]);
+    expect(markedItems(scene(), 'tasks')).toEqual([lists.tasks.item]);
+    const cards = [...scene().querySelectorAll('.content-rail .annotation-card')];
+    expect(cards).toHaveLength(2);
+    expect(cards.map((card) => card.querySelectorAll('.annotation-card__header .note-badge').length)).toEqual([1, 0]);
   });
 
   it('keeps what the card names and its badge together, so a line of its own takes both', () => {
@@ -322,7 +360,7 @@ describe('a diagram beside the primary marks the node the rail note names', () =
   } };
   const onGate: ControllerAction = { op: 'show', id: 'gate-note', type: 'note', data: { tag: 'GATE', anchor: { target: 'flow', node: 'gate' }, segments: [{ text: 'The gate stamps each action.' }] } };
 
-  it('marks the node in its cell while the rail shows that note, and no node while it shows another', () => {
+  it('marks the node in its cell while the rail shows that note, after the primary\'s', () => {
     renderScene([table, flow, onGate]);
     const card = scene().querySelector('.content-rail .annotation-card');
     expect(card?.querySelector('.annotation-card__anchor')?.textContent).toBe('TARGET / Display gate');
@@ -332,8 +370,9 @@ describe('a diagram beside the primary marks the node the rail note names', () =
     expect(cell?.querySelector('.diagram-node__body--anchored')?.textContent).toContain('Display gate');
     const onGrid: ControllerAction = { op: 'show', id: 'grid-note', type: 'note', data: { tag: 'GRID', anchor: { target: 'grid' }, segments: [{ text: 'About the table.' }] } };
     runActions([onGrid]);
-    expect(scene().querySelector('.content-rail .annotation-card__tag')?.textContent).toBe('GRID');
-    expect(scene().querySelectorAll('.composed-aux .diagram-node__body--anchored')).toHaveLength(0);
+    const tags = [...scene().querySelectorAll('.content-rail .annotation-card__tag')].map((tag) => tag.textContent);
+    expect(tags).toEqual(['GRID', 'GATE']);
+    expect(scene().querySelectorAll('.composed-aux .diagram-node__body--anchored')).toHaveLength(1);
   });
 });
 

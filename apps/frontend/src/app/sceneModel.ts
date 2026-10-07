@@ -148,7 +148,7 @@ export function buildCompositionModel(state: ControllerState): CompositionModel 
   };
 }
 
-/** The note about an object: the first note shown whose anchor names it. The rail and the focus layer both take this one. */
+/** The note about an object: the first note shown whose anchor names it. The rail's first note (the rest follow it) and the one the focus layer takes. */
 export function anchoredNote(notes: Array<SceneObject<NoteData>>, targetId: string): SceneObject<NoteData> | undefined {
   return notes.find((note) => note.data.anchor?.target === targetId);
 }

@@ -1538,7 +1538,10 @@ button {
 }
 .composed-main--metric-primary {
   grid-template-rows: auto;
-  grid-auto-rows: auto;
+  /* As tall as its cells ask, but no taller than what the card leaves: on
+     a short stage (844x390) a chart's cell under the card ran past the
+     column and the stage's foot, its x axis out of view. */
+  grid-auto-rows: minmax(0, auto);
   align-content: center;
 }
 /* A metric card keeps its height; the aux row under it takes the rest of
@@ -1698,6 +1701,20 @@ button {
 }
 .rail-note--leads .annotation-card {
   height: auto;
+}
+/* A rail with more than one note reads each whole, at its own height, one
+   after another; the column scrolls where they do not all fit, its edges
+   fading as a scroller's do. */
+.content-rail__details > .rail-note--stacked {
+  flex: none;
+  min-height: 0;
+}
+.rail-note--stacked .annotation-card {
+  height: auto;
+}
+.content-rail > .scroll-rim__fade {
+  grid-column: 1;
+  grid-row: 2;
 }
 .content-rail__details > .rail-progress {
   flex: none;
@@ -5885,6 +5902,23 @@ button {
     --edge: clamp(20px, 3.4cqw, 66px);
     --rail: clamp(190px, 15cqw, 300px);
     --scene-gap: clamp(32px, 3.7cqw, 72px);
+  }
+  /* A stage twice as wide as tall has the width a metric card does not use
+     and not the height for a visual's cell under it: on a phone on its
+     side a chart's cell ran past the column's foot, its x axis out of
+     view. The aux row stands beside the card instead, as tall as the
+     column; a card with no row keeps the column to itself. */
+  .composed-main--metric-primary:has(> .composed-aux-viewport) {
+    grid-template-columns: fit-content(60%) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    align-content: stretch;
+  }
+  .composed-main--metric-primary:has(> .composed-aux-viewport) > .composed-primary-object {
+    align-self: center;
+  }
+  .composed-main--metric-primary > .composed-aux-viewport {
+    grid-row: 1;
+    grid-column: 2;
   }
   .content-grid {
     top: 13cqh;

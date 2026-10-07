@@ -13,10 +13,28 @@ import { cast, nameFields } from './sceneModel';
 // beside it), the item carries the NOTE badge wherever the object is drawn
 // (the main slot, an aux cell, focus), the twin of the badge on the card,
 // and the card's TARGET line names the item in the object's own words: a
-// diagram marks the node its shown note names the same way. A note the
-// page does not draw marks nothing, so a badge always has its card on
+// diagram marks the node its shown note names the same way. Of the notes
+// the page draws, only the first about an object marks (`markingNote`), and
+// only its card carries the badge, so a badge always has its mark on
 // screen. Neither validator looks the item up, so a name the object does
 // not hold marks nothing either.
+
+/**
+ * Of the notes the page draws in one place (the rail's, in order), the one
+ * whose node, actor or item `objectId` marks: the first about it. An object
+ * marks one part, so a later note about the same object marks nothing, and
+ * its card carries no badge (`railNoteTarget`).
+ */
+export function markingNote(notes: readonly NoteData[], objectId: string): NoteData | undefined {
+  return notes.find((note) => note.anchor?.target === objectId);
+}
+
+/** A rail card's target (`noteTarget`), its badge kept only where its object marks what it names: where it is the first of `drawn` about that object (`markingNote`). */
+export function railNoteTarget(objects: Readonly<Record<string, SceneObject | undefined>>, drawn: readonly NoteData[], note: NoteData | null | undefined): NoteTarget {
+  const named = noteTarget(objects, note);
+  const target = note?.anchor?.target;
+  return named.marked && target !== undefined && markingNote(drawn, target) !== note ? { ...named, marked: false } : named;
+}
 
 /** The item of a list the drawn note names (`markedPart`). */
 export function markedItem(note: NoteData | null | undefined, objectId: string): string | undefined {

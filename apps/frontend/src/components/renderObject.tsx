@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { NoteData, SceneObject } from '../controller/types';
-import { markedItem, standingNoteTarget } from '../app/noteItems';
+import { markedItem, markingNote, standingNoteTarget } from '../app/noteItems';
 import { cast } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
 import { CalendarPrimitive } from '../primitives/CalendarPrimitive';
@@ -27,7 +27,7 @@ export interface ObjectContext {
    * The notes the page draws about the object (the rail's, or those focus
    * keeps beside it), and the object marks what they name in it: a chart
    * the point of each (a bar outlined, its value printed; a point on a line
-   * ringed), any other object what the first names (`markedItem`: a list's
+   * ringed), any other object what the first naming it names (`markedItem`: a list's
    * item; a diagram's node or actor, with its NOTE marker).
    */
   notes: NoteData[];
@@ -47,7 +47,9 @@ export interface ObjectContext {
  * nothing.
  */
 export function renderObject(object: SceneObject, slot: Slot, { onStage, notes, onCalloutChange }: ObjectContext): ReactNode {
-  const note = notes[0] ?? null;
+  // The first note about this object of those the page draws there: the
+  // rail carries every note on stage, the one about the primary first.
+  const note = markingNote(notes, object.id) ?? null;
   const marked = markedItem(note, object.id);
   switch (object.type) {
     case 'chart': {

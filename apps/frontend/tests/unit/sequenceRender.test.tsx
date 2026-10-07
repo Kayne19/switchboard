@@ -5,7 +5,7 @@ import { DiagramObject } from '../../src/components/DiagramObject';
 import { SequencePrimitive } from '../../src/primitives/SequencePrimitive';
 import { traceDiagram } from '../../src/fixtures/scenes';
 import { layoutSequence, sequenceMinScale } from '../../src/primitives/sequenceLayout';
-import { mount, stubResizeObserver, unmount } from './sceneHarness';
+import { mount, referenced, stubResizeObserver, unmount } from './sceneHarness';
 
 const data: SequenceDiagramData = {
   mode: 'sequence',
@@ -63,8 +63,9 @@ describe('sequence rendering', () => {
     render(<SequencePrimitive data={data} id="seq" />);
     const active = host.querySelectorAll('.sequence-message--active');
     expect(active).toHaveLength(1);
-    expect(active[0].querySelector('.sequence-message__line')?.getAttribute('filter')).toBe('url(#sequence-active-glow)');
-    expect(host.querySelector('#sequence-active-glow')?.getAttribute('filterUnits')).toBe('userSpaceOnUse');
+    const glow = referenced(host, active[0].querySelector('.sequence-message__line')?.getAttribute('filter'));
+    expect(glow?.tagName).toBe('filter');
+    expect(glow?.getAttribute('filterUnits')).toBe('userSpaceOnUse');
   });
 
   it('paints message labels after the messages, each on its own backing', () => {

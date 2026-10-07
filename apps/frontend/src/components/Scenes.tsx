@@ -11,7 +11,7 @@ import type {
   SceneObject,
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../controller/types';
-import { noteTarget } from '../app/noteItems';
+import { noteTarget, railNoteTarget } from '../app/noteItems';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, nameFields, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { useLayoutMotion } from '../hooks/useLayoutMotion';
 import { watchElement } from '../hooks/watchElement';
@@ -19,6 +19,7 @@ import { AnnotationCard, type NoteTarget } from '../primitives/AnnotationCard';
 import { calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
+import { NOTES_PLACED_IN_FULL } from '../primitives/notePlacement';
 import { countText, type Noun } from '../primitives/countText';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { ListViewport, continuesPast, fadeDepth } from '../primitives/ListViewport';
@@ -134,11 +135,11 @@ interface ExplanationProps {
 // it resolves in and out only when an explanation appears or goes away. Its
 // layout animates position only: animating its size on a text change scales
 // the text while it reflows, which reads as a twitch.
-function RailNote({ note, noteObject, onFocus, onOpenHistory, named, leads = false }: ExplanationProps & { named: NoteTarget; leads?: boolean }) {
+function RailNote({ note, noteObject, onFocus, onOpenHistory, named, leads = false, stacked = false }: ExplanationProps & { named: NoteTarget; leads?: boolean; stacked?: boolean }) {
   return (
     <AnimatePresence initial={false}>
       {note ? (
-        <ObjectMotion key="rail-note" objectId={noteObject?.id ?? 'speech-note'} className={`rail-note${leads ? ' rail-note--leads' : ''}`} layout="position">
+        <ObjectMotion key="rail-note" objectId={noteObject?.id ?? 'speech-note'} className={`rail-note${leads ? ' rail-note--leads' : ''}${stacked ? ' rail-note--stacked' : ''}`} layout="position">
           <SurfaceBoundary surfaceId={noteObject?.id ?? 'speech-note'} resetKey={noteObject ?? note}>
             <AnnotationCard
               data={note}
@@ -149,6 +150,26 @@ function RailNote({ note, noteObject, onFocus, onOpenHistory, named, leads = fal
           </SurfaceBoundary>
         </ObjectMotion>
       ) : null}
+    </AnimatePresence>
+  );
+}
+
+// The notes the rail carries after its note: every note on stage is shown
+// somewhere, so a second note about the primary, one about another object
+// or one past what a chart holds is not dropped (pr/issues.md, "The rail
+// shows one note"). Each reads whole, at its own height, after the first,
+// in the order the agent showed them; the column scrolls where they do not
+// all fit. They lead with the first where it leads.
+function RailMoreNotes({ notes, drawn, onFocus, objects, leads }: { notes: Array<SceneObject<NoteData>>; drawn: NoteData[]; onFocus: (id: string | null) => void; objects: Readonly<Record<string, SceneObject>>; leads: boolean }) {
+  return (
+    <AnimatePresence initial={false}>
+      {notes.map((object) => (
+        <ObjectMotion key={object.id} objectId={object.id} className={`rail-note rail-note--stacked${leads ? ' rail-note--leads' : ''}`} layout="position">
+          <SurfaceBoundary surfaceId={object.id} resetKey={object}>
+            <AnnotationCard data={object.data} onFocus={() => onFocus(object.id)} named={railNoteTarget(objects, drawn, object.data)} />
+          </SurfaceBoundary>
+        </ObjectMotion>
+      ))}
     </AnimatePresence>
   );
 }
@@ -176,6 +197,10 @@ interface RailDetailsProps {
   metrics: Array<SceneObject<MetricData>>;
   note: NoteData | null;
   noteObject?: SceneObject<NoteData>;
+  /** The notes the rail carries after `note` (`RailMoreNotes`). */
+  moreNotes?: Array<SceneObject<NoteData>>;
+  /** Every note the page draws about the scene's objects, in order -- the rail's, and its note where a diagram carries it as a callout instead: an object marks what the first about it names, and only that card carries the badge. */
+  pageNotes?: NoteData[];
   progressList: Array<SceneObject<ProgressData>>;
   onFocus: (id: string | null) => void;
   onOpenHistory?: () => void;
@@ -306,7 +331,39 @@ function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFlo
   return under ? fit : FITS;
 }
 
+// Beside the main column, where the rail carries more than one note, the
+// column scrolls where they do not all fit, and an edge it continues past
+// fades as a scroller's edge does (under the column, useRailFit says so).
+function useColumnEdges(ref: RefObject<HTMLDivElement | null>, watching: boolean): Pick<RailFit, 'above' | 'below' | 'fade'> {
+  const [edges, setEdges] = useState({ above: false, below: false, fade: 0 });
+  useLayoutEffect(() => {
+    const column = ref.current;
+    if (!watching || !column) return undefined;
+    const measure = () => {
+      const next = { above: column.scrollTop > 1, below: column.scrollTop + column.clientHeight < column.scrollHeight - 1, fade: fadeDepth(column.clientHeight) };
+      setEdges((current) => (current.above === next.above && current.below === next.below && current.fade === next.fade ? current : next));
+    };
+    measure();
+    const stop = watchElement(column, measure, { children: true, changes: true });
+    let frame = 0;
+    const scrolled = () => {
+      if (frame === 0) frame = requestAnimationFrame(() => {
+        frame = 0;
+        measure();
+      });
+    };
+    column.addEventListener('scroll', scrolled, { passive: true });
+    return () => {
+      stop();
+      cancelAnimationFrame(frame);
+      column.removeEventListener('scroll', scrolled);
+    };
+  }, [ref, watching]);
+  return watching ? edges : FITS;
+}
+
 const noFloor = () => {};
+const NO_NOTES: Array<SceneObject<NoteData>> = [];
 
 // The details column beside every content visual: the metrics and any
 // progress the main column has no slot for, one stack of instruments read
@@ -316,28 +373,36 @@ const noFloor = () => {};
 // unmounting it first. Its children stand in one order in every state; a
 // note that leads a crowded column does so by its order there, so leading
 // moves nothing in or out of the page, and nothing is drawn afresh.
-function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, onOpenHistory, noteLeads = false, under = false, onFloor = noFloor, floor = null }: RailDetailsProps) {
+function RailDetails({ state, metrics, note, noteObject, moreNotes = NO_NOTES, pageNotes, progressList, onFocus, onOpenHistory, noteLeads = false, under = false, onFloor = noFloor, floor = null }: RailDetailsProps) {
   const liveMessage = liveChatMessage(state);
   const columnRef = useRef<HTMLDivElement>(null);
-  const crowded = useCrowded(columnRef, !under && noteLeads && note !== null);
+  const crowded = useCrowded(columnRef, !under && noteLeads && (note !== null || moreNotes.length > 0));
   const fit = useRailFit(columnRef, under, onFloor, floor);
+  const stacked = moreNotes.length > 0;
+  const beside = useColumnEdges(columnRef, !under && stacked);
+  const edges = under ? fit : beside;
   // The response and the note stretch into the column's free space, so while
   // either is shown the activity slot stays reserved and a tool starting or
   // clearing never resizes them. Metrics and progress keep their own size at
   // the top and are not moved by a panel below them.
-  const reserveActivity = liveMessage !== null || note !== null;
+  const reserveActivity = liveMessage !== null || note !== null || moreNotes.length > 0;
+  const leads = under ? fit.leads : crowded;
+  // Every note the page draws, in order: an object marks what the first
+  // about it names, and only that card carries the badge.
+  const drawn = pageNotes ?? [...(note ? [note] : []), ...moreNotes.map((object) => object.data)];
   return (
     <>
       <div ref={columnRef} className="content-rail__details">
         {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} slot="rail" /> : null}
         <RailProgress progressList={progressList} onFocus={onFocus} />
         {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-        <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={noteTarget(state.agentObjects, note)} leads={under ? fit.leads : crowded} />
+        <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={railNoteTarget(state.agentObjects, drawn, note)} leads={leads} stacked={stacked} />
+        <RailMoreNotes notes={moreNotes} drawn={drawn} onFocus={onFocus} objects={state.agentObjects} leads={leads} />
         <ToolActivity activity={state.activity} reserveSpace={reserveActivity} away={fit.away} />
       </div>
       {/* The column's edges as every scroller draws them: a fade, with no tag (what lies past is the rail's own). */}
-      {fit.above ? <ScrollRim side="top" fade={fit.fade} /> : null}
-      {fit.below ? <ScrollRim side="bottom" fade={fit.fade} /> : null}
+      {edges.above ? <ScrollRim side="top" fade={edges.fade} /> : null}
+      {edges.below ? <ScrollRim side="bottom" fade={edges.fade} /> : null}
     </>
   );
 }
@@ -346,23 +411,23 @@ function RailDetails({ state, metrics, note, noteObject, progressList, onFocus, 
 // chart's included, and otherwise the primary. Every note is shown -- a
 // second note on the chart is annotated beside the first, not dropped --
 // and with no note object on stage, a spoken explanation stands in on the
-// primary. The first note that names a visual on stage that is not a chart
-// (one in the aux row, say) is about that visual, not a chart: it is left
-// for the rail.
+// primary. A note that names a visual on stage that is not a chart (one in
+// the aux row, say) is about that visual, not a chart: it is left for the
+// rail, as many as there are.
 function chartNotesByPanel(
   state: ControllerState,
   charts: Array<SceneObject<ChartData>>,
   primary: SceneObject<ChartData>,
-): { byPanel: Map<string, ChartNote[]>; offCharts?: ChartNote } {
+): { byPanel: Map<string, ChartNote[]>; offCharts: ChartNote[] } {
   const byPanel = new Map<string, ChartNote[]>();
   const add = (chartId: string, note: ChartNote) => byPanel.set(chartId, [...(byPanel.get(chartId) ?? []), note]);
-  let offCharts: ChartNote | undefined;
+  const offCharts: ChartNote[] = [];
   const noteObjects = objectsOfType<NoteData>(state, 'note');
   for (const object of noteObjects) {
     const targetId = object.data.anchor?.target;
     const named = targetId ? state.agentObjects[targetId] : undefined;
-    if (!offCharts && named && named.type !== 'chart' && named.id !== object.id) {
-      offCharts = { key: object.id, data: object.data, object };
+    if (named && named.type !== 'chart' && named.id !== object.id) {
+      offCharts.push({ key: object.id, data: object.data, object });
       continue;
     }
     const target = charts.find((chart) => chart.id === targetId) ?? primary;
@@ -401,6 +466,8 @@ interface SceneContent {
   metrics: Array<SceneObject<MetricData>>;
   note: NoteData | null;
   noteObject?: SceneObject<NoteData>;
+  /** The notes the rail carries after `note`, in the order shown: none is dropped. */
+  moreNotes?: Array<SceneObject<NoteData>>;
   /** The rail's note is one the charts could not hold, or one about a visual off them: in a rail too short for all it carries, it leads. */
   noteLeads?: boolean;
   progressList: Array<SceneObject<ProgressData>>;
@@ -434,15 +501,23 @@ function trainingContent(
   // points they name, and of the data the chart draws. Only the one note it
   // cannot hold so, where the rail stands under the charts, takes a band.
   const { byPanel: notesByPanel, offCharts } = chartNotesByPanel(state, charts, primary);
-  const primaryNotes = notesByPanel.get(primary.id) ?? [];
+  // A chart lays at most `NOTES_PLACED_IN_FULL` notes over itself, the
+  // first it was shown, each placed clear of the others and of its data;
+  // the rest are read in the rail, where a card has room, rather than over
+  // the data or one another (pr/issues.md, "where notes past five go").
+  // The chart still marks the points they name.
+  const laidOn = (chart: SceneObject<ChartData>) => (notesByPanel.get(chart.id) ?? []).slice(0, NOTES_PLACED_IN_FULL);
+  const pastLaid = charts.flatMap((chart) => (notesByPanel.get(chart.id) ?? []).slice(NOTES_PLACED_IN_FULL));
+  const primaryNotes = laidOn(primary);
   // A note the primary chart left out, held in a band under the charts:
   // the chart no longer places it, and the rail does not carry it.
   const banded = band?.chart === primary.id ? primaryNotes.find((note) => note.key === band.note) : undefined;
-  // The rail's one note slot: a note about a visual off the charts, else
-  // the note the primary chart leaves out so the rest have clear places.
-  const inRail =
-    offCharts ??
-    (railNote?.chart === primary.id && railNote.note !== banded?.key ? primaryNotes.find((note) => note.key === railNote.note) : undefined);
+  // The rail's notes: those about a visual off the charts, the note the
+  // primary chart leaves out so the rest have clear places, and the notes
+  // past those a chart lays over itself, in that order.
+  const handedOver = railNote?.chart === primary.id && railNote.note !== banded?.key ? primaryNotes.find((note) => note.key === railNote.note) : undefined;
+  const inRail = [...offCharts, ...(handedOver ? [handedOver] : []), ...pastLaid];
+  const [railLead, ...railMore] = inRail;
   // Frame text the chart leaves out names what it is -- its kind -- and
   // nothing more: a bar chart of test durations is not a training run.
   const kind = chartKind(primary.data).toUpperCase();
@@ -453,11 +528,13 @@ function trainingContent(
     footer: 'DISPLAY / COMPOSED',
     caption: sceneCaption(primary, `PRIMARY / ${kind} CHART`),
     metrics: objectsOfType<MetricData>(state, 'metric'),
-    // The notes sit on the charts here; the rail carries only the one the
-    // primary leaves out, or one about a visual that is not a chart.
-    note: inRail?.data ?? null,
-    noteObject: inRail?.object,
-    noteLeads: inRail !== undefined,
+    // The notes sit on the charts here; the rail carries the one the
+    // primary leaves out, those about a visual that is not a chart, and
+    // those past what a chart lays over itself.
+    note: railLead?.data ?? null,
+    noteObject: railLead?.object,
+    moreNotes: railMore.flatMap((note) => (note.object ? [note.object] : [])),
+    noteLeads: railLead !== undefined,
     progressList: railProgress,
     // A band is carved from one chart's slot. A compare pair on a portrait
     // stage already scrolls in its row, and a band would push the second
@@ -469,9 +546,11 @@ function trainingContent(
         <div className={`training-charts${charts.length > 1 ? ' training-charts--compare' : ''}`}>
           <AnimatePresence mode="popLayout" initial={false}>
             {charts.map((chart) => {
+              // Every note about the chart: the chart marks each one's point.
               const notes = notesByPanel.get(chart.id) ?? [];
+              const laid = laidOn(chart);
               // Its bar or point stays marked; the card is in the band.
-              const onChart = banded ? notes.filter((note) => note.key !== banded.key) : notes;
+              const onChart = banded ? laid.filter((note) => note.key !== banded.key) : laid;
               // The notes whose leaders run to their points on the chart: not
               // the one in the band, nor the one the chart left for the rail.
               const away = railNote?.chart === chart.id ? railNote.note : undefined;
@@ -492,7 +571,7 @@ function trainingContent(
                       named={chartNoteAnchors(chart, notes)}
                       onFocus={onFocus}
                       onOpenHistory={onOpenHistory}
-                      onRailNote={chart.id === primary.id && !offCharts ? onRailNote : undefined}
+                      onRailNote={chart.id === primary.id ? onRailNote : undefined}
                     />
                   ) : null}
                   {chart.role === 'compare' ? <div className="compare-label tech micro">COMPARE / {chart.data.compareLabel ?? 'RUN'}</div> : null}
@@ -537,8 +616,11 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
   const primary = primaryObject(state);
   const frame = primary ? sceneFrame(primary) : null;
   if (!primary || !frame) return null;
-  const noteObject = noteForTarget(objectsOfType<NoteData>(state, 'note'), primary.id);
+  const noteObjects = objectsOfType<NoteData>(state, 'note');
+  const noteObject = noteForTarget(noteObjects, primary.id);
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
+  // The other notes on stage follow it in the rail: the page shows them all.
+  const moreNotes = noteObjects.filter((object) => object.id !== noteObject?.id);
   const { outline, ...words } = frame;
   return {
     ...words,
@@ -548,13 +630,14 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
     metrics: objectsOfType<MetricData>(state, 'metric'),
     note,
     noteObject,
+    moreNotes,
     progressList: objectsOfType<ProgressData>(state, 'progress'),
     main: (
       <ObjectMotion objectId={primary.id} className={`content-main ${primary.type}-object`}>
         {outline ? <TechFrame variant={outline} /> : null}
         <ObjectSurface object={primary}>
           <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-            {renderObject(primary, 'primary', { onStage: state.agentObjects, notes: note ? [note] : [], onCalloutChange })}
+            {renderObject(primary, 'primary', { onStage: state.agentObjects, notes: [...(note ? [note] : []), ...moreNotes.map((object) => object.data)], onCalloutChange })}
           </FocusableSurface>
         </ObjectSurface>
       </ObjectMotion>
@@ -695,7 +778,7 @@ const PANEL: Noun = ['PANEL', 'PANELS'];
 // never lost to the layout. A visual keeps a readable floor in its cell; a
 // row with no room for every cell scrolls inside itself rather than squeezing
 // one to nothing (`.composed-aux` in styles/index.css). Each object marks
-// what the rail's note names in it (`drawn`): an item, a node, an actor.
+// what the rail's notes name in it (`drawn`): an item, a node, an actor.
 function AuxRow({
   objects,
   onStage,
@@ -706,8 +789,8 @@ function AuxRow({
   /** Every object on stage, by id. */
   onStage: ControllerState['agentObjects'];
   onFocus: (id: string | null) => void;
-  /** The note the rail draws: each cell marks what it names in its object. */
-  drawn: NoteData | null;
+  /** The notes the page draws: each cell marks what the first about its object names. */
+  drawn: NoteData[];
 }) {
   // A row with no room for every cell scrolls under the rim every scroller
   // draws, counting the cells wholly past each edge (ListViewport); it opens
@@ -723,7 +806,7 @@ function AuxRow({
           <TechFrame variant="panel" />
           <ObjectSurface object={object}>
             <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
-              {renderObject(object, 'aux', { onStage, notes: drawn ? [drawn] : [] })}
+              {renderObject(object, 'aux', { onStage, notes: drawn })}
             </FocusableSurface>
           </ObjectSurface>
         </ObjectMotion>
@@ -762,7 +845,7 @@ function MainWithAux({
   aux: SceneObject[];
   onStage: ControllerState['agentObjects'];
   onFocus: (id: string | null) => void;
-  drawn: NoteData | null;
+  drawn: NoteData[];
   ref?: RefObject<HTMLDivElement | null>;
   children: ReactNode;
 }) {
@@ -829,6 +912,9 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
     ...besideVisuals(comp).filter((o) => o.role !== 'compare'),
     ...progressList.filter((p) => p.id !== primary.id && !comp.compare.some((c) => c.id === p.id)),
   ];
+  // The other notes, neither the primary nor drawn in the aux row, follow
+  // the rail's note: the page shows them all.
+  const moreNotes = noteObjects.filter((object) => object.id !== noteObject?.id && object.id !== primary.id && !auxObjects.some((aux) => aux.id === object.id));
 
   return {
     // Named by the same fields, in the same order, as the agent's view (`nameFields`).
@@ -840,6 +926,7 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
     metrics: isMetricPrimary ? metrics.filter((metric) => !primaryMetricIds.has(metric.id)) : metrics,
     note,
     noteObject: noteIsPrimary ? undefined : noteObject,
+    moreNotes,
     progressList: [],
     aux: auxObjects,
     mainVariant: isMetricPrimary ? 'composed-main--metric-primary' : undefined,
@@ -873,7 +960,7 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
                 />
               ) : (
                 // A progress or a note: sceneKind gives every visual primary a scene of its own.
-                renderObject(primary, 'primary', { onStage: state.agentObjects, notes: note ? [note] : [] })
+                renderObject(primary, 'primary', { onStage: state.agentObjects, notes: [...(note ? [note] : []), ...moreNotes.map((object) => object.data)] })
               )}
             </FocusableSurface>
           </ObjectSurface>
@@ -989,6 +1076,8 @@ export function SceneShell(props: SceneProps) {
     if (banding && chartRailNote?.chart === banding.chart) setChartBand(chartRailNote);
   }, [banding, bandHeld, chartBand, chartRailNote]);
   const railNote = calloutPlaced ? null : (content?.note ?? null);
+  // The note a diagram carries as a callout still marks its node first.
+  const pageNotes = [...(content?.note ? [content.note] : []), ...(content?.moreNotes ?? []).map((object) => object.data)];
   const railMotion = useLayoutMotion({ layout: true });
   const presence = (
     <DamoclesPresence
@@ -1017,7 +1106,7 @@ export function SceneShell(props: SceneProps) {
             <div className="scene-heading__sub tech micro">{content.subtitle}</div>
           </div>
           <div className="content-grid" style={railFloor !== null ? ({ '--rail-floor': `${railFloor}px` } as CSSProperties) : undefined}>
-            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} drawn={calloutPlaced ? null : content.note}>
+            <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} drawn={pageNotes}>
               {content.main}
             </MainWithAux>
             <motion.aside ref={railRef} className="content-rail" {...railMotion}>
@@ -1027,6 +1116,8 @@ export function SceneShell(props: SceneProps) {
                 metrics={content.metrics}
                 note={railNote}
                 noteObject={calloutPlaced ? undefined : content.noteObject}
+                moreNotes={content.moreNotes}
+                pageNotes={pageNotes}
                 progressList={content.progressList}
                 onFocus={onFocus}
                 onOpenHistory={onOpenHistory}

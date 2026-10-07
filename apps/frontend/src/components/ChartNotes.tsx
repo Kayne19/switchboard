@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
@@ -7,6 +7,7 @@ import { AnnotationCard } from '../primitives/AnnotationCard';
 import {
   chartFrame,
   chartObstacles,
+  chartRingBox,
   chartScales,
   chartNoteTarget,
   type ChartAnchor,
@@ -15,6 +16,7 @@ import {
 } from '../primitives/chartGeometry';
 import { layoutNotes, NOTE_CARD_CUT, placedInFull, routeLeader, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
 import { crispLine, type Point, type Rect, type Size } from '../primitives/geometry';
+import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** One note on a chart: a note object, or the spoken explanation standing in for one. */
@@ -45,10 +47,12 @@ const MAX_CARD_SHARE = 0.8;
 // The notes are placed again at most once a step of this many pixels of
 // the layer's size or the chart's, as a graph is laid out once a step
 // (diagramLayout's FRAME_STEP): a placement of a few notes costs tens of
-// milliseconds of CPU on a line chart and up to 200-250 ms on a dense bar
+// milliseconds of CPU on a line chart and up to some 70 ms on a dense bar
 // chart (four series of 40 with five notes and the rail), more in the page,
-// and a resize measures every frame. Past `NOTES_PLACED_IN_FULL` notes it
-// is bounded (`placedInFull`): sixteen on that bar chart cost about 40 ms.
+// and a resize measures every frame. The scene lays at most
+// `NOTES_PLACED_IN_FULL` notes on a chart (the rail takes the rest); past
+// that many `layoutNotes` would bound its work (`placedInFull`), a guard
+// the page does not reach.
 // Within a step the cards follow their points, and once the size has held
 // still for `REST_MS` the notes are placed for it, so where they come to
 // rest is where they would stand had the page opened at that size.
@@ -161,7 +165,8 @@ function sameLayout(a: NotesLayout | null, b: NotesLayout): boolean {
  * chart's drawn geometry and itself, and `layoutNotes` decides where each
  * card goes, so no card covers another, its own point, or the data the
  * chart draws where a clear place exists -- on a chart with at most
- * `NOTES_PLACED_IN_FULL` notes; past that the placement is bounded
+ * `NOTES_PLACED_IN_FULL` notes, as many as the scene lays on one chart
+ * (the rail takes the rest); given more, the placement is bounded
  * (`placedInFull`), and a later card may cover them.
  *
  * Where the scene gives it `onRailNote` and some card has no place that
@@ -202,7 +207,7 @@ export function ChartNotes({
   named?: ChartAnchor[];
 }) {
   const reduced = useReducedMotion();
-  const gradientBase = useId().replace(/:/g, '');
+  const ids = useSvgIds();
   const layerRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const [layout, setLayout] = useState<NotesLayout | null>(null);
@@ -223,18 +228,18 @@ export function ChartNotes({
   // frame -- the box the cards and leaders are placed in -- is the canvas's
   // size, moved by the scroll, so the cards are laid out over the whole
   // chart and keep to the bars they name. Found from the panel the layer
-  // stands in; found in the same frame the chart starts or stops scrolling.
+  // stands in; found in the same frame the chart starts or stops scrolling:
+  // at mount the layout effect's own update is committed before the frame
+  // is painted, and a later change the observer reports is committed at once
+  // (flushSync), which React allows outside a lifecycle method only.
   const outerRef = useRef<HTMLDivElement>(null);
   const [canvas, setCanvas] = useState<HTMLElement | null>(null);
   useLayoutEffect(() => {
     const panel = outerRef.current?.parentElement;
     if (!panel) return undefined;
-    const find = () => {
-      const found = panel.querySelector<HTMLElement>('.chart-primitive__canvas');
-      flushSync(() => setCanvas(found));
-    };
-    find();
-    const watcher = new MutationObserver(find);
+    const find = () => panel.querySelector<HTMLElement>('.chart-primitive__canvas');
+    setCanvas(find());
+    const watcher = new MutationObserver(() => flushSync(() => setCanvas(find())));
     watcher.observe(panel, { childList: true, subtree: true });
     return () => watcher.disconnect();
   }, []);
@@ -407,6 +412,9 @@ export function ChartNotes({
           from: target?.from,
           bar: target?.bar && rectToLayer(target.bar),
           value: target?.value && rectToLayer(target.value),
+          // Shown in the rail, a point on a line, area or scatter chart
+          // keeps a ring (`chartRings`), which the other cards keep off.
+          ring: target && !target.from ? rectToLayer(chartRingBox(target.point)) : undefined,
         });
       }
       const options = { spill, leaderOverlap: 1 };
@@ -508,8 +516,9 @@ export function ChartNotes({
               const toBar = targets.get(note.key)?.from !== undefined;
               const start = leader[0];
               const end = leader[leader.length - 1];
-              // Named for its note, so a leader fading out keeps its own.
-              const gradientId = `${gradientBase}-leader-${note.key.replace(/[^\w-]/g, '_')}`;
+              // Named for its note, so a leader fading out keeps its own;
+              // escaped one-to-one, so `obs.1` and `obs_1` keep two.
+              const gradientId = ids('leader', note.key);
               return (
                 <motion.g
                   key={note.key}
@@ -531,7 +540,7 @@ export function ChartNotes({
                     className="chart-note-leader__line"
                     points={leader.map((point) => `${point.x},${point.y}`).join(' ')}
                     fill="none"
-                    stroke={`url(#${gradientId})`}
+                    stroke={svgUrl(gradientId)}
                   />
                 </motion.g>
               );

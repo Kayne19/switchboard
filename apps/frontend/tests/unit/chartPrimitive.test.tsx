@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChartData } from '../../src/controller/types';
 import { ChartPrimitive, chartSeriesColor, chartXTicks } from '../../src/primitives/ChartPrimitive';
 import {
+  CHART_AXIS_NAME_ADVANCE,
   CHART_FRAME,
   CHART_LEGEND_CHAR_ADVANCE,
   CHART_LEGEND_GAP,
@@ -769,5 +770,72 @@ describe('chart category labels down the left', () => {
       const middle = (ys[0] + ys[ys.length - 1]) / 2;
       expect(middle).toBeCloseTo(scales.xAt(index) + 4, 6);
     });
+  });
+});
+
+// review-drawing L3: an axis name of up to 128 characters ran past the plot
+// and across the frame; the legend and the category labels were cut already.
+describe("a chart's axis names", () => {
+  const long = (word: string) => `${word} `.repeat(30).trim().slice(0, 128);
+  it.each(['line', 'bar'] as const)('are cut to the span of their axis, the whole name in a title (%s)', (kind) => {
+    const chart: ChartData = { kind, xLabel: long('EPOCHS'), yLabel: long('LOSS'), labels: kind === 'bar' ? ['A', 'B'] : undefined, series: [{ name: 'S', values: [1, 2] }] };
+    host = mount(<ChartPrimitive data={chart} />);
+    const scales = chartScales(chart);
+    const names = [...host.querySelectorAll('.chart-axis-label')];
+    expect(names).toHaveLength(2);
+    const spans = [scales.plot.right - scales.plot.left, scales.plot.bottom - scales.plot.top];
+    names.forEach((name, index) => {
+      const text = name.firstChild!.textContent!;
+      expect(text.endsWith('…')).toBe(true);
+      expect(text.length * CHART_AXIS_NAME_ADVANCE).toBeLessThanOrEqual(spans[index]);
+      expect(name.querySelector('title')?.textContent).toBe(index === 0 ? chart.xLabel : chart.yLabel);
+    });
+    unmount(host);
+  });
+
+  it('are drawn whole, with no title, where they fit', () => {
+    host = mount(<ChartPrimitive data={{ xLabel: 'EPOCH', yLabel: 'LOSS', series: [{ name: 'S', values: [1, 2] }] }} />);
+    expect([...host.querySelectorAll('.chart-axis-label')].map((name) => name.textContent)).toEqual(['EPOCH', 'LOSS']);
+    expect(host.querySelector('.chart-axis-label title')).toBeNull();
+    unmount(host);
+  });
+});
+
+// review-drawing L4: ends that leave no domain (`yMin >= yMax`) drew an
+// empty plot with one tick and every value off it, and values near
+// Number.MAX_VALUE overflowed the axis's span and step: React logged
+// "Received NaN for the y1 attribute" and the axis printed NaN.
+describe('a value axis with no room for a round step', () => {
+  const cases: Array<[string, ChartData]> = [
+    ['yMin past yMax', { yMin: 10, yMax: 0, series: [{ name: 'S', values: [2, 4, 6] }] }],
+    ['yMin at yMax', { kind: 'bar', labels: ['A', 'B'], yMin: 5, yMax: 5, series: [{ name: 'S', values: [2, 4] }] }],
+    ['a bar near the largest number', { kind: 'bar', labels: ['A', 'B'], series: [{ name: 'S', values: [1.7e308, 1] }] }],
+    ['a line across the whole range', { xMax: 2, series: [{ name: 'S', values: [1.7e308, -1.7e308, 0] }] }],
+    ['a flat line near the largest number', { xMax: 2, series: [{ name: 'S', values: [1.7e308, 1.7e308] }] }],
+    ['an area from the most negative number', { kind: 'area', xMax: 1, series: [{ name: 'S', values: [-1.7e308, 1] }] }],
+  ];
+  it.each(cases)('keeps a domain and draws every value on the plot (%s)', (_, chart) => {
+    const scales = chartScales(chart);
+    expect(scales.yMin).toBeLessThan(scales.yMax);
+    expect(scales.valueTicks.length).toBeGreaterThan(1);
+    for (const tick of scales.valueTicks) expect(Number.isFinite(tick)).toBe(true);
+    for (const series of chart.series) {
+      series.values.forEach((value, index) => {
+        const point = scales.pointAt(scales.sampleX(series, index), value);
+        expect(point.y).toBeGreaterThanOrEqual(scales.plot.top - 0.01);
+        expect(point.y).toBeLessThanOrEqual(scales.plot.bottom + 0.01);
+      });
+    }
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    host = mount(<ChartPrimitive data={chart} />);
+    expect(host.innerHTML).not.toContain('NaN');
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+    unmount(host);
+  });
+
+  it('keeps the domain a chart gives where it has room', () => {
+    const scales = chartScales({ yMin: 0, yMax: 10, series: [{ name: 'S', values: [2, 4] }] });
+    expect([scales.yMin, scales.yMax]).toEqual([0, 10]);
   });
 });

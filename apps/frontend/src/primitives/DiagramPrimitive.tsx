@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub } from './diagramLayout';
 import { GlowFilters, LABEL_HEIGHT, entranceStep, pathThrough } from './drawingKit';
+import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
@@ -64,6 +65,7 @@ export function DiagramPrimitive({
   onCalloutChange?: (placed: boolean) => void;
 }) {
   const callout = slot === 'primary';
+  const ids = useSvgIds();
   const anchoredNodeId = markedPart(note, id).node;
   const hasAnchoredNode = Boolean(anchoredNodeId && data.nodes.some((n) => n.id === anchoredNodeId));
   const anchor = hasAnchoredNode ? anchoredNodeId : undefined;
@@ -176,13 +178,13 @@ export function DiagramPrimitive({
     <div ref={hostRef} className={`diagram-primitive${slot === 'focus' ? ' diagram-primitive--focused' : ''}`} data-testid="diagram">
       <DrawingViewport drawing={layout} fit={fit} lead={lead} map={map} strip={strip} ariaLabel={data.title ?? 'System diagram'}>
         <defs>
-          <GlowFilters line="active-edge-glow" frame="diagram-node-glow" />
+          <GlowFilters line={ids('edge-glow')} frame={ids('node-glow')} />
           {/* One arrowhead per colour: a marker cannot take its fill from the
               path it ends, so each edge points at the marker of its own hue. */}
           {SEMANTICS.map((semantic) => (
             <marker
               key={semantic}
-              id={`diagram-arrow-${semantic}`}
+              id={ids('arrow', semantic)}
               className="diagram-arrow"
               viewBox="0 0 10 10"
               refX="10"
@@ -210,8 +212,8 @@ export function DiagramPrimitive({
                 strokeWidth={edge.active ? 2 : 1.25}
                 strokeDasharray={edge.active ? '10 8' : undefined}
                 vectorEffect="non-scaling-stroke"
-                filter={edge.active ? 'url(#active-edge-glow)' : undefined}
-                markerEnd={`url(#diagram-arrow-${edge.edge.semantic ?? 'paper'})`}
+                filter={edge.active ? svgUrl(ids('edge-glow')) : undefined}
+                markerEnd={svgUrl(ids('arrow', edge.edge.semantic ?? 'paper'))}
               />
             ),
           )}
@@ -230,8 +232,8 @@ export function DiagramPrimitive({
               strokeWidth={stub.active ? 2 : 1.25}
               strokeDasharray={stub.active ? '10 8' : undefined}
               vectorEffect="non-scaling-stroke"
-              filter={stub.active ? 'url(#active-edge-glow)' : undefined}
-              markerEnd={stub.head ? `url(#diagram-arrow-${stub.semantic})` : undefined}
+              filter={stub.active ? svgUrl(ids('edge-glow')) : undefined}
+              markerEnd={stub.head ? svgUrl(ids('arrow', stub.semantic)) : undefined}
             />
           ))}
         </g>
@@ -266,7 +268,7 @@ export function DiagramPrimitive({
                     strokeOpacity={lit || state === 'blocked' ? '1' : '.64'}
                     strokeWidth={lit ? '2.2' : '1.3'}
                     vectorEffect="non-scaling-stroke"
-                    filter={lit ? 'url(#diagram-node-glow)' : undefined}
+                    filter={lit ? svgUrl(ids('node-glow')) : undefined}
                   />
                   <line
                     x1="16"

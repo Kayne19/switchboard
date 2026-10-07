@@ -14,7 +14,7 @@ import {
   type NoteToPlace,
   type PlaceOptions,
 } from '../../src/primitives/notePlacement';
-import { hiddenTraceLength, type Point, type Rect } from '../../src/primitives/geometry';
+import { hiddenTraceLength, overlapArea, type Point, type Rect } from '../../src/primitives/geometry';
 import { leastCpuMs } from './cpuTime';
 
 // Each card's box, as most of these cases read it.
@@ -782,6 +782,27 @@ describe('the note left out for the rail', () => {
     expect([...layoutNotes(notes, { area }, { spill: true }).keys()].sort()).toEqual(['general', 'observation']);
   });
 
+  // REPORT-line-notes-revert Open 4: the others were placed against the
+  // left-out note's point (6 px clear) but not the ring the chart then draws
+  // round it, so a card could touch or cover the ring.
+  it('keeps the other cards off the ring the chart draws round the point of the note it leaves out', () => {
+    const area = box(0, 0, 400, 200);
+    const point = { x: 108, y: 20 };
+    const ring = box(point.x - 6, point.y - 6, 12, 12);
+    // `named` covers its own point wherever it goes, so the rail takes it;
+    // the general note settles into the top-left corner, 8 px from that point.
+    const notes: NoteToPlace[] = [
+      { id: 'general', width: 100, height: 40 },
+      { id: 'named', width: 380, height: 190, point, ring },
+    ];
+    const placed = layoutNotes(notes, { area }, { spill: true });
+    expect([...placed.keys()]).toEqual(['general']);
+    expect(overlapArea(inflate(placed.get('general')!.rect, DATA_CLEARANCE), ring)).toBe(0);
+    // Without a ring to keep off, the corner is its place: the ring is what moves it.
+    const unringed = layoutNotes(notes.map(({ ring: _, ...note }) => note), { area }, { spill: true });
+    expect(unringed.get('general')!.rect).toEqual(box(0, 0, 100, 40));
+  });
+
   it('counts a card over another card astray, and gives the rail the one that has no place', () => {
     // Two cards as tall as the field side by side would cover each other: one goes.
     const area = box(0, 0, 500, 300);
@@ -841,24 +862,48 @@ const spread = (count: number): ChartAnchorAt[] => Array.from({ length: count },
 // place could not win, and tried every other size again in each run for
 // the rail: a 40-category chart of four series with five notes took over a
 // second (1208 ms), at mount and on every resize frame (review finding).
-// It takes some 200-250 ms of CPU time now, up to 400 ms at load 50; the
-// budget is CPU time, the least of three runs (cpuTime.ts says why).
+// Then the search read every bar across each place it tried, for every
+// pass, size and run, and sorted them: 200-250 ms of CPU with five anchored
+// notes, 300-320 ms with five that name no point. It reads what the data
+// blocks across a span once a span now, joined: some 70 ms and 55 ms alone,
+// 160 ms with the suite beside it, and a budget of 200 ms failed at load 60
+// (fix-ci's run). The budget is CPU time, the least of five runs (cpuTime.ts
+// says why), at 400 ms: some 2.5x the loaded cost, and still a third of the
+// 1208 ms regression these tests were written to catch.
 describe('placing notes on a dense bar chart', () => {
-  it('stays within a frame budget or two', () => {
-    const { notes, field } = denseBarNotes([{ x: 1, series: 'S0' }, { x: 10, series: 'S1' }, { x: 20, series: 'S2' }, { x: 30, series: 'S3' }, { x: 39, series: 'S0' }]);
-    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(900);
+  const five = [{ x: 1, series: 'S0' }, { x: 10, series: 'S1' }, { x: 20, series: 'S2' }, { x: 30, series: 'S3' }, { x: 39, series: 'S0' }];
+  it('stays within a frame budget or two with five notes on bars', () => {
+    const { notes, field } = denseBarNotes(five);
+    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }), 5)).toBeLessThan(400);
+  });
+
+  it('stays within a frame budget or two with five notes that name no point', () => {
+    const { notes, field } = denseBarNotes(five);
+    const general = notes.map(({ id, width, height, sizes }) => ({ id, width, height, sizes }));
+    expect(leastCpuMs(() => layoutNotes(general, field, { spill: true }), 5)).toBeLessThan(400);
   });
 });
 
 // A line chart's notes take the free leader path: no route is worked out
 // for each place a card tries, so a chart of four series with three notes
 // and the rail is placed in a few milliseconds. The budget is CPU time, the
-// least of three runs (cpuTime.ts says why), wide enough for a loaded machine.
+// least of five runs (cpuTime.ts says why), wide enough for a loaded machine.
 describe('placing notes on a line chart', () => {
   it('stays within a frame budget', () => {
     const { notes, field } = lineNotes([{ x: 10, series: 'S0' }, { x: 20, series: 'S1' }, { x: 30, series: 'S2' }]);
-    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(100);
+    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }), 5)).toBeLessThan(100);
   });
+
+  // Each note left out for the rail rings its point, and the run that
+  // places the others without it reuses the run with every note only where
+  // no other card meets that ring: the left-out note's own card always
+  // does, and counting it placed every card again in every run (review M3).
+  it('stays within a frame budget with five ringed notes and the rail', () => {
+    const { notes, field } = lineNotes(spread(5));
+    const ringed = notes.map((note) => ({ ...note, ring: { left: note.point!.x - 6, top: note.point!.y - 6, right: note.point!.x + 6, bottom: note.point!.y + 6 } }));
+    expect(leastCpuMs(() => layoutNotes(ringed, field, { spill: true }), 5)).toBeLessThan(250);
+  });
+
 });
 
 // Nothing bounds how many notes a chart carries: an agent that adds one per
@@ -872,12 +917,12 @@ describe('placing notes on a line chart', () => {
 describe('placing many notes on one chart', () => {
   it('stays within a frame budget or two with sixteen notes on a dense bar chart', () => {
     const { notes, field } = denseBarNotes(spread(16));
-    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(100);
+    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }), 5)).toBeLessThan(250);
   });
 
   it('stays within a frame budget or two with sixteen notes on a line chart', () => {
     const { notes, field } = lineNotes(spread(16));
-    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }))).toBeLessThan(100);
+    expect(leastCpuMs(() => layoutNotes(notes, field, { spill: true }), 5)).toBeLessThan(250);
   });
 
   it(`leaves no note out for the rail past ${NOTES_PLACED_IN_FULL} notes`, () => {

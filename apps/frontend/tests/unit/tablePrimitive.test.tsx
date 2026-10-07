@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { TablePrimitive, inferColumnAlignment } from '../../src/primitives/TablePrimitive';
 import type { TableData } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
+import { leastCpuMs } from './cpuTime';
 import { mount, stubResizeObserver } from './sceneHarness';
 
 // The rows scroll in a list viewport, which watches its box.
@@ -42,6 +43,21 @@ describe('inferColumnAlignment', () => {
       ['\u2014', 3, '-'],
     ]))).toEqual(['end', 'end', 'start']);
     expect(inferColumnAlignment(table(['a'], [[12], ['twelve']]))).toEqual(['start']);
+  });
+
+  it('reads a space inside the digits, and the space before a unit', () => {
+    expect(inferColumnAlignment(table(['a', 'b', 'c', 'd'], [['1 000', '12 ms', '1 000 000 kB', '4.5 %']]))).toEqual(['end', 'end', 'end', 'end']);
+    expect(inferColumnAlignment(table(['a', 'b'], [['12 ms!', '1 , 2']]))).toEqual(['start', 'start']);
+  });
+
+  // review-drawing L8: three patterns that each took a run of spaces made a
+  // cell of a digit and 254 spaces cost some 4-25 ms to refuse, and a
+  // column stops only at its first such cell: twelve of them, every render.
+  it('refuses a digit followed by a run of spaces in linear time', () => {
+    const cell = `1${' '.repeat(254)}!`;
+    const wide = table(Array.from({ length: 12 }, (_, index) => `c${index}`), [Array.from({ length: 12 }, () => cell)]);
+    expect(inferColumnAlignment(wide)).toEqual(Array.from({ length: 12 }, () => 'start'));
+    expect(leastCpuMs(() => inferColumnAlignment(wide))).toBeLessThan(5);
   });
 
   it('reads styled cells by their text, and sets an empty column to the start', () => {

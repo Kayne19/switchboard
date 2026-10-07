@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from 'motion/react';
-import { useId, useMemo, useRef } from 'react';
+import { useMemo, useRef } from 'react';
 import type { ChartData, ChartKind, ChartSeries, Semantic } from '../controller/types';
 import {
   CHART_LEGEND_KEY_WIDTH,
@@ -11,6 +11,8 @@ import {
   CHART_POINT_RADIUS,
   CHART_TICK_BASELINE,
   CHART_TICK_ROW_HEIGHT,
+  chartAxisNames,
+  chartBarCallout,
   chartBarCallouts,
   chartBars,
   chartCategoryLabelX,
@@ -25,6 +27,7 @@ import {
 } from './chartGeometry';
 import { SEMANTIC_COLOR } from '../design/tokens';
 import { useElementSize } from '../hooks/useElementSize';
+import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 import type { Point } from './geometry';
 import { ListViewport } from './ListViewport';
 import type { Slot } from './slot';
@@ -65,7 +68,7 @@ function formatValueTick(value: number, decimals: number): string {
 // stays closed where an end the chart gives falls between round values.
 function valueGridLines(scales: ChartScales): Array<{ value: number; tick: boolean }> {
   const { valueTicks, yMin, yMax } = scales;
-  const near = (a: number, b: number) => Math.abs(a - b) <= Math.abs(yMax - yMin) * 1e-9;
+  const near = (a: number, b: number) => Math.abs(a / 2 - b / 2) <= Math.abs(yMax / 2 - yMin / 2) * 1e-9;
   const ends = [yMax, yMin].filter((end) => !valueTicks.some((tick) => near(tick, end)));
   return [...valueTicks.map((value) => ({ value, tick: true })), ...ends.map((value) => ({ value, tick: false }))];
 }
@@ -171,7 +174,8 @@ export function ChartPrimitive({
   led?: ChartAnchor[];
 }) {
   const reduced = useReducedMotion();
-  const clipId = useId().replace(/:/g,'');
+  const ids = useSvgIds();
+  const clipId = ids('clip');
   // The frame is the box's to decide: the approved canvas where it reads,
   // else one of the box's own shape (`chartFrame`).
   const hostRef = useRef<HTMLDivElement>(null);
@@ -191,6 +195,7 @@ export function ChartPrimitive({
   // grow downward from there instead.
   const plotWidth=plot.right-plot.left;
   const legend=useMemo(()=>chartLegendLayout(data,plotWidth,{width,height}),[data,plotWidth,width,height]);
+  const axisNames=chartAxisNames(data,scales);
   const drawn=useMemo(()=>{
     const bars=chartBars(data,scales);
     const baseY=valueAt(baseline);
@@ -231,18 +236,18 @@ export function ChartPrimitive({
             measured in user space but laid in screen space -- would stop
             short of the last point whenever the chart is drawn larger than
             its viewBox. */}
-        {drawn.map((series,index)=><clipPath key={series.name} id={`${clipId}-trace-${index}`}>
+        {drawn.map((_series,index)=><clipPath key={index} id={ids('trace', index)}>
           <motion.rect x={0} y={0} height={height} width={width} initial={reduced?false:{width:plot.left}} animate={{width}} transition={{duration:.62,delay:index*.08,ease:[.22,.61,.36,1]}}/>
         </clipPath>)}
       </defs>
       <Grid scales={scales}/>
-      <g clipPath={`url(#${clipId})`}>
+      <g clipPath={svgUrl(clipId)}>
         {grounded ? (horizontal
           ? <line className="chart-baseline" x1={base} y1={plot.top} x2={base} y2={plot.bottom}/>
           : <line className="chart-baseline" x1={plot.left} y1={base} x2={plot.right} y2={base}/>) : null}
         {drawn.map((series,index)=>{
           const color=chartSeriesColor(series,index);
-          return <motion.g key={series.name} className="chart-series-group" data-series={series.name} clipPath={`url(#${clipId}-trace-${index})`} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{duration:.3,delay:index*.08}}>
+          return <motion.g key={index} className="chart-series-group" data-series={series.name} clipPath={svgUrl(ids('trace', index))} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{duration:.3,delay:index*.08}}>
             {kind==='area' ? <path className="chart-area" d={series.area} fill={color} fillOpacity={0.16} stroke="none"/> : null}
             {kind==='line'||kind==='area' ? <path className="chart-series" d={series.path} fill="none" stroke={color} strokeWidth={slot==='focus'?3:2.3} vectorEffect="non-scaling-stroke"/> : null}
             {kind==='scatter' ? series.points.map((p,sample)=><circle key={sample} className="chart-point" cx={p.x} cy={p.y} r={CHART_POINT_RADIUS} fill={color}/>) : null}
@@ -268,27 +273,32 @@ export function ChartPrimitive({
       {callouts.map((callout)=>{
         const {rect}=callout.bar;
         return <motion.g key={`${callout.bar.series}-${callout.bar.index}`} className="chart-callout" data-series={data.series[callout.bar.series]?.name} data-index={callout.bar.index} initial={reduced?false:{opacity:0}} animate={{opacity:1}} transition={{delay:.42}}>
-          <rect className="chart-callout__outline" clipPath={`url(#${clipId})`} x={rect.left} y={rect.top} width={Math.max(0.5,rect.right-rect.left)} height={Math.max(0.5,rect.bottom-rect.top)}/>
+          <rect className="chart-callout__outline" clipPath={svgUrl(clipId)} x={rect.left} y={rect.top} width={Math.max(0.5,rect.right-rect.left)} height={Math.max(0.5,rect.bottom-rect.top)}/>
           <text className={`chart-callout__value${callout.value.inside?' chart-callout__value--inside':''}`} x={callout.value.x} y={callout.value.y} textAnchor={callout.value.anchor}>{callout.value.text}</text>
         </motion.g>;
       })}
       {/* The axis names follow their axes: a horizontal bar chart's
-          categories run down the left and its values along the bottom. */}
-      <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{(horizontal ? data.yLabel : data.xLabel) ?? (horizontal ? 'Y' : 'X')}</text>
-      <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{(horizontal ? data.xLabel : data.yLabel) ?? (horizontal ? 'X' : 'Y')}</text>
+          categories run down the left and its values along the bottom.
+          Each is cut to its axis's span, its title the whole name. */}
+      <text className="chart-axis-label" x={width/2} y={height-2} textAnchor="middle">{axisNames.bottom.text}{axisNames.bottom.full?<title>{axisNames.bottom.full}</title>:null}</text>
+      <text className="chart-axis-label" transform={`translate(17 ${height/2}) rotate(-90)`} textAnchor="middle">{axisNames.side.text}{axisNames.side.full?<title>{axisNames.side.full}</title>:null}</text>
       {/* Rows grow downward from the one-row anchor (`CHART_PAD.top`, not
           the possibly-grown plot top): `chartPad` already grew the plot's
           own top padding to keep the last row clear of it. The series past
           the rows the frame gives the legend are counted in its last item,
           a label with no key, its title naming them. */}
       <g className="chart-legend" transform={`translate(${plot.left+8} ${CHART_PAD.top+12})`}>
-        {legend.items.map((item,index)=><g transform={`translate(${item.x} ${item.row*CHART_LEGEND_ROW_HEIGHT})`} key={item.name}><LegendKey kind={kind} color={chartSeriesColor(data.series[index], index)}/><text x={CHART_LEGEND_TEXT_X} y="4">{item.text}</text>{item.truncated?<title>{item.name}</title>:null}</g>)}
+        {legend.items.map((item,index)=><g transform={`translate(${item.x} ${item.row*CHART_LEGEND_ROW_HEIGHT})`} key={index}><LegendKey kind={kind} color={chartSeriesColor(data.series[index], index)}/><text x={CHART_LEGEND_TEXT_X} y="4">{item.text}</text>{item.truncated?<title>{item.name}</title>:null}</g>)}
         {legend.more ? <g className="chart-legend__more" transform={`translate(${legend.more.x} ${legend.more.row*CHART_LEGEND_ROW_HEIGHT})`}><text y="4">{legend.more.text}</text><title>{legend.more.names.join('\n')}</title></g> : null}
       </g>
     </svg>
   );
   // The category a note names, or the marker's, is the row it opens on.
-  const lead = [...(named ?? []), ...(data.marker ? [data.marker] : [])][0];
+  // The bar it marks, as its callout does: an x past the last category
+  // marks the last bar, and the chart opens there too (review-drawing L5).
+  const leadAnchor = [...(named ?? []), ...(data.marker ? [data.marker] : [])][0];
+  const lastCategory = (scales.categories.categories?.length ?? 1) - 1;
+  const lead = leadAnchor ? (kind === 'bar' ? (chartBarCallout(data, leadAnchor, scales)?.bar.index ?? Math.min(lastCategory, Math.max(0, Math.round(leadAnchor.x)))) : Math.round(leadAnchor.x)) : undefined;
   const drawnScale = size.width / width;
   return <div ref={hostRef} className={`chart-primitive${slot==='focus'?' chart-primitive--focused':''}${scroll===null?'':' chart-primitive--scrolls'}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     {scroll===null ? svg : (
@@ -297,7 +307,7 @@ export function ChartPrimitive({
       <ListViewport
         noun={data.series.length > 1 ? ['GROUP', 'GROUPS'] : ['BAR', 'BARS']}
         countSelector=".chart-grid__category"
-        lead={lead ? String(Math.round(lead.x)) : undefined}
+        lead={lead === undefined ? undefined : String(lead)}
         head={<ValueAxisHead scales={scales} width={width} scale={drawnScale}/>}
         className="chart-primitive__viewport"
         scrollClassName="chart-primitive__scroll"

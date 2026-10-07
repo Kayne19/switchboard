@@ -1,6 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import type { NoteData, SequenceDiagramData } from '../controller/types';
 import { GlowFilters, LABEL_HEIGHT, entranceStep, pathThrough } from './drawingKit';
+import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
 import { viewWithMap, type DrawingMap } from './drawingScroll';
@@ -55,6 +56,7 @@ export function SequencePrimitive({
   // The note itself stays in the rail; the actor it names carries the NOTE
   // marker, the rail badge's twin, in its header.
   const anchoredActorId = markedPart(note, id).node;
+  const ids = useSvgIds();
   // The geometry follows the viewport's shape, and the drawing is fitted to
   // it, or scrolled in it once fitting would make it too small to read.
   const focused = slot === 'focus';
@@ -110,7 +112,7 @@ export function SequencePrimitive({
                 strokeOpacity={isAnchored ? '1' : '.64'}
                 strokeWidth={isAnchored ? '2.2' : '1.3'}
                 vectorEffect="non-scaling-stroke"
-                filter={isAnchored ? 'url(#sequence-anchor-glow)' : undefined}
+                filter={isAnchored ? svgUrl(ids('anchor-glow')) : undefined}
               />
               <text
                 x={labelX}
@@ -157,7 +159,7 @@ export function SequencePrimitive({
     <div ref={hostRef} className={`sequence-primitive${focused ? ' sequence-primitive--focused' : ''}`} data-testid="sequence">
       <DrawingViewport drawing={layout} fit={fit} pinned={{ height: pinnedDepth(layout), content: actors }} map={map} strip={strip} ariaLabel={data.title ?? 'Sequence diagram'}>
         <defs>
-          <GlowFilters line="sequence-active-glow" frame="sequence-anchor-glow" />
+          <GlowFilters line={ids('active-glow')} frame={ids('anchor-glow')} />
         </defs>
         <g className="sequence-lifelines">
           {layout.actors.map(({ actor, x, box, lifelineEnd }) => (
@@ -191,7 +193,7 @@ export function SequencePrimitive({
                   strokeWidth={active ? 2 : 1.25}
                   strokeDasharray={item.kind === 'return' ? '7 5' : undefined}
                   vectorEffect="non-scaling-stroke"
-                  filter={active ? 'url(#sequence-active-glow)' : undefined}
+                  filter={active ? svgUrl(ids('active-glow')) : undefined}
                 />
                 <Arrowhead message={item} color={color} />
               </g>
