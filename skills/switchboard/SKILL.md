@@ -74,6 +74,9 @@ data.events[3].location`.
 - `show` (`id`, `type`, optional `role`, `data`) creates an object, or
   updates it in place when the `id` is reused.
 - `hide` and `focus` take an `id`; `clear` takes nothing.
+- A display action is at most 48,000 bytes as JSON (an image's 12 MiB, its
+  picture at most 8 MiB). A refusal for size gives the action's bytes and
+  the cap, so you know how much to cut.
 - The stage holds at most 32 objects, 4 of them images. A `show` with a new
   id past that is refused; hide what the caller is done with, or update an
   object by its id.
