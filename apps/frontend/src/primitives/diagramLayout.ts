@@ -33,6 +33,7 @@
 // drawn as a stub pair naming its far ends (`chooseStubs`, `bundledEdges`).
 
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
+import { textCells } from '../design/textCells';
 import { monoAdvance } from '../design/tokens';
 import { LABEL_BACKING, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
@@ -283,14 +284,14 @@ const EPSILON = 0.5;
 
 // --- Text ------------------------------------------------------------------
 
-/** Words onto lines of at most `wrapAt` characters, each line as full as it goes; a word longer than that takes a line of its own. */
+/** Words onto lines of at most `wrapAt` cells (design/textCells.ts), each line as full as it goes; a word longer than that takes a line of its own. */
 export function wrapGreedy(words: string[], wrapAt: number): string[] {
   const lines: string[] = [];
   let current = '';
   for (const word of words) {
     if (!current) {
       current = word;
-    } else if (current.length + 1 + word.length <= wrapAt) {
+    } else if (textCells(current) + 1 + textCells(word) <= wrapAt) {
       current += ' ' + word;
     } else {
       lines.push(current);
@@ -302,7 +303,7 @@ export function wrapGreedy(words: string[], wrapAt: number): string[] {
 }
 
 /**
- * Breaks text at spaces into lines of at most `wrapAt` characters. Text
+ * Breaks text at spaces into lines of at most `wrapAt` cells. Text
  * that would take more than `maxLines` lines is wrapped wider instead, at
  * the narrowest width that fits, so its lines stay balanced rather than
  * piling the rest onto the last one.
@@ -315,7 +316,7 @@ function wrapLine(text: string, wrapAt: number, maxLines: number): string[] {
   // The line count only falls as the width grows; the whole text on one
   // line always fits.
   let low = wrapAt + 1;
-  let high = text.length;
+  let high = textCells(text);
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
     if (wrapGreedy(words, middle).length <= maxLines) high = middle;
@@ -380,9 +381,9 @@ export function measureNode(node: DiagramNode, cornerTags: CornerTags, wrap: Nod
   }
 
   const textWidth = Math.max(
-    ...labelLines.map((line) => line.length * NODE_TEXT.label.advance + tagRoom(cornerTags)),
-    ...subLines.map((line) => line.length * NODE_TEXT.sub.advance),
-    ...detailLines.map((line) => line.length * NODE_TEXT.detail.advance),
+    ...labelLines.map((line) => textCells(line) * NODE_TEXT.label.advance + tagRoom(cornerTags)),
+    ...subLines.map((line) => textCells(line) * NODE_TEXT.sub.advance),
+    ...detailLines.map((line) => textCells(line) * NODE_TEXT.detail.advance),
   );
   return {
     width: Math.max(wrap.minWidth, Math.ceil(textWidth + 2 * NODE_PAD_SIDE)),

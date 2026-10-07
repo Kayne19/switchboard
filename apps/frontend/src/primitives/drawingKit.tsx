@@ -2,6 +2,7 @@
 // sequence (SequencePrimitive + sequenceLayout) draw alike, said once. Each
 // drawing keeps its own sizes (its frames' cuts, its arrowheads).
 
+import { textCells } from '../design/textCells';
 import { monoAdvance } from '../design/tokens';
 import type { Point, Size } from './geometry';
 
@@ -25,7 +26,7 @@ export const LABEL_BACKING = 4;
 /** The backing a label drawn on `lines` paints over. */
 export function labelBox(lines: readonly string[]): Size {
   return {
-    width: Math.max(...lines.map((line) => line.length)) * LABEL_ADVANCE + 2 * LABEL_BACKING,
+    width: Math.max(...lines.map(textCells)) * LABEL_ADVANCE + 2 * LABEL_BACKING,
     height: lines.length * LABEL_HEIGHT + 2 * LABEL_BACKING,
   };
 }

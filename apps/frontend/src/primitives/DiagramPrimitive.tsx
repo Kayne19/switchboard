@@ -8,6 +8,7 @@ import { viewWithMap, type DrawingMap } from './drawingScroll';
 import type { Point } from './geometry';
 import { NoteMarker, markedPart } from './NoteMarker';
 import type { Slot } from './slot';
+import { textCells } from '../design/textCells';
 import { SEMANTIC_COLOR } from '../design/tokens';
 
 const SEMANTICS = Object.keys(SEMANTIC_COLOR) as Semantic[];
@@ -129,8 +130,8 @@ export function DiagramPrimitive({
   const calloutFits =
     calloutLines.length > 0 &&
     calloutLines.length <= 3 &&
-    calloutLines.every((line) => line.length <= CALLOUT_LINE_CHARS) &&
-    (note?.tag?.length ?? 0) <= CALLOUT_TAG_CHARS;
+    calloutLines.every((line) => textCells(line) <= CALLOUT_LINE_CHARS) &&
+    textCells(note?.tag ?? '') <= CALLOUT_TAG_CHARS;
   // A callout rides on the drawing; on one that scrolls it could sit out of
   // view, so there the note stays in the rail and the node carries the marker.
   const calloutPlaced = Boolean(callout && !portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutFits);

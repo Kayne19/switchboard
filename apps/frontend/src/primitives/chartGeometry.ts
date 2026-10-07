@@ -1,4 +1,5 @@
 import type { ChartData, ChartKind, ChartSeries } from '../controller/types';
+import { graphemes, headCells, tailCells, textCells } from '../design/textCells';
 import { monoAdvance } from '../design/tokens';
 import { readableScale, type DrawingText } from './drawingFit';
 import { intersection, type Point, type Rect, type Size } from './geometry';
@@ -163,10 +164,10 @@ export interface ChartLegendLayout {
 }
 
 function truncateLabel(name: string, maxWidth: number, advance: number): { text: string; truncated: boolean } {
-  if (name.length * advance <= maxWidth) return { text: name, truncated: false };
-  // Reserve one character's width for the ellipsis itself.
-  const maxChars = Math.max(0, Math.floor(maxWidth / advance) - 1);
-  return { text: `${name.slice(0, maxChars).trimEnd()}${CHART_ELLIPSIS}`, truncated: true };
+  if (textCells(name) * advance <= maxWidth) return { text: name, truncated: false };
+  // Reserve one cell's width for the ellipsis itself.
+  const maxCells = Math.max(0, Math.floor(maxWidth / advance) - 1);
+  return { text: `${headCells(name, maxCells).trimEnd()}${CHART_ELLIPSIS}`, truncated: true };
 }
 
 // How far a legend item's origin moves the next one along its row.
@@ -208,7 +209,7 @@ export function chartLegendLayout(
   let row = 0;
   const availableText = plotWidth - CHART_LEGEND_TEXT_X;
   for (const series of data.series) {
-    let contentWidth = CHART_LEGEND_TEXT_X + series.name.length * CHART_LEGEND_CHAR_ADVANCE;
+    let contentWidth = CHART_LEGEND_TEXT_X + textCells(series.name) * CHART_LEGEND_CHAR_ADVANCE;
     if (cursor > 0 && cursor + contentWidth > plotWidth) {
       row += 1;
       cursor = 0;
@@ -217,7 +218,7 @@ export function chartLegendLayout(
     let truncated = false;
     if (contentWidth > plotWidth) {
       ({ text, truncated } = truncateLabel(series.name, availableText, CHART_LEGEND_CHAR_ADVANCE));
-      contentWidth = CHART_LEGEND_TEXT_X + text.length * CHART_LEGEND_CHAR_ADVANCE;
+      contentWidth = CHART_LEGEND_TEXT_X + textCells(text) * CHART_LEGEND_CHAR_ADVANCE;
     }
     items.push({ name: series.name, text, truncated, x: cursor, row });
     cursor += legendAdvance(contentWidth);
@@ -235,7 +236,7 @@ export function chartLegendLayout(
     const width = text.length * CHART_LEGEND_CHAR_ADVANCE;
     const tail = kept.at(-1);
     if (!tail || tail.row !== last) return folded(kept, items, { text, x: 0, row: last }, cap);
-    const content = CHART_LEGEND_TEXT_X + tail.text.length * CHART_LEGEND_CHAR_ADVANCE;
+    const content = CHART_LEGEND_TEXT_X + textCells(tail.text) * CHART_LEGEND_CHAR_ADVANCE;
     const x = [tail.x + legendAdvance(content), tail.x + content + CHART_LEGEND_GAP].find((at) => at + width <= plotWidth);
     if (x !== undefined) return folded(kept, items, { text, x, row: last }, cap);
     kept.pop();
@@ -317,7 +318,7 @@ export interface ChartCategoryLayout {
 const CHART_CATEGORY_LINES = 3;
 
 /**
- * A label set on at most `lines` lines of at most `width` characters: a
+ * A label set on at most `lines` lines of at most `width` cells: a
  * line breaks after a space, a path's separator or a dot, or inside a
  * camel-cased name before a capital, where it can; inside a word only where
  * a word alone is too long. A label that needs more lines is cut with an
@@ -326,7 +327,7 @@ const CHART_CATEGORY_LINES = 3;
  */
 export function wrapLabel(label: string, width: number, lines: number): { text: string; lines: string[]; truncated: boolean } {
   const room = Math.max(2, width);
-  if (label.length <= room) return { text: label, lines: [label], truncated: false };
+  if (textCells(label) <= room) return { text: label, lines: [label], truncated: false };
   const pieces = labelPieces(label);
   const set = fill(pieces, room);
   if (set.length <= lines) return { text: label, lines: set.map((line) => line.trim()), truncated: false };
@@ -352,9 +353,10 @@ export function wrapLabel(label: string, width: number, lines: number): { text: 
 function labelPieces(label: string): string[] {
   const pieces: string[] = [];
   let piece = '';
-  for (let index = 0; index < label.length; index += 1) {
-    const char = label[index];
-    const next = label[index + 1] ?? '';
+  const chars = graphemes(label);
+  for (let index = 0; index < chars.length; index += 1) {
+    const char = chars[index];
+    const next = chars[index + 1] ?? '';
     piece += char;
     const separator = /[\s/_.:-]/.test(char) && !/[\s/_.:-]/.test(next);
     const camel = /[a-z]/.test(char) && /[A-Z]/.test(next);
@@ -367,7 +369,7 @@ function labelPieces(label: string): string[] {
   return pieces;
 }
 
-// Pieces set on lines of at most `room` characters (spaces at a line's
+// Pieces set on lines of at most `room` cells (spaces at a line's
 // ends not counted), in order -- or, with `backward`, the pieces given last
 // first, each line grown at its start. The lines keep their spaces, so in
 // order they join back into the label.
@@ -378,19 +380,22 @@ function fill(pieces: string[], room: number, backward = false): string[] {
   for (const piece of pieces) {
     let rest = piece;
     while (rest.length > 0) {
-      if (join(rest).trim().length <= room) {
+      if (textCells(join(rest).trim()) <= room) {
         line = join(rest);
         rest = '';
       } else if (line.trim().length > 0) {
         set.push(line);
         line = '';
       } else if (backward) {
-        set.push(rest.slice(-room) + line);
-        rest = rest.slice(0, -room);
+        // At least one character a line, so a wide one in a one-cell room still moves on.
+        const tail = tailCells(rest, room) || graphemes(rest).at(-1) || rest;
+        set.push(tail + line);
+        rest = rest.slice(0, rest.length - tail.length);
         line = '';
       } else {
-        set.push(line + rest.slice(0, room));
-        rest = rest.slice(room);
+        const head = headCells(rest, room) || graphemes(rest)[0];
+        set.push(line + head);
+        rest = rest.slice(head.length);
         line = '';
       }
     }
@@ -413,7 +418,7 @@ function upright(categories: string[] | undefined, ticks: ChartTick[], rows: num
  * would run past them.
  */
 export function chartCategoryLabelX(x: number, text: string, frameWidth: number = CHART_VIEW_WIDTH): number {
-  const half = (text.length * CHART_TICK_CHAR_ADVANCE) / 2;
+  const half = (textCells(text) * CHART_TICK_CHAR_ADVANCE) / 2;
   return Math.min(frameWidth - half, Math.max(half, x));
 }
 
@@ -449,7 +454,7 @@ export function chartCategoryLayout(data: ChartData, frame: ChartFrame = CHART_F
   const plotWidth = frame.width - CHART_PAD.left - CHART_PAD.right;
   const legendRows = chartLegendLayout(data, plotWidth, frame).rows;
   const plotHeight = frame.height - CHART_PAD.top - legendRowsAbovePlot(kind, legendRows) * CHART_LEGEND_ROW_HEIGHT - CHART_PAD.bottom;
-  const widest = Math.max(...categories.map((label) => label.length)) * CHART_TICK_CHAR_ADVANCE + CHART_TICK_GAP;
+  const widest = Math.max(...categories.map(textCells)) * CHART_TICK_CHAR_ADVANCE + CHART_TICK_GAP;
   // Bars take a band each; the other kinds spread their categories edge to edge.
   const slot = kind === 'bar' ? plotWidth / count : count > 1 ? plotWidth / (count - 1) : plotWidth;
   // Every `step`-th category labelled, the labels taking `rows` rows in turn.
@@ -463,7 +468,7 @@ export function chartCategoryLayout(data: ChartData, frame: ChartFrame = CHART_F
   const clear = (ticks: ChartTick[]): boolean => {
     const ends = new Map<number, number>();
     for (const tick of ticks) {
-      const half = (tick.text.length * CHART_TICK_CHAR_ADVANCE) / 2;
+      const half = (textCells(tick.text) * CHART_TICK_CHAR_ADVANCE) / 2;
       const x = chartCategoryLabelX(centre(tick.index), tick.text, frame.width);
       const end = ends.get(tick.row);
       if (end !== undefined && x - half - end < CHART_TICK_GAP) return false;
@@ -506,7 +511,7 @@ export function chartPad(data: ChartData, frame: ChartFrame = CHART_FRAME): Char
   const categories = chartCategoryLayout(data, frame);
   let left: number = CHART_PAD.left;
   if (categories.horizontal) {
-    const widest = Math.max(0, ...categories.ticks.flatMap((tick) => tick.lines.map((line) => line.length))) * CHART_TICK_CHAR_ADVANCE;
+    const widest = Math.max(0, ...categories.ticks.flatMap((tick) => tick.lines.map(textCells))) * CHART_TICK_CHAR_ADVANCE;
     left = Math.min(categoryPadMax(frame), Math.max(CHART_PAD.left, Math.ceil(widest + CHART_CATEGORY_PAD_GAP)));
   }
   const legendRows = chartLegendLayout(data, frame.width - left - CHART_PAD.right, frame).rows;
@@ -786,7 +791,7 @@ export function chartBarCallout(data: ChartData, anchor: ChartAnchor, scales: Ch
   if (!bar) return undefined;
   const { plot, horizontal } = scales;
   const text = calloutText(bar.value);
-  const width = text.length * CHART_TICK_CHAR_ADVANCE;
+  const width = textCells(text) * CHART_TICK_CHAR_ADVANCE;
   const positive = bar.value >= scales.baseline;
   // Along the value axis (y upright, x across) the way the bar grows, and
   // across it the category axis.
@@ -1071,8 +1076,8 @@ export function chartLegendBox(data: ChartData, frame: ChartFrame = CHART_FRAME)
   const left = pad.left + 8;
   const line = CHART_PAD.top + 12;
   const ends = [
-    ...layout.items.map((item) => item.x + CHART_LEGEND_TEXT_X + item.text.length * CHART_LEGEND_CHAR_ADVANCE),
-    ...(layout.more ? [layout.more.x + layout.more.text.length * CHART_LEGEND_CHAR_ADVANCE] : []),
+    ...layout.items.map((item) => item.x + CHART_LEGEND_TEXT_X + textCells(item.text) * CHART_LEGEND_CHAR_ADVANCE),
+    ...(layout.more ? [layout.more.x + textCells(layout.more.text) * CHART_LEGEND_CHAR_ADVANCE] : []),
   ];
   const right = left + (ends.length > 0 ? Math.max(...ends) : CHART_LEGEND_STEP - 40);
   return { left, top: line - 7, right, bottom: line + 6 + (layout.rows - 1) * CHART_LEGEND_ROW_HEIGHT };

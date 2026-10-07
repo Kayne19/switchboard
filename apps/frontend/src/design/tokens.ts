@@ -21,7 +21,8 @@ export const TYPE_FLOOR_PX = { micro: 7, tech: 8 } as const;
 
 // The page's monospace face sets every glyph 0.6em wide, and letter-spacing
 // adds its tracking after each, so a line in it is as wide as its
-// characters times this advance, in the units of its size. A layout that
+// cells (design/textCells.ts: a wide character takes two) times this
+// advance, in the units of its size. A layout that
 // sizes a box to its text before drawing it (jsdom measures no text) takes
 // the advance from here, with the size and tracking of the stylesheet rule
 // that sets the text; a test holds each in step with styles/index.css.
