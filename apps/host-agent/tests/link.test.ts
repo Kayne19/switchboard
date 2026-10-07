@@ -433,6 +433,12 @@ test("every frame goes out with a lone surrogate written as U+FFFD", async () =>
 		link.publish("a1", { kind: "text", text: "half \ude00 and whole \ud83d\ude00" });
 		const event = await l.next((m) => m.type === "event");
 		assert.equal((event.event as Message).text, "half \ufffd and whole \ud83d\ude00");
+		// A key is mended too: a tool's result object goes out with the keys
+		// the daemon gave it, and one cut inside an emoji used to keep its
+		// escape, so the service refused the frame and lost the event.
+		link.publish("a1", { kind: "tool_end", tool: "read", result: { ["k\ud83d"]: "v\ud83d", nested: [{ ["\ude00"]: 1 }] } } as unknown as Parameters<typeof link.publish>[1]);
+		const tool = await l.next((m) => m.type === "event" && (m.event as Message).kind === "tool_end");
+		assert.deepEqual((tool.event as { result: unknown }).result, { ["k\ufffd"]: "v\ufffd", nested: [{ ["\ufffd"]: 1 }] });
 		const reply = await command(l, 1, "c1", "list_saved_sessions", { cwd: "/srv/homelab" });
 		assert.deepEqual(reply.result, { sessions: [{ first_message: "fix the parser \ufffd" }] });
 		assert.ok(raw.every((frame) => !/\\ud[89a-f]/i.test(frame)), "no surrogate escape on the wire");

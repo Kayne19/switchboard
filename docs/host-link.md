@@ -410,8 +410,9 @@ same way. A module call for a session whose listener has gone is refused
 `not_on_call`, as one for a session nobody listens to.
 
 The host agent writes every frame well-formed: a lone surrogate in any
-string it sends (daemon text, a saved session's first message, a relayed
-call's arguments) goes out as U+FFFD, so the frame is not lost to it. A
+string it sends, a value or an object's key (daemon text, a saved session's
+first message, a tool's `args` and `result` keys, a relayed call's
+arguments), goes out as U+FFFD, so the frame is not lost to it. A
 clipped tool `args` or `result` preview is cut between whole characters, so
 it makes none. The skill module refuses a lone surrogate before sending, so a
 relayed call is not changed in practice. It holds a display call to the depth
@@ -433,8 +434,22 @@ one reply line; the host agent never pushes. A connection may carry several
 requests; they are answered in order. A request line is at most 13 MiB: the
 largest display action (an image, at most 12 MiB) with room for its envelope,
 and safely under the host link's 16 MiB frame, which the relayed call is
-re-wrapped in. A longer line is answered `refused`, `too_large`, in its turn,
-and then the connection ends; lines after it are not read.
+re-wrapped in. A line ends at `\n` (a `\r` before it is part of the break,
+though it counts toward the cap), and its length is counted as its bytes
+arrive: a line that passes 13 MiB is answered `refused`, `too_large`, in its
+turn, without waiting for its newline. The host agent reads the rest of that
+line and drops it as it arrives, so it never holds more than the cap of any
+line however long it runs, and the connection ends with the line; lines after
+it are not read.
+
+The module writes a request and reads its answer before it writes the next,
+so it never has more than one waiting. A client that writes ahead is held to
+`MAX_WAITING_REQUESTS` (8) requests read and not yet answered on one
+connection, the one being handled included, and to 13 MiB of request text
+between them. A line past either bound is answered `refused`, `queue_full`, in
+its turn, and the connection ends after it; lines after it are not read. So a
+connection holds at most one line's cap of waiting requests and one open line
+however it writes.
 
 ### Hello
 

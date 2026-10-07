@@ -81,8 +81,22 @@ _ONE_OF = {
 # ---- image ------------------------------------------------------------------
 
 # The service and the page take at most this many raw image bytes
-# (MAX_IMAGE_BYTES in visual_protocol.rs and validation.ts).
+# (MAX_IMAGE_BYTES in visual_protocol.rs and validation.ts);
+# scripts/check_hygiene.mjs keeps the numbers equal.
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+# ---- size -------------------------------------------------------------------
+
+# The caps a request is held to, named when one is too large: a display
+# action as JSON, an image's action (MAX_ACTION_BYTES and
+# MAX_IMAGE_ACTION_BYTES in visual_protocol.rs and validation.ts, which
+# measure it), and the request line the host agent reads (MAX_LINE_BYTES in
+# apps/host-agent/src/skill_socket.ts, which answers a longer one
+# `too_large` unread). scripts/check_hygiene.mjs keeps the numbers equal.
+_MAX_ACTION_BYTES = 48_000
+_MAX_IMAGE_ACTION_BYTES = 12 * 1024 * 1024
+_MAX_LINE_BYTES = 13 * 1024 * 1024
+_MIB = 1024 * 1024
 
 
 class _Result:
@@ -276,6 +290,8 @@ def _common(result):
         return f"Could not reach the switchboard{f': {detail}' if detail else ''}. Nothing was sent."
     if result.reason == "caller_away":
         return "The caller is on other work; nothing was played. If it matters to them, send it with request_to_speak."
+    if result.reason == "too_large":
+        return f"Too large; nothing was sent. The host agent reads a request of at most {_MAX_LINE_BYTES // _MIB} MiB. Send less."
     return None
 
 
@@ -432,6 +448,70 @@ def _check_display_action(action):
     one_of = _ONE_OF.get(kind, ())
     if one_of and not any(key in data for key in one_of):
         raise ValueError(f"{kind} data needs {' or '.join(one_of)}; its shape is {hint}")
+    if kind == "chart":
+        _check_chart(data)
+    elif kind == "timer":
+        _check_timers(data)
+
+
+# The most seconds a paused timer may have left: the instants a timer takes
+# span 1970 to 2199 (MAX_TIMER_REMAINING_S in validation.ts and
+# visual_protocol.rs). The corpus pins it here too: its case at the cap is
+# accepted and its case a second past it refused (DisplayCorpusTests).
+_MAX_TIMER_REMAINING_S = 7_258_118_400
+
+
+def _real(value):
+    """`value` as a plain int or float when JSON sends it as a number (a
+    numpy scalar too), else None. A bool is not one, as JSON's true is not."""
+    if hasattr(value, "tolist") and not isinstance(value, (list, tuple, dict, str)):
+        value = value.tolist()
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _check_chart(data):
+    """A chart's rules across its fields, in the validators' words: no two
+    series share a name, and `yMin` is below `yMax` when both are given. The
+    series are read up to the first one whose shape the service would refuse
+    first, which is the service's to name."""
+    series = data.get("series")
+    if isinstance(series, (list, tuple)):
+        first = {}
+        for index, item in enumerate(series):
+            name = item.get("name") if isinstance(item, dict) else None
+            if not isinstance(name, str):
+                break
+            if name in first:
+                raise ValueError(f'duplicate chart series name "{name}": chart.series[{first[name]}] and chart.series[{index}]')
+            first[name] = index
+    low, high = _real(data.get("yMin")), _real(data.get("yMax"))
+    if low is not None and high is not None and low >= high:
+        raise ValueError("chart.yMin must be below chart.yMax")
+
+
+def _check_timers(data):
+    """Each timer's `remaining`, in the validators' words: required when
+    the timer is paused, refused when it runs, and a number of seconds from 0
+    to the cap. The timers are read up to the first whose shape or state the
+    service would refuse first."""
+    timers = data.get("timers")
+    if not isinstance(timers, (list, tuple)):
+        return
+    for timer in timers:
+        if not isinstance(timer, dict) or timer.get("state", "running") not in ("running", "paused"):
+            return
+        paused = timer.get("state") == "paused"
+        if "remaining" not in timer:
+            if paused:
+                raise ValueError("timer.remaining is required when the timer is paused")
+            continue
+        if not paused:
+            raise ValueError("timer.remaining is only for a paused timer")
+        seconds = _real(timer["remaining"])
+        if seconds is None or not 0 <= seconds <= _MAX_TIMER_REMAINING_S:
+            raise ValueError(f"timer.remaining must be a number of seconds, 0 to {_MAX_TIMER_REMAINING_S}")
 
 
 # ---- time values ---------------------------------------------------------------
@@ -449,8 +529,9 @@ def _wire_instant(value, key):
     offset = value.utcoffset()
     if offset is None:
         raise ValueError(
-            f"{key} is an instant: give an aware datetime, such as "
-            "datetime.now(timezone.utc) + timedelta(minutes=9), or text like 2026-10-05T18:42:00-07:00"
+            f"{key} is an instant: give an aware datetime in the caller's zone, such as "
+            "datetime.now(zone) + timedelta(minutes=9) with zone the caller's ZoneInfo, "
+            "or text like 2026-10-05T18:42:00-07:00"
         )
     if offset.seconds % 60 or offset.microseconds:
         value = value.astimezone(_datetime.timezone.utc)
@@ -515,6 +596,12 @@ def display(action=None, **fields):
             if data.get("rendered") is False:
                 return "Sent, but the caller's screen has not confirmed it; it may not be visible yet."
             return "On screen."
+        if result.reason == "too_large":
+            return (
+                f"Too large; nothing was sent. The host agent reads a request of at most {_MAX_LINE_BYTES // _MIB} MiB, "
+                f"and a display action is at most {_MAX_ACTION_BYTES:,} bytes as JSON (an image's "
+                f"{_MAX_IMAGE_ACTION_BYTES // _MIB} MiB). Send less."
+            )
         if result.status == "refused" and result.reason not in ("not_on_call", "subagent", "caller_away"):
             return (
                 f"The switchboard rejected it: {result.reason or 'invalid payload'}. "

@@ -8,6 +8,7 @@ export interface RichSegment {
 }
 
 export interface ChartSeries {
+  /** Unique within its chart: the legend, `marker.series`, a note's `anchor.series` and `say at.series` name a series by it. */
   name: string;
   semantic?: Semantic;
   values: number[];
