@@ -5862,13 +5862,13 @@ button {
      and not the height for a visual's cell under it: on a phone on its
      side a chart's cell ran past the column's foot, its x axis out of
      view. The aux row stands beside the card instead, as tall as the
-     column. */
-  .composed-main--metric-primary {
+     column; a card with no row keeps the column to itself. */
+  .composed-main--metric-primary:has(> .composed-aux) {
     grid-template-columns: fit-content(60%) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
     align-content: stretch;
   }
-  .composed-main--metric-primary > .composed-primary-object--metric {
+  .composed-main--metric-primary:has(> .composed-aux) > .composed-primary-object {
     align-self: center;
   }
   .composed-main--metric-primary > .composed-aux {

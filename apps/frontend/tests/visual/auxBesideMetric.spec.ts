@@ -35,3 +35,24 @@ for (const size of FRAME_GEOMETRIES) {
     expect(apart).toBe(true);
   });
 }
+
+// The rule is for a card with a row beside it: alone, a metric primary (or a
+// cluster) keeps the whole column on a very wide stage (review-fix-charts M2).
+for (const size of [{ width: 844, height: 390 }, { width: 2560, height: 1080 }]) {
+  test(`${size.width}x${size.height}: a metric primary with no aux row keeps its own width`, async ({ page }) => {
+    await page.setViewportSize(size);
+    await openScene(page, 'idle');
+    await runActions(page, [
+      actions[0],
+      { op: 'show', id: 'p50', type: 'metric', role: 'primary', data: { label: 'P50 LATENCY', value: '83 ms' } },
+    ]);
+    await expect(page.locator('.composed-primary-object')).toBeVisible();
+    await page.waitForTimeout(400);
+    const widths = await page.evaluate(() => ({
+      main: document.querySelector('.content-grid > .content-main')!.getBoundingClientRect().width,
+      card: document.querySelector('.composed-primary-object')!.getBoundingClientRect().width,
+    }));
+    // A cluster spans the column (composed-primary-object--cluster).
+    expect(widths.card).toBeGreaterThan(widths.main - 2);
+  });
+}
