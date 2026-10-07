@@ -21,6 +21,7 @@
     "test:no-ssh": "node scripts/check_no_ssh.mjs",
     "test:hygiene": "node scripts/check_hygiene.mjs",
     "test:visual": "playwright test --config apps/frontend/playwright.config.ts",
+    "test:browser": "playwright test --config apps/frontend/playwright.config.ts --grep-invert @golden",
     "test:integration": "playwright test --config apps/frontend/playwright.production.config.ts"
   },
   "devDependencies": {

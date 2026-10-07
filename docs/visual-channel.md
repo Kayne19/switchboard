@@ -313,7 +313,7 @@ Kayne approved the portrait goldens:
 
 A landscape stage, the rail beside the primary, is laid out as before.
 
-Why not give a large primary the stage's height: round 4 did, folding the
+Why not give a large primary the stage's height: an earlier design did, folding the
 rail to a strip under the primary, Damocles at about a third of its size
 and the note cut to three lines behind a handle. Kayne rejected it on the
 portrait-phone architecture golden. With Damocles at its size a strip is

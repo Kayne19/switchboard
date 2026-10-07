@@ -125,9 +125,9 @@ describe('chart notes', () => {
     expect(panel.classList.contains('chart-object--noted')).toBe(false);
   });
 
-  // Kayne, round 6: the line-note rules of round 4 (a value printed by the
-  // ringed point, the leader landing past it) are reverted; the leader ends
-  // on the line itself again, as the approved training goldens show.
+  // A line chart's leader ends on the line itself, as the approved training
+  // goldens show, not past a value printed by the ringed point: that rule
+  // was tried for line charts and taken back as harder to read.
   it('runs a leader from the card\'s border to the point on the line', () => {
     mount([chart, note('loss-note', { target: 'loss', x: 30, series: 'VAL LOSS' })]);
     const box = card('loss-note')!;
