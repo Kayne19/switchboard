@@ -84,7 +84,10 @@ const MAX_ACTION_BYTES = 48_000;
  * image is at most 8 MiB, and the action around its base64 at most 12 MiB.
  * Every other type keeps the 48,000-byte cap. Both socket links allow
  * 16 MiB frames, so one image action always fits one frame; the reconnect
- * snapshot replays each action as its own frame for the same reason.
+ * snapshot replays each action as its own frame for the same reason. The
+ * corpus pins both numbers on both sides, and scripts/check_hygiene.mjs
+ * keeps every other copy (the skill module, the schema, the socket caps) in
+ * step with them.
  */
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_IMAGE_ACTION_BYTES = 12 * 1024 * 1024;
@@ -234,26 +237,38 @@ function findForbiddenLayoutKey(val: unknown): string | null {
   return null;
 }
 
-function findUnsafeString(val: unknown): string | null {
+/**
+ * The first unsafe string met walking depth first, keys in code point order:
+ * what is wrong with it, and where it is, written from the action down
+ * (`data.events[3].location`), so an agent with 200 events can find the one
+ * to mend. A key on the action itself is written bare and every key below it
+ * after a dot, even an empty one. `path` holds where `val` is, one part per
+ * step, and comes back as it went in. The backend's `unsafe_string` writes
+ * the same path.
+ */
+function findUnsafeString(val: unknown, path: string[] = []): string | null {
   if (typeof val === 'string') {
-    for (const pattern of HTML_JS_PATTERNS) {
-      if (pattern.test(val)) return `raw markup or script injection is forbidden`;
-    }
-    if (EXTERNAL_URL_REGEX.test(val)) {
-      return `external resource URL is forbidden`;
-    }
-    return null;
+    const reason = HTML_JS_PATTERNS.some((pattern) => pattern.test(val))
+      ? 'raw markup or script injection is forbidden'
+      : EXTERNAL_URL_REGEX.test(val)
+        ? 'external resource URL is forbidden'
+        : null;
+    return reason && `${reason} in ${path.join('')}`;
   }
   if (Array.isArray(val)) {
-    for (const item of val) {
-      const found = findUnsafeString(item);
+    for (const [index, item] of val.entries()) {
+      path.push(`[${index}]`);
+      const found = findUnsafeString(item, path);
+      path.pop();
       if (found) return found;
     }
     return null;
   }
   if (isRecord(val)) {
     for (const key of keysInOrder(val)) {
-      const found = findUnsafeString(val[key]);
+      path.push(path.length === 0 ? key : `.${key}`);
+      const found = findUnsafeString(val[key], path);
+      path.pop();
       if (found) return found;
     }
   }
@@ -384,8 +399,8 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     if (!Array.isArray(data.labels) || data.labels.length < 1 || data.labels.length > MAX_CHART_LABELS) {
       return { ok: false, error: `chart.labels must be an array of 1 to ${MAX_CHART_LABELS} strings` };
     }
-    for (const label of data.labels) {
-      const err = checkString(label, MAX_CHART_LABEL_UTF16, 'chart label');
+    for (const [index, label] of data.labels.entries()) {
+      const err = checkString(label, MAX_CHART_LABEL_UTF16, `chart.labels[${index}]`);
       if (err) return { ok: false, error: err };
     }
     result.labels = data.labels as string[];
@@ -395,18 +410,30 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     return { ok: false, error: 'chart.series must be an array' };
   }
   const seriesAllowed = new Set(['name', 'semantic', 'values']);
-  for (const s of data.series) {
+  // A series is known by its name (the legend, `marker.series`, a note's
+  // `anchor.series`, `say at.series`), so no two may share one.
+  const seriesNames = new Map<string, number>();
+  for (const [index, s] of data.series.entries()) {
     if (!isRecord(s)) return { ok: false, error: 'chart series item must be an object' };
     const sUnknown = checkUnknownKeys(s, seriesAllowed, 'chart series item');
     if (sUnknown) return { ok: false, error: sUnknown };
     const nameErr = checkString(s.name, 128, 'series.name');
     if (nameErr) return { ok: false, error: nameErr };
+    const name = s.name as string;
+    const first = seriesNames.get(name);
+    if (first !== undefined) {
+      return { ok: false, error: `duplicate chart series name "${name}": chart.series[${first}] and chart.series[${index}]` };
+    }
+    seriesNames.set(name, index);
     if (!Array.isArray(s.values)) return { ok: false, error: 'series.values must be an array' };
     for (const v of s.values) {
       if (typeof v !== 'number' || !Number.isFinite(v)) return { ok: false, error: 'series.values must contain finite numbers' };
     }
     if (result.labels && s.values.length > result.labels.length) {
-      return { ok: false, error: 'series.values is longer than chart.labels' };
+      return {
+        ok: false,
+        error: `chart.series[${index}].values is longer than chart.labels (${s.values.length} values, ${result.labels.length} labels)`,
+      };
     }
     const series: ChartSeries = { name: s.name as string, values: s.values as number[] };
     const semanticErr = copyOptionalName(s, series, 'semantic', SEMANTICS, 'series.semantic');
@@ -423,6 +450,10 @@ function validateChartData(data: Record<string, unknown>): { ok: true; data: Cha
     copyNumber(data, result, 'yMin', 'chart.yMin', false) ??
     copyNumber(data, result, 'yMax', 'chart.yMax', false);
   if (err) return { ok: false, error: err };
+  // Ends that leave no span draw an empty plot with every point off it.
+  if (result.yMin !== undefined && result.yMax !== undefined && result.yMin >= result.yMax) {
+    return { ok: false, error: 'chart.yMin must be below chart.yMax' };
+  }
   if (data.marker !== undefined) {
     if (!isRecord(data.marker)) return { ok: false, error: 'chart.marker must be an object' };
     const markerAllowed = new Set(['x', 'series']);
@@ -820,32 +851,34 @@ function validateTableData(data: Record<string, unknown>): { ok: true; data: Tab
   const cellAllowed = new Set(['text', 'semantic', 'bold']);
   const rows: TableCell[][] = [];
   for (const [rowIndex, r] of data.rows.entries()) {
-    if (!Array.isArray(r)) return { ok: false, error: `table row ${rowIndex} must be an array` };
+    if (!Array.isArray(r)) return { ok: false, error: `table.rows[${rowIndex}] must be an array` };
     if (r.length !== columns.length) {
-      return { ok: false, error: `table row ${rowIndex} has ${r.length} cells; the table has ${columns.length} columns` };
+      return { ok: false, error: `table.rows[${rowIndex}] has ${r.length} cells; the table has ${columns.length} columns` };
     }
     const row: TableCell[] = [];
-    for (const cell of r) {
+    for (const [cellIndex, cell] of r.entries()) {
+      // Every refusal names its cell: a 200 by 12 table is 2,400 of them.
+      const at = `table.rows[${rowIndex}][${cellIndex}]`;
       if (typeof cell === 'number') {
-        if (!Number.isFinite(cell)) return { ok: false, error: 'table cell must be a finite number' };
+        if (!Number.isFinite(cell)) return { ok: false, error: `${at} must be a finite number` };
         row.push(cell);
         continue;
       }
       if (typeof cell === 'string') {
-        const err = checkString(cell, MAX_TABLE_CELL_UTF16, 'table cell');
+        const err = checkString(cell, MAX_TABLE_CELL_UTF16, at);
         if (err) return { ok: false, error: err };
         row.push(cell);
         continue;
       }
-      if (!isRecord(cell)) return { ok: false, error: 'table cell must be a string, a number or an object' };
-      const cellUnknown = checkUnknownKeys(cell, cellAllowed, 'table cell');
+      if (!isRecord(cell)) return { ok: false, error: `${at} must be a string, a number or an object` };
+      const cellUnknown = checkUnknownKeys(cell, cellAllowed, at);
       if (cellUnknown) return { ok: false, error: cellUnknown };
-      const textErr = checkString(cell.text, MAX_TABLE_CELL_UTF16, 'table cell.text');
+      const textErr = checkString(cell.text, MAX_TABLE_CELL_UTF16, `${at}.text`);
       if (textErr) return { ok: false, error: textErr };
       const cellObj: TableCellObject = { text: cell.text as string };
       const cellErr =
-        copyOptionalName(cell, cellObj, 'semantic', SEMANTICS, 'table cell.semantic') ??
-        copyOptionalBoolean(cell, cellObj, 'bold', 'table cell.bold');
+        copyOptionalName(cell, cellObj, 'semantic', SEMANTICS, `${at}.semantic`) ??
+        copyOptionalBoolean(cell, cellObj, 'bold', `${at}.bold`);
       if (cellErr) return { ok: false, error: cellErr };
       row.push(cellObj);
     }
@@ -1267,6 +1300,12 @@ function validateTasksData(data: Fields): { ok: true; data: TasksData } | { ok: 
 }
 
 const MAX_TIMERS = 8;
+/**
+ * The most seconds a paused timer may have left: the span of the instants a
+ * timer takes (1970 to 2199, 84,006 days), so a reading is always a time the
+ * page can draw. The backend's `MAX_TIMER_REMAINING_S`.
+ */
+const MAX_TIMER_REMAINING_S = 7_258_118_400;
 const TIMER_STATES = ['running', 'paused'];
 
 function validateTimer(t: unknown, seen: Set<string>): { ok: true; timer: Timer } | { ok: false; error: string } {
@@ -1297,8 +1336,8 @@ function validateTimer(t: unknown, seen: Set<string>): { ok: true; timer: Timer 
     if (paused) return { ok: false, error: 'timer.remaining is required when the timer is paused' };
   } else {
     if (!paused) return { ok: false, error: 'timer.remaining is only for a paused timer' };
-    if (typeof t.remaining !== 'number' || !Number.isFinite(t.remaining) || t.remaining < 0) {
-      return { ok: false, error: 'timer.remaining must be a number of seconds, 0 or more' };
+    if (typeof t.remaining !== 'number' || !(t.remaining >= 0 && t.remaining <= MAX_TIMER_REMAINING_S)) {
+      return { ok: false, error: `timer.remaining must be a number of seconds, 0 to ${MAX_TIMER_REMAINING_S}` };
     }
     out.remaining = t.remaining;
   }
@@ -1586,15 +1625,27 @@ function actionSizeCap(value: Record<string, unknown>): number {
  */
 export function validateControllerAction(value: unknown): ActionValidationResult {
   const result = validateActionFields(value);
-  if (result.ok && isRecord(value) && serializedSize(result.action) > actionSizeCap(value)) {
-    return { ok: false, error: 'action exceeds size limit' };
+  if (result.ok && isRecord(value)) {
+    const size = serializedSize(result.action);
+    if (size > actionSizeCap(value)) return { ok: false, error: sizeRefusal(size, actionSizeCap(value), true) };
   }
   return result;
 }
 
+/**
+ * The refusal of an action of `size` bytes over `cap`, with both numbers so
+ * the agent knows how much to cut; `normalized` when it is the normalized
+ * action that is over (a say's added `at: null`). The backend's
+ * `size_refusal` writes the same words.
+ */
+function sizeRefusal(size: number, cap: number, normalized: boolean): string {
+  return `action exceeds size limit${normalized ? ' once normalized' : ''}: ${size} bytes, the cap is ${cap}`;
+}
+
 function validateActionFields(value: unknown): ActionValidationResult {
   if (!isRecord(value)) return { ok: false, error: 'action must be an object' };
-  if (serializedSize(value) > actionSizeCap(value)) return { ok: false, error: 'action exceeds size limit' };
+  const size = serializedSize(value);
+  if (size > actionSizeCap(value)) return { ok: false, error: sizeRefusal(size, actionSizeCap(value), false) };
   if (!isName(value.op, OPERATIONS)) {
     return { ok: false, error: invalidName('op', OPERATIONS) };
   }

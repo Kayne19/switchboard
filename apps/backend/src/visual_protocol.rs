@@ -1,5 +1,5 @@
 use serde_json::{Map, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub const MAX_ACTION_BYTES: usize = 48_000;
 /// An image action carries raster bytes, so it gets its own cap: the raw
@@ -8,7 +8,9 @@ pub const MAX_ACTION_BYTES: usize = 48_000;
 /// socket both allow 16 MiB frames (`hosts::MAX_HOST_FRAME_BYTES`,
 /// `browser::MAX_WEBSOCKET_MESSAGE_BYTES`), so one image action always fits
 /// one frame; the reconnect snapshot sends each action as its own frame for
-/// the same reason. The browser's `validation.ts` holds the same two numbers.
+/// the same reason. The browser's `validation.ts` holds the same two numbers;
+/// the corpus pins both sides, and `scripts/check_hygiene.mjs` keeps every
+/// other copy (the skill module, the schema, the socket caps) in step.
 pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_IMAGE_ACTION_BYTES: usize = 12 * 1024 * 1024;
 pub const MAX_ID_UTF16: usize = 128;
@@ -172,40 +174,53 @@ fn names_external_resource(s: &str) -> bool {
     })
 }
 
-fn check_unsafe_string(v: &Value) -> Result<(), String> {
+/// What is unsafe in a string the agent sent, or None: markup or script
+/// first, then an external resource.
+fn unsafe_text(s: &str) -> Option<&'static str> {
+    let lower = s.to_ascii_lowercase();
+    if lower.contains("<script")
+        || lower.contains("<iframe")
+        || lower.contains("<html")
+        || lower.contains("<style")
+        || lower.contains("<svg")
+        || lower.contains("<object")
+        || lower.contains("<embed")
+        || lower.contains("javascript:")
+        || lower.contains("data:text/html")
+    {
+        return Some("raw markup or script injection is forbidden");
+    }
+    names_external_resource(s).then_some("external resource URL is forbidden")
+}
+
+/// The first unsafe string met walking depth first, keys in code point
+/// order: what is wrong with it, and where it is, written from the action
+/// down (`data.events[3].location`), so an agent with 200 events can find
+/// the one to mend. A key on the action itself (`on_action`) is written bare
+/// and every key below it after a dot, even an empty one. `path` holds where
+/// `v` is and comes back as it went in. The browser's `findUnsafeString`
+/// writes the same path.
+fn unsafe_string(v: &Value, path: &mut String, on_action: bool) -> Option<String> {
     match v {
-        Value::String(s) => {
-            let lower = s.to_ascii_lowercase();
-            if lower.contains("<script")
-                || lower.contains("<iframe")
-                || lower.contains("<html")
-                || lower.contains("<style")
-                || lower.contains("<svg")
-                || lower.contains("<object")
-                || lower.contains("<embed")
-                || lower.contains("javascript:")
-                || lower.contains("data:text/html")
-            {
-                return Err("raw markup or script injection is forbidden".to_string());
+        Value::String(s) => unsafe_text(s).map(|reason| format!("{reason} in {path}")),
+        Value::Object(m) => entries_in_order(m).into_iter().find_map(|(key, val)| {
+            let at = path.len();
+            if !on_action {
+                path.push('.');
             }
-            if names_external_resource(s) {
-                return Err("external resource URL is forbidden".to_string());
-            }
-            Ok(())
-        }
-        Value::Object(m) => {
-            for (_, val) in entries_in_order(m) {
-                check_unsafe_string(val)?;
-            }
-            Ok(())
-        }
-        Value::Array(a) => {
-            for val in a {
-                check_unsafe_string(val)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
+            path.push_str(key);
+            let found = unsafe_string(val, path, false);
+            path.truncate(at);
+            found
+        }),
+        Value::Array(a) => a.iter().enumerate().find_map(|(index, val)| {
+            let at = path.len();
+            path.push_str(&format!("[{index}]"));
+            let found = unsafe_string(val, path, false);
+            path.truncate(at);
+            found
+        }),
+        _ => None,
     }
 }
 
@@ -428,8 +443,12 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
                 .ok_or(format!(
                     "chart.labels must be an array of 1 to {MAX_CHART_LABELS} strings"
                 ))?;
-            for label in arr {
-                check_string(Some(label), MAX_CHART_LABEL_UTF16, "chart label")?;
+            for (index, label) in arr.iter().enumerate() {
+                check_string(
+                    Some(label),
+                    MAX_CHART_LABEL_UTF16,
+                    &format!("chart.labels[{index}]"),
+                )?;
             }
             Some(arr)
         }
@@ -440,12 +459,20 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
         .as_array()
         .ok_or("chart.series must be an array")?;
     let mut clean_series = Vec::new();
+    // A series is known by its name (the legend, `marker.series`, a note's
+    // `anchor.series`, `say at.series`), so no two may share one.
+    let mut series_names = HashMap::new();
 
-    for s in series_arr {
+    for (index, s) in series_arr.iter().enumerate() {
         let sm = s.as_object().ok_or("chart series item must be an object")?;
         check_unknown_keys(sm, &["name", "semantic", "values"], "chart series item")?;
 
         let name = required_string(sm, "name", 128, "series.name")?;
+        if let Some(first) = series_names.insert(name, index) {
+            return Err(format!(
+                "duplicate chart series name \"{name}\": chart.series[{first}] and chart.series[{index}]"
+            ));
+        }
 
         let values = sm
             .get("values")
@@ -456,8 +483,12 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
                 return Err("series.values must contain finite numbers".into());
             }
         }
-        if labels.is_some_and(|labels| values.len() > labels.len()) {
-            return Err("series.values is longer than chart.labels".into());
+        if let Some(labels) = labels.filter(|labels| values.len() > labels.len()) {
+            return Err(format!(
+                "chart.series[{index}].values is longer than chart.labels ({} values, {} labels)",
+                values.len(),
+                labels.len()
+            ));
         }
 
         let mut item = Map::new();
@@ -478,6 +509,15 @@ fn validate_chart_data(data: &Map<String, Value>) -> Result<Value, String> {
     }
     for k in ["xMax", "yMin", "yMax"] {
         copy_number(data, &mut out, k, &format!("chart.{k}"), false)?;
+    }
+    // Ends that leave no span draw an empty plot with every point off it.
+    if let (Some(low), Some(high)) = (
+        out.get("yMin").and_then(Value::as_f64),
+        out.get("yMax").and_then(Value::as_f64),
+    ) {
+        if low >= high {
+            return Err("chart.yMin must be below chart.yMax".into());
+        }
     }
 
     if let Some(marker_val) = data.get("marker") {
@@ -929,28 +969,29 @@ fn validate_code_data(data: &Map<String, Value>) -> Result<Value, String> {
     Ok(Value::Object(out))
 }
 
-fn validate_table_cell(cell: &Value) -> Result<Value, String> {
+/// One table cell, refused by its place `at` (`table.rows[3][2]`).
+fn validate_table_cell(cell: &Value, at: &str) -> Result<Value, String> {
     match cell {
         Value::Number(n) => {
             if !n.as_f64().is_some_and(f64::is_finite) {
-                return Err("table cell must be a finite number".into());
+                return Err(format!("{at} must be a finite number"));
             }
             Ok(cell.clone())
         }
         Value::String(_) => {
-            check_string(Some(cell), MAX_TABLE_CELL_UTF16, "table cell")?;
+            check_string(Some(cell), MAX_TABLE_CELL_UTF16, at)?;
             Ok(cell.clone())
         }
         Value::Object(cm) => {
-            check_unknown_keys(cm, &["text", "semantic", "bold"], "table cell")?;
-            let text = required_string(cm, "text", MAX_TABLE_CELL_UTF16, "table cell.text")?;
+            check_unknown_keys(cm, &["text", "semantic", "bold"], at)?;
+            let text = required_string(cm, "text", MAX_TABLE_CELL_UTF16, &format!("{at}.text"))?;
             let mut cell_out = Map::new();
             cell_out.insert("text".into(), text.into());
-            copy_optional_semantic(cm, &mut cell_out, "table cell.semantic")?;
-            copy_optional_bool(cm, &mut cell_out, "bold", "table cell.bold")?;
+            copy_optional_semantic(cm, &mut cell_out, &format!("{at}.semantic"))?;
+            copy_optional_bool(cm, &mut cell_out, "bold", &format!("{at}.bold"))?;
             Ok(Value::Object(cell_out))
         }
-        _ => Err("table cell must be a string, a number or an object".into()),
+        _ => Err(format!("{at} must be a string, a number or an object")),
     }
 }
 
@@ -1005,17 +1046,19 @@ fn validate_table_data(data: &Map<String, Value>) -> Result<Value, String> {
     for (row_index, r) in rows_arr.iter().enumerate() {
         let cells = r
             .as_array()
-            .ok_or(format!("table row {row_index} must be an array"))?;
+            .ok_or(format!("table.rows[{row_index}] must be an array"))?;
         if cells.len() != clean_columns.len() {
             return Err(format!(
-                "table row {row_index} has {} cells; the table has {} columns",
+                "table.rows[{row_index}] has {} cells; the table has {} columns",
                 cells.len(),
                 clean_columns.len()
             ));
         }
         let mut clean_cells = Vec::new();
-        for cell in cells {
-            clean_cells.push(validate_table_cell(cell)?);
+        for (cell_index, cell) in cells.iter().enumerate() {
+            // Every refusal names its cell: a 200 by 12 table is 2,400 of them.
+            let at = format!("table.rows[{row_index}][{cell_index}]");
+            clean_cells.push(validate_table_cell(cell, &at)?);
         }
         clean_rows.push(Value::Array(clean_cells));
     }
@@ -1559,6 +1602,10 @@ fn validate_tasks_data(data: &Map<String, Value>) -> Result<Value, String> {
 }
 
 const MAX_TIMERS: usize = 8;
+/// The most seconds a paused timer may have left: the span of the instants
+/// a timer takes (1970 to 2199, 84,006 days), so a reading is always a time
+/// the page can draw. The browser's `MAX_TIMER_REMAINING_S`.
+const MAX_TIMER_REMAINING_S: f64 = 7_258_118_400.0;
 const TIMER_STATES: [&str; 2] = ["running", "paused"];
 
 fn validate_timer(timer: &Value, seen: &mut HashSet<String>) -> Result<Value, String> {
@@ -1593,9 +1640,11 @@ fn validate_timer(timer: &Value, seen: &mut HashSet<String>) -> Result<Value, St
         Some(remaining) => {
             if !remaining
                 .as_f64()
-                .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
+                .is_some_and(|seconds| (0.0..=MAX_TIMER_REMAINING_S).contains(&seconds))
             {
-                return Err("timer.remaining must be a number of seconds, 0 or more".into());
+                return Err(format!(
+                    "timer.remaining must be a number of seconds, 0 to {MAX_TIMER_REMAINING_S}"
+                ));
             }
             out.insert("remaining".into(), remaining.clone());
         }
@@ -2031,8 +2080,9 @@ fn js_number_len(n: &serde_json::Number) -> usize {
 pub fn validate_action(action: &Value) -> Result<Value, String> {
     let map = action.as_object().ok_or("action must be an object")?;
     let size_cap = action_size_cap(action);
-    if json_len(action) > size_cap {
-        return Err("action exceeds size limit".into());
+    let size = json_len(action);
+    if size > size_cap {
+        return Err(size_refusal(size, size_cap, false));
     }
     let op = read_name(map.get("op"), &OPS, "op")?;
 
@@ -2040,7 +2090,9 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
         return Err(format!("model-controlled layout field is forbidden: {k}"));
     }
 
-    check_unsafe_string(action)?;
+    if let Some(unsafe_error) = unsafe_string(action, &mut String::new(), true) {
+        return Err(unsafe_error);
+    }
 
     if !finite(action) {
         return Err("action contains a non-finite number".into());
@@ -2160,10 +2212,20 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
     }
 
     let normalized = Value::Object(out);
-    if json_len(&normalized) > size_cap {
-        return Err("action exceeds size limit".into());
+    let size = json_len(&normalized);
+    if size > size_cap {
+        return Err(size_refusal(size, size_cap, true));
     }
     Ok(normalized)
+}
+
+/// The refusal of an action of `size` bytes over `cap`, with both numbers
+/// so the agent knows how much to cut; `normalized` when it is the
+/// normalized action that is over (a say's added `at: null`). The browser's
+/// `sizeRefusal` writes the same words.
+fn size_refusal(size: usize, cap: usize, normalized: bool) -> String {
+    let when = if normalized { " once normalized" } else { "" };
+    format!("action exceeds size limit{when}: {size} bytes, the cap is {cap}")
 }
 
 /// The shared validator corpus, `apps/frontend/tests/fixtures/validator-corpus.json`:

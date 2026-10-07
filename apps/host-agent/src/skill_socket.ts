@@ -10,7 +10,6 @@
 import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import type { ModuleReply } from "./link.ts";
 import type { CallMode, CallState, TurnCause } from "./sessions.ts";
 
@@ -18,18 +17,35 @@ import type { CallMode, CallState, TurnCause } from "./sessions.ts";
 export const MODULE_CALLS: readonly string[] = ["speak", "request_to_speak", "display", "view"];
 
 /**
- * Longest request line accepted; a longer one closes the connection. An image
+ * Longest request line accepted, in bytes before its newline. An image
  * display action may be 12 MiB (MAX_IMAGE_ACTION_BYTES in the service), so a
  * line may carry that and 1 MiB more for its envelope. The relay re-wraps the
  * args in a module_call frame of its own, and the host link refuses frames
  * over 16 MiB (MAX_HOST_FRAME_BYTES in hosts.rs) by dropping the whole link,
  * so the cap stays well under that: a line this accepts always fits a frame.
- * A longer line is answered `refused`, `too_large`, and ends the connection.
+ * A longer line is answered `refused`, `too_large`, as soon as it passes the
+ * cap, its rest is dropped as it arrives, and the connection ends with it.
+ * scripts/check_hygiene.mjs checks both margins: 1 MiB over the image action
+ * cap, and 1 MiB under the host link's frame cap.
  */
 export const MAX_LINE_BYTES = 13 * 1024 * 1024;
 
 /** The answer to a request line longer than MAX_LINE_BYTES. */
 const TOO_LARGE = { status: "refused", reason: "too_large" } as const;
+
+/**
+ * The most requests one connection may have read and not yet answered, the
+ * one being handled included, and the most bytes of request text they may
+ * hold together (one line's cap). The module writes a request and waits for
+ * its answer, so it never has more than one waiting; a client that writes
+ * more without reading is refused rather than held. Without the bound a
+ * connection could queue any number of 13 MiB lines behind a call waiting
+ * on the service (up to its 30 s relay timeout), and each one was held.
+ */
+export const MAX_WAITING_REQUESTS = 8;
+
+/** The answer to a request past MAX_WAITING_REQUESTS or the bytes they may hold. */
+const QUEUE_FULL = { status: "refused", reason: "queue_full" } as const;
 
 export interface SkillSocketOptions {
 	socketPath: string;
@@ -86,28 +102,80 @@ export class SkillSocket {
 
 	#serve(conn: net.Socket): void {
 		conn.on("error", () => conn.destroy());
-		const lines = createInterface({ input: conn, crlfDelay: Number.POSITIVE_INFINITY });
 		// Requests on one connection are answered in order.
 		let queue = Promise.resolve();
-		let ending = false;
-		lines.on("line", (line) => {
-			if (ending) return;
-			if (Buffer.byteLength(line) > MAX_LINE_BYTES) {
-				// Refused in its turn, and the connection ends after the answer.
-				// It used to close without one, and the module could only
-				// report that the host agent hung up.
-				ending = true;
-				queue = queue.then(() => {
-					if (!conn.destroyed) conn.end(`${JSON.stringify(TOO_LARGE)}\n`, () => conn.destroy());
+		const answer = (reply: unknown) => {
+			if (!conn.destroyed) conn.write(`${JSON.stringify(reply)}\n`);
+		};
+		// The line still open: its bytes so far, never more than the cap. The
+		// cap is checked as the bytes arrive, not once the line is whole.
+		// readline used to hold a line until its newline however long it
+		// grew: 64 MiB with no newline was 64 MiB held here, and 600 MiB
+		// passed V8's longest string and ended the process, and with it every
+		// session on the host.
+		let open: Buffer[] = [];
+		let openBytes = 0;
+		// Set once the open line passes the cap: the rest of it is read and
+		// dropped as it arrives, and the connection ends where it does.
+		let refused = false;
+		let ended = false;
+		// The requests read and not yet answered, and their bytes.
+		let waiting = 0;
+		let waitingBytes = 0;
+		conn.on("data", (chunk: Buffer) => {
+			let from = 0;
+			while (!ended && from < chunk.length) {
+				const newline = chunk.indexOf(0x0a, from);
+				const to = newline < 0 ? chunk.length : newline;
+				if (!refused) {
+					openBytes += to - from;
+					if (openBytes > MAX_LINE_BYTES) {
+						// Answered in its turn, without waiting for the newline.
+						// The connection stays open to the end of the line: the
+						// module writes a line whole before it reads the answer,
+						// and a socket closed under that write would lose it.
+						refused = true;
+						open = [];
+						queue = queue.then(() => answer(TOO_LARGE));
+					} else if (to > from) {
+						open.push(chunk.subarray(from, to));
+					}
+				}
+				if (newline < 0) return;
+				from = newline + 1;
+				if (refused) {
+					// Lines after the refused one are not read.
+					ended = true;
+					queue = queue.then(() => {
+						if (!conn.destroyed) conn.end(() => conn.destroy());
+					});
+					return;
+				}
+				const bytes = openBytes;
+				if (waiting >= MAX_WAITING_REQUESTS || waitingBytes + bytes > MAX_LINE_BYTES) {
+					// Refused in its turn, and the connection ends after the
+					// answer; lines after it are not read.
+					ended = true;
+					queue = queue.then(() => {
+						answer(QUEUE_FULL);
+						if (!conn.destroyed) conn.end(() => conn.destroy());
+					});
+					return;
+				}
+				// A line ends at "\n"; a "\r" before it is part of the break.
+				const line = Buffer.concat(open, openBytes).toString("utf8").replace(/\r$/, "");
+				open = [];
+				openBytes = 0;
+				waiting += 1;
+				waitingBytes += bytes;
+				// A handler failure answers that one request and leaves the
+				// connection's queue alive for the next line.
+				queue = queue.then(async () => {
+					answer(await this.handle(line).catch(() => ({ status: "refused", reason: "bad_request" })));
+					waiting -= 1;
+					waitingBytes -= bytes;
 				});
-				return;
 			}
-			// A handler failure answers that one request and leaves the
-			// connection's queue alive for the next line.
-			queue = queue.then(async () => {
-				const reply = await this.handle(line).catch(() => ({ status: "refused", reason: "bad_request" }));
-				if (!conn.destroyed) conn.write(`${JSON.stringify(reply)}\n`);
-			});
 		});
 	}
 
