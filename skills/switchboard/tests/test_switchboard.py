@@ -756,7 +756,18 @@ class DisplayCorpusTests(unittest.TestCase):
 
     # No object, an unknown op, a missing or blank id, an unknown type or role,
     # data that is not a dict, an empty say text, a required data key missing,
-    # an unknown diagram mode. Every other refusal is the service's to give.
+    # an unknown diagram mode; and, in the validators' own words
+    # (VALUE_RULES), two chart series with one name, a yMin not below yMax,
+    # and a timer's remaining (required when paused, refused when running, 0
+    # to the cap). Every other refusal is the service's to give.
+    VALUE_RULES = (
+        "chart_series_name_duplicate", "chart_series_name_duplicate_empty",
+        "chart_series_order_name_duplicate_before_values", "chart_y_ends_equal", "chart_y_ends_inverted",
+        "chart_order_y_ends_before_marker", "timer_paused_without_remaining", "timer_running_with_remaining",
+        "timer_unsaid_state_with_remaining", "timer_entry_order_running_before_remaining_type",
+        "timer_remaining_negative", "timer_remaining_string", "timer_remaining_null",
+        "timer_remaining_one_second_past_its_cap", "timer_remaining_a_fraction_past_its_cap", "timer_remaining_huge",
+    )
     OUTLINE_REFUSES = (
         "action_is_a_string", "action_is_an_array", "action_is_null", "action_is_a_number",
         "action_is_a_huge_string", "op_missing", "op_not_a_string", "op_listen_is_internal", "op_delete",
@@ -784,6 +795,7 @@ class DisplayCorpusTests(unittest.TestCase):
         "calendar_view_missing", "calendar_start_missing", "calendar_events_missing", "tasks_items_missing",
         "timer_timers_missing", "weather_location_missing", "weather_units_missing", "weather_current_missing",
         "inbox_messages_missing",
+        *VALUE_RULES,
     )
 
     @classmethod
@@ -837,6 +849,35 @@ class DisplayCorpusTests(unittest.TestCase):
                     switchboard._display_wire_action(self._expand(by_name[name]["action"]))
                 self.assertTrue(str(caught.exception).startswith(error), str(caught.exception))
         self.assertGreater(checked, 20)
+
+    def test_refuses_a_value_rule_in_the_validators_words(self):
+        """Where the outline checks a rule across a chart's or a timer's fields,
+        its error is the validators' own, word for word."""
+        by_name = {case["name"]: case for case in self.cases}
+        for name in self.VALUE_RULES:
+            with self.subTest(name):
+                with self.assertRaises(ValueError) as caught:
+                    switchboard._display_wire_action(self._expand(by_name[name]["action"]))
+                self.assertEqual(str(caught.exception), by_name[name]["error"])
+
+    def test_a_value_rule_reads_numbers_as_json_sends_them(self):
+        # A numpy scalar is sent as its number; a bool is not a number.
+        class Scalar:
+            def __init__(self, value):
+                self.value = value
+
+            def tolist(self):
+                return self.value
+
+        chart = {"op": "show", "id": "c", "type": "chart", "data": {"series": [{"name": "a", "values": [1]}]}}
+        switchboard._display_wire_action({**chart, "data": {**chart["data"], "yMin": Scalar(0), "yMax": Scalar(10)}})
+        with self.assertRaises(ValueError):
+            switchboard._display_wire_action({**chart, "data": {**chart["data"], "yMin": Scalar(10), "yMax": 10.0}})
+        timer = {"id": "t", "label": "Tea", "endsAt": "2026-10-05T18:42:00-07:00", "state": "paused"}
+        show = lambda remaining: {"op": "show", "id": "k", "type": "timer", "data": {"timers": [{**timer, "remaining": remaining}]}}
+        switchboard._display_wire_action(show(Scalar(90)))
+        with self.assertRaises(ValueError):
+            switchboard._display_wire_action(show(True))
 
     def test_a_blank_id_is_unicode_white_space(self):
         # str.strip also strips U+001C to U+001F, which are not White_Space.

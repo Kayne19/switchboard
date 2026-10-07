@@ -448,6 +448,70 @@ def _check_display_action(action):
     one_of = _ONE_OF.get(kind, ())
     if one_of and not any(key in data for key in one_of):
         raise ValueError(f"{kind} data needs {' or '.join(one_of)}; its shape is {hint}")
+    if kind == "chart":
+        _check_chart(data)
+    elif kind == "timer":
+        _check_timers(data)
+
+
+# The most seconds a paused timer may have left: the instants a timer takes
+# span 1970 to 2199 (MAX_TIMER_REMAINING_S in validation.ts and
+# visual_protocol.rs). The corpus pins it here too: its case at the cap is
+# accepted and its case a second past it refused (DisplayCorpusTests).
+_MAX_TIMER_REMAINING_S = 7_258_118_400
+
+
+def _real(value):
+    """`value` as a plain int or float when JSON sends it as a number (a
+    numpy scalar too), else None. A bool is not one, as JSON's true is not."""
+    if hasattr(value, "tolist") and not isinstance(value, (list, tuple, dict, str)):
+        value = value.tolist()
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def _check_chart(data):
+    """A chart's rules across its fields, in the validators' words: no two
+    series share a name, and `yMin` is below `yMax` when both are given. The
+    series are read up to the first one whose shape the service would refuse
+    first, which is the service's to name."""
+    series = data.get("series")
+    if isinstance(series, (list, tuple)):
+        first = {}
+        for index, item in enumerate(series):
+            name = item.get("name") if isinstance(item, dict) else None
+            if not isinstance(name, str):
+                break
+            if name in first:
+                raise ValueError(f'duplicate chart series name "{name}": chart.series[{first[name]}] and chart.series[{index}]')
+            first[name] = index
+    low, high = _real(data.get("yMin")), _real(data.get("yMax"))
+    if low is not None and high is not None and low >= high:
+        raise ValueError("chart.yMin must be below chart.yMax")
+
+
+def _check_timers(data):
+    """Each timer's `remaining`, in the validators' words: required when
+    the timer is paused, refused when it runs, and a number of seconds from 0
+    to the cap. The timers are read up to the first whose shape or state the
+    service would refuse first."""
+    timers = data.get("timers")
+    if not isinstance(timers, (list, tuple)):
+        return
+    for timer in timers:
+        if not isinstance(timer, dict) or timer.get("state", "running") not in ("running", "paused"):
+            return
+        paused = timer.get("state") == "paused"
+        if "remaining" not in timer:
+            if paused:
+                raise ValueError("timer.remaining is required when the timer is paused")
+            continue
+        if not paused:
+            raise ValueError("timer.remaining is only for a paused timer")
+        seconds = _real(timer["remaining"])
+        if seconds is None or not 0 <= seconds <= _MAX_TIMER_REMAINING_S:
+            raise ValueError(f"timer.remaining must be a number of seconds, 0 to {_MAX_TIMER_REMAINING_S}")
 
 
 # ---- time values ---------------------------------------------------------------

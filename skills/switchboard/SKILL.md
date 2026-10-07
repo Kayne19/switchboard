@@ -33,8 +33,11 @@ wrong argument raises: a bad type, an unknown display type, op, role or view
 target, a value JSON cannot carry (NaN, an infinity, or a string holding
 half of a surrogate pair), or one the switchboard would read as another (an
 integer beyond 2**53, which it reads as a double; send a float or text), or
-data nested deeper than it reads. Values with `tolist()`, such as numpy
-arrays, are sent as lists.
+data nested deeper than it reads. A display also raises, in the
+switchboard's own words, for two chart series with one name, a `yMin` not
+below `yMax`, and a timer's `remaining` that breaks its rule (required when
+paused, refused when running, 0 to 7258118400). Values with `tolist()`, such
+as numpy arrays, are sent as lists.
 
 ## Functions
 
