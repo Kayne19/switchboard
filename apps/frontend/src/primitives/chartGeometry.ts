@@ -234,7 +234,7 @@ export function chartLegendLayout(
   const kept = items.filter((item) => item.row <= last);
   for (;;) {
     const text = `+${items.length - kept.length} SERIES`;
-    const width = text.length * CHART_LEGEND_CHAR_ADVANCE;
+    const width = textCells(text) * CHART_LEGEND_CHAR_ADVANCE;
     const tail = kept.at(-1);
     if (!tail || tail.row !== last) return folded(kept, items, { text, x: 0, row: last }, cap);
     const content = CHART_LEGEND_TEXT_X + textCells(tail.text) * CHART_LEGEND_CHAR_ADVANCE;
@@ -339,9 +339,13 @@ export function wrapLabel(label: string, width: number, lines: number): { text: 
   }
   // The lines kept as set, and what the label says after them, cut.
   const kept = set.slice(0, lines - 1);
+  // The words the kept lines hold, and the rest of the label after them (a
+  // kept line may end inside a word, `breakWord`): matched against the
+  // label's words joined by one space, as the lines join them.
+  const words = label.split(/\s+/).filter(Boolean).join(' ');
   let cursor = 0;
-  for (const line of kept) cursor = label.indexOf(line, cursor) + line.length;
-  const last = truncateLabel(label.slice(cursor).trim(), room * CHART_TICK_CHAR_ADVANCE, CHART_TICK_CHAR_ADVANCE).text;
+  for (const line of kept) cursor = words.indexOf(line, cursor) + line.length;
+  const last = truncateLabel(words.slice(cursor).trim(), room * CHART_TICK_CHAR_ADVANCE, CHART_TICK_CHAR_ADVANCE).text;
   const shown = [...kept, last];
   return { text: shown.join(' '), lines: shown, truncated: true };
 }

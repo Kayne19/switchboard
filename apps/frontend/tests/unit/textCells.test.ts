@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { graphemes, headCells, tailCells, textCells } from '../../src/design/textCells';
+import { graphemes, headCells, textCells } from '../../src/design/textCells';
 
 describe('textCells', () => {
   it('counts one cell a character, two for a wide one, none for a format character', () => {
@@ -21,15 +21,11 @@ describe('textCells', () => {
     expect(graphemes('e\u0301\u{1F680}')).toEqual(['e\u0301', '\u{1F680}']);
   });
 
-  it('cuts the head and the tail between characters', () => {
+  it('cuts the head between characters', () => {
     expect(headCells('abcdef', 3)).toBe('abc');
     expect(headCells('abc', 0)).toBe('');
     expect(headCells('\u6570\u636E\u5E93', 3)).toBe('\u6570');
     expect(headCells('\u{1F680}\u{1F680}', 3)).toBe('\u{1F680}');
     expect(headCells('e\u0301e\u0301', 1)).toBe('e\u0301');
-    expect(tailCells('abcdef', 2)).toBe('ef');
-    expect(tailCells('abc', 0)).toBe('');
-    expect(tailCells('\u6570\u636E\u5E93', 5)).toBe('\u636E\u5E93');
-    expect(tailCells('\u{1F680}\u{1F680}', 1)).toBe('');
   });
 });

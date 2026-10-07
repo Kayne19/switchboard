@@ -29,6 +29,11 @@ describe('textWrap', () => {
     expect(breakWord('\u{1F680}', 1)).toEqual(['\u{1F680}']);
   });
 
+  it('keeps a trailing separator on the last piece of the word before it', () => {
+    expect(wrapText('DAMOCLES / FRONT DESK', 8)).toEqual(['DAMOCLES /', 'FRONT', 'DESK']);
+    expect(wrapText('noteThing / x', 8)).toEqual(['note', 'Thing /', 'x']);
+  });
+
   it('wraps text and breaks the words too long for a line', () => {
     expect(wrapText('see apps/frontend/src/primitives/textWrap.ts now', 20)).toEqual(['see', 'apps/frontend/src/', 'primitives/textWrap.', 'ts', 'now']);
   });

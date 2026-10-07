@@ -23,12 +23,19 @@ const UPPER = /^\p{Lu}$/u;
 export function wrapWords(text: string, cells: number): string[] {
   const lines: string[] = [];
   let current = '';
+  let used = 0;
   for (const word of text.split(/\s+/).filter(Boolean)) {
-    if (!current) current = word;
-    else if (TRAILING.test(word) || textCells(current) + 1 + textCells(word) <= cells) current += ` ${word}`;
-    else {
+    const width = textCells(word);
+    if (!current) {
+      current = word;
+      used = width;
+    } else if (TRAILING.test(word) || used + 1 + width <= cells) {
+      current += ` ${word}`;
+      used += 1 + width;
+    } else {
       lines.push(current);
       current = word;
+      used = width;
     }
   }
   if (current) lines.push(current);
@@ -51,11 +58,13 @@ function breaksBetween(before: string | undefined, after: string | undefined): b
  */
 export function breakWord(word: string, cells: number, { fromEnd = false }: { fromEnd?: boolean } = {}): string[] {
   const chars = graphemes(word);
-  const widths = chars.map((char) => textCells(char));
+  // The cells before each character: a stretch's width is a difference.
+  const before = [0];
+  for (const char of chars) before.push(before[before.length - 1] + textCells(char));
+  const width = (from: number, to: number) => before[to] - before[from];
   const pieces: string[] = [];
   let low = 0;
   let high = chars.length;
-  const width = (from: number, to: number) => widths.slice(from, to).reduce((sum, each) => sum + each, 0);
   while (low < high && width(low, high) > cells) {
     if (!fromEnd) {
       // The most characters from `low` that fit, at least one.
@@ -81,7 +90,19 @@ export function breakWord(word: string, cells: number, { fromEnd = false }: { fr
   return pieces.filter(Boolean);
 }
 
-/** Text onto lines of at most `cells`: wrapped at spaces (`wrapWords`), a word too long broken (`breakWord`). */
+/**
+ * Text onto lines of at most `cells`: wrapped at spaces (`wrapWords`), a
+ * word too long broken (`breakWord`). A trailing separator `wrapWords` kept
+ * on a line stays on the last piece of the word before it.
+ */
 export function wrapText(text: string, cells: number): string[] {
-  return wrapWords(text, cells).flatMap((line) => (textCells(line) > cells ? breakWord(line, cells) : [line]));
+  return wrapWords(text, cells).flatMap((line) => {
+    if (textCells(line) <= cells) return [line];
+    const space = line.lastIndexOf(' ');
+    const tail = space > 0 ? line.slice(space + 1) : '';
+    if (!TRAILING.test(tail)) return breakWord(line, cells);
+    const pieces = breakWord(line.slice(0, space), cells);
+    pieces[pieces.length - 1] = `${pieces[pieces.length - 1]} ${tail}`;
+    return pieces;
+  });
 }

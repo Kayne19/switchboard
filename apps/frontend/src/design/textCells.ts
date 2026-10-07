@@ -79,16 +79,3 @@ export function headCells(text: string, cells: number): string {
   }
   return text.slice(0, end);
 }
-
-/** The longest end of `text` that fits in `cells`, cut between characters. */
-export function tailCells(text: string, cells: number): string {
-  if (ASCII.test(text)) return cells <= 0 ? '' : text.slice(-cells);
-  let used = 0;
-  let start = text.length;
-  for (const grapheme of graphemes(text).reverse()) {
-    used += cellsOf(grapheme);
-    if (used > cells) break;
-    start -= grapheme.length;
-  }
-  return text.slice(start);
-}
