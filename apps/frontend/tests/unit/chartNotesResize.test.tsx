@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 // The notes over a chart were placed again on every frame of a resize: a
 // placement costs up to 200-250 ms on a dense bar chart (four series of 40
-// with five notes and the rail), so a resize dropped frames
-// (polish row 14). They are placed once a step of the size, as a graph is
+// with five notes and the rail), so a resize dropped frames. They are placed once a step of the size, as a graph is
 // laid out once a step; within a step the cards follow their points, and
 // where the size comes to rest they are placed for it.
 import { act } from 'react';
@@ -166,6 +165,10 @@ describe('chart notes through a resize', () => {
     // A resize from 1000 to 1160 px, a frame for every pixel.
     for (let width = 1001; width <= 1160; width += 1) {
       resize(width);
+      // A frame apart, as a browser reports a resize: with no time between
+      // frames the rest could never come mid-resize, and the count below
+      // held with no rest at all.
+      act(() => vi.advanceTimersByTime(16));
       // The leader still lands on the named point, however the card got there.
       const end = drawn().ends.turn;
       const at = landing(width);
