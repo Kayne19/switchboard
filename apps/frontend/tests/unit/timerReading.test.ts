@@ -6,6 +6,7 @@ import {
   formatCountdown,
   instantClock,
   instantMs,
+  MAX_COUNTDOWN,
   MIN_CELL_DIGITS,
   MIN_CELL_WIDTH,
   readTimer,
@@ -85,6 +86,7 @@ describe('readTimer', () => {
     expect(before.gone).toBeCloseTo(1 - 1260 / 2700);
     expect(readTimer({ ...bread, remaining: 0 }, 0)).toMatchObject({ phase: 'paused', seconds: 0 });
     expect(readTimer({ ...bread, remaining: 12.2 }, 0)).toMatchObject({ seconds: 13 });
+    expect(readTimer({ ...bread, remaining: 1e20 }, 0)).toMatchObject({ phase: 'paused', seconds: MAX_COUNTDOWN, gone: 0 });
   });
 
   it('applies offsets: one moment written two ways ends at once', () => {
@@ -135,6 +137,19 @@ describe('formatCountdown', () => {
     [-5, '00:00'],
   ])('%i seconds read %s', (seconds, text) => {
     expect(formatCountdown(seconds)).toBe(text);
+  });
+
+  // review-views L1: the wire bounds `remaining` below only, and a paused
+  // timer drew 1e20 as `1157407407407407D 09:46:40` and 1e300 in exponent
+  // form. The page holds a countdown to the longest two instants can span
+  // (1970-01-01 to 2200-01-01).
+  it('holds a countdown to the longest span two instants make', () => {
+    expect(MAX_COUNTDOWN).toBe(84_006 * 86_400);
+    expect(formatCountdown(MAX_COUNTDOWN)).toBe('84006D 00:00:00');
+    expect(formatCountdown(1e20)).toBe('84006D 00:00:00');
+    expect(formatCountdown(1e300)).toBe('84006D 00:00:00');
+    expect(formatCountdown(Number.POSITIVE_INFINITY)).toBe('84006D 00:00:00');
+    expect(formatCountdown(Number.NaN)).toBe('00:00');
   });
 });
 

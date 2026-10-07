@@ -54,6 +54,8 @@ export interface SceneProps {
   /** Opens the conversation history drawer; absent while there is no conversation. */
   onOpenHistory?: () => void;
   setTranscriptOpen: (open: boolean) => void;
+  /** The focus layer is open over the scene: the scene is inert behind it (FocusLayer `useModalFocus`). */
+  behindFocus?: boolean;
 }
 
 // The conversation's corner accents, from #conversation .corner-a / .corner-b
@@ -843,8 +845,10 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
     mainVariant: isMetricPrimary ? 'composed-main--metric-primary' : undefined,
     main: (
       <ObjectMotion
+        // The object's identity, shared with its focus as every object's is
+        // (ObjectMotion's switchboard-object-<id>); a cluster is named by its
+        // own id, so focusing one of its metrics grows from nothing in it.
         objectId={primaryMetrics.length > 1 ? 'primary-metric-cluster' : primary.id}
-        layoutId={primaryMetrics.length > 1 ? 'switchboard-primary-metric-cluster' : undefined}
         className={`composed-primary-object composed-primary-object--${primary.type}${primaryMetrics.length > 1 ? ' composed-primary-object--cluster' : ''}`}
       >
         <TechFrame variant="panel" />
@@ -942,7 +946,7 @@ function sceneContent(
  * primary object; a content kind with nothing to show draws the idle page.
  */
 export function SceneShell(props: SceneProps) {
-  const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen } = props;
+  const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, behindFocus = false } = props;
   const isPresent = useIsPresent();
   // A diagram can place its note as a callout beside the node it names; the
   // rail then leaves it out. A chart hands the rail the one note it leaves
@@ -1001,6 +1005,7 @@ export function SceneShell(props: SceneProps) {
     <motion.section
       className={`scene scene--${layout}${content ? ` scene--${kind}` : ''}`}
       data-scene={content ? kind : layout}
+      inert={behindFocus}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
