@@ -66,6 +66,15 @@ commit.
   documented environment, one fake-executable writer, one skill socket path,
   one frame depth, live paths, routes and settings in the docs); a new rule of
   that kind gets a check there.
+- CI's `browser` job runs the Playwright specs in Chromium: `npm run
+  test:browser` (every spec in `apps/frontend/tests/visual` but the pixel
+  goldens, which are tagged `@golden`) and `npm run test:integration` (the
+  production build). The goldens are drawn on the dev box and the runner's
+  fonts raster differently, so they stay a local gate: run `npm run
+  test:visual` before a change that moves pixels. The suite starts its own
+  server on port 4183 (`PLAYWRIGHT_PORT` moves it) and fails rather than
+  test a server it finds there. `master` requires only `test`; a red
+  `browser` is still a failure to fix, not to merge over.
 - A `static/` or `static-debug/` merge conflict is resolved by rebuilding from the merged source
   (`npm ci && npm run build`), never by picking a side (see #37).
 - `master` requires a passing CI `test` check on an up-to-date head. If

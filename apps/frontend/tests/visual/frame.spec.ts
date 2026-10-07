@@ -6,7 +6,7 @@ import { FRAME_GEOMETRIES, frameCrossings, openScene, runActions } from './helpe
 // aux row. Nothing it draws crosses the frame (helpers.ts `frameCrossings`;
 // calendar.spec.ts asks the same of the calendar). A list's rows, a table's
 // last row, a figure's caption and a document's meta line each ran over a
-// step of their frame on visual-palette, and a long first line of source ran
+// step of their frame before this was checked, and a long first line of source ran
 // under the code frame's top-right step in focus on a phone.
 
 const table80 = {
