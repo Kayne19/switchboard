@@ -5,7 +5,8 @@ import type { DiagramData } from '../../src/controller/types';
 import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
 import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import { GRAPH_MIN_SCALE } from '../../src/primitives/diagramLayout';
-import { mount, rerender, stubResizeObserver } from './sceneHarness';
+import { SEMANTIC_COLOR } from '../../src/design/tokens';
+import { mount, referenced, rerender, stubResizeObserver } from './sceneHarness';
 
 const data: DiagramData = {
   mode: 'graph',
@@ -69,20 +70,22 @@ describe('diagram rendering', () => {
   it('sizes the active-edge glow to the drawing so straight edges keep their stroke', () => {
     render();
     // A bounding-box filter region has zero height on a horizontal edge.
-    const glow = host.querySelector('#active-edge-glow');
+    const edge = host.querySelector('.diagram-edge--active')!;
+    const glow = referenced(host, edge.getAttribute('filter'));
+    expect(glow?.tagName).toBe('filter');
     expect(glow?.getAttribute('filterUnits')).toBe('userSpaceOnUse');
   });
 
   it('ends every edge in an arrowhead of its own colour, not a dot', () => {
     render();
     const edges = [...host.querySelectorAll<SVGPathElement>('.diagram-edges path')];
-    for (const edge of edges) expect(edge.getAttribute('marker-end')).toBe('url(#diagram-arrow-paper)');
+    for (const edge of edges) expect(referenced(host, edge.getAttribute('marker-end'))?.querySelector('path')?.getAttribute('fill')).toBe(SEMANTIC_COLOR.paper);
     expect(host.querySelector('.diagram-edges circle')).toBeNull();
-    const markers = [...host.querySelectorAll('defs marker')].map((marker) => marker.id);
-    expect(markers).toContain('diagram-arrow-paper');
-    expect(markers).toContain('diagram-arrow-red');
+    const fills = [...host.querySelectorAll('defs marker')].map((marker) => marker.querySelector('path')?.getAttribute('fill'));
+    expect(fills).toContain(SEMANTIC_COLOR.paper);
+    expect(fills).toContain(SEMANTIC_COLOR.red);
     // The arrowhead scales with the drawing, as the frames do.
-    expect(host.querySelector('#diagram-arrow-paper')?.getAttribute('markerUnits')).toBe('userSpaceOnUse');
+    expect(referenced(host, edges[0].getAttribute('marker-end'))?.getAttribute('markerUnits')).toBe('userSpaceOnUse');
   });
 
   it('sizes each node box to its text and wraps a long label', () => {
@@ -131,7 +134,7 @@ describe('diagram node state', () => {
 
     const active = nodeOf('active');
     expect(active.querySelector('.diagram-node__body--active')).not.toBeNull();
-    expect(active.querySelector('.diagram-node__frame')?.getAttribute('filter')).toBe('url(#diagram-node-glow)');
+    expect(referenced(host, active.querySelector('.diagram-node__frame')?.getAttribute('filter'))?.tagName).toBe('filter');
     expect(active.querySelector('.diagram-node__tag')).toBeNull();
 
     const blocked = nodeOf('blocked');

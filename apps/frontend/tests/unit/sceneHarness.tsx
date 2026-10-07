@@ -123,6 +123,16 @@ export function stubResizeObserver(): void {
   };
 }
 
+/**
+ * The element a `url(#id)` attribute value names, looked up in `within`
+ * (null where it names none there): SVG ids are each drawing's own
+ * (`useSvgIds`), so a test follows the reference rather than spell an id.
+ */
+export function referenced(within: ParentNode, value: string | null | undefined): Element | null {
+  const id = value?.match(/^url\(#(.+)\)$/)?.[1];
+  return id ? ([...within.querySelectorAll('[id]')].find((element) => element.id === id) ?? null) : null;
+}
+
 /** Unmounts everything mounted, now; the harness does it after each test. */
 export function unmountAll(): void {
   // Every root goes, even past one whose cleanup throws; the first error is reported.

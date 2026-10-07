@@ -18,7 +18,7 @@ import type { ChartData, SceneObject } from '../../src/controller/types';
 import { ChartPrimitive } from '../../src/primitives/ChartPrimitive';
 import { chartFrame, chartScales, chartSeriesPoint } from '../../src/primitives/chartGeometry';
 import { layoutNotes } from '../../src/primitives/notePlacement';
-import { mount as mountNode, rerender, unmount, unmountAll } from './sceneHarness';
+import { mount as mountNode, referenced, rerender, unmount, unmountAll } from './sceneHarness';
 
 const data: ChartData = {
   xLabel: 'EPOCH',
@@ -255,5 +255,21 @@ describe('chart notes through a resize', () => {
       resize(width);
     }
     expect(placements()).toBe(0);
+  });
+
+  // review-drawing L6: the gradient id cut every character outside [\w-] to
+  // `_`, so these two shared one, and the second leader was painted with
+  // the first one's coordinates.
+  it('give each leader a gradient of its own, for keys that differ only outside letters and digits', () => {
+    const twins: ChartNote[] = [
+      { key: 'obs.1', data: { tag: 'A', anchor: { target: 'loss', x: 10, series: 'VAL' }, segments: [{ text: 'One.' }] } },
+      { key: 'obs_1', data: { tag: 'B', anchor: { target: 'loss', x: 35, series: 'VAL' }, segments: [{ text: 'Two.' }] } },
+    ];
+    host = mountNode(view(twins));
+    const leaders = [...host.querySelectorAll<SVGGElement>('.chart-note-leader')];
+    expect(leaders).toHaveLength(2);
+    const strokes = leaders.map((group) => group.querySelector('polyline')!.getAttribute('stroke'));
+    expect(new Set(strokes).size).toBe(2);
+    for (const [index, group] of leaders.entries()) expect(referenced(group, strokes[index])?.tagName).toBe('linearGradient');
   });
 });

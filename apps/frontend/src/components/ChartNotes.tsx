@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
@@ -15,6 +15,7 @@ import {
 } from '../primitives/chartGeometry';
 import { layoutNotes, NOTE_CARD_CUT, placedInFull, routeLeader, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
 import { crispLine, type Point, type Rect, type Size } from '../primitives/geometry';
+import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
 /** One note on a chart: a note object, or the spoken explanation standing in for one. */
@@ -202,7 +203,7 @@ export function ChartNotes({
   named?: ChartAnchor[];
 }) {
   const reduced = useReducedMotion();
-  const gradientBase = useId().replace(/:/g, '');
+  const ids = useSvgIds();
   const layerRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef(new Map<string, HTMLDivElement>());
   const [layout, setLayout] = useState<NotesLayout | null>(null);
@@ -508,8 +509,9 @@ export function ChartNotes({
               const toBar = targets.get(note.key)?.from !== undefined;
               const start = leader[0];
               const end = leader[leader.length - 1];
-              // Named for its note, so a leader fading out keeps its own.
-              const gradientId = `${gradientBase}-leader-${note.key.replace(/[^\w-]/g, '_')}`;
+              // Named for its note, so a leader fading out keeps its own;
+              // escaped one-to-one, so `obs.1` and `obs_1` keep two.
+              const gradientId = ids('leader', note.key);
               return (
                 <motion.g
                   key={note.key}
@@ -531,7 +533,7 @@ export function ChartNotes({
                     className="chart-note-leader__line"
                     points={leader.map((point) => `${point.x},${point.y}`).join(' ')}
                     fill="none"
-                    stroke={`url(#${gradientId})`}
+                    stroke={svgUrl(gradientId)}
                   />
                 </motion.g>
               );
