@@ -96,7 +96,7 @@ A page-level patch that duplicates one of these responsibilities is usually inco
 | Updated object | Changes in place without being recreated |
 | Removed object | Content de-resolves, then its frame withdraws |
 | Recomposition | Existing objects move and resize continuously |
-| Focus | The same object expands through a shared layout identity, and its slot stands empty under it (under reduced motion, its focus fades in over the empty slot) |
+| Focus | The same object expands through a shared layout identity, and its slot stands empty under it (under reduced motion, its focus fades in over the empty slot); a metric in a primary cluster has none of its own, so its focus grows from nothing and the cluster stays in place |
 | Annotation | Explanation resolves near its semantic target |
 | Clear | Content recedes until only Damocles remains |
 
