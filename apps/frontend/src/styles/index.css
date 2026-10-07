@@ -1774,6 +1774,11 @@ button {
   padding-top: clamp(10px, 1.2cqh, 14px);
   border-top: 1px solid rgba(var(--orange-rgb), 0.48);
 }
+/* The response's text box clips it: its fades (SpokenLog) stand over the
+   box's edges. */
+.live-chat-card__body {
+  position: relative;
+}
 .content-rail__details > .live-chat-card {
   flex: 1 1 auto;
   min-height: clamp(84px, 13cqh, 140px);

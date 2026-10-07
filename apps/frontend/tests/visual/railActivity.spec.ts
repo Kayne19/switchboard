@@ -413,3 +413,44 @@ for (const viewport of viewports) {
     }
   });
 }
+
+// A live response used as the explanation grows into the column's free
+// space and scrolls inside its own box; it streams, so it is never "whole".
+// Where it continues past an edge, that edge fades as every scroller's does
+// (ScrollRim), so a line cut there reads as more to come, not as broken.
+// On a 390x844 phone its last visible line was cut in half with no cue.
+for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
+  test(`a live response cut by its box fades at the cut at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    const fixtureServer = new DisplayFixtureServer({ initialGeneration: testInfo.workerIndex + 90 });
+    const { wsUrl } = await fixtureServer.start();
+    try {
+      await page.goto(`/?ws=${encodeURIComponent(wsUrl)}&chrome=0`);
+      await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+      fixtureServer.broadcast({
+        type: 'display',
+        action: { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { mode: 'graph', title: 'ROUTE', nodes: [{ id: 'a', label: 'CALLER' }, { id: 'b', label: 'PBX' }], edges: [{ from: 'a', to: 'b' }] } },
+      });
+      fixtureServer.broadcast({ type: 'display', action: { op: 'show', id: 'legs', type: 'metric', role: 'secondary', data: { label: 'LEGS', value: '2' } } });
+      fixtureServer.broadcast({
+        type: 'spoken',
+        entry: transcriptEntry({ role: 'agent', id: 'reply-1', text: 'The route held through the deploy, and the second leg came up clean. The operator is on the line and the project agent has the call; it is reading the source now and will answer in a moment.' }),
+      });
+      const text = page.locator('.content-rail .live-chat-card__text');
+      await expect(text).toBeVisible();
+      await page.waitForTimeout(400);
+      const cut = await text.evaluate((element) => element.scrollHeight > element.clientHeight + 1);
+      expect(cut, 'the response is longer than its box here').toBe(true);
+      const fade = page.locator('.content-rail .live-chat-card .scroll-rim__fade--bottom');
+      await expect(fade).toBeVisible();
+      const [box, faded] = await Promise.all([text.boundingBox(), fade.boundingBox()]);
+      expect(Math.abs(faded!.y + faded!.height - (box!.y + box!.height))).toBeLessThanOrEqual(1);
+      // Read to its end, the response no longer continues below: the fade moves to the top.
+      await text.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+      await expect(page.locator('.content-rail .live-chat-card .scroll-rim__fade--top')).toBeVisible();
+      await expect(fade).toHaveCount(0);
+    } finally {
+      await fixtureServer.stop();
+    }
+  });
+}

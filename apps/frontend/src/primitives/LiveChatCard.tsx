@@ -21,7 +21,7 @@ export function LiveChatCard({ message, onOpenHistory }: { message: MessageData;
         ) : null}
       </div>
       <div className="live-chat-card__body">
-        <SpokenLog message={message} className="live-chat-card__text" />
+        <SpokenLog message={message} className="live-chat-card__text" edges />
       </div>
     </div>
   );
