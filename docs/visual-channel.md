@@ -684,8 +684,9 @@ or scatter chart gets a hollow ring, which the cards left on the chart keep
 clear of as they keep clear of the data; the rail card still names its target. A note anchored to a visual on a chart page that
 is not a chart (one in the aux row) is shown in the rail too, every one of
 them, and never on a chart it does not describe. Only the primary chart hands
-a note over; a compare chart's notes stay on it, over its data where it has
-no clear place.
+a note over; a compare chart's notes stay on it (but for those past the five
+any chart lays, which the rail carries), over its data where it has no clear
+place.
 
 A resize places the notes again at most once a step of 16 pixels of the
 chart's size, as a graph is laid out again once a step: between steps each

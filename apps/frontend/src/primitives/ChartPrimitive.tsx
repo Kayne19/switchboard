@@ -297,7 +297,8 @@ export function ChartPrimitive({
   // The bar it marks, as its callout does: an x past the last category
   // marks the last bar, and the chart opens there too (review-drawing L5).
   const leadAnchor = [...(named ?? []), ...(data.marker ? [data.marker] : [])][0];
-  const lead = leadAnchor ? (kind === 'bar' ? chartBarCallout(data, leadAnchor, scales)?.bar.index : Math.round(leadAnchor.x)) : undefined;
+  const lastCategory = (scales.categories.categories?.length ?? 1) - 1;
+  const lead = leadAnchor ? (kind === 'bar' ? (chartBarCallout(data, leadAnchor, scales)?.bar.index ?? Math.min(lastCategory, Math.max(0, Math.round(leadAnchor.x)))) : Math.round(leadAnchor.x)) : undefined;
   const drawnScale = size.width / width;
   return <div ref={hostRef} className={`chart-primitive${slot==='focus'?' chart-primitive--focused':''}${scroll===null?'':' chart-primitive--scrolls'}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     {scroll===null ? svg : (

@@ -1,4 +1,3 @@
-import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 // Frame geometry is copied from the approved composition,
 // reference/lineage/approved-v16-controller.html; each variant names the
 // element it was taken from. Changing a path here is a design change, not a
@@ -8,6 +7,8 @@ import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 // path length is measured in user space, but these strokes are
 // non-scaling, and the dash pattern Motion writes to trace them breaks on
 // exactly that mismatch.
+
+import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 
 interface FramePath {
   d: string;

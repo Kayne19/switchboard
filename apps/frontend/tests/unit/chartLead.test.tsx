@@ -61,4 +61,12 @@ describe('a scrolled bar chart', () => {
     expect(leads.at(-1)).toBe(bar);
     expect(document.querySelector(`.chart-grid__category[data-item="${bar}"]`)).not.toBeNull();
   });
+
+  // review-fix-charts L6: an anchor on a series the chart does not carry has
+  // no callout; the chart still opens on its clamped x, as it did.
+  it('opens on the clamped x where the anchor names no series it draws', () => {
+    mount(<ChartPrimitive data={data} named={[{ x: 80, series: 'NONE' }]} />);
+    expect(leads.at(-1)).toBeDefined();
+    expect(Number(leads.at(-1))).toBeLessThanOrEqual(59);
+  });
 });
