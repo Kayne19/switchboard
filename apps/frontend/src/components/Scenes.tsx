@@ -21,7 +21,7 @@ import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
 import { countText, type Noun } from '../primitives/countText';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
-import { ListViewport, fadeDepth } from '../primitives/ListViewport';
+import { ListViewport, continuesPast, fadeDepth } from '../primitives/ListViewport';
 import { LiveChatCard } from '../primitives/LiveChatCard';
 import { SpokenLog } from '../primitives/SpokenLog';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
@@ -250,12 +250,10 @@ function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFlo
     // to it are not observed), and where its scroll stands.
     let decided: Pick<RailFit, 'leads' | 'away'> = FITS;
     let flow = 0;
-    const edges = (): RailFit => ({
-      ...decided,
-      above: column.scrollTop > 1,
-      below: column.scrollTop + column.clientHeight < flow - 1,
-      fade: fadeDepth(column.clientHeight),
-    });
+    const edges = (): RailFit => {
+      const goes = continuesPast(column.scrollTop, column.clientHeight, flow);
+      return { ...decided, above: goes.top, below: goes.bottom, fade: fadeDepth(column.clientHeight) };
+    };
     const measure = () => {
       const children = Array.from(column.children) as HTMLElement[];
       const slot = children.find((child) => child.classList.contains('tool-activity-slot'));

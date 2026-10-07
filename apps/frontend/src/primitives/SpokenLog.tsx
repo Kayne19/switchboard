@@ -1,8 +1,8 @@
 import type { MessageData } from '../controller/types';
 import { usePinnedScroll } from '../hooks/usePinnedScroll';
-import { useScrollEdges } from '../hooks/useScrollEdges';
 import { RichText } from './RichText';
 import { ScrollRim } from './ScrollRim';
+import { useScrollEdges } from './useScrollEdges';
 
 interface SpokenLogProps {
   message: MessageData;
