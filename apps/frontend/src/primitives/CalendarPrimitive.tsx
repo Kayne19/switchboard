@@ -534,6 +534,8 @@ function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: b
   return (
     <div
       className="calendar-grid calendar-pages"
+      // It turns its pages by a swipe: a demo page's swipe to the next fixture leaves it alone (App `OWN_SWIPE`).
+      data-swipe=""
       // The keys every scroller takes turn the days too, for a reader without
       // a pointer (drawingScroll `scrollMove`, across): an arrow, Space or a
       // page key a page of days, Home and End to the first and the last.

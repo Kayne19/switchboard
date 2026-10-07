@@ -165,6 +165,42 @@ test.describe('a touch screen', () => {
     // A swipe is not a tap: focus stayed shut.
     await expect(page.locator('.focus-layer')).toHaveCount(0);
   });
+
+  // review-views L3: on a demo page (?scene=, fixture review and this
+  // suite) a swipe loads the next fixture, except where something takes the
+  // swipe itself. The list named only the old scrollers, so one swipe in a
+  // paged calendar loaded the next fixture (calendar-day), and so did one
+  // across a list or a scrolled drawing.
+  test('on a demo page a swipe that a calendar, a list or a drawing takes loads no other fixture', async ({ page }) => {
+    const fixture = () => page.evaluate(() => document.querySelector('.stage')?.getAttribute('data-scene-kind'));
+    await page.goto('/?scene=calendar&chrome=0');
+    await expect(page.locator('.scene [data-testid="calendar"]')).toBeVisible();
+    await page.waitForTimeout(400);
+    const days = () => page.locator('.scene .calendar-grid__weekday').allTextContents();
+    expect(await days()).toEqual(['WED', 'THU', 'FRI']);
+    const hours = (await page.locator('.scene .calendar-grid__scroll').boundingBox())!;
+    await swipe(page, hours.x + hours.width * 0.75, hours.y + hours.height / 2, -180);
+    await expect.poll(days).toEqual(['FRI', 'SAT', 'SUN']);
+    await page.waitForTimeout(300);
+    expect(await page.locator('.scene .calendar-grid__weekday').count()).toBeGreaterThan(0);
+    expect(await days()).toEqual(['FRI', 'SAT', 'SUN']);
+    for (const [scene, scroller] of [['tasks', '.list-viewport__scroll'], ['topology', '.drawing-viewport__scroll']] as const) {
+      await page.goto(`/?scene=${scene}&chrome=0`);
+      await expect(page.locator(`.scene ${scroller}`).first()).toBeVisible();
+      await page.waitForTimeout(400);
+      const kind = await fixture();
+      const box = (await page.locator(`.scene ${scroller}`).first().boundingBox())!;
+      await swipe(page, box.x + box.width * 0.75, box.y + Math.min(box.height / 2, 120), -180);
+      await page.waitForTimeout(300);
+      expect(await fixture(), `${scene}: the swipe stayed on ${scene}`).toBe(kind);
+      await expect(page.locator(`.scene ${scroller}`).first()).toBeVisible();
+    }
+    // Elsewhere on the stage a swipe still loads the next fixture.
+    await page.goto('/?scene=idle&chrome=0');
+    await page.waitForTimeout(400);
+    await swipe(page, 300, 120, -180);
+    await expect.poll(fixture).not.toBe('idle');
+  });
 });
 
 /**
