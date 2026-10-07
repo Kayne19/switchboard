@@ -180,18 +180,19 @@ test.describe('a touch screen', () => {
     expect(await days()).toEqual(['WED', 'THU', 'FRI']);
     const hours = (await page.locator('.scene .calendar-grid__scroll').boundingBox())!;
     await swipe(page, hours.x + hours.width * 0.75, hours.y + hours.height / 2, -180);
+    // The days turned (a positive sign the swipe landed), and the fixture stayed.
     await expect.poll(days).toEqual(['FRI', 'SAT', 'SUN']);
-    await page.waitForTimeout(300);
-    expect(await page.locator('.scene .calendar-grid__weekday').count()).toBeGreaterThan(0);
+    await page.waitForTimeout(800);
     expect(await days()).toEqual(['FRI', 'SAT', 'SUN']);
-    for (const [scene, scroller] of [['tasks', '.list-viewport__scroll'], ['topology', '.drawing-viewport__scroll']] as const) {
+    for (const [scene, scroller] of [['tasks', '.list-viewport--scrolling .list-viewport__scroll'], ['topology', '.drawing-viewport--scrolling .drawing-viewport__scroll']] as const) {
       await page.goto(`/?scene=${scene}&chrome=0`);
       await expect(page.locator(`.scene ${scroller}`).first()).toBeVisible();
       await page.waitForTimeout(400);
       const kind = await fixture();
       const box = (await page.locator(`.scene ${scroller}`).first().boundingBox())!;
       await swipe(page, box.x + box.width * 0.75, box.y + Math.min(box.height / 2, 120), -180);
-      await page.waitForTimeout(300);
+      // Long enough for a fixture to load: the positive case below loads within it.
+      await page.waitForTimeout(800);
       expect(await fixture(), `${scene}: the swipe stayed on ${scene}`).toBe(kind);
       await expect(page.locator(`.scene ${scroller}`).first()).toBeVisible();
     }
@@ -199,7 +200,7 @@ test.describe('a touch screen', () => {
     await page.goto('/?scene=idle&chrome=0');
     await page.waitForTimeout(400);
     await swipe(page, 300, 120, -180);
-    await expect.poll(fixture).not.toBe('idle');
+    await expect.poll(fixture, { timeout: 800 }).not.toBe('idle');
   });
 });
 

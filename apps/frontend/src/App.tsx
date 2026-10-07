@@ -10,14 +10,14 @@ import { sceneOrder } from './design/tokens';
 import { RuntimeIntegration } from './integration/runtime';
 
 // What takes a swipe itself, so a demo page's swipe to the next fixture
-// leaves it alone: a control, a layer over the stage, every scroller of an
-// object (code, a document's body, a table, a list, a drawing) and an
-// element that turns its own pages by a swipe (`data-swipe`: a calendar's
-// paged days). The list named only the first scrollers, and a swipe in a
-// paged calendar, a list or a scrolled drawing loaded the next fixture.
+// leaves it alone: a control, a layer over the stage, the scrollers of code,
+// a document's body and a table, a list or a drawing while it scrolls, and
+// an element that turns its own pages by a swipe (`data-swipe`: a
+// calendar's paged days). The list named only the first scrollers, and a
+// swipe in a paged calendar or a scrolling list loaded the next fixture.
 const OWN_SWIPE = [
   'button', 'input', 'textarea', '[data-swipe]',
-  '.code-viewport__scroll', '.document-viewport__body', '.table-viewport__scroll', '.list-viewport__scroll', '.drawing-viewport__scroll', '.drawing-viewport--scrolling',
+  '.code-viewport__scroll', '.document-viewport__body', '.table-viewport__scroll', '.list-viewport--scrolling', '.drawing-viewport--scrolling',
   '.focus-layer', '.controller-panel', '.ir-drawer', '.transcript',
 ].join(',');
 
