@@ -403,7 +403,18 @@ for (const { viewport, two } of barNoteCases) {
         });
       });
     }
-    await expect(page.locator('.chart-note')).toHaveCount(two ? 2 : 1);
+    // Every note is shown once, on the chart or past it (the band under a
+    // portrait chart, or the rail); which one is the layout's choice, made
+    // from the text's measured size. Counting `.chart-note` instead caught
+    // a card the chart had drawn hidden while it measured it: on a fast
+    // machine the count passed for that frame, on CI's runner it did not,
+    // and the settled page had the second note in the band all along.
+    const tags = two ? ['OBSERVATION / BACKEND', 'OBSERVATION / VISUAL SUITE'] : ['OBSERVATION / VISUAL SUITE'];
+    await expect.poll(() => page.evaluate(() => {
+      const shown = [...document.querySelectorAll<HTMLElement>('.chart-note:not(.chart-note--away), .chart-note-band, .rail-note')]
+        .filter((card) => getComputedStyle(card).visibility === 'visible' && Number(getComputedStyle(card).opacity) > 0);
+      return shown.map((card) => card.querySelector('.annotation-card__tag')?.textContent ?? '').sort();
+    })).toEqual(tags);
     await page.waitForTimeout(500);
     const geometry = await page.evaluate(() => {
       const box = (element: Element) => {
