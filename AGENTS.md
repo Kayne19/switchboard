@@ -70,7 +70,12 @@ commit.
 - CI's `browser` job runs the Playwright specs in Chromium: `npm run
   test:browser` (every spec in `apps/frontend/tests/visual` but the pixel
   goldens, which are tagged `@golden`) and `npm run test:integration` (the
-  production build). The goldens are drawn on the dev box and the runner's
+  production build). It is a matrix of five legs, so one runner does not
+  take 45 minutes: `browser (1/4)` .. `browser (4/4)` each run a quarter of
+  `test:browser` (`-- --fully-parallel --shard=i/4`, still one worker, so
+  the timing checks stay valid), and `browser (integration)` runs
+  `test:integration` once. To rerun one leg's specs locally, pass it the
+  same flags. The goldens are drawn on the dev box and the runner's
   fonts raster differently, so they stay a local gate: run `npm run
   test:visual` before a change that moves pixels. The suite starts its own
   server on port 4183 (`PLAYWRIGHT_PORT` moves it) and fails rather than

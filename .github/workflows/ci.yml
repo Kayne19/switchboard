@@ -57,7 +57,33 @@ jobs:
     # The pixel goldens (tagged @golden) are left out: they are drawn on the
     # dev box, and the runner's fonts raster differently. Its own job, so the
     # required `test` check keeps its name and its speed.
+    #
+    # One runner took 45 minutes for the specs, so they are split four ways,
+    # one leg each, with the production build's integration specs as a fifth
+    # leg run once. Each leg still runs one worker: the specs' timing checks
+    # measure one page at a time. --fully-parallel lets a shard cut inside a
+    # file (with one worker it changes only how the specs are dealt out, not
+    # how they run); without it the largest spec file is one 13-minute
+    # piece. The checks are named `browser (1/4)` .. `browser (4/4)` and
+    # `browser (integration)`.
+    name: browser (${{ matrix.part }})
     runs-on: ubuntu-latest
+    strategy:
+      # A failure in one leg does not cancel the others: each reports what it
+      # found.
+      fail-fast: false
+      matrix:
+        include:
+          - part: 1/4
+            run: npm run test:browser -- --fully-parallel --shard=1/4
+          - part: 2/4
+            run: npm run test:browser -- --fully-parallel --shard=2/4
+          - part: 3/4
+            run: npm run test:browser -- --fully-parallel --shard=3/4
+          - part: 4/4
+            run: npm run test:browser -- --fully-parallel --shard=4/4
+          - part: integration
+            run: npm run test:integration
     steps:
       - uses: actions/checkout@v6
 
@@ -72,6 +98,7 @@ jobs:
       # The browser is keyed by the lockfile, which pins @playwright/test and
       # with it the Chromium build. A hit restores the browser; its system
       # libraries are not in the cache, so they are installed either way.
+      # Every leg shares the one key: the first to finish saves it.
       - name: Cache Playwright's Chromium
         id: playwright-cache
         uses: actions/cache@v5
@@ -97,17 +124,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends fonts-liberation-sans-narrow fonts-liberation fonts-dejavu-core fonts-dejavu-mono
 
-      - name: Browser specs (geometry, not the pixel goldens)
-        run: npm run test:browser
-
-      - name: Production build in the browser
-        run: npm run test:integration
+      - name: Browser specs (${{ matrix.part }})
+        run: ${{ matrix.run }}
 
       - name: Keep the failure traces
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-test-results
+          # One artifact per leg: two legs may not upload under one name.
+          name: playwright-test-results-${{ strategy.job-index }}
           path: test-results/
           if-no-files-found: ignore
           retention-days: 7
