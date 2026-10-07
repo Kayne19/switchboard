@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from 'react';
+import { headCells, textCells } from '../design/textCells';
 import { useElementSize } from '../hooks/useElementSize';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import type { DrawingFit, Viewport } from './drawingFit';
@@ -144,7 +145,7 @@ function mapFrame(width: number, height: number): string {
   return `M ${points.map(([x, y]) => `${x} ${y}`).join(' L ')} Z`;
 }
 
-const cut = (label: string) => (label.length > EXIT_CHARS ? `${label.slice(0, EXIT_CHARS - 1)}\u2026` : label);
+const cut = (label: string) => (textCells(label) > EXIT_CHARS ? `${headCells(label, EXIT_CHARS - 1)}\u2026` : label);
 
 /**
  * A drawing in its viewport (drawingFit.ts): contained when it fits at a

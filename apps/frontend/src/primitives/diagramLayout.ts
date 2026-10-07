@@ -33,7 +33,9 @@
 // drawn as a stub pair naming its far ends (`chooseStubs`, `bundledEdges`).
 
 import type { DiagramData, DiagramEdge, DiagramNode } from '../controller/types';
+import { textCells } from '../design/textCells';
 import { monoAdvance } from '../design/tokens';
+import { wrapWords } from './textWrap';
 import { LABEL_BACKING, drawingOrientation, labelBox, steppedFrame } from './drawingKit';
 import { fitDrawing, readableScale, scrollCost, type DrawingFit, type Viewport } from './drawingFit';
 import type { Box, Point, Size } from './geometry';
@@ -250,7 +252,7 @@ const ROW_GAP = 24;
 // whose side is too short for its ports grows along that side.
 const PORT_PITCH = 16;
 const LINE_PORT_PITCH = 10;
-export const ARROW_PORT_PITCH = ARROW_LENGTH + 3;
+const ARROW_PORT_PITCH = ARROW_LENGTH + 3;
 const PORT_INSET = 14;
 const SELF_LOOP = 18;
 // A run of more than this many long edges side by side through a layer,
@@ -283,45 +285,26 @@ const EPSILON = 0.5;
 
 // --- Text ------------------------------------------------------------------
 
-/** Words onto lines of at most `wrapAt` characters, each line as full as it goes; a word longer than that takes a line of its own. */
-export function wrapGreedy(words: string[], wrapAt: number): string[] {
-  const lines: string[] = [];
-  let current = '';
-  for (const word of words) {
-    if (!current) {
-      current = word;
-    } else if (current.length + 1 + word.length <= wrapAt) {
-      current += ' ' + word;
-    } else {
-      lines.push(current);
-      current = word;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
-}
-
 /**
- * Breaks text at spaces into lines of at most `wrapAt` characters. Text
+ * Breaks text at spaces into lines of at most `wrapAt` cells (textWrap.ts). Text
  * that would take more than `maxLines` lines is wrapped wider instead, at
  * the narrowest width that fits, so its lines stay balanced rather than
  * piling the rest onto the last one.
  */
 function wrapLine(text: string, wrapAt: number, maxLines: number): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
-  if (!words.length) return [''];
-  let lines = wrapGreedy(words, wrapAt);
+  if (!text.trim()) return [''];
+  let lines = wrapWords(text, wrapAt);
   if (lines.length <= maxLines) return lines;
   // The line count only falls as the width grows; the whole text on one
   // line always fits.
   let low = wrapAt + 1;
-  let high = text.length;
+  let high = textCells(text);
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
-    if (wrapGreedy(words, middle).length <= maxLines) high = middle;
+    if (wrapWords(text, middle).length <= maxLines) high = middle;
     else low = middle + 1;
   }
-  lines = wrapGreedy(words, low);
+  lines = wrapWords(text, low);
   return lines;
 }
 
@@ -380,9 +363,9 @@ export function measureNode(node: DiagramNode, cornerTags: CornerTags, wrap: Nod
   }
 
   const textWidth = Math.max(
-    ...labelLines.map((line) => line.length * NODE_TEXT.label.advance + tagRoom(cornerTags)),
-    ...subLines.map((line) => line.length * NODE_TEXT.sub.advance),
-    ...detailLines.map((line) => line.length * NODE_TEXT.detail.advance),
+    ...labelLines.map((line) => textCells(line) * NODE_TEXT.label.advance + tagRoom(cornerTags)),
+    ...subLines.map((line) => textCells(line) * NODE_TEXT.sub.advance),
+    ...detailLines.map((line) => textCells(line) * NODE_TEXT.detail.advance),
   );
   return {
     width: Math.max(wrap.minWidth, Math.ceil(textWidth + 2 * NODE_PAD_SIDE)),
@@ -1962,7 +1945,7 @@ const FLOW_SWITCH = 1.25;
 // scrolls one way.
 const BOTH_WAYS = 2;
 
-export interface DiagramView {
+interface DiagramView {
   orientation: DiagramOrientation;
   layout: DiagramLayout;
   fit: DrawingFit;
@@ -2055,7 +2038,7 @@ function boxesOverlap(a: Box, b: Box, clearance = 10): boolean {
   );
 }
 
-export function placeCallout(
+function placeCallout(
   nodes: LaidOutNode[],
   edges: LaidOutEdge[],
   targetNodeId: string,

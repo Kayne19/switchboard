@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react';
 import type { NoteData, SequenceDiagramData } from '../controller/types';
-import { GlowFilters, LABEL_HEIGHT, pathThrough } from './drawingKit';
+import { GlowFilters, LABEL_HEIGHT, entranceStep, pathThrough } from './drawingKit';
 import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 import { DrawingViewport, useDrawingView } from './DrawingViewport';
 import type { Viewport } from './drawingFit';
@@ -90,9 +90,8 @@ export function SequencePrimitive({
       },
     };
   }, [layout, anchoredActorId]);
-  // Messages resolve in order, but a long exchange is not made to wait on
-  // them: the stagger shrinks so the last one is in within about a second.
-  const stagger = Math.min(60, Math.floor(900 / Math.max(1, layout.messages.length)));
+  // Messages resolve in order, the last within about a second (entranceStep).
+  const stagger = entranceStep(layout.messages.length, 60);
 
   // The headers are drawn twice when the exchange scrolls: in place, and
   // pinned over the viewport's top once the drawing scrolls under them.

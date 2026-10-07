@@ -191,3 +191,20 @@ test.describe('390x844 rail', () => {
     }
   });
 });
+
+// Damocles stands in the rail, never past it: at 820x1180 he was about
+// 266 px tall in a 241 px rail and overflowed each edge by 13 px, at
+// 768x1024 by 28 px. The rail is at least as tall as he is.
+for (const viewport of [{ width: 390, height: 844 }, { width: 600, height: 960 }, { width: 768, height: 1024 }, { width: 820, height: 1180 }]) {
+  test(`Damocles stands inside the rail at ${viewport.width}x${viewport.height}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    for (const scene of ['architecture', 'code', 'tasks']) {
+      await openScene(page, scene);
+      await expect(page.locator('.content-rail [data-testid="damocles-presence"]')).toBeVisible();
+      await page.waitForTimeout(500);
+      const [rail, presence] = await Promise.all([page.locator('.content-rail').boundingBox(), page.locator('.content-rail [data-testid="damocles-presence"]').boundingBox()]);
+      expect(presence!.y, scene).toBeGreaterThanOrEqual(rail!.y - 1);
+      expect(presence!.y + presence!.height, scene).toBeLessThanOrEqual(rail!.y + rail!.height + 1);
+    }
+  });
+}

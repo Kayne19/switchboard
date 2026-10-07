@@ -162,8 +162,8 @@ interface ListViewportProps {
   children: ReactNode;
   /** How the counts name the items: `['TASK', 'TASKS']`. */
   noun: Noun;
-  /** The `data-item` of the item to open on; absent, an element marked `data-lead`, if any. */
-  lead?: string;
+  /** The `data-item` of the item to open on; absent, an element marked `data-lead`, if any; null, none (a row of objects, whose leads are their own). */
+  lead?: string | null;
   /** Which items the counts count, when not every `data-item` is one (a forecast counts its days, not its hours). */
   countSelector?: string;
   /** Pinned above the scroll inside the same frame: a list's header, a calendar's day row. */
@@ -244,7 +244,7 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     const element = scrollRef.current;
     if (!element) return;
     const shape = `${lead ?? ''}|${element.querySelectorAll('[data-item]').length}|${Math.round(element.clientHeight)}`;
-    if (led.current === shape) return;
+    if (led.current === shape || lead === null) return;
     led.current = shape;
     const target = lead !== undefined
       ? element.querySelector<HTMLElement>(`[data-item="${cssEscape(lead)}"]`)

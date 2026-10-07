@@ -134,4 +134,19 @@ describe('SpokenLog', () => {
     expect(text.getAttribute('data-testid')).toBe('spoken-log');
     expect(text.querySelectorAll('.spoken-log__line')).toHaveLength(2);
   });
+
+  it('fades each edge its text continues past, where the card asks for it', async () => {
+    rerender(host, <SpokenLog message={message(said(6))} className="log" edges />);
+    const log = host.querySelector<HTMLElement>('[data-testid="spoken-log"]')!;
+    // Pinned to the newest line, the text goes on above it only.
+    expect(host.querySelector('.scroll-rim__fade--top')).not.toBeNull();
+    expect(host.querySelector('.scroll-rim__fade--bottom')).toBeNull();
+    scrollTo(log, 0);
+    await act(() => new Promise((done) => requestAnimationFrame(() => done(undefined))));
+    expect(host.querySelector('.scroll-rim__fade--top')).toBeNull();
+    expect(host.querySelector('.scroll-rim__fade--bottom')).not.toBeNull();
+    // Without `edges`, none.
+    rerender(host, <SpokenLog message={message(said(6))} className="log" />);
+    expect(host.querySelector('.scroll-rim__fade--top, .scroll-rim__fade--bottom')).toBeNull();
+  });
 });

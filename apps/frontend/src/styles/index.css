@@ -3,10 +3,17 @@
   --red: #c61522;
   --orange: #f15a24;
   --orange-rgb: 241, 90, 36;
+  /* The item a note names (a task, a message, a timer, a forecast day or
+     hour) is marked alike: an orange edge on the side it is read from and
+     a wash fading away from it, its name in orange, and the NOTE badge. */
+  --marked-edge: rgba(var(--orange-rgb), 0.7);
+  --marked-wash-from: rgba(var(--orange-rgb), 0.1);
+  --marked-wash-to: rgba(var(--orange-rgb), 0.02);
   --amber: #ffb000;
   --green: #7fd63d;
   --cyan: #5ed6d8;
   --paper: #e8e6df;
+  --paper-rgb: 232, 230, 223;
   --muted: #8c8c86;
   --dim: #3e3e3a;
   /* The two stacks beside the narrow root face: data and labels (.tech,
@@ -113,7 +120,7 @@ button {
   letter-spacing: 0.17em;
 }
 .muted {
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
 }
 .accent,
 .semantic-orange {
@@ -171,7 +178,7 @@ button {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
 }
 .stage-unavailable {
   position: absolute;
@@ -227,7 +234,6 @@ button {
 .transcript__body:focus-visible,
 .rich-text__code-block:focus-visible,
 .progress-primitive__steps:focus-visible,
-.composed-aux:focus-visible,
 .content-rail__details:focus-visible,
 .training-charts--compare:focus-visible {
   outline: var(--focus-ring);
@@ -416,7 +422,7 @@ button {
   flex: none;
   width: max-content;
   text-align: center;
-  color: rgba(232, 230, 223, 0.54);
+  color: rgba(var(--paper-rgb), 0.54);
   white-space: nowrap;
 }
 /* Sized to its content, never narrower than the bars need: a label wider
@@ -455,7 +461,7 @@ button {
   transform-origin: center;
 }
 .voice-indicator__label {
-  color: rgba(232, 230, 223, 0.45);
+  color: rgba(var(--paper-rgb), 0.45);
   text-align: center;
   white-space: nowrap;
   line-height: 1.2;
@@ -499,7 +505,7 @@ button {
   z-index: 2;
   left: 4.3%;
   top: 8.5%;
-  color: rgba(232, 230, 223, 0.38);
+  color: rgba(var(--paper-rgb), 0.38);
 }
 .conversation-answer__index {
   position: absolute;
@@ -513,7 +519,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(232, 230, 223, 0.28);
+  color: rgba(var(--paper-rgb), 0.28);
 }
 .conversation-answer__text {
   position: absolute;
@@ -551,7 +557,7 @@ button {
 }
 .spoken-log__line {
   min-width: 0;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   transition: color 0.24s ease;
 }
 .spoken-log__line--current {
@@ -561,7 +567,7 @@ button {
   position: absolute;
   left: 6.2cqw;
   bottom: 7.3cqh;
-  color: rgba(232, 230, 223, 0.34);
+  color: rgba(var(--paper-rgb), 0.34);
 }
 .transcript-toggle {
   position: absolute;
@@ -571,7 +577,7 @@ button {
   padding: 8px 12px;
   border: 0;
   background: transparent;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   cursor: pointer;
   transition:
     color 0.16s ease,
@@ -640,7 +646,7 @@ button {
   justify-content: space-between;
   align-items: center;
   height: 6cqh;
-  color: rgba(232, 230, 223, 0.48);
+  color: rgba(var(--paper-rgb), 0.48);
   border-bottom: 1px solid rgba(var(--orange-rgb), 0.34);
 }
 .transcript__header button {
@@ -652,7 +658,7 @@ button {
 .transcript__body {
   height: 67cqh;
   overflow: auto;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.13);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.13);
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.42) transparent;
 }
@@ -661,7 +667,7 @@ button {
   grid-template-columns: minmax(80px, 10cqw) 1fr;
   gap: 2cqw;
   padding: 2.4cqh 0;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.08);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.08);
   font-family: var(--transcript-font);
   font-size: var(--transcript-size);
   line-height: 1.5;
@@ -671,7 +677,7 @@ button {
   font-size: clamp(16px, 1.45cqw, 25px);
 }
 .transcript-line__speaker {
-  color: rgba(232, 230, 223, 0.34);
+  color: rgba(var(--paper-rgb), 0.34);
 }
 .transcript__composer {
   position: absolute;
@@ -682,7 +688,7 @@ button {
   align-items: stretch;
   height: 6cqh;
   min-height: 48px;
-  border: 1px solid rgba(232, 230, 223, 0.17);
+  border: 1px solid rgba(var(--paper-rgb), 0.17);
   background: #050505;
 }
 .transcript__composer:focus-within {
@@ -706,15 +712,15 @@ button {
   line-height: 1.5;
 }
 .transcript__input:disabled {
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
 }
 .transcript__send {
   flex: none;
   padding: 0 18px;
   border: 0;
-  border-left: 1px solid rgba(232, 230, 223, 0.1);
+  border-left: 1px solid rgba(var(--paper-rgb), 0.1);
   background: transparent;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   cursor: pointer;
   transition: color 0.16s ease;
 }
@@ -723,7 +729,7 @@ button {
   color: var(--orange);
 }
 .transcript__send:disabled {
-  color: rgba(232, 230, 223, 0.18);
+  color: rgba(var(--paper-rgb), 0.18);
   cursor: default;
 }
 .transcript__status {
@@ -740,20 +746,35 @@ button {
   --scene-gap: clamp(42px, 4.6cqw, 96px);
   --footer-y: 6.7cqh;
 }
+/* The heading runs to the stage's far edge and no further: a long title
+   (up to 128 characters) or subtitle is cut there with an ellipsis. */
 .scene-heading {
   position: absolute;
   z-index: 3;
   left: var(--edge);
+  right: var(--edge);
   top: 6.2cqh;
   display: grid;
   gap: 0.45cqh;
+  /* It has nothing to click, and spans the band at the stage's top. */
+  pointer-events: none;
+}
+.scene-heading__title,
+.scene-heading__sub {
+  min-width: 0;
+  /* Clipped a little outside the box: a glyph's antialiased edge reaches
+     past it, and a short title is drawn as it was before. */
+  overflow: clip;
+  overflow-clip-margin: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .scene-heading__title {
   color: var(--orange);
   font-weight: 700;
 }
 .scene-heading__sub {
-  color: rgba(232, 230, 223, 0.36);
+  color: rgba(var(--paper-rgb), 0.36);
 }
 .content-grid {
   position: absolute;
@@ -818,7 +839,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: rgba(232, 230, 223, 0.28);
+  color: rgba(var(--paper-rgb), 0.28);
   pointer-events: none;
 }
 
@@ -860,7 +881,7 @@ button {
 .live-chat-card__tag,
 .tool-activity__tag {
   flex: none;
-  color: rgba(232, 230, 223, 0.35);
+  color: rgba(var(--paper-rgb), 0.35);
 }
 .annotation-card__target {
   display: flex;
@@ -903,7 +924,7 @@ button {
   padding: 0;
   border: 0;
   background: transparent;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   cursor: pointer;
   transition: color 0.16s ease;
 }
@@ -975,14 +996,14 @@ button {
   overflow-x: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  background: rgba(232, 230, 223, 0.08);
+  background: rgba(var(--paper-rgb), 0.08);
   color: var(--paper);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.86em;
 }
 .rich-text__code {
   padding: 0.05em 0.3em;
-  background: rgba(232, 230, 223, 0.08);
+  background: rgba(var(--paper-rgb), 0.08);
   color: var(--paper);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.86em;
@@ -1080,32 +1101,32 @@ button {
   display: block;
 }
 .chart-grid line {
-  stroke: rgba(232, 230, 223, 0.11);
+  stroke: rgba(var(--paper-rgb), 0.11);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 /* Bars and areas rise from their baseline, drawn a shade firmer than the
    grid so the eye reads the ground they stand on. */
 .chart-baseline {
-  stroke: rgba(232, 230, 223, 0.32);
+  stroke: rgba(var(--paper-rgb), 0.32);
   stroke-width: 1;
   vector-effect: non-scaling-stroke;
 }
 .chart-grid text,
 .chart-legend text,
 .chart-axis-label {
-  fill: rgba(232, 230, 223, 0.38);
+  fill: rgba(var(--paper-rgb), 0.38);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 13px;
   letter-spacing: 0.08em;
 }
 .chart-axis-label {
-  fill: rgba(232, 230, 223, 0.28);
+  fill: rgba(var(--paper-rgb), 0.28);
   font-size: 11px;
   letter-spacing: 0.14em;
 }
 .chart-legend text {
-  fill: rgba(232, 230, 223, 0.62);
+  fill: rgba(var(--paper-rgb), 0.62);
   font-size: 11px;
 }
 
@@ -1249,19 +1270,24 @@ button {
   min-height: 64px;
   padding-top: clamp(10px, 1.2cqh, 16px);
 }
+/* A label with no space to break at (a path, a long name) wraps inside
+   its column rather than running under the bar and out of the frame. */
 .progress-primitive__label {
   display: grid;
   gap: 4px;
+  min-width: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 .progress-primitive__label strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: clamp(18px, 1.8cqw, 31px);
   font-weight: 500;
   color: var(--paper);
 }
 .progress-primitive__track {
   height: 5px;
-  background: rgba(232, 230, 223, 0.11);
+  background: rgba(var(--paper-rgb), 0.11);
   overflow: hidden;
 }
 .progress-primitive__fill {
@@ -1274,7 +1300,7 @@ button {
   transform-origin: left center;
 }
 .progress-primitive__text {
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
   white-space: nowrap;
 }
 /* The plan under the bar: one line per step, a square glyph for its state,
@@ -1298,7 +1324,7 @@ button {
   min-height: 0;
   margin: clamp(4px, 0.8cqh, 10px) 0 0;
   padding: clamp(6px, 0.9cqh, 10px) clamp(6px, 0.6cqw, 10px) 0 0;
-  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
   list-style: none;
   display: grid;
   /* A list shorter than its stretched box keeps its rows at their own
@@ -1316,7 +1342,7 @@ button {
   align-items: baseline;
   column-gap: clamp(8px, 0.8cqw, 14px);
   min-width: 0;
-  color: rgba(232, 230, 223, 0.5);
+  color: rgba(var(--paper-rgb), 0.5);
   line-height: 1.5;
 }
 .progress-step__glyph {
@@ -1332,7 +1358,7 @@ button {
   white-space: nowrap;
 }
 .progress-step--done {
-  color: rgba(232, 230, 223, 0.62);
+  color: rgba(var(--paper-rgb), 0.62);
 }
 .progress-step--done .progress-step__glyph {
   color: var(--green);
@@ -1344,7 +1370,7 @@ button {
   color: var(--orange);
 }
 .progress-step--todo .progress-step__glyph {
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
 }
 .progress-step--blocked {
   color: var(--paper);
@@ -1357,7 +1383,7 @@ button {
 .progress-step--elided {
   grid-template-columns: 1fr;
   padding-left: calc(0.95em + clamp(6px, 0.7cqw, 12px));
-  color: rgba(232, 230, 223, 0.35);
+  color: rgba(var(--paper-rgb), 0.35);
 }
 /* The training page's progress sits under its charts in an auto row: the
    list is capped so a long plan scrolls here rather than squeezing the
@@ -1382,14 +1408,14 @@ button {
   align-items: center;
   min-height: 0;
   padding: clamp(8px, 1.25cqh, 14px) 0;
-  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
 }
 .metric-row__label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
 }
 .metric-row__value {
   display: flex;
@@ -1457,7 +1483,7 @@ button {
   grid-auto-rows: fit-content(40%);
   gap: clamp(12px, 2cqh, 22px);
 }
-.composed-aux {
+.composed-aux-viewport {
   /* The readable floor of a visual's cell: the head of a table or a code
      pane and its first rows, a chart's plot, a figure with its caption. On
      a short stage it fits the row's cap, so one cell shows whole. */
@@ -1465,15 +1491,14 @@ button {
   grid-row: 2;
   min-width: 0;
   min-height: clamp(96px, 15cqh, 210px);
+}
+/* A row with no room for every cell at its floor scrolls, the same bounded
+   scroll as a list (ListViewport, which draws its rim), and never squeezes
+   a cell to nothing. */
+.composed-aux {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: clamp(10px, 1.6cqw, 20px);
-  /* A row with no room for every cell at its floor scrolls, the same
-     bounded scroll as a code pane or the rail, and never squeezes a cell
-     to nothing. */
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
 }
 .composed-primary-object,
@@ -1609,14 +1634,14 @@ button {
   position: absolute;
   right: clamp(22px, 3cqw, 42px);
   top: clamp(18px, 2cqh, 28px);
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: clamp(8px, 0.56cqw, 11px);
   letter-spacing: 0.16em;
 }
 .metrics--primary .metric-row__label {
   align-self: end;
-  color: rgba(232, 230, 223, 0.52);
+  color: rgba(var(--paper-rgb), 0.52);
 }
 .metrics--primary .metric-row__value {
   align-self: start;
@@ -1751,7 +1776,7 @@ button {
 .progress-primitive--rail .progress-step {
   grid-template-columns: auto minmax(0, 1fr);
   padding: clamp(3px, 0.55cqh, 7px) 0;
-  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
   line-height: 1.3;
 }
 .progress-primitive--rail .progress-step__detail {
@@ -1771,6 +1796,11 @@ button {
   gap: clamp(8px, 1cqh, 12px);
   padding-top: clamp(10px, 1.2cqh, 14px);
   border-top: 1px solid rgba(var(--orange-rgb), 0.48);
+}
+/* The response's text box clips it: its fades (SpokenLog) stand over the
+   box's edges. */
+.live-chat-card__body {
+  position: relative;
 }
 .content-rail__details > .live-chat-card {
   flex: 1 1 auto;
@@ -1801,7 +1831,7 @@ button {
   display: grid;
   gap: 4px;
   padding-top: clamp(8px, 1.1cqh, 12px);
-  border-top: 1px solid rgba(232, 230, 223, 0.14);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.14);
 }
 .tool-activity {
   position: relative;
@@ -1854,7 +1884,7 @@ button {
   color: var(--orange);
 }
 .tool-activity__status--done {
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
 }
 .tool-activity__tool,
 .tool-activity__detail {
@@ -2236,7 +2266,7 @@ button {
   height: 100%;
   overflow: visible;
   fill: none;
-  stroke: rgba(232, 230, 223, 0.3);
+  stroke: rgba(var(--paper-rgb), 0.3);
   stroke-width: 1;
 }
 .drawing-viewport__map-sketch {
@@ -2376,7 +2406,7 @@ button {
 }
 .timer-cell--paused,
 .timer-row--paused {
-  --phase: rgba(232, 230, 223, 0.45);
+  --phase: rgba(var(--paper-rgb), 0.45);
 }
 .timer-cell--done,
 .timer-row--done {
@@ -2385,7 +2415,7 @@ button {
 .timer__body {
   position: relative;
   min-width: 0;
-  border-top: 1px solid rgba(232, 230, 223, 0.16);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.16);
 }
 /* The tab on the rule, in the phase's colour; a marked timer's whole rule
    is orange, as the note that names it. */
@@ -2401,7 +2431,7 @@ button {
 }
 .timer-cell--marked > .timer__body,
 .timer-row--marked > .timer__body {
-  border-top-color: rgba(var(--orange-rgb), 0.7);
+  border-top-color: var(--marked-edge);
 }
 /* A cell stands its timer in its middle, rule and all. */
 .timer-cell {
@@ -2465,7 +2495,7 @@ button {
 }
 .timer-cell--paused .timer__digits,
 .timer-row--paused .timer__digits {
-  color: rgba(232, 230, 223, 0.5);
+  color: rgba(var(--paper-rgb), 0.5);
 }
 .timer-cell--done .timer__digits,
 .timer-row--done .timer__digits {
@@ -2473,7 +2503,7 @@ button {
 }
 .timer__track {
   height: 3px;
-  background: rgba(232, 230, 223, 0.11);
+  background: rgba(var(--paper-rgb), 0.11);
   overflow: hidden;
 }
 /* The share gone sweeps with the clock, one tick to the next; with reduced
@@ -2486,7 +2516,7 @@ button {
 }
 .timer__meta {
   margin-top: 8px;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2657,7 +2687,7 @@ button {
   stroke: var(--orange);
 }
 .weather-glyph__cloud {
-  stroke: rgba(232, 230, 223, 0.88);
+  stroke: rgba(var(--paper-rgb), 0.88);
 }
 .weather-glyph__water {
   stroke: var(--cyan);
@@ -2669,7 +2699,7 @@ button {
   stroke: var(--amber);
 }
 .weather-glyph__air {
-  stroke: rgba(232, 230, 223, 0.7);
+  stroke: rgba(var(--paper-rgb), 0.7);
 }
 .weather-glyph path.weather-glyph--solid {
   fill: var(--paper);
@@ -2693,7 +2723,7 @@ button {
   justify-content: space-between;
   gap: 14px;
   padding-bottom: 6px;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   white-space: nowrap;
 }
 .weather-now__head {
@@ -2710,7 +2740,6 @@ button {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: rgba(var(--orange-rgb), 0.9);
   text-overflow: ellipsis;
 }
 /* The alert's tag, where its line has given way (weatherLayout alertLine):
@@ -2739,7 +2768,7 @@ button {
 
 .weather-now__title + .weather-now__location {
   flex: 0 10 auto;
-  color: rgba(232, 230, 223, 0.5);
+  color: rgba(var(--paper-rgb), 0.5);
 }
 .weather-now__body {
   display: grid;
@@ -2781,7 +2810,7 @@ button {
 }
 .weather-now__unit {
   margin-left: 0.1em;
-  color: rgba(232, 230, 223, 0.55);
+  color: rgba(var(--paper-rgb), 0.55);
   font-size: 0.34em;
   letter-spacing: 0.04em;
   vertical-align: top;
@@ -2794,7 +2823,7 @@ button {
   color: var(--paper);
 }
 .weather-now__high-low {
-  color: rgba(232, 230, 223, 0.55);
+  color: rgba(var(--paper-rgb), 0.55);
 }
 .weather-now__summary {
   max-width: 46ch;
@@ -2813,10 +2842,10 @@ button {
 .weather-now__reading {
   min-width: 0;
   padding: 7px 0 4px;
-  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
 }
 .weather-now__reading dt {
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
 }
 /* A reading's value wraps at its words rather than losing them (a wind
    of "W 12 mph, gusts 25" in a narrow cell). */
@@ -2860,12 +2889,12 @@ button {
   gap: 2px;
   width: var(--outlook-column);
   padding: 8px 0 2px;
-  border-top: 1px solid rgba(232, 230, 223, 0.16);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.16);
   line-height: 1.15;
 }
 
 .weather-outlook__name {
-  color: rgba(232, 230, 223, 0.6);
+  color: rgba(var(--paper-rgb), 0.6);
   white-space: nowrap;
 }
 
@@ -2879,12 +2908,12 @@ button {
 }
 
 .weather-outlook__low {
-  color: rgba(232, 230, 223, 0.55);
+  color: rgba(var(--paper-rgb), 0.55);
 }
 
 .weather-outlook__day--marked {
-  border-top-color: var(--orange);
-  background: linear-gradient(180deg, rgba(var(--orange-rgb), 0.12), transparent 80%);
+  border-top-color: var(--marked-edge);
+  background: linear-gradient(180deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
 }
 
 .weather-outlook__day--marked > .weather-outlook__name {
@@ -2985,7 +3014,7 @@ button {
 }
 .weather-section__head {
   margin-bottom: 4px;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.13);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.13);
 }
 /* --strip-pad is weatherLayout.ts STRIP_PAD, set by WeatherPrimitive: the
    padding the label step counted. */
@@ -3073,7 +3102,7 @@ button {
 .weather-hour__rain {
   height: var(--rain-row);
   align-items: flex-end;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.16);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.16);
 }
 .weather-hour__rain-bar {
   width: calc(100% - 2px);
@@ -3090,7 +3119,7 @@ button {
 .weather-hour__time {
   height: var(--time-row);
   align-items: flex-end;
-  color: rgba(232, 230, 223, 0.5);
+  color: rgba(var(--paper-rgb), 0.5);
 }
 /* Midnight: a dashed rule down the strip and the new day's name. */
 .weather-hour--day {
@@ -3108,7 +3137,7 @@ button {
   bottom: calc(var(--time-row) + var(--precip-row));
   left: calc(50% - 0.5px);
   width: 1px;
-  background: rgba(var(--orange-rgb), 0.55);
+  background: var(--marked-edge);
 }
 .weather-hour--marked > .weather-hour__temp,
 .weather-hour--marked > .weather-hour__time {
@@ -3154,7 +3183,7 @@ button {
   grid-template-columns: subgrid;
   align-items: center;
   padding: clamp(5px, 0.75cqh, 9px) 4px clamp(5px, 0.75cqh, 9px) 0;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
   color: #d9d7d1;
   font-variant-numeric: tabular-nums;
 }
@@ -3162,7 +3191,7 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: rgba(232, 230, 223, 0.78);
+  color: rgba(var(--paper-rgb), 0.78);
   white-space: nowrap;
 }
 .weather-day__glyph {
@@ -3174,10 +3203,10 @@ button {
   text-align: right;
 }
 .weather-day__precip--none {
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
 }
 .weather-day__low {
-  color: rgba(232, 230, 223, 0.55);
+  color: rgba(var(--paper-rgb), 0.55);
   text-align: right;
 }
 .weather-day__high {
@@ -3190,7 +3219,7 @@ button {
 .weather-day__range {
   position: relative;
   height: 4px;
-  background: rgba(232, 230, 223, 0.08);
+  background: rgba(var(--paper-rgb), 0.08);
 }
 .weather-day__bar {
   position: absolute;
@@ -3199,8 +3228,8 @@ button {
   clip-path: inset(0 calc(100% - var(--to)) 0 var(--from));
 }
 .weather-day--marked {
-  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.085), rgba(var(--orange-rgb), 0.018) 76%, transparent);
-  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.64);
+  background: linear-gradient(90deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+  box-shadow: inset 2px 0 0 var(--marked-edge);
 }
 .weather-day--marked .weather-day__name {
   padding-left: 8px;
@@ -3327,13 +3356,13 @@ button {
   font-weight: 700;
 }
 .diagram-node-sub {
-  fill: rgba(232, 230, 223, 0.55);
+  fill: rgba(var(--paper-rgb), 0.55);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 9px;
   letter-spacing: 0.09em;
 }
 .diagram-node-detail {
-  fill: rgba(232, 230, 223, 0.27);
+  fill: rgba(var(--paper-rgb), 0.27);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 7px;
   letter-spacing: 0.08em;
@@ -3357,7 +3386,7 @@ button {
 }
 
 .sequence-actor-sub {
-  fill: rgba(232, 230, 223, 0.55);
+  fill: rgba(var(--paper-rgb), 0.55);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   letter-spacing: 0.09em;
 }
@@ -3391,7 +3420,6 @@ button {
   display: grid;
   grid-template-columns: 1fr 1fr auto;
   gap: 18px;
-  color: rgba(232, 230, 223, 0.37);
 }
 .document-viewport h1 {
   width: min(88%, 900px);
@@ -3496,8 +3524,8 @@ button {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px;
   padding-top: clamp(6px, 1cqh, 10px);
-  border-top: 1px solid rgba(232, 230, 223, 0.12);
-  color: rgba(232, 230, 223, 0.37);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.12);
+  color: rgba(var(--paper-rgb), 0.37);
 }
 .image-primitive__alt {
   min-width: 0;
@@ -3584,7 +3612,7 @@ button {
   left: -42px;
   width: 28px;
   text-align: right;
-  color: rgba(232, 230, 223, 0.2);
+  color: rgba(var(--paper-rgb), 0.2);
   user-select: none;
 }
 .code-line--hot {
@@ -3631,7 +3659,6 @@ button {
   gap: clamp(18px, 2.4cqw, 36px);
   margin-bottom: clamp(10px, 1.6cqh, 18px);
   padding: var(--mask-top) clamp(28px, 3cqw, 52px) 0;
-  color: rgba(232, 230, 223, 0.37);
 }
 .table-grid {
   width: 100%;
@@ -3649,14 +3676,14 @@ button {
   padding: 0 clamp(8px, 0.9cqw, 14px) clamp(8px, 1cqh, 12px);
   border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
   background: #000;
-  color: rgba(232, 230, 223, 0.55);
+  color: rgba(var(--paper-rgb), 0.55);
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
 }
 .table-grid__cell {
   padding: clamp(7px, 0.9cqh, 11px) clamp(8px, 0.9cqw, 14px);
-  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
   vertical-align: top;
   text-align: left;
   /* Not `anywhere`: that lets the table size a column below its longest
@@ -3695,7 +3722,7 @@ button {
 }
 .table-grid__empty {
   margin-top: clamp(12px, 2cqh, 20px);
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
 }
 /* In the aux row the panel is short: the header and the first rows are
    the point, so the meta line goes and the padding tightens. */
@@ -3759,7 +3786,6 @@ button {
   gap: 2px clamp(12px, 1.8cqw, 28px);
   padding: 0 0 clamp(6px, 1cqh, 10px) 10px;
   border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
-  color: rgba(232, 230, 223, 0.42);
 }
 
 .tasks-primitive__title,
@@ -3770,7 +3796,6 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(var(--orange-rgb), 0.85);
 }
 
 /* The counts wrap part by part where the list is too narrow for them on
@@ -3783,6 +3808,15 @@ button {
   text-align: right;
 }
 
+/* Every object's meta line (a table's, a document's, a list's, a
+   calendar's) is inked alike, and so is the title it leads with where no
+   frame shows one (MetaTitle); each primitive keeps its own layout. */
+.meta-line {
+  color: rgba(var(--paper-rgb), 0.42);
+}
+.meta-line__title {
+  color: rgba(var(--orange-rgb), 0.85);
+}
 .meta-count {
   white-space: nowrap;
 }
@@ -3827,8 +3861,8 @@ button {
   justify-content: space-between;
   gap: 2px 12px;
   padding: clamp(8px, 1.4cqh, 14px) 0 clamp(4px, 0.6cqh, 7px) 10px;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.22);
-  color: rgba(232, 230, 223, 0.4);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.22);
+  color: rgba(var(--paper-rgb), 0.4);
 }
 
 .task-section__name {
@@ -3838,7 +3872,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(232, 230, 223, 0.78);
+  color: rgba(var(--paper-rgb), 0.78);
 }
 
 .task-section__count {
@@ -3863,7 +3897,7 @@ button {
   align-items: start;
   column-gap: clamp(9px, 0.9cqw, 15px);
   padding: clamp(7px, 1cqh, 11px) 0 clamp(7px, 1cqh, 11px) 10px;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
 }
 
 .task-row__glyph {
@@ -3871,7 +3905,7 @@ button {
   height: 0.8em;
   /* Centred on the first line, however many lines the text wraps to. */
   margin-top: 0.3em;
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
 }
 
 .task-row--active .task-row__glyph {
@@ -3914,12 +3948,12 @@ button {
 }
 
 .task-row--low .task-row__text {
-  color: rgba(232, 230, 223, 0.6);
+  color: rgba(var(--paper-rgb), 0.6);
 }
 
 /* Done is quieter: the check says it, the words step back. */
 .task-row--done .task-row__text {
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
   font-weight: 400;
 }
 
@@ -3940,16 +3974,16 @@ button {
 }
 
 .task-row__priority--low {
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
 }
 
 .task-row--done .task-row__priority {
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
 }
 
 .task-row__detail {
   margin-top: 2px;
-  color: rgba(232, 230, 223, 0.5);
+  color: rgba(var(--paper-rgb), 0.5);
   font-size: 0.86em;
   line-height: 1.35;
   overflow-wrap: break-word;
@@ -3968,14 +4002,14 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 0 5px;
-  border: 1px solid rgba(232, 230, 223, 0.2);
-  color: rgba(232, 230, 223, 0.55);
+  border: 1px solid rgba(var(--paper-rgb), 0.2);
+  color: rgba(var(--paper-rgb), 0.55);
   line-height: 1.6;
 }
 
 .task-row--done .task-tag {
-  color: rgba(232, 230, 223, 0.32);
-  border-color: rgba(232, 230, 223, 0.1);
+  color: rgba(var(--paper-rgb), 0.32);
+  border-color: rgba(var(--paper-rgb), 0.1);
 }
 
 /* The due day at the end of the row: the word that judges it (OVERDUE,
@@ -3985,7 +4019,7 @@ button {
   flex-direction: column;
   align-items: flex-end;
   margin-top: 0.2em;
-  color: rgba(232, 230, 223, 0.5);
+  color: rgba(var(--paper-rgb), 0.5);
   text-align: right;
   white-space: nowrap;
 }
@@ -4003,18 +4037,18 @@ button {
 }
 
 .task-row__due--tomorrow {
-  color: rgba(232, 230, 223, 0.78);
+  color: rgba(var(--paper-rgb), 0.78);
 }
 
 .task-row--done .task-row__due {
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
 }
 
 /* A section's done tasks, counted on one row in their place. */
 .task-row--counted {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
 }
 
 .task-row--counted .task-row__glyph {
@@ -4026,8 +4060,8 @@ button {
    the rail card carries. */
 .task-row--marked,
 .inbox-row--marked {
-  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.1), rgba(var(--orange-rgb), 0.02) 76%, transparent);
-  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7);
+  background: linear-gradient(90deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+  box-shadow: inset 2px 0 0 var(--marked-edge);
 }
 
 .task-row__note,
@@ -4058,7 +4092,7 @@ button {
 .tasks-primitive--compact .task-row {
   align-items: center;
   padding: clamp(3px, 0.55cqh, 7px) 0 clamp(3px, 0.55cqh, 7px) 10px;
-  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
   border-bottom: 0;
 }
 
@@ -4121,14 +4155,14 @@ button {
   align-items: baseline;
   row-gap: 2px;
   padding: clamp(7px, 1cqh, 11px) 0;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
 }
 
 .inbox-primitive__rows--compact-line > .inbox-row,
 .inbox-primitive__rows--compact-stack > .inbox-row {
   padding-top: clamp(3px, 0.55cqh, 7px);
   padding-bottom: clamp(3px, 0.55cqh, 7px);
-  border-top: 1px solid rgba(232, 230, 223, 0.13);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.13);
   border-bottom: 0;
 }
 
@@ -4172,7 +4206,7 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(232, 230, 223, 0.62);
+  color: rgba(var(--paper-rgb), 0.62);
 }
 
 .inbox-row--unread .inbox-row__sender {
@@ -4196,7 +4230,7 @@ button {
 }
 
 .inbox-row__subject {
-  color: rgba(232, 230, 223, 0.66);
+  color: rgba(var(--paper-rgb), 0.66);
 }
 
 .inbox-row--unread .inbox-row__subject {
@@ -4205,13 +4239,13 @@ button {
 }
 
 .inbox-row__snippet {
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
 }
 
 /* A message with no subject is read by its snippet: an unread one keeps
    it strong. */
 .inbox-row--unread .inbox-row__snippet:first-child {
-  color: rgba(232, 230, 223, 0.78);
+  color: rgba(var(--paper-rgb), 0.78);
 }
 
 .inbox-primitive__rows--line .inbox-row__subject + .inbox-row__snippet::before {
@@ -4220,7 +4254,7 @@ button {
 
 .inbox-primitive--compact .inbox-row__subject,
 .inbox-primitive--compact .inbox-row--unread .inbox-row__subject {
-  color: rgba(232, 230, 223, 0.55);
+  color: rgba(var(--paper-rgb), 0.55);
   font-weight: 400;
 }
 
@@ -4239,8 +4273,8 @@ button {
 .inbox-row__tag {
   display: inline-block;
   padding: 0 5px;
-  border: 1px solid rgba(232, 230, 223, 0.2);
-  color: rgba(232, 230, 223, 0.55);
+  border: 1px solid rgba(var(--paper-rgb), 0.2);
+  color: rgba(var(--paper-rgb), 0.55);
   line-height: 1.6;
 }
 
@@ -4258,14 +4292,14 @@ button {
 
 .inbox-row__time {
   justify-self: end;
-  color: rgba(232, 230, 223, 0.48);
+  color: rgba(var(--paper-rgb), 0.48);
   text-align: right;
   white-space: nowrap;
 }
 
 .inbox-row--unread .inbox-row__time,
 .inbox-row__time--today {
-  color: rgba(232, 230, 223, 0.82);
+  color: rgba(var(--paper-rgb), 0.82);
 }
 
 /* A message the agent tinted: its semantic colour (its tone) down its
@@ -4278,8 +4312,8 @@ button {
 /* A tinted message a note names keeps both: the marked row's orange on
    its edge and accent, its own tint just inside the edge. */
 .inbox-row--marked.inbox-row--tint {
-  background: linear-gradient(90deg, rgba(var(--orange-rgb), 0.1), rgba(var(--orange-rgb), 0.02) 76%, transparent);
-  box-shadow: inset 2px 0 0 rgba(var(--orange-rgb), 0.7), inset 4px 0 0 var(--tone);
+  background: linear-gradient(90deg, var(--marked-wash-from), var(--marked-wash-to) 76%, transparent);
+  box-shadow: inset 2px 0 0 var(--marked-edge), inset 4px 0 0 var(--tone);
 }
 
 /* Calendar (CalendarPrimitive): the same instrument as the table and the
@@ -4345,7 +4379,7 @@ button {
 }
 /* An event the agent gave no colour draws in a quiet paper tone. */
 .tone--none {
-  --tone: rgba(232, 230, 223, 0.62);
+  --tone: rgba(var(--paper-rgb), 0.62);
 }
 /* The meta line, as the table's: what the view shows and how much. */
 .calendar__meta {
@@ -4355,16 +4389,12 @@ button {
   gap: clamp(12px, 2cqw, 32px);
   min-width: 0;
   margin-bottom: clamp(8px, 1.4cqh, 16px);
-  color: rgba(232, 230, 223, 0.37);
 }
 .calendar__meta > span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.calendar__meta-title {
-  color: rgba(var(--orange-rgb), 0.8);
 }
 .calendar__meta-range {
   margin-left: auto;
@@ -4407,8 +4437,8 @@ button {
   min-width: 0;
   padding: 0 6px;
   overflow: hidden;
-  border-left: 1px solid rgba(232, 230, 223, 0.08);
-  color: rgba(232, 230, 223, 0.55);
+  border-left: 1px solid rgba(var(--paper-rgb), 0.08);
+  color: rgba(var(--paper-rgb), 0.55);
   white-space: nowrap;
   line-height: 36px;
 }
@@ -4419,7 +4449,7 @@ button {
   letter-spacing: -0.02em;
 }
 .calendar-grid__month {
-  color: rgba(232, 230, 223, 0.38);
+  color: rgba(var(--paper-rgb), 0.38);
 }
 .calendar-grid__day--today {
   background: rgba(var(--orange-rgb), 0.07);
@@ -4436,21 +4466,21 @@ button {
   grid-column: 1 / -1;
   display: grid;
   padding: 3px 0;
-  border-top: 1px solid rgba(232, 230, 223, 0.1);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.1);
 }
 .calendar-grid__strip-label {
   grid-column: 1;
   grid-row: 1;
   align-self: center;
   overflow: hidden;
-  color: rgba(232, 230, 223, 0.35);
+  color: rgba(var(--paper-rgb), 0.35);
   font-size: 7px;
   letter-spacing: 0.04em;
   white-space: nowrap;
 }
 .calendar-grid__strip-cell {
   grid-row: 1 / -1;
-  border-left: 1px solid rgba(232, 230, 223, 0.08);
+  border-left: 1px solid rgba(var(--paper-rgb), 0.08);
 }
 .calendar-grid__strip-cell--today {
   background: rgba(var(--orange-rgb), 0.05);
@@ -4482,14 +4512,14 @@ button {
   position: absolute;
   left: var(--grid-lead, var(--calendar-gutter));
   right: var(--grid-trail, 0px);
-  border-top: 1px solid rgba(232, 230, 223, 0.08);
+  border-top: 1px solid rgba(var(--paper-rgb), 0.08);
 }
 .calendar-grid__hour-text {
   position: absolute;
   left: 0;
   top: 2px;
   width: calc(var(--calendar-gutter) - 8px);
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
   text-align: right;
   letter-spacing: 0.06em;
 }
@@ -4503,15 +4533,15 @@ button {
   right: var(--grid-trail, 0px);
   display: flex;
   align-items: center;
-  border-top: 1px dashed rgba(232, 230, 223, 0.18);
-  border-bottom: 1px dashed rgba(232, 230, 223, 0.18);
-  background: repeating-linear-gradient(-45deg, rgba(232, 230, 223, 0.06) 0 1px, transparent 1px 6px);
+  border-top: 1px dashed rgba(var(--paper-rgb), 0.18);
+  border-bottom: 1px dashed rgba(var(--paper-rgb), 0.18);
+  background: repeating-linear-gradient(-45deg, rgba(var(--paper-rgb), 0.06) 0 1px, transparent 1px 6px);
 }
 .calendar-grid__fold-text {
   margin-left: 8px;
   padding: 0 5px;
   background: #000;
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
   letter-spacing: 0.08em;
   white-space: nowrap;
 }
@@ -4519,7 +4549,7 @@ button {
   position: relative;
   grid-row: 1;
   min-width: 0;
-  border-left: 1px solid rgba(232, 230, 223, 0.08);
+  border-left: 1px solid rgba(var(--paper-rgb), 0.08);
 }
 .calendar-grid__column--today {
   background: rgba(var(--orange-rgb), 0.04);
@@ -4542,7 +4572,7 @@ button {
   top: 40%;
   left: var(--calendar-gutter);
   right: 0;
-  color: rgba(232, 230, 223, 0.36);
+  color: rgba(var(--paper-rgb), 0.36);
   text-align: center;
 }
 /* The agent's now, one mark in every view (the agenda's NOW row is the
@@ -4623,7 +4653,7 @@ button {
   flex: none;
   min-width: 0;
   overflow: hidden;
-  color: rgba(232, 230, 223, 0.55);
+  color: rgba(var(--paper-rgb), 0.55);
   letter-spacing: 0.06em;
   line-height: 14px;
   text-overflow: ellipsis;
@@ -4634,7 +4664,7 @@ button {
   flex: none;
   min-width: 0;
   overflow: hidden;
-  color: rgba(232, 230, 223, 0.58);
+  color: rgba(var(--paper-rgb), 0.58);
   font-family: var(--font-prose);
   font-size: clamp(10.5px, 0.7cqw, 13px);
   line-height: 15px;
@@ -4670,7 +4700,7 @@ button {
 }
 .calendar-event__time--inline {
   flex: none;
-  color: rgba(232, 230, 223, 0.6);
+  color: rgba(var(--paper-rgb), 0.6);
 }
 /* A later event of a stepped cluster lies over the earlier ones, parted
    from them by the black field. */
@@ -4711,7 +4741,7 @@ button {
 .calendar-line--cancelled .calendar-line__title,
 .calendar-agenda__item--cancelled .calendar-agenda__title {
   text-decoration: line-through;
-  text-decoration-color: rgba(232, 230, 223, 0.7);
+  text-decoration-color: rgba(var(--paper-rgb), 0.7);
 }
 /* Lit, as an active diagram node is: in its own tone, orange when it has none. */
 .tone--none:is(.calendar-event--active, .calendar-bar--active, .calendar-line--active, .calendar-agenda__item--active) {
@@ -4763,12 +4793,12 @@ button {
 }
 .calendar-bar__time {
   flex: none;
-  color: rgba(232, 230, 223, 0.6);
+  color: rgba(var(--paper-rgb), 0.6);
   letter-spacing: 0.04em;
 }
 .calendar-bar__status {
   flex: none;
-  color: rgba(232, 230, 223, 0.55);
+  color: rgba(var(--paper-rgb), 0.55);
 }
 .calendar-bar--tentative {
   border-left-style: dashed;
@@ -4839,7 +4869,7 @@ button {
   grid-template-columns: repeat(7, minmax(0, 1fr));
   align-items: center;
   border-bottom: 1px solid rgba(var(--orange-rgb), 0.48);
-  color: rgba(232, 230, 223, 0.45);
+  color: rgba(var(--paper-rgb), 0.45);
 }
 .calendar-month__weekdays > span {
   padding: 0 5px;
@@ -4861,30 +4891,30 @@ button {
   grid-template-columns: repeat(7, minmax(0, 1fr));
   min-height: 0;
   overflow: hidden;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.1);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.1);
 }
 .calendar-month__cell {
   grid-row: 1 / -1;
   min-width: 0;
   min-height: 0;
   padding: 2px 4px;
-  border-left: 1px solid rgba(232, 230, 223, 0.07);
+  border-left: 1px solid rgba(var(--paper-rgb), 0.07);
 }
 .calendar-month__number {
   display: inline-block;
   font-family: var(--font-mono);
   font-size: clamp(11px, 0.8cqw, 14px);
   line-height: 16px;
-  color: rgba(232, 230, 223, 0.75);
+  color: rgba(var(--paper-rgb), 0.75);
 }
 .calendar-month__cell--outside {
-  background: rgba(232, 230, 223, 0.02);
+  background: rgba(var(--paper-rgb), 0.02);
 }
 .calendar-month__cell--outside .calendar-month__number {
-  color: rgba(232, 230, 223, 0.25);
+  color: rgba(var(--paper-rgb), 0.25);
 }
 .calendar-month__cell--past .calendar-month__number {
-  color: rgba(232, 230, 223, 0.42);
+  color: rgba(var(--paper-rgb), 0.42);
 }
 /* Today is one mark in the grid and the month: its date on a square
    orange tag, an orange rule along the top of its column head or cell (the
@@ -4920,7 +4950,7 @@ button {
 }
 .calendar-line__time {
   flex: none;
-  color: rgba(232, 230, 223, 0.5);
+  color: rgba(var(--paper-rgb), 0.5);
   letter-spacing: 0.04em;
 }
 .calendar-line__title {
@@ -5010,9 +5040,9 @@ button {
   gap: 10px;
   min-width: 0;
   padding: 5px 0;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.2);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.2);
   background: #000;
-  color: rgba(232, 230, 223, 0.6);
+  color: rgba(var(--paper-rgb), 0.6);
   white-space: nowrap;
 }
 .calendar-agenda__day--today .calendar-agenda__day-head {
@@ -5020,7 +5050,7 @@ button {
   color: var(--orange);
 }
 .calendar-agenda__day--past .calendar-agenda__day-head {
-  color: rgba(232, 230, 223, 0.38);
+  color: rgba(var(--paper-rgb), 0.38);
 }
 .calendar-agenda__today {
   padding: 0 4px;
@@ -5030,7 +5060,7 @@ button {
 }
 .calendar-agenda__day-count {
   margin-left: auto;
-  color: rgba(232, 230, 223, 0.38);
+  color: rgba(var(--paper-rgb), 0.38);
 }
 .calendar-agenda__items {
   margin: 0;
@@ -5052,7 +5082,7 @@ button {
   column-gap: clamp(8px, 0.9cqw, 14px);
   align-items: start;
   padding: clamp(5px, 0.8cqh, 9px) 0;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.08);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.08);
 }
 .calendar-agenda__time {
   display: grid;
@@ -5065,7 +5095,7 @@ button {
   white-space: nowrap;
 }
 .calendar-agenda__to {
-  color: rgba(232, 230, 223, 0.45);
+  color: rgba(var(--paper-rgb), 0.45);
   font-size: 0.86em;
 }
 .calendar-agenda__stripe {
@@ -5094,7 +5124,7 @@ button {
   font-family: var(--font-prose);
   font-size: clamp(11.5px, 0.82cqw, 14px);
   line-height: 1.35;
-  color: rgba(232, 230, 223, 0.5);
+  color: rgba(var(--paper-rgb), 0.5);
   overflow-wrap: anywhere;
 }
 .calendar-agenda__line {
@@ -5122,10 +5152,10 @@ button {
 }
 .calendar-tag--tentative {
   border-style: dashed;
-  color: rgba(232, 230, 223, 0.6);
+  color: rgba(var(--paper-rgb), 0.6);
 }
 .calendar-tag--cancelled {
-  color: rgba(232, 230, 223, 0.45);
+  color: rgba(var(--paper-rgb), 0.45);
 }
 .calendar-tag--overlap {
   color: var(--amber);
@@ -5141,7 +5171,7 @@ button {
   opacity: 0.5;
 }
 .calendar-agenda__item--again .calendar-agenda__title {
-  color: rgba(232, 230, 223, 0.7);
+  color: rgba(var(--paper-rgb), 0.7);
 }
 /* The now between the rows: the grid's mark laid down the list, its tag
    pointed along the rule. */
@@ -5170,11 +5200,11 @@ button {
   justify-content: space-between;
   gap: 4px 12px;
   padding: 6px 0;
-  border-bottom: 1px dashed rgba(232, 230, 223, 0.14);
-  color: rgba(232, 230, 223, 0.42);
+  border-bottom: 1px dashed rgba(var(--paper-rgb), 0.14);
+  color: rgba(var(--paper-rgb), 0.42);
 }
 .calendar-agenda__empty-text {
-  color: rgba(232, 230, 223, 0.3);
+  color: rgba(var(--paper-rgb), 0.3);
 }
 /* The agenda under a month too small for titles, and an agenda in an aux cell: tighter rows. */
 .calendar-agenda__viewport--compact .calendar-agenda__item,
@@ -5235,7 +5265,7 @@ button {
   top: -3.4cqh;
   display: flex;
   justify-content: space-between;
-  color: rgba(232, 230, 223, 0.48);
+  color: rgba(var(--paper-rgb), 0.48);
 }
 .focus-layer__header button {
   border: 0;
@@ -5356,7 +5386,7 @@ button {
   border: 0;
   border-left: 1px solid rgba(var(--orange-rgb), 0.48);
   background: rgba(0, 0, 0, 0.72);
-  color: rgba(232, 230, 223, 0.34);
+  color: rgba(var(--paper-rgb), 0.34);
   cursor: pointer;
 }
 .dev-toggle:hover {
@@ -5401,8 +5431,8 @@ button {
   justify-content: space-between;
   align-items: center;
   padding-bottom: 14px;
-  border-bottom: 1px solid rgba(232, 230, 223, 0.13);
-  color: rgba(232, 230, 223, 0.56);
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.13);
+  color: rgba(var(--paper-rgb), 0.56);
 }
 .controller-panel__head button,
 .ir-drawer__head button {
@@ -5419,7 +5449,7 @@ button {
 }
 .controller-panel button,
 .controller-panel textarea {
-  border: 1px solid rgba(232, 230, 223, 0.15);
+  border: 1px solid rgba(var(--paper-rgb), 0.15);
   background: #050505;
   color: #d8d5ce;
 }
@@ -5441,7 +5471,7 @@ button {
 .controller-panel__label {
   display: block;
   margin: 20px 0 8px;
-  color: rgba(232, 230, 223, 0.38);
+  color: rgba(var(--paper-rgb), 0.38);
 }
 .controller-panel textarea {
   width: 100%;
@@ -5458,7 +5488,7 @@ button {
 }
 .controller-panel__state,
 .ir-drawer pre {
-  color: rgba(232, 230, 223, 0.4);
+  color: rgba(var(--paper-rgb), 0.4);
   font-size: 10px;
   line-height: 1.45;
   white-space: pre-wrap;
@@ -5493,9 +5523,15 @@ button {
     --presence-width: min(29cqw, 21cqh, 220px);
     --signal-height: clamp(38px, 5.5cqh, 52px);
   }
+  /* Damocles in the rail under the column: his size is the scene's, so
+     the grid can hold a rail as tall as he is (.content-grid). */
+  .scene--content {
+    --rail-presence-width: min(25cqw, 18cqh, 185px);
+    --rail-signal-height: clamp(34px, 4.6cqh, 44px);
+  }
   .damocles-presence--rail {
-    --presence-width: min(25cqw, 18cqh, 185px);
-    --signal-height: clamp(34px, 4.6cqh, 44px);
+    --presence-width: var(--rail-presence-width);
+    --signal-height: var(--rail-signal-height);
   }
 
   .scene--conversation {
@@ -5571,14 +5607,16 @@ button {
     left: var(--edge);
   }
   /* The rail under the column is at least as tall as its note reads whole
-     in (--rail-floor, measured by RailDetails), up to half the grid: the
-     main column keeps its 59% where the note fits in the rest, and gives up
-     what the note needs, keeping the larger share. */
+     in (--rail-floor, measured by RailDetails) and as Damocles stands (his
+     glyph, 944 by 1133, over his signal row), up to half the grid: the
+     main column keeps its 59% where both fit in the rest, and gives up
+     what they need, keeping the larger share. */
   .content-grid {
+    --rail-presence-height: calc(var(--rail-presence-width) * 1133 / 944 + var(--rail-signal-height));
     top: 9.2cqh;
     bottom: 9.2cqh;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 59cqh) minmax(min(var(--rail-floor, 0px), (100% - var(--scene-gap)) / 2), 1fr);
+    grid-template-rows: minmax(0, 59cqh) minmax(min(max(var(--rail-floor, 0px), var(--rail-presence-height)), (100% - var(--scene-gap)) / 2), 1fr);
     gap: var(--scene-gap);
   }
   .content-rail {

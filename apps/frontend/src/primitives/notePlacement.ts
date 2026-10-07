@@ -121,7 +121,7 @@ export interface NoteField {
 }
 
 /** Space kept between two cards, and between a card and the point it must not cover. */
-export const NOTE_GAP = 10;
+const NOTE_GAP = 10;
 
 /**
  * The most notes on one chart placed in full: past it the placement leaves

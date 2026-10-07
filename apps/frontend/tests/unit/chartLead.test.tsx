@@ -5,7 +5,7 @@
 // chart stayed at its top, the bar out of view.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const leads: Array<string | undefined> = [];
+const leads: Array<string | null | undefined> = [];
 vi.mock('../../src/primitives/ListViewport', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/primitives/ListViewport')>();
   return {
