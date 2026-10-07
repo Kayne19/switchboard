@@ -60,6 +60,8 @@ type DisplayAction =
 }
 ```
 
+The stage holds at most **32** objects (`MAX_STAGE_OBJECTS` in `apps/backend/src/display.rs`), and at most **4** of them may be images (`MAX_STAGE_IMAGES`). A `show` that would add past either bound is refused, and nothing reaches the screen: `the stage holds 32 objects, the most it takes: hide one, or update one by its id` (or `... 4 images ...`; an object that would become an image counts as one more). An update in place, `hide`, `clear` and the other ops are always taken, so the agent can always make room. The bound has one owner, the service's projection: it keeps every object's data and replays all of it to a page that reconnects, and the page keeps each image as a data URL, so without it an agent that showed new ids and never hid one grew both without limit. The page's stage holds only what the service admitted, so the page has no copy of the bound.
+
 ### focus / hide / clear / say
 ```json
 { "op": "focus", "id": "arch" }

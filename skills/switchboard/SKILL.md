@@ -74,6 +74,9 @@ data.events[3].location`.
 - `show` (`id`, `type`, optional `role`, `data`) creates an object, or
   updates it in place when the `id` is reused.
 - `hide` and `focus` take an `id`; `clear` takes nothing.
+- The stage holds at most 32 objects, 4 of them images. A `show` with a new
+  id past that is refused; hide what the caller is done with, or update an
+  object by its id.
 - `say` (`text`, optional `target`, optional `at: {x?, series?}`) anchors
   speech to an object.
 
