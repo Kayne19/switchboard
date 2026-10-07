@@ -36,6 +36,49 @@ describe('weather glyphs', () => {
     }
   });
 
+  // The names and labels above would pass with one picture drawn for two
+  // conditions; the caller reads the shape, so each must be its own.
+  it('every condition draws its own shape', () => {
+    const shapes = conditions.map((condition) => WEATHER_GLYPHS[condition].map((part) => `${part.kind}${part.solid ? '!' : ''}:${part.d}`).join('|'));
+    expect(new Set(shapes).size).toBe(conditions.length);
+  });
+
+  // What each glyph is made of: a sun where the sky clears, a cloud where it
+  // does not, water where it rains, ice where it freezes, a bolt for
+  // thunder and air for fog, wind and haze.
+  const MADE_OF: Record<WeatherCondition, string[]> = {
+    clear: ['sun'],
+    'partly-cloudy': ['cloud', 'sun'],
+    cloudy: ['cloud'],
+    fog: ['air'],
+    drizzle: ['cloud', 'water'],
+    rain: ['cloud', 'water'],
+    'heavy-rain': ['cloud', 'water'],
+    thunder: ['bolt', 'cloud'],
+    snow: ['cloud', 'ice'],
+    sleet: ['cloud', 'ice', 'water'],
+    hail: ['cloud', 'ice'],
+    wind: ['air'],
+    haze: ['air', 'sun'],
+  };
+  it.each(conditions)('%s is drawn from the parts its weather names', (condition) => {
+    expect([...new Set(WEATHER_GLYPHS[condition].map((part) => part.kind))].sort()).toEqual(MADE_OF[condition]);
+  });
+
+  // Rain's three intensities differ by how much falls: more strokes, or longer.
+  it('drizzle, rain and heavy rain fall harder in that order', () => {
+    const fall = (condition: WeatherCondition) => {
+      const water = WEATHER_GLYPHS[condition].find((part) => part.kind === 'water')!.d;
+      let total = 0;
+      for (const [, x1, y1, x2, y2] of water.matchAll(/M(-?[\d.]+) (-?[\d.]+) L(-?[\d.]+) (-?[\d.]+)/g)) {
+        total += Math.hypot(Number(x2) - Number(x1), Number(y2) - Number(y1));
+      }
+      return total;
+    };
+    expect(fall('drizzle')).toBeLessThan(fall('rain'));
+    expect(fall('rain')).toBeLessThan(fall('heavy-rain'));
+  });
+
   it.each(conditions)('%s draws as an SVG named for its condition, never an emoji or an image', (condition) => {
     const host = mount(<WeatherGlyph condition={condition} />);
     const svg = host.querySelector('svg')!;
