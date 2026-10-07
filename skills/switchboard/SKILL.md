@@ -65,6 +65,12 @@ arrays, are sent as lists.
 Show semantic content; the page owns layout, pixels and styling. Never send
 markup, CSS, pixel geometry or styling.
 
+No string may hold a URL (`https://...`, any `scheme://`, or `//host.tld`)
+or an HTML tag such as `<script>` or `<svg>`. Write a link as its host and
+path, without the scheme (`meet.google.com/abc-defg-hij`), or leave it out.
+The refusal names the string: `external resource URL is forbidden in
+data.events[3].location`.
+
 - `show` (`id`, `type`, optional `role`, `data`) creates an object, or
   updates it in place when the `id` is reused.
 - `hide` and `focus` take an `id`; `clear` takes nothing.

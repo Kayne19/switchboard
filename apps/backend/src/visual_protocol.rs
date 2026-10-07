@@ -174,40 +174,53 @@ fn names_external_resource(s: &str) -> bool {
     })
 }
 
-fn check_unsafe_string(v: &Value) -> Result<(), String> {
+/// What is unsafe in a string the agent sent, or None: markup or script
+/// first, then an external resource.
+fn unsafe_text(s: &str) -> Option<&'static str> {
+    let lower = s.to_ascii_lowercase();
+    if lower.contains("<script")
+        || lower.contains("<iframe")
+        || lower.contains("<html")
+        || lower.contains("<style")
+        || lower.contains("<svg")
+        || lower.contains("<object")
+        || lower.contains("<embed")
+        || lower.contains("javascript:")
+        || lower.contains("data:text/html")
+    {
+        return Some("raw markup or script injection is forbidden");
+    }
+    names_external_resource(s).then_some("external resource URL is forbidden")
+}
+
+/// The first unsafe string met walking depth first, keys in code point
+/// order: what is wrong with it, and where it is, written from the action
+/// down (`data.events[3].location`), so an agent with 200 events can find
+/// the one to mend. A key on the action itself (`on_action`) is written bare
+/// and every key below it after a dot, even an empty one. `path` holds where
+/// `v` is and comes back as it went in. The browser's `findUnsafeString`
+/// writes the same path.
+fn unsafe_string(v: &Value, path: &mut String, on_action: bool) -> Option<String> {
     match v {
-        Value::String(s) => {
-            let lower = s.to_ascii_lowercase();
-            if lower.contains("<script")
-                || lower.contains("<iframe")
-                || lower.contains("<html")
-                || lower.contains("<style")
-                || lower.contains("<svg")
-                || lower.contains("<object")
-                || lower.contains("<embed")
-                || lower.contains("javascript:")
-                || lower.contains("data:text/html")
-            {
-                return Err("raw markup or script injection is forbidden".to_string());
+        Value::String(s) => unsafe_text(s).map(|reason| format!("{reason} in {path}")),
+        Value::Object(m) => entries_in_order(m).into_iter().find_map(|(key, val)| {
+            let at = path.len();
+            if !on_action {
+                path.push('.');
             }
-            if names_external_resource(s) {
-                return Err("external resource URL is forbidden".to_string());
-            }
-            Ok(())
-        }
-        Value::Object(m) => {
-            for (_, val) in entries_in_order(m) {
-                check_unsafe_string(val)?;
-            }
-            Ok(())
-        }
-        Value::Array(a) => {
-            for val in a {
-                check_unsafe_string(val)?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
+            path.push_str(key);
+            let found = unsafe_string(val, path, false);
+            path.truncate(at);
+            found
+        }),
+        Value::Array(a) => a.iter().enumerate().find_map(|(index, val)| {
+            let at = path.len();
+            path.push_str(&format!("[{index}]"));
+            let found = unsafe_string(val, path, false);
+            path.truncate(at);
+            found
+        }),
+        _ => None,
     }
 }
 
@@ -2042,7 +2055,9 @@ pub fn validate_action(action: &Value) -> Result<Value, String> {
         return Err(format!("model-controlled layout field is forbidden: {k}"));
     }
 
-    check_unsafe_string(action)?;
+    if let Some(unsafe_error) = unsafe_string(action, &mut String::new(), true) {
+        return Err(unsafe_error);
+    }
 
     if !finite(action) {
         return Err("action contains a non-finite number".into());

@@ -237,26 +237,38 @@ function findForbiddenLayoutKey(val: unknown): string | null {
   return null;
 }
 
-function findUnsafeString(val: unknown): string | null {
+/**
+ * The first unsafe string met walking depth first, keys in code point order:
+ * what is wrong with it, and where it is, written from the action down
+ * (`data.events[3].location`), so an agent with 200 events can find the one
+ * to mend. A key on the action itself is written bare and every key below it
+ * after a dot, even an empty one. `path` holds where `val` is, one part per
+ * step, and comes back as it went in. The backend's `unsafe_string` writes
+ * the same path.
+ */
+function findUnsafeString(val: unknown, path: string[] = []): string | null {
   if (typeof val === 'string') {
-    for (const pattern of HTML_JS_PATTERNS) {
-      if (pattern.test(val)) return `raw markup or script injection is forbidden`;
-    }
-    if (EXTERNAL_URL_REGEX.test(val)) {
-      return `external resource URL is forbidden`;
-    }
-    return null;
+    const reason = HTML_JS_PATTERNS.some((pattern) => pattern.test(val))
+      ? 'raw markup or script injection is forbidden'
+      : EXTERNAL_URL_REGEX.test(val)
+        ? 'external resource URL is forbidden'
+        : null;
+    return reason && `${reason} in ${path.join('')}`;
   }
   if (Array.isArray(val)) {
-    for (const item of val) {
-      const found = findUnsafeString(item);
+    for (const [index, item] of val.entries()) {
+      path.push(`[${index}]`);
+      const found = findUnsafeString(item, path);
+      path.pop();
       if (found) return found;
     }
     return null;
   }
   if (isRecord(val)) {
     for (const key of keysInOrder(val)) {
-      const found = findUnsafeString(val[key]);
+      path.push(path.length === 0 ? key : `.${key}`);
+      const found = findUnsafeString(val[key], path);
+      path.pop();
       if (found) return found;
     }
   }
