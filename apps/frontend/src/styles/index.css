@@ -755,7 +755,10 @@ button {
 .scene-heading__title,
 .scene-heading__sub {
   min-width: 0;
-  overflow: hidden;
+  /* Clipped a little outside the box: a glyph's antialiased edge reaches
+     past it, and a short title is drawn as it was before. */
+  overflow: clip;
+  overflow-clip-margin: 2px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
