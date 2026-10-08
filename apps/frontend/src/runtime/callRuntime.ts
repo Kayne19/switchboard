@@ -237,6 +237,10 @@ export class CallRuntime {
         }
       },
       onChange: () => {
+        // A caption waits for the audio that voices it, but not for audio
+        // that is not coming: the caption clock is told whether playback is
+        // sounding, and frees a waiting line when it is not (#189).
+        this.spokenLines.playbackActive(this.playback.isPlaying);
         this.update({ speaking: this.playback.isPlaying });
         this.maybeCompleteResponseBarrier();
       },
@@ -335,6 +339,7 @@ export class CallRuntime {
     this.handsFree?.disable("Hands-free stopped when the page was left.");
     this.clearResponseBarrier();
     this.playback.dispose();
+    this.spokenLines.clear();
   }
 
   // --- Commands ---------------------------------------------------------

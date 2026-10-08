@@ -14,6 +14,7 @@ import {
 } from "../../src/runtime/callRuntime";
 import type { HelloAckMessage, ServerMessage } from "../../src/protocol";
 import { AudioPlayback } from "../../src/runtime/audioPlayback";
+import { CAPTION_WAIT_MS } from "../../src/runtime/spokenLines";
 import { helloAck, statusMessage } from "../fixtures/serverMessages";
 
 class FakeSocket {
@@ -257,6 +258,41 @@ describe("CallRuntime blocked audio recovery", () => {
     for (const type of ["click", "pointerdown", "touchend", "keydown"]) {
       expect(handlers.has(type), `${type} is a gesture`).toBe(true);
     }
+    runtime.dispose();
+  });
+});
+
+describe("CallRuntime captions when playback fails", () => {
+  // A caption waits for the audio that voices it (#112). When that audio is
+  // refused, fails, or never comes -- every WebKit playback failure in #189
+  // -- the line used to wait for ever: the caption log froze on an old line
+  // while the transcript drawer had every later one.
+  it("shows a line whose audio never arrives", async () => {
+    vi.useFakeTimers();
+    const heard: string[] = [];
+    const { runtime } = makeRuntime({
+      onHeard: (line) => heard.push(line.text),
+    });
+    const socket = await connectAt(runtime, 0);
+    socket.receive({
+      type: "spoken",
+      entry: {
+        role: "agent",
+        text: "Putting you through.",
+        route: "operator",
+        ts: 0,
+        voiced: true,
+      },
+      sequence: 1,
+    });
+    await settle();
+    expect(heard, "the line waits for its audio first").toEqual([]);
+
+    vi.advanceTimersByTime(CAPTION_WAIT_MS);
+    await settle();
+    expect(heard, "the caller reads what was said").toEqual([
+      "Putting you through.",
+    ]);
     runtime.dispose();
   });
 });

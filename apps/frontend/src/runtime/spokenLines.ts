@@ -12,6 +12,14 @@
 // dropped and will never play (`AudioPlayback`'s `onUtterance`). A line with
 // no utterance is heard as soon as the lines before it are.
 
+/**
+ * How long a waiting line waits while playback is not playing. A caption is
+ * held for the audio that voices it, but never for audio that is not coming:
+ * on WebKit a refused, failed or silent clip left the caption log frozen on
+ * an old line while the transcript drawer filled up (#189).
+ */
+export const CAPTION_WAIT_MS = 4000;
+
 /** A line the caller has started to hear. */
 export interface HeardLine {
   text: string;
@@ -40,9 +48,30 @@ export class SpokenLines {
   /** Lines whose utterance has not been reached, in utterance order. */
   private waiting: WaitingLine[] = [];
   private readonly onHeard: (line: HeardLine) => void;
+  private readonly waitMs: number;
+  /** True while playback is sounding; a waiting line then waits for it. */
+  private playing = false;
+  private waitTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(onHeard: (line: HeardLine) => void) {
+  constructor(
+    onHeard: (line: HeardLine) => void,
+    options: { waitMs?: number } = {},
+  ) {
     this.onHeard = onHeard;
+    this.waitMs = options.waitMs ?? CAPTION_WAIT_MS;
+  }
+
+  /**
+   * Playback is sounding, or it is not. While it is, a line waits for its
+   * own utterance's turn however long that takes. While it is not, a waiting
+   * line is heard after `waitMs`: whatever went wrong with the audio -- a
+   * refusal, a failed stream, a silent element, audio that never arrived --
+   * the caller still reads what was said.
+   */
+  playbackActive(active: boolean): void {
+    this.playing = active;
+    if (active) this.clearWait();
+    else this.armWait();
   }
 
   /** A spoken line arrived; `sequence` names the utterance that voices it. */
@@ -80,6 +109,7 @@ export class SpokenLines {
 
   /** The transcript was replaced (`history`): nothing is waiting any more. */
   clear(): void {
+    this.clearWait();
     this.waiting = [];
     this.reached = Number.NEGATIVE_INFINITY;
     this.heard = Number.NEGATIVE_INFINITY;
@@ -88,11 +118,42 @@ export class SpokenLines {
   private release(): void {
     while (this.waiting.length > 0) {
       const next = this.waiting[0];
-      if (next.sequence !== undefined && next.sequence > this.reached) return;
+      if (next.sequence !== undefined && next.sequence > this.reached) {
+        this.armWait();
+        return;
+      }
       this.waiting.shift();
       const order = next.sequence ?? this.heard;
       this.heard = Math.max(this.heard, order);
       this.onHeard({ text: next.text, route: next.route, order });
     }
+    this.clearWait();
+  }
+
+  /** Starts the wait that frees the head line if playback never reaches it. */
+  private armWait(): void {
+    if (
+      this.waitTimer !== null ||
+      this.playing ||
+      this.waitMs <= 0 ||
+      this.waiting.length === 0
+    )
+      return;
+    this.waitTimer = setTimeout(() => {
+      this.waitTimer = null;
+      // Playback is not sounding and the wait is up: none of the audio that
+      // these lines are waiting for is coming. They are all heard now, in
+      // order, and a line that arrives later waits for its own audio again.
+      for (const line of this.waiting) {
+        if (line.sequence !== undefined)
+          this.reached = Math.max(this.reached, line.sequence);
+      }
+      this.release();
+    }, this.waitMs);
+  }
+
+  private clearWait(): void {
+    if (this.waitTimer !== null) clearTimeout(this.waitTimer);
+    this.waitTimer = null;
   }
 }
