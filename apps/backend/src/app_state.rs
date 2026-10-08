@@ -189,8 +189,9 @@ pub struct AppInner {
     pub stt_stream: SttStreamAdapter,
     pub events: broadcast::Sender<Event>,
     pub coordinator: Coordinator,
-    /// Decides the pickers' redials without the PBX lock.
-    pub(crate) redials: RedialPlanner,
+    /// Decides the pickers' redials without the PBX lock. Only
+    /// `page_controls.rs` asks for it, through `redial_planner`.
+    redials: RedialPlanner,
     /// The speech worker's queue and the state only `speech.rs` reads.
     pub(crate) speech: SpeechQueue,
     /// Caller audio clips and the state only `caller_input.rs` reads.
@@ -204,6 +205,9 @@ pub struct AppInner {
     pub(crate) projection: AgentProjection,
     /// One owner of queued background speech and its release order.
     pub(crate) floor: Floor,
+    /// Announces a new leg and resets its scene. Its callbacks are installed
+    /// here; `module_calls.rs` promotes a candidate leg through it, and
+    /// several modules' tests drive a promotion with it.
     pub(crate) leg_announcer: LegAnnouncer,
     pub(crate) operation_transition: Mutex<()>,
     pub(crate) active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
@@ -212,6 +216,14 @@ pub struct AppInner {
     pub(crate) shutdown: watch::Sender<bool>,
     pub(crate) audio: Mutex<AudioQueue>,
     pub(crate) speech_deadline: std::time::Duration,
+}
+
+impl AppInner {
+    /// The planner the page's model and thinking controls redial through.
+    /// `page_controls.rs` is its one caller.
+    pub(crate) fn redial_planner(&self) -> RedialPlanner {
+        self.redials.clone()
+    }
 }
 
 impl AppState {
