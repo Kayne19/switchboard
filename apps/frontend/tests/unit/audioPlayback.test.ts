@@ -373,47 +373,41 @@ describe("AudioPlayback replay ownership", () => {
   });
 });
 
-describe("AudioPlayback analyser safety", () => {
-  it("does not attach a source while AudioContext is suspended", () => {
+describe("AudioPlayback and Web Audio", () => {
+  // One reader of the level, in every engine (#194): the element plays
+  // natively everywhere and the level is decoded off to the side. A graph on
+  // the element was a second implementation of the same level, and it is the
+  // graph that silences a WebKit element holding a MediaSource (#189).
+  it("never routes the element through a live context, whatever the engine", async () => {
     const player = fakePlayer();
-    let attached = 0;
-    class SuspendedContext {
-      state = "suspended";
-      destination = {} as AudioNode;
-      createMediaElementSource() {
-        attached += 1;
-        throw new Error("must not attach while suspended");
-      }
-      resume() { return Promise.resolve(); }
-    }
-    vi.stubGlobal("AudioContext", SuspendedContext);
     stubObjectUrls();
-    const playback = new AudioPlayback({
-      player: player as unknown as HTMLAudioElement,
-      idleText: "idle",
-      onStatus: () => {},
-      onChange: () => {},
-      onAudioLevel: () => {},
-      gapMs: 0,
-    });
-    playback.audioQueue.push(new Blob(["speech"]));
-    playback.playNext();
-    expect(attached, "native playback stays attached").toBe(0);
-    expect(player.playCalls).toHaveLength(1);
-  });
-
-  it("keeps native playback when graph attachment fails", () => {
-    const player = fakePlayer();
-    class BrokenContext {
+    let contexts = 0;
+    class ForbiddenContext {
       state = "running";
       destination = {} as AudioNode;
-      createMediaElementSource() {
-        throw new Error("unsupported graph");
+      constructor() {
+        contexts += 1;
       }
-      close() { return Promise.resolve(); }
+      createMediaElementSource(): MediaElementAudioSourceNode {
+        throw new Error("the element must stay on native playback");
+      }
+      createAnalyser(): AnalyserNode {
+        throw new Error("the level is not read from the element");
+      }
+      resume() {
+        return Promise.resolve();
+      }
+      close() {
+        return Promise.resolve();
+      }
     }
-    vi.stubGlobal("AudioContext", BrokenContext);
-    stubObjectUrls();
+    vi.stubGlobal("AudioContext", ForbiddenContext);
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    });
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
     const playback = new AudioPlayback({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
@@ -424,37 +418,11 @@ describe("AudioPlayback analyser safety", () => {
     });
     playback.audioQueue.push(new Blob(["speech"]));
     playback.playNext();
-    expect(player.playCalls).toHaveLength(1);
-  });
-
-  it("connects directly to the destination when analyser setup fails", () => {
-    const player = fakePlayer();
-    const connections: AudioNode[] = [];
-    const destination = {} as AudioNode;
-    const source = {
-      connect(node: AudioNode) { connections.push(node); },
-      disconnect() {},
-    } as unknown as MediaElementAudioSourceNode;
-    class BrokenAnalyserContext {
-      state = "running";
-      destination = destination;
-      createMediaElementSource() { return source; }
-      createAnalyser() { throw new Error("analyser unavailable"); }
-      close() { throw new Error("captured context must stay open"); }
-    }
-    vi.stubGlobal("AudioContext", BrokenAnalyserContext);
-    stubObjectUrls();
-    const playback = new AudioPlayback({
-      player: player as unknown as HTMLAudioElement,
-      idleText: "idle",
-      onStatus: () => {},
-      onChange: () => {},
-      onAudioLevel: () => {},
-      gapMs: 0,
-    });
-    playback.audioQueue.push(new Blob(["speech"]));
-    playback.playNext();
-    expect(connections).toEqual([destination]);
+    player.playPromises[0].resolve();
+    for (let step = 0; step < 8; step += 1) await Promise.resolve();
+    playback.handleGesture(null);
+    playback.dispose();
+    expect(contexts, "no live context is built for playback").toBe(0);
     expect(player.playCalls).toHaveLength(1);
   });
 });
@@ -830,25 +798,14 @@ describe("AudioPlayback silent playback", () => {
   });
 });
 
-describe("AudioPlayback level on a browser that cannot be analysed", () => {
-  // WebKit silences an element routed through `createMediaElementSource`, so
-  // the analyser is refused there on purpose and the level used to be null
-  // for the whole call (#189). The utterance's own bytes carry it instead.
+describe("AudioPlayback level", () => {
+  // The level is the utterance's own bytes in every engine (#194): a replay
+  // is decoded in one go, a stream as its chunks arrive.
   it("meters the replay against its decoded envelope", async () => {
     const player = fakePlayer();
     stubObjectUrls();
     const levels: number[] = [];
     const frames: FrameRequestCallback[] = [];
-    vi.stubGlobal("navigator", {
-      userAgent:
-        "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-    });
-    vi.stubGlobal(
-      "AudioContext",
-      class {
-        state = "running";
-      },
-    );
     const samples = new Float32Array(1000).fill(0.5);
     vi.stubGlobal(
       "OfflineAudioContext",
@@ -891,6 +848,90 @@ describe("AudioPlayback level on a browser that cannot be analysed", () => {
     player.ended = true;
     player.emit("ended");
     expect(levels[levels.length - 1], "a finished clip reports nothing").toBe(0);
+  });
+
+  it("meters a stream against the chunks that have arrived", async () => {
+    const player = fakePlayer();
+    player.play = () => {
+      player.playCalls.push(player.src);
+      return Promise.resolve();
+    };
+    stubObjectUrls();
+    const levels: number[] = [];
+    const frames: FrameRequestCallback[] = [];
+    // One MPEG-1 Layer III frame at 128 kbps, 44.1 kHz: 417 bytes, 26ms.
+    const frameBytes = 417;
+    const mp3 = (count: number) => {
+      const bytes = new Uint8Array(count * frameBytes);
+      for (let frame = 0; frame < count; frame += 1) {
+        bytes.set([0xff, 0xfb, 0x90, 0x00], frame * frameBytes);
+      }
+      return bytes.buffer as ArrayBuffer;
+    };
+    class FakeSourceBuffer {
+      updating = false;
+      addEventListener() {}
+      removeEventListener() {}
+      appendBuffer() {}
+    }
+    class FakeMediaSource {
+      static isTypeSupported = () => true;
+      readyState = "open";
+      addEventListener() {}
+      addSourceBuffer() {
+        return new FakeSourceBuffer();
+      }
+      endOfStream() {}
+    }
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal(
+      "OfflineAudioContext",
+      class {
+        decodeAudioData(data: ArrayBuffer) {
+          const decoded = Math.floor(data.byteLength / frameBytes) * 1152;
+          const samples = new Float32Array(decoded).fill(0.5);
+          return Promise.resolve({
+            sampleRate: 44100,
+            length: samples.length,
+            getChannelData: () => samples,
+          } as unknown as AudioBuffer);
+        }
+      },
+    );
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: () => {},
+      onChange: () => {},
+      onAudioLevel: (level) => levels.push(level),
+      gapMs: 0,
+    });
+    playback.setStreamingEnabled(true);
+
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    // Two frames: 52ms of voice, cut mid-frame as a socket chunk is.
+    playback.receiveAudioChunk(mp3(2).slice(0, 2 * frameBytes + 11));
+    for (let step = 0; step < 8; step += 1) await Promise.resolve();
+    player.currentTime = 0.01;
+    frames.pop()?.(0);
+    expect(levels.at(-1), "the stream is metered as it arrives").toBeCloseTo(1, 5);
+
+    player.currentTime = 0.09;
+    frames.pop()?.(0);
+    expect(levels.at(-1), "past what has arrived is silence").toBe(0);
+
+    playback.receiveAudioChunk(mp3(4));
+    for (let step = 0; step < 8; step += 1) await Promise.resolve();
+    frames.pop()?.(0);
+    expect(levels.at(-1), "the same timeline grew with the clip").toBeCloseTo(
+      1,
+      5,
+    );
   });
 });
 

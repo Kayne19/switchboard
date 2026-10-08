@@ -9,11 +9,11 @@
 
 import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
 import { errorName, mediaErrorName } from "./errors";
-import { AudioLevelMonitor } from "./audioLevel";
 import {
   createEnvelopeDecoder,
   decodeEnvelope,
   EnvelopeMeter,
+  StreamingEnvelope,
   type EnvelopeDecoder,
 } from "./speechEnvelope";
 
@@ -61,6 +61,8 @@ interface MseUtterance {
   buffer: SourceBuffer | null;
   url: string | null;
   started: boolean;
+  /** This utterance's level, decoded from its chunks as they arrive. */
+  envelope: StreamingEnvelope | null;
   endedHandler?: EventListener;
   errorHandler?: EventListener;
 }
@@ -114,20 +116,16 @@ export class AudioPlayback {
   private gapTimer: ReturnType<typeof setTimeout> | null = null;
   /** Watches an accepted clip for sound; see `NO_PROGRESS_MS`. */
   private progressTimer: ReturnType<typeof setTimeout> | null = null;
-  private audioContext: AudioContext | null = null;
-  private audioSource: MediaElementAudioSourceNode | null = null;
-  private levelMonitor: AudioLevelMonitor | null = null;
-  private audioGraphAttempted = false;
   /**
-   * The meter for a browser whose element cannot be analysed. There is one
-   * level, from one of two readers, and which one a browser gets is decided
-   * once in `ensureAudioGraph`: the analyser where the element can be routed
-   * through `createMediaElementSource`, the utterance's own envelope where it
-   * cannot (WebKit, #189). A browser never runs both.
+   * The one reader of the agent's playback level, in every engine (#194):
+   * the utterance's own bytes, decoded off to the side, read at the
+   * element's `currentTime`. The element is never routed through Web Audio,
+   * so no engine has to be asked whether it survives that (#189).
    */
   private envelopeDecoder: EnvelopeDecoder | null = null;
   private envelopeMeter: EnvelopeMeter | null = null;
   private envelopeToken = 0;
+  private envelopeDecoderAttempted = false;
 
   constructor(options: AudioPlaybackOptions) {
     this.options = options;
@@ -249,12 +247,6 @@ export class AudioPlayback {
     this.clearMsePlayback();
     if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
     this.stopEnvelopeMeter();
-    this.levelMonitor?.disconnect();
-    this.levelMonitor = null;
-    this.audioSource?.disconnect();
-    this.audioSource = null;
-    if (this.audioContext) void this.audioContext.close().catch(() => undefined);
-    this.audioContext = null;
     this.playing = false;
   }
 
@@ -263,7 +255,6 @@ export class AudioPlayback {
   // later clip to arrive.
   handleGesture(target?: EventTarget | null): void {
     if (target === this.player || this.gapTimer !== null) return;
-    this.resumeAudioGraph();
     const owner = this.playbackOwner;
     if (!owner) {
       if (this.mseActive && !this.playing) this.msePlay();
@@ -276,22 +267,24 @@ export class AudioPlayback {
   }
 
   /**
-   * True when this browser refused the analyser graph for good, so the level
-   * has to come from the audio's own envelope.
+   * The decoder the level is read through, made once. `null` on a browser
+   * with no `OfflineAudioContext`: that is a flat level, which is what a
+   * caller with no level should see.
    */
-  private envelopeMetering(): boolean {
-    if (!this.options.onAudioLevel) return false;
-    this.ensureAudioGraph();
-    return this.audioGraphAttempted && this.levelMonitor === null;
+  private meterDecoder(): EnvelopeDecoder | null {
+    if (!this.options.onAudioLevel) return null;
+    if (!this.envelopeDecoderAttempted) {
+      this.envelopeDecoderAttempted = true;
+      this.envelopeDecoder = createEnvelopeDecoder();
+    }
+    return this.envelopeDecoder;
   }
 
   /** Decodes the clip aside and meters the element against its envelope. */
   private startEnvelopeMeter(blob: Blob): void {
     const onLevel = this.options.onAudioLevel;
-    if (!onLevel) return;
-    if (!this.envelopeDecoder) this.envelopeDecoder = createEnvelopeDecoder();
-    const decoder = this.envelopeDecoder;
-    if (!decoder) return;
+    const decoder = this.meterDecoder();
+    if (!onLevel || !decoder) return;
     const token = ++this.envelopeToken;
     void blob
       .arrayBuffer()
@@ -305,14 +298,29 @@ export class AudioPlayback {
       .catch(() => undefined);
   }
 
-  /** Both level readers; a browser has only one of them (see `EnvelopeMeter`). */
+  /** The timeline a streamed utterance's chunks are decoded into. */
+  private newStreamEnvelope(): StreamingEnvelope | null {
+    const decoder = this.meterDecoder();
+    return decoder ? new StreamingEnvelope(decoder) : null;
+  }
+
+  /** Meters a stream against the envelope its chunks are decoded into. */
+  private startStreamEnvelopeMeter(utterance: MseUtterance): void {
+    const onLevel = this.options.onAudioLevel;
+    if (!onLevel || !utterance.envelope) return;
+    this.envelopeToken += 1;
+    this.envelopeMeter = new EnvelopeMeter(
+      this.player,
+      utterance.envelope,
+      onLevel,
+    );
+  }
+
   private startMeter(): void {
-    this.levelMonitor?.start();
     this.envelopeMeter?.start();
   }
 
   private stopMeter(): void {
-    this.levelMonitor?.stop();
     this.envelopeMeter?.stop();
   }
 
@@ -345,7 +353,7 @@ export class AudioPlayback {
       handlers: [],
     };
     this.playbackOwner = owner;
-    if (this.envelopeMetering()) this.startEnvelopeMeter(blob);
+    this.startEnvelopeMeter(blob);
     const sequence = this.replaySequences.get(blob);
     if (sequence !== undefined) this.options.onUtterance?.(sequence);
     this.notifyPlaybackChange();
@@ -447,6 +455,9 @@ export class AudioPlayback {
       buffer: null,
       url: null,
       started: false,
+      // A stream's level is its own chunks, decoded as they arrive; a
+      // replay's is the whole blob (`startEnvelopeMeter`).
+      envelope: this.mseEnabled ? this.newStreamEnvelope() : null,
     };
     this.msePending = utterance;
     if (this.mseEnabled) {
@@ -469,6 +480,7 @@ export class AudioPlayback {
     utterance.bytes += data.byteLength;
     this.mseReplayBytes += data.byteLength;
     utterance.parts.push(new Blob([data], { type: utterance.mime }));
+    utterance.envelope?.append(data);
     if (this.mseEnabled && !utterance.failed) {
       utterance.queued.push(data);
       if (utterance === this.mseActive) this.mseAppend(utterance);
@@ -499,85 +511,6 @@ export class AudioPlayback {
     if (utterance === this.mseActive) this.mseAppend(utterance);
     this.msePending = null;
     this.notifyPlaybackChange();
-  }
-
-  private ensureAudioGraph(): boolean {
-    if (this.audioGraphAttempted) {
-      return this.audioContext?.state === "running" && this.levelMonitor !== null;
-    }
-    if (!this.options.onAudioLevel || typeof AudioContext === "undefined") {
-      this.audioGraphAttempted = true;
-      return false;
-    }
-    if (isWebKitMediaElementAudioSource()) {
-      // WebKit still has an open MSE -> MediaElementAudioSourceNode bug. Do
-      // not reroute the element there; native playback is more important than
-      // an analyser level.
-      this.audioGraphAttempted = true;
-      return false;
-    }
-    let context = this.audioContext;
-    if (!context) {
-      try {
-        context = new AudioContext();
-        this.audioContext = context;
-      } catch {
-        this.audioGraphAttempted = true;
-        return false;
-      }
-    }
-    // A suspended context has not yet been granted a user gesture. Attaching
-    // the source now would permanently reroute a working media element into
-    // a graph that may never run.
-    if (context.state !== "running") return false;
-    let source: MediaElementAudioSourceNode | null = null;
-    try {
-      source = context.createMediaElementSource(this.player);
-      const monitor = new AudioLevelMonitor(
-        context,
-        source,
-        this.options.onAudioLevel,
-        context.destination,
-      );
-      this.audioSource = source;
-      this.levelMonitor = monitor;
-      this.audioGraphAttempted = true;
-      if (this.playing) monitor.start();
-      return true;
-    } catch {
-      if (source) {
-        // createMediaElementSource permanently reroutes the element. If the
-        // analyser cannot be built, keep the context and make the safe direct
-        // connection instead of closing it and leaving playback silent.
-        this.audioSource = source;
-        try {
-          source.connect(context.destination);
-        } catch {
-          // There is no safe second graph to try. Keep the source/context
-          // alive; a later native fallback cannot undo the one-time binding.
-        }
-        this.audioGraphAttempted = true;
-        return false;
-      }
-      // The source was never created, so this context has not captured the
-      // element and can be closed without changing playback routing.
-      this.levelMonitor?.disconnect();
-      this.levelMonitor = null;
-      this.audioSource = null;
-      void context.close().catch(() => undefined);
-      this.audioContext = null;
-      this.audioGraphAttempted = true;
-      return false;
-    }
-  }
-
-  private resumeAudioGraph(): void {
-    if (this.ensureAudioGraph()) return;
-    const context = this.audioContext;
-    if (!context || context.state === "running") return;
-    void context.resume().then(() => {
-      if (context.state === "running") this.ensureAudioGraph();
-    }).catch(() => undefined);
   }
 
   private notifyPlaybackChange(): void {
@@ -658,7 +591,6 @@ export class AudioPlayback {
       return;
     owner.paused = false;
     owner.seeked = false;
-    this.resumeAudioGraph();
     this.startMeter();
     this.playing = true;
     this.notifyPlaybackChange();
@@ -719,7 +651,6 @@ export class AudioPlayback {
   private msePlay(): void {
     if (!this.mseActive || this.mseActive.failed || this.playing) return;
     const utterance = this.mseActive;
-    this.resumeAudioGraph();
     this.startMeter();
     this.playing = true;
     this.notifyPlaybackChange();
@@ -790,7 +721,7 @@ export class AudioPlayback {
     const player = this.player;
     if (this.mseActive === utterance) {
       this.clearProgressWatch();
-      this.stopMeter();
+      this.stopEnvelopeMeter();
       this.playing = false;
       this.notifyPlaybackChange();
       this.mseDetach(utterance);
@@ -841,6 +772,7 @@ export class AudioPlayback {
     const utterance = this.mseQueue.shift()!;
     const player = this.player;
     this.mseActive = utterance;
+    this.startStreamEnvelopeMeter(utterance);
     this.options.onUtterance?.(utterance.sequence);
     utterance.media = new MediaSource();
     utterance.url = URL.createObjectURL(utterance.media);
@@ -848,7 +780,7 @@ export class AudioPlayback {
       if (this.mseActive !== utterance) return;
       this.mseDetach(utterance);
       this.mseActive = null;
-      this.stopMeter();
+      this.stopEnvelopeMeter();
       this.playing = false;
       this.notifyPlaybackChange();
       if (utterance.url) URL.revokeObjectURL(utterance.url);
@@ -895,7 +827,7 @@ export class AudioPlayback {
     this.mseQueue = [];
     this.msePending = null;
     this.mseReplayBytes = 0;
-    this.stopMeter();
+    this.stopEnvelopeMeter();
     this.playing = false;
     this.notifyPlaybackChange();
     player.pause();
@@ -910,15 +842,4 @@ function mseRuntimeSupported(): boolean {
     typeof MediaSource !== "undefined" &&
     MediaSource.isTypeSupported("audio/mpeg")
   );
-}
-
-
-function isWebKitMediaElementAudioSource(): boolean {
-  if (typeof navigator === "undefined") return false;
-  const userAgent = navigator.userAgent;
-  if (!/AppleWebKit/i.test(userAgent)) return false;
-  // Chrome/Edge/Opera on desktop use Blink despite the historical token. All
-  // iOS browser shells retain WebKit and therefore stay on native playback.
-  return !/(Chrome|Chromium|Edg|OPR)/i.test(userAgent) ||
-    /(CriOS|FxiOS|EdgiOS|OPiOS)/i.test(userAgent);
 }

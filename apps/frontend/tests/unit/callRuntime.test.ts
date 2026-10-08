@@ -100,6 +100,8 @@ function fakePlayer() {
     load() {},
     play: () => Promise.resolve(),
     src: "",
+    // The level is read at the element's own time (#194).
+    currentTime: 0,
   } as unknown as HTMLAudioElement;
 }
 
@@ -298,28 +300,27 @@ describe("CallRuntime captions when playback fails", () => {
 });
 
 describe("CallRuntime audio levels", () => {
-  it("publishes the playback analyser level through currentVoiceLevel", async () => {
-    class FakeAnalyser {
-      fftSize = 0;
-      connect() {}
-      disconnect() {}
-      getByteTimeDomainData(values: Uint8Array) {
-        values.fill(200);
+  it("publishes the playback envelope level through currentVoiceLevel", async () => {
+    // One reader of the level in every engine (#194): the utterance's own
+    // bytes, decoded aside. Nothing routes the element through Web Audio.
+    const samples = new Float32Array(1000).fill(0.5);
+    vi.stubGlobal(
+      "OfflineAudioContext",
+      class {
+        decodeAudioData() {
+          return Promise.resolve({
+            sampleRate: 1000,
+            length: samples.length,
+            getChannelData: () => samples,
+          } as unknown as AudioBuffer);
+        }
+      },
+    );
+    vi.stubGlobal("AudioContext", class {
+      constructor() {
+        throw new Error("playback builds no live context");
       }
-    }
-    class FakeAudioContext {
-      state = "running";
-      destination = {} as AudioNode;
-      createMediaElementSource() {
-        return { connect() {}, disconnect() {} } as unknown as MediaElementAudioSourceNode;
-      }
-      createAnalyser() {
-        return new FakeAnalyser() as unknown as AnalyserNode;
-      }
-      resume() { return Promise.resolve(); }
-      close() { return Promise.resolve(); }
-    }
-    vi.stubGlobal("AudioContext", FakeAudioContext);
+    });
     vi.stubGlobal("requestAnimationFrame", () => 0);
     vi.stubGlobal("cancelAnimationFrame", () => {});
     const { runtime } = makeRuntime();
