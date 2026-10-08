@@ -15,6 +15,7 @@ import {
   PLAYBACK_DRAIN_DEBOUNCE_MS,
   type HandsFreeControllerOptions,
   type HandsFreeStateDetail,
+  type SpeechEndpointer,
   type WakeDetector,
 } from "../hands_free";
 import {
@@ -130,6 +131,8 @@ export interface CallRuntimeOptions {
   createAudioContext?: PushToTalkOptions["createAudioContext"];
   /** Loads the local wake-word detector the first time hands-free starts. */
   loadWakeDetector?: () => Promise<WakeDetector>;
+  /** Loads the local Silero speech endpointer alongside it. */
+  loadSpeechEndpointer?: () => Promise<SpeechEndpointer>;
   createHandsFree?: (options: HandsFreeControllerOptions) => HandsFreeController;
   /** Where page-level listeners go: gestures, visibility, and page exit. */
   document?: EventSource & { readonly visibilityState?: DocumentVisibilityState };
@@ -621,16 +624,22 @@ export class CallRuntime {
     this.handsFreeStartup = (async () => {
       this.renderHandsFreeState({
         state: "starting",
-        message: "Loading the local wake-word detector...",
+        message: "Loading the local wake-word and speech detectors...",
         leaseRemainingMs: 0,
       });
       try {
         const loadWakeDetector =
           this.options.loadWakeDetector ?? loadLocalWakeDetector;
-        const wakeDetector = await loadWakeDetector();
+        const loadSpeechEndpointer =
+          this.options.loadSpeechEndpointer ?? loadLocalSpeechEndpointer;
+        const [wakeDetector, speechEndpointer] = await Promise.all([
+          loadWakeDetector(),
+          loadSpeechEndpointer(),
+        ]);
         if (this.disposed) return;
         const handsFreeOptions: HandsFreeControllerOptions = {
           wakeDetector,
+          speechEndpointer,
           isSnapshotReady: () => this.snapshotReady,
           currentEpoch: () => this.turnEpoch,
           isPttActive: () => this.pushToTalk.isActive,
@@ -1086,4 +1095,9 @@ export class CallRuntime {
 async function loadLocalWakeDetector(): Promise<WakeDetector> {
   const { createWakeWordDetector } = await import("../wake_word");
   return createWakeWordDetector();
+}
+
+async function loadLocalSpeechEndpointer(): Promise<SpeechEndpointer> {
+  const { createSpeechEndpointer } = await import("../silero_vad");
+  return createSpeechEndpointer();
 }

@@ -6,6 +6,12 @@ export const WAKE_PHRASE = "Hey Jarvis";
 export const WAKE_SAMPLE_RATE = 16_000;
 export const WAKE_FRAME_SAMPLES = 1_280;
 export const VAD_TRAILING_SILENCE_MS = 900;
+/** Silero VAD's window at 16 kHz, and the 32 ms of audio it scores. */
+export const VAD_WINDOW_SAMPLES = 512;
+export const VAD_WINDOW_MS = (VAD_WINDOW_SAMPLES / WAKE_SAMPLE_RATE) * 1_000;
+/** Speech starts at the first threshold and only ends below the second. */
+export const SPEECH_START_PROBABILITY = 0.5;
+export const SPEECH_END_PROBABILITY = 0.35;
 export const WAKE_SPEECH_GRACE_MS = 2_000;
 export const MAX_HANDS_FREE_UTTERANCE_MS = 30_000;
 export const FOLLOW_UP_LEASE_MS = 8_000;
@@ -36,6 +42,20 @@ export interface WakeDetector {
 	onError?(callback: DetectorErrorCallback): () => void;
 }
 
+/**
+ * The speech endpoint detector: the same 16 kHz PCM frames in, a speech start
+ * and a speech end out. `silero_vad.ts` is the implementation; there is no
+ * energy-threshold fallback (`docs/architecture.md` rule 9).
+ */
+export interface SpeechEndpointer {
+	load?(): Promise<void>;
+	reset(): void;
+	process(samples: Float32Array): void;
+	onSpeechStart(callback: DetectorCallback): () => void;
+	onSpeechEnd(callback: DetectorCallback): () => void;
+	onError?(callback: DetectorErrorCallback): () => void;
+}
+
 export interface HandsFreeStateDetail {
 	state: HandsFreeState;
 	message: string;
@@ -48,6 +68,7 @@ export interface HandsFreeControllerOptions {
 	createRecorder?: (stream: MediaStream, mime: string) => MediaRecorder;
 	createWorkletNode?: (context: AudioContext) => AudioWorkletNode;
 	wakeDetector?: WakeDetector;
+	speechEndpointer?: SpeechEndpointer;
 	workletUrl?: string;
 	now?: () => number;
 	setTimeout?: (handler: () => void, timeout: number) => Timer;
@@ -95,6 +116,7 @@ export class HandsFreeController {
 		HandsFreeControllerOptions["isForeground"]
 	>;
 	private readonly detector: WakeDetector | null;
+	private readonly endpointer: SpeechEndpointer | null;
 	private state: HandsFreeState = "off";
 	private enabled = false;
 	private runtimeToken = 0;
@@ -129,23 +151,22 @@ export class HandsFreeController {
 			options.createWorkletNode ||
 			((context) => new AudioWorkletNode(context, "hands-free-vad"));
 		this.detector = options.wakeDetector || null;
+		this.endpointer = options.speechEndpointer || null;
 		this.detector?.onDetect(() => {
 			if (this.enabled && this.state === "armed") this.beginWakeGrace();
 		});
-		this.detector?.onError?.((error) => {
+		this.detector?.onError?.((error) => this.failListening("detector", error));
+		this.endpointer?.onSpeechStart(() => {
 			if (!this.enabled) return;
-			this.enabled = false;
-			this.runtimeToken++;
-			this.clearWakeTimer();
-			this.clearLeaseTimer();
-			this.stopCapture(true);
-			this.releaseRuntime();
-			this.detector?.reset();
-			this.publish(
-				"error",
-				`Hands-free detector failed (${this.errorName(error)}).`,
-			);
+			if (this.state === "wake_grace") this.beginCapture(false);
+			else if (this.state === "lease") this.beginCapture(true);
 		});
+		this.endpointer?.onSpeechEnd(() => {
+			if (this.enabled && this.capture) this.stopCapture(false);
+		});
+		this.endpointer?.onError?.((error) =>
+			this.failListening("speech detector", error),
+		);
 		this.now = options.now || (() => Date.now());
 		this.setTimer =
 			options.setTimeout ||
@@ -185,8 +206,13 @@ export class HandsFreeController {
 			);
 			return false;
 		}
-		if (!this.detector) {
-			this.publish("error", "Hands-free wake detector is unavailable.");
+		if (!this.detector || !this.endpointer) {
+			this.publish(
+				"error",
+				this.detector
+					? "Hands-free speech detector is unavailable."
+					: "Hands-free wake detector is unavailable.",
+			);
 			return false;
 		}
 		this.enabled = true;
@@ -196,7 +222,9 @@ export class HandsFreeController {
 		);
 		const token = ++this.runtimeToken;
 		try {
-			await this.detector.load?.();
+			// Two models, one wait: either one failing is the same start
+			// failure, reported by the catch below.
+			await Promise.all([this.detector.load?.(), this.endpointer.load?.()]);
 			if (!this.enabled || token !== this.runtimeToken) return false;
 			this.context = this.createAudioContext();
 			if (typeof this.context.audioWorklet?.addModule !== "function")
@@ -230,14 +258,14 @@ export class HandsFreeController {
 			this.sink.gain.value = 0;
 			worklet.connect(this.sink);
 			this.sink.connect(this.context.destination);
-			this.detector.reset();
+			this.resetListening();
 			this.publish("armed", `Listening locally for “${WAKE_PHRASE}”.`);
 			return true;
 		} catch (error) {
 			if (!this.enabled || token !== this.runtimeToken) return false;
 			this.enabled = false;
 			this.releaseRuntime();
-			this.detector.reset();
+			this.resetListening();
 			this.publish(
 				"error",
 				`Hands-free could not start (${this.errorName(error)}).`,
@@ -254,7 +282,7 @@ export class HandsFreeController {
 		this.clearLeaseTimer();
 		this.stopCapture(true);
 		this.releaseRuntime();
-		this.detector?.reset();
+		this.resetListening();
 		this.publish("off", message);
 	}
 
@@ -265,7 +293,7 @@ export class HandsFreeController {
 		this.clearWakeTimer();
 		this.stopCapture(true);
 		this.releaseRuntime();
-		this.detector?.reset();
+		this.resetListening();
 		this.publish("paused_ptt", "Hands-free paused for push-to-talk.");
 	}
 
@@ -285,7 +313,7 @@ export class HandsFreeController {
 		)
 			return;
 		this.clearLeaseTimer();
-		this.worklet?.port.postMessage({ type: "reset_endpoint" });
+		this.endpointer?.reset();
 		this.leaseUsed = false;
 		this.leaseDeadline = this.now() + FOLLOW_UP_LEASE_MS;
 		this.leaseTimer = this.setTimer(
@@ -338,30 +366,23 @@ export class HandsFreeController {
 			return;
 		}
 		if (message.type === "audio") {
-			if (
-				!(this.state === "armed" || this.state === "wake_grace") ||
-				!(message.samples instanceof Float32Array)
-			)
-				return;
-			this.detector?.process(message.samples);
-			return;
+			if (!(message.samples instanceof Float32Array)) return;
+			// The endpointer scores every frame; the wake detector only runs
+			// while a wake word could still open a turn.
+			this.endpointer?.process(message.samples);
+			if (this.state === "armed" || this.state === "wake_grace")
+				this.detector?.process(message.samples);
 		}
-		if (message.type === "speech_start") {
-			if (this.state === "wake_grace") this.beginCapture(false);
-			else if (this.state === "lease") this.beginCapture(true);
-			return;
-		}
-		if (message.type === "speech_end" && this.capture) this.stopCapture(false);
 	}
 
 	private beginWakeGrace(): void {
 		if (this.state !== "armed") return;
-		this.worklet?.port.postMessage({ type: "reset_endpoint" });
+		this.endpointer?.reset();
 		this.clearWakeTimer();
 		this.wakeTimer = this.setTimer(() => {
 			this.wakeTimer = null;
 			if (this.state === "wake_grace") {
-				this.detector?.reset();
+				this.resetListening();
 				this.publish(
 					"armed",
 					`Wake heard; speak within ${WAKE_SPEECH_GRACE_MS / 1000} seconds.`,
@@ -552,6 +573,28 @@ export class HandsFreeController {
 			message,
 			leaseRemainingMs: Math.max(0, this.leaseDeadline - this.now()),
 		});
+	}
+
+	/** A detector that failed stops hands-free and says which one it was. */
+	private failListening(what: string, error: unknown): void {
+		if (!this.enabled) return;
+		this.enabled = false;
+		this.runtimeToken++;
+		this.clearWakeTimer();
+		this.clearLeaseTimer();
+		this.stopCapture(true);
+		this.releaseRuntime();
+		this.resetListening();
+		this.publish(
+			"error",
+			`Hands-free ${what} failed (${this.errorName(error)}).`,
+		);
+	}
+
+	/** Both detectors forget the audio before this moment. */
+	private resetListening(): void {
+		this.detector?.reset();
+		this.endpointer?.reset();
 	}
 
 	private errorName(error: unknown): string {
