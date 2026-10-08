@@ -830,6 +830,70 @@ describe("AudioPlayback silent playback", () => {
   });
 });
 
+describe("AudioPlayback level on a browser that cannot be analysed", () => {
+  // WebKit silences an element routed through `createMediaElementSource`, so
+  // the analyser is refused there on purpose and the level used to be null
+  // for the whole call (#189). The utterance's own bytes carry it instead.
+  it("meters the replay against its decoded envelope", async () => {
+    const player = fakePlayer();
+    stubObjectUrls();
+    const levels: number[] = [];
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    });
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        state = "running";
+      },
+    );
+    const samples = new Float32Array(1000).fill(0.5);
+    vi.stubGlobal(
+      "OfflineAudioContext",
+      class {
+        decodeAudioData() {
+          return Promise.resolve({
+            sampleRate: 1000,
+            length: samples.length,
+            getChannelData: () => samples,
+          } as unknown as AudioBuffer);
+        }
+      },
+    );
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: () => {},
+      onChange: () => {},
+      onAudioLevel: (level) => levels.push(level),
+      gapMs: 0,
+    });
+
+    playback.audioQueue.push(new Blob(["mp3 bytes"]));
+    playback.playNext();
+    player.currentTime = 0.5;
+    player.playPromises[0].resolve();
+    for (let step = 0; step < 8; step += 1) await Promise.resolve();
+    expect(levels.length, "the envelope is metered once decoded").toBeGreaterThan(0);
+    expect(levels[levels.length - 1]).toBeCloseTo(1, 5);
+
+    player.currentTime = 100;
+    frames.pop()?.(0);
+    expect(levels[levels.length - 1], "past the clip is silence").toBe(0);
+
+    player.ended = true;
+    player.emit("ended");
+    expect(levels[levels.length - 1], "a finished clip reports nothing").toBe(0);
+  });
+});
+
 describe("AudioPlayback pause between messages", () => {
   it("waits the gap before the next message and none after the last", async () => {
     vi.useFakeTimers();

@@ -10,6 +10,12 @@
 import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
 import { errorName, mediaErrorName } from "./errors";
 import { AudioLevelMonitor } from "./audioLevel";
+import {
+  createEnvelopeDecoder,
+  decodeEnvelope,
+  EnvelopeMeter,
+  type EnvelopeDecoder,
+} from "./speechEnvelope";
 
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
 export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
@@ -112,6 +118,16 @@ export class AudioPlayback {
   private audioSource: MediaElementAudioSourceNode | null = null;
   private levelMonitor: AudioLevelMonitor | null = null;
   private audioGraphAttempted = false;
+  /**
+   * The meter for a browser whose element cannot be analysed. There is one
+   * level, from one of two readers, and which one a browser gets is decided
+   * once in `ensureAudioGraph`: the analyser where the element can be routed
+   * through `createMediaElementSource`, the utterance's own envelope where it
+   * cannot (WebKit, #189). A browser never runs both.
+   */
+  private envelopeDecoder: EnvelopeDecoder | null = null;
+  private envelopeMeter: EnvelopeMeter | null = null;
+  private envelopeToken = 0;
 
   constructor(options: AudioPlaybackOptions) {
     this.options = options;
@@ -232,6 +248,7 @@ export class AudioPlayback {
     this.audioQueue.length = 0;
     this.clearMsePlayback();
     if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
+    this.stopEnvelopeMeter();
     this.levelMonitor?.disconnect();
     this.levelMonitor = null;
     this.audioSource?.disconnect();
@@ -258,6 +275,53 @@ export class AudioPlayback {
     this.attemptPlay(owner);
   }
 
+  /**
+   * True when this browser refused the analyser graph for good, so the level
+   * has to come from the audio's own envelope.
+   */
+  private envelopeMetering(): boolean {
+    if (!this.options.onAudioLevel) return false;
+    this.ensureAudioGraph();
+    return this.audioGraphAttempted && this.levelMonitor === null;
+  }
+
+  /** Decodes the clip aside and meters the element against its envelope. */
+  private startEnvelopeMeter(blob: Blob): void {
+    const onLevel = this.options.onAudioLevel;
+    if (!onLevel) return;
+    if (!this.envelopeDecoder) this.envelopeDecoder = createEnvelopeDecoder();
+    const decoder = this.envelopeDecoder;
+    if (!decoder) return;
+    const token = ++this.envelopeToken;
+    void blob
+      .arrayBuffer()
+      .then((bytes) => decodeEnvelope(bytes, decoder))
+      .then((envelope) => {
+        if (!envelope || this.envelopeToken !== token) return;
+        const meter = new EnvelopeMeter(this.player, envelope, onLevel);
+        this.envelopeMeter = meter;
+        if (this.playing) meter.start();
+      })
+      .catch(() => undefined);
+  }
+
+  /** Both level readers; a browser has only one of them (see `EnvelopeMeter`). */
+  private startMeter(): void {
+    this.levelMonitor?.start();
+    this.envelopeMeter?.start();
+  }
+
+  private stopMeter(): void {
+    this.levelMonitor?.stop();
+    this.envelopeMeter?.stop();
+  }
+
+  private stopEnvelopeMeter(): void {
+    this.envelopeToken += 1;
+    this.envelopeMeter?.stop();
+    this.envelopeMeter = null;
+  }
+
   playNext(): void {
     if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
     const blob = this.audioQueue.shift();
@@ -281,6 +345,7 @@ export class AudioPlayback {
       handlers: [],
     };
     this.playbackOwner = owner;
+    if (this.envelopeMetering()) this.startEnvelopeMeter(blob);
     const sequence = this.replaySequences.get(blob);
     if (sequence !== undefined) this.options.onUtterance?.(sequence);
     this.notifyPlaybackChange();
@@ -303,7 +368,7 @@ export class AudioPlayback {
         return;
       owner.paused = true;
       this.clearProgressWatch();
-      this.levelMonitor?.stop();
+      this.stopMeter();
       owner.awaitingEnded = owner.seeked && this.terminalSeek();
       this.playing = false;
       this.notifyPlaybackChange();
@@ -522,13 +587,14 @@ export class AudioPlayback {
   private cleanupOwner(owner: PlaybackOwner): void {
     const player = this.player;
     this.clearProgressWatch();
+    this.stopEnvelopeMeter();
     if (this.playbackOwner === owner) this.playbackOwner = null;
     owner.pendingAttempt = null;
     for (const [name, handler] of owner.handlers) {
       player.removeEventListener(name, handler);
     }
     owner.handlers = [];
-    this.levelMonitor?.stop();
+    this.stopMeter();
     player.pause();
     player.removeAttribute("src");
     player.load();
@@ -593,7 +659,7 @@ export class AudioPlayback {
     owner.paused = false;
     owner.seeked = false;
     this.resumeAudioGraph();
-    this.levelMonitor?.start();
+    this.startMeter();
     this.playing = true;
     this.notifyPlaybackChange();
     const attempt = ++this.playAttemptToken;
@@ -654,7 +720,7 @@ export class AudioPlayback {
     if (!this.mseActive || this.mseActive.failed || this.playing) return;
     const utterance = this.mseActive;
     this.resumeAudioGraph();
-    this.levelMonitor?.start();
+    this.startMeter();
     this.playing = true;
     this.notifyPlaybackChange();
     Promise.resolve(this.player.play()).then(
@@ -667,7 +733,7 @@ export class AudioPlayback {
         );
       },
       (error) => {
-        this.levelMonitor?.stop();
+        this.stopMeter();
         this.playing = false;
         this.notifyPlaybackChange();
         this.options.onStatus(
@@ -724,7 +790,7 @@ export class AudioPlayback {
     const player = this.player;
     if (this.mseActive === utterance) {
       this.clearProgressWatch();
-      this.levelMonitor?.stop();
+      this.stopMeter();
       this.playing = false;
       this.notifyPlaybackChange();
       this.mseDetach(utterance);
@@ -782,7 +848,7 @@ export class AudioPlayback {
       if (this.mseActive !== utterance) return;
       this.mseDetach(utterance);
       this.mseActive = null;
-      this.levelMonitor?.stop();
+      this.stopMeter();
       this.playing = false;
       this.notifyPlaybackChange();
       if (utterance.url) URL.revokeObjectURL(utterance.url);
@@ -829,7 +895,7 @@ export class AudioPlayback {
     this.mseQueue = [];
     this.msePending = null;
     this.mseReplayBytes = 0;
-    this.levelMonitor?.stop();
+    this.stopMeter();
     this.playing = false;
     this.notifyPlaybackChange();
     player.pause();
