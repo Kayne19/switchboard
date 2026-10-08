@@ -596,6 +596,10 @@ export class AudioPlayback {
     this.notifyPlaybackChange();
     const attempt = ++this.playAttemptToken;
     owner.pendingAttempt = attempt;
+    // Armed on the attempt, for the same reason as the stream's: a `play()`
+    // that never settles is a clip that produced no sound, and the caller
+    // has to be told about it either way (#203).
+    this.watchProgress(() => this.replayStalled(owner));
     let result: Promise<void>;
     try {
       result = this.player.play();
@@ -613,8 +617,7 @@ export class AudioPlayback {
           return;
         owner.pendingAttempt = null;
         this.playing = !owner.paused;
-        if (this.playing)
-          this.watchProgress(() => this.replayStalled(owner));
+        if (!this.playing) this.clearProgressWatch();
         this.notifyPlaybackChange();
       },
       (error) => this.playFailed(owner, attempt, error),
@@ -654,16 +657,24 @@ export class AudioPlayback {
     this.startMeter();
     this.playing = true;
     this.notifyPlaybackChange();
+    // The watch is armed on the attempt, not on `play()` resolving: a
+    // WebKit element given a MediaSource of MP3 buffers it, never reaches
+    // `canplay`, and leaves `play()` pending for good -- no sound, no
+    // rejection, nothing to notice (#203). A clip that does advance is left
+    // alone; one that does not says so and the whole replay follows.
+    this.watchProgress(() =>
+      this.mseFail(utterance, new Error("no playback progress")),
+    );
     Promise.resolve(this.player.play()).then(
-      () => {
-        if (this.mseActive !== utterance || utterance.failed) return;
-        // The element accepted the stream. If it never advances, this is a
-        // MediaSource it cannot play: say so and use the whole replay (#189).
-        this.watchProgress(() =>
-          this.mseFail(utterance, new Error("no playback progress")),
-        );
-      },
+      () => undefined,
       (error) => {
+        // A rejection that arrives after this utterance was replaced or
+        // failed belongs to a clip that is already gone: `mseFail` aborts
+        // the pending `play()` itself when it reloads the element, and that
+        // used to reach the caller as "Audio blocked by the browser" while
+        // the whole replay was already playing (#203).
+        if (this.mseActive !== utterance || utterance.failed) return;
+        this.clearProgressWatch();
         this.stopMeter();
         this.playing = false;
         this.notifyPlaybackChange();
@@ -747,6 +758,7 @@ export class AudioPlayback {
     this.notifyPlaybackChange();
   }
 
+  /** The source is open: it has a SourceBuffer, and what has arrived goes in. */
   private mseOpen(utterance: MseUtterance): void {
     if (utterance.failed || !utterance.media) return;
     try {
@@ -754,7 +766,6 @@ export class AudioPlayback {
       utterance.buffer.addEventListener("error", () =>
         this.mseFail(utterance, new Error("MediaSource append error")),
       );
-      this.player.src = utterance.url || "";
       this.mseAppend(utterance);
     } catch (error) {
       this.mseFail(utterance, error);
@@ -802,7 +813,14 @@ export class AudioPlayback {
       () => this.mseOpen(utterance),
       { once: true },
     );
-    if (utterance.media.readyState === "open") this.mseOpen(utterance);
+    // Attaching the source is what opens it: a MediaSource is `closed` until
+    // an element takes its URL, and `sourceopen` fires then. Waiting for the
+    // event before attaching waits forever -- no SourceBuffer, no append, no
+    // `play()`, and nothing reported, which is a call that hears nothing at
+    // all (#203, the silence in #189). The element's `error` handler is
+    // already on, so an engine that refuses the source says so and the whole
+    // replay follows.
+    player.src = utterance.url;
   }
 
   /** Takes an utterance's element handlers back off the element. */
