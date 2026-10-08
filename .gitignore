@@ -17,5 +17,10 @@ target/
 # Playwright output.
 test-results/
 
+# A local Playwright config of your own. The orb-level spec names the WebKit
+# one it wants (apps/frontend/tests/visual/orbLevel.spec.ts); CI runs the
+# spec in Chromium.
+playwright.*.local.config.ts
+
 # Personal routing symlink into the owner's wiki (see AGENTS.md).
 /BRAIN.md
