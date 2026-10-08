@@ -187,15 +187,18 @@ A caption waits for the audio that voices it (#112) but never for audio that
 is not coming. `SpokenLines` is told whether playback is sounding; while it is
 not, every waiting line is heard `CAPTION_WAIT_MS` later, in order.
 
-The agent's level has one meaning and two readers, decided once per browser in
-`ensureAudioGraph`. Where the element can be routed through
-`createMediaElementSource` it is the `AnalyserNode` on that graph. Where it
-cannot -- WebKit silences a routed element that holds a `MediaSource` -- the
-level is read from the utterance's own bytes: `speechEnvelope.ts` decodes the
-replay in an `OfflineAudioContext` and `EnvelopeMeter` reports the step the
-element's `currentTime` has reached. A browser never runs both, and a browser
-that can do neither draws flat bars; the canned loop belongs to the demo
-scenes, which have no voice runtime at all.
+The agent's level has one reader in every engine (`speechEnvelope.ts`): the
+utterance's own bytes. They are decoded off to the side in an
+`OfflineAudioContext`, which needs no user gesture and no element, and
+`EnvelopeMeter` reports the step the element's own `currentTime` has reached.
+A complete replay is decoded in one go; a stream's chunks arrive on no frame
+boundary, so `StreamingEnvelope` decodes every whole MP3 frame received so far
+(`mp3FrameBoundary`) into one growing timeline that ends equal to the whole
+clip's. The media element is never routed through Web Audio, in any engine:
+that was a second implementation of one level, and routing an element through
+`createMediaElementSource` while a `MediaSource` is attached is what silences
+WebKit playback. A browser with no `OfflineAudioContext` draws flat bars; the
+canned loop belongs to the demo scenes, which have no voice runtime at all.
 
 Capture itself is in `src/runtime/pushToTalk.ts`, and its order is
 load-bearing. The press creates the level meter's `AudioContext` -- that is
