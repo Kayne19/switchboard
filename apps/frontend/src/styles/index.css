@@ -5872,6 +5872,12 @@ button {
     scroll-behavior: auto !important;
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+    /* No transitions at all, not near-instant ones: with the property left
+       at `all`, a 0.001ms duration turned every visibility change into a
+       transition, and WebKit kept the old value for a few hundred ms after
+       it ended. The focused object's slot copy stayed visible under the
+       focus, and a leaving scene's Damocles button stayed in the tab order
+       behind the modal layer. Nothing here waits for transitionend. */
+    transition-property: none !important;
   }
 }

@@ -104,10 +104,10 @@ test.describe('landscape', () => {
 
   test('reduced motion shows and hides the toggle at once', async ({ page }) => {
     await openIdle(page);
-    const durations = await page.locator(idleToggle).evaluate((element) =>
-      getComputedStyle(element).transitionDuration.split(',').map((value) => parseFloat(value)),
-    );
-    expect(Math.max(...durations)).toBeLessThan(0.001);
+    // Reduced motion turns transitions off, not near-instant (index.css):
+    // a near-instant transition of visibility held its old value in WebKit.
+    const properties = await page.locator(idleToggle).evaluate((element) => getComputedStyle(element).transitionProperty);
+    expect(properties).toBe('none');
   });
 
   test.describe('without reduced motion', () => {
