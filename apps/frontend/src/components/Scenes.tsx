@@ -28,6 +28,7 @@ import { SpokenLog } from '../primitives/SpokenLog';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
+import { ChannelStack } from '../primitives/ChannelStack';
 import { SceneFooter } from '../primitives/SceneFooter';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame, type FrameVariant } from '../primitives/TechFrame';
@@ -54,6 +55,10 @@ export interface SceneProps {
   /** Opens the conversation history drawer; absent while there is no conversation. */
   onOpenHistory?: () => void;
   setTranscriptOpen: (open: boolean) => void;
+  /** Whether the voice runtime reports hands-free wake-word listening (#180). */
+  handsFree: boolean;
+  /** Switches the mode through the voice runtime; absent in demo mode, where there is no transport to switch. */
+  onToggleMode?: () => void;
   /** The focus layer is open over the scene: the scene is inert behind it (FocusLayer `useModalFocus`). */
   behindFocus?: boolean;
 }
@@ -387,7 +392,6 @@ interface SceneContent {
   title: string;
   subtitle: string;
   context: string;
-  footer: string;
   caption: string;
   main: ReactNode;
   /** Objects on stage that `main` does not draw and the rail does not
@@ -459,7 +463,6 @@ function trainingContent(
     title: primary.data.title ?? `CHART / ${kind}`,
     subtitle: primary.data.subtitle ?? 'SERIES / COMPOSED',
     context: primary.data.context ?? 'CHART',
-    footer: 'DISPLAY / COMPOSED',
     caption: sceneCaption(primary, `PRIMARY / ${kind} CHART`),
     metrics: objectsOfType<MetricData>(state, 'metric'),
     // The notes sit on the charts here; the rail carries the one the
@@ -580,7 +583,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
 }
 
 /** What the scene's frame says about a primary that fills the main slot, and the frame drawn round the slot where its primitive draws none of its own. */
-type SceneFrame = Pick<SceneContent, 'title' | 'subtitle' | 'context' | 'footer' | 'caption'> & { outline?: FrameVariant };
+type SceneFrame = Pick<SceneContent, 'title' | 'subtitle' | 'context' | 'caption'> & { outline?: FrameVariant };
 
 // The frame's words for each type that fills the main slot: the agent's
 // own where it sent them, else what the object is. The object itself is
@@ -594,7 +597,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         title: data.title ?? (sequence ? 'SYSTEM / SEQUENCE' : 'SYSTEM / DIAGRAM'),
         subtitle: data.subtitle ?? (sequence ? 'SEQUENCE / COMPOSED' : 'GRAPH / COMPOSED'),
         context: data.context ?? (sequence ? 'SEQUENCE' : 'SYSTEM MAP'),
-        footer: sequence ? 'DISPLAY / SEQUENCE' : 'DISPLAY / SYSTEM MAP',
         caption: sceneCaption(primary, sequence ? 'TRACE / MESSAGE ORDER' : 'TRACE / ACTIVE ROUTE'),
         outline: 'rails',
       };
@@ -605,7 +607,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         title: `DOCUMENT / ${data.kind?.toUpperCase() ?? 'CONTENT'}`,
         subtitle: 'CONTENT / ORIGINAL',
         context: data.context ?? 'DOCUMENT',
-        footer: 'CONTENT / ORIGINAL EMAIL',
         caption: sceneCaption(primary, 'CHROME / SWITCHBOARD'),
       };
     }
@@ -615,7 +616,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         title: data.title ?? 'SOURCE / LIVE',
         subtitle: data.file ?? 'SOURCE',
         context: data.context ?? 'SOURCE',
-        footer: 'FRAME / INTERRUPTED RAILS',
         caption: sceneCaption(primary, 'DISPLAY / SOURCE'),
       };
     }
@@ -625,7 +625,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         title: data.title ?? 'DATA / TABLE',
         subtitle: data.subtitle ?? 'ROWS / COLUMNS',
         context: data.context ?? 'TABLE',
-        footer: 'FRAME / INTERRUPTED RAILS',
         caption: sceneCaption(primary, 'DISPLAY / TABLE'),
       };
     }
@@ -637,7 +636,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         title: data.title ?? data.alt,
         subtitle: data.subtitle ?? `IMAGE / ${data.format.toUpperCase()}`,
         context: data.context ?? 'FIGURE',
-        footer: 'DISPLAY / FIGURE',
         caption: sceneCaption(primary, `FIGURE / ${data.format.toUpperCase()}`),
         outline: 'panel',
       };
@@ -646,7 +644,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
       const { data } = cast.calendar(primary);
       return {
         ...calendarFrame(data),
-        footer: 'DISPLAY / CALENDAR',
         caption: sceneCaption(primary, `CALENDAR / ${data.view.toUpperCase()}`),
         outline: 'panel',
       };
@@ -659,7 +656,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         title: data.title ?? 'TASKS / TO DO',
         subtitle: data.subtitle ?? 'CHECKLIST',
         context: data.context ?? 'TASKS',
-        footer: 'DISPLAY / TASKS',
         caption: sceneCaption(primary, 'TASKS / TO DO'),
         outline: 'panel',
       };
@@ -670,7 +666,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         title: data.title ?? 'INBOX / MESSAGES',
         subtitle: data.subtitle ?? 'MESSAGES / AS SENT',
         context: data.context ?? 'INBOX',
-        footer: 'DISPLAY / INBOX',
         caption: sceneCaption(primary, 'INBOX / AS SENT'),
         outline: 'panel',
       };
@@ -682,7 +677,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         title: data.title ?? (data.timers.length === 1 ? data.timers[0].label : 'TIMERS'),
         subtitle: data.subtitle ?? [countText(data.timers.length, ['TIMER', 'TIMERS']), paused > 0 ? `${paused} PAUSED` : null].filter(Boolean).join(' / '),
         context: data.context ?? 'TIMERS',
-        footer: 'DISPLAY / TIMERS',
         caption: sceneCaption(primary, 'TIMERS / PAGE CLOCK'),
         outline: 'panel',
       };
@@ -693,7 +687,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         title: data.title ?? `WEATHER / ${data.location}`,
         subtitle: data.subtitle ?? ['NOW', data.hourly?.length ? `${data.hourly.length} H` : null, data.daily?.length ? `${data.daily.length} DAYS` : null].filter(Boolean).join(' + '),
         context: data.context ?? 'FORECAST',
-        footer: 'DISPLAY / FORECAST',
         caption: sceneCaption(primary, `FORECAST / DEGREES ${data.units}`),
         outline: 'panel',
       };
@@ -853,7 +846,6 @@ function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
     title: nameFields(primary.data)[0] ?? 'COMPOSED WORKSPACE',
     subtitle: frameText(primary.data, 'subtitle') ?? 'STRUCTURED SCENE',
     context: frameText(primary.data, 'context') ?? 'COMPOSED',
-    footer: 'DISPLAY / COMPOSED',
     caption: sceneCaption(primary, 'SYSTEM / ACTIVE'),
     metrics: isMetricPrimary ? metrics.filter((metric) => !primaryMetricIds.has(metric.id)) : metrics,
     note,
@@ -906,7 +898,7 @@ const FALLBACK_MESSAGE: MessageData = {
   context: 'OPERATOR LINE',
   tag: 'CURRENT RESPONSE / LIVE',
   segments: [{ text: 'Line open. Speak when ready.' }],
-  channel: { name: 'VOICE', mode: 'PUSH-TO-TALK' },
+  channel: { name: 'VOICE' },
   transcript: [],
 };
 
@@ -921,19 +913,14 @@ function ConversationAnswer({ state }: { state: ControllerState }) {
   const message = object ? cast.message(object).data : FALLBACK_MESSAGE;
   const segments = message.segments.length > 0 ? message.segments : FALLBACK_MESSAGE.segments;
   return (
-    <>
-      <ObjectMotion objectId={object?.id ?? 'conversation'} className="conversation-answer">
-        <TechFrame variant="answer" />
-        <SurfaceBoundary surfaceId={object?.id ?? 'conversation'} resetKey={object ?? message}>
-          <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
-          <SpokenLog message={{ ...message, segments }} className="conversation-answer__text" innerClassName="conversation-answer__text-inner" />
-          <div className="conversation-answer__index tech micro">{message.caption ?? `${message.channel?.name ?? 'VOICE'} / LIVE`}</div>
-        </SurfaceBoundary>
-      </ObjectMotion>
-      <div className="conversation-channel tech micro">
-        CHANNEL / {message.channel?.name ?? 'VOICE'}<br />MODE / {message.channel?.mode ?? 'HANDS-FREE'}
-      </div>
-    </>
+    <ObjectMotion objectId={object?.id ?? 'conversation'} className="conversation-answer">
+      <TechFrame variant="answer" />
+      <SurfaceBoundary surfaceId={object?.id ?? 'conversation'} resetKey={object ?? message}>
+        <div className="conversation-answer__tag tech micro">{message.tag ?? 'CURRENT RESPONSE / 01'}</div>
+        <SpokenLog message={{ ...message, segments }} className="conversation-answer__text" innerClassName="conversation-answer__text-inner" />
+        <div className="conversation-answer__index tech micro">{message.caption ?? `${message.channel?.name ?? 'VOICE'} / LIVE`}</div>
+      </SurfaceBoundary>
+    </ObjectMotion>
   );
 }
 
@@ -965,7 +952,7 @@ function sceneContent(
  * primary object; a content kind with nothing to show draws the idle page.
  */
 export function SceneShell(props: SceneProps) {
-  const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, behindFocus = false } = props;
+  const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, behindFocus = false } = props;
   const isPresent = useIsPresent();
   // A diagram can place its note as a callout beside the node it names; the
   // rail then leaves it out. A chart hands the rail the one note it leaves
@@ -1031,6 +1018,10 @@ export function SceneShell(props: SceneProps) {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
     >
+      {/* Every page carries the corner stack once (#180): the shell draws it
+          here, not a composition, so the idle, conversation and content
+          pages cannot drift apart on what the microphone is doing. */}
+      <ChannelStack handsFree={handsFree} onToggleMode={onToggleMode} />
       {content ? (
         <>
           <div className="scene-heading">
@@ -1060,7 +1051,7 @@ export function SceneShell(props: SceneProps) {
               />
             </motion.aside>
           </div>
-          <SceneFooter left={content.footer} right={content.caption} />
+          <SceneFooter right={content.caption} />
         </>
       ) : layout === 'conversation' ? (
         <>

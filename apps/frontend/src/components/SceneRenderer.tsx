@@ -36,6 +36,10 @@ function SceneContent({
   const shared = {
     state,
     onToggleListening,
+    // MODE in the corner stack (#180) reads and switches the transport's
+    // hands-free listening; with no transport there is nothing to switch.
+    handsFree: voiceRuntime?.handsFree ?? false,
+    onToggleMode: voiceRuntime ? () => voiceRuntime.toggleHandsFree() : undefined,
     onFocus: (id: string | null) => dispatch({ op: "focus", id }),
     // An explanation offers the history only when there is one to open.
     onOpenHistory: conversation ? () => setTranscriptOpen(true) : undefined,

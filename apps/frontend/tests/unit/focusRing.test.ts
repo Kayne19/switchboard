@@ -82,7 +82,7 @@ describe('the focus ring', () => {
     const { classes, tags, where } = tagged(/<button\b(?:=>|[^>])*>/gs);
     expect(where).toEqual([]);
     expect(classes).toHaveLength(tags);
-    expect(classes).toEqual(expect.arrayContaining(['focus-layer__return', 'transcript__return', 'transcript__send', 'annotation-card__history', 'live-chat-card__history', 'damocles-presence__button', 'transcript-toggle']));
+    expect(classes).toEqual(expect.arrayContaining(['focus-layer__return', 'transcript__return', 'transcript__send', 'annotation-card__history', 'live-chat-card__history', 'damocles-presence__button', 'transcript-toggle', 'channel-stack__mode']));
     expect(classes.filter((name) => !control.selectors.includes(`.${name}:focus-visible`))).toEqual([]);
   });
 

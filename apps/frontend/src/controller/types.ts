@@ -434,7 +434,12 @@ export interface MessageData {
    * it shows `segments`.
    */
   lines?: SpokenLine[];
-  channel?: { name: string; mode: string };
+  /**
+   * How the caller is on the line, for the live box's index. The input
+   * mode is not here: the page reads it from the voice runtime and shows
+   * it in the corner stack (#180, `ChannelStack`).
+   */
+  channel?: { name: string };
   /** `agent` names the project agent that spoke, when one did. */
   transcript?: Array<{ speaker: string; text: string; agent?: string }>;
 }

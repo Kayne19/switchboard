@@ -104,6 +104,7 @@ describe('primary metric cluster rendering', () => {
           onToggleListening={() => {}}
           onFocus={() => {}}
           setTranscriptOpen={() => {}}
+          handsFree={false}
         />
       </ControllerProvider>,
     );
@@ -134,7 +135,7 @@ describe('primary metric cluster rendering', () => {
 
     const host = mount(
       <ControllerProvider>
-        <SceneShell kind="composed" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
+        <SceneShell kind="composed" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} />
       </ControllerProvider>,
     );
 

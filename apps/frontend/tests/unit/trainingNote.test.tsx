@@ -71,7 +71,7 @@ afterEach(() => {
 
 const shell = (state: ControllerState) => (
   <ControllerProvider>
-    <SceneShell kind="training" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} />
+    <SceneShell kind="training" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} />
   </ControllerProvider>
 );
 

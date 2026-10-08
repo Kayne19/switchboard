@@ -35,7 +35,7 @@ let frames: FrameRequestCallback[];
 // actions run.
 function Voice() {
   const { registerVoiceRuntime } = useController();
-  useEffect(() => registerVoiceRuntime({ toggleTurn: () => {}, sendText: () => true, getVoiceLevel: () => 1 }), [registerVoiceRuntime]);
+  useEffect(() => registerVoiceRuntime({ toggleTurn: () => {}, sendText: () => true, getVoiceLevel: () => 1, handsFree: false, toggleHandsFree: () => {} }), [registerVoiceRuntime]);
   return null;
 }
 

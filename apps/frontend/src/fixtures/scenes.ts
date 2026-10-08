@@ -471,7 +471,7 @@ export const fixtures: Record<FixtureName, ControllerAction[]> = {
           { text: 'epoch 32', accent: true },
           { text: '. Training loss keeps falling, but validation loss turns upward, so I would inspect the learning-rate transition and the first batches after it.' },
         ],
-        channel: { name: 'VOICE', mode: 'HANDS-FREE' },
+        channel: { name: 'VOICE' },
         transcript: [
           { speaker: 'YOU', text: 'How did the training run go?' },
           { speaker: 'DAMOCLES', text: 'The run is still healthy overall, but validation divergence begins around epoch 32.' },

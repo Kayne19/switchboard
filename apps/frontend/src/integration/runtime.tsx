@@ -126,10 +126,7 @@ export function RuntimeIntegration() {
         // its own open-line prompt, and a content rail shows no live card.
         segments: currentResponseRef.current ? [{ text: currentResponseRef.current }] : [],
         lines: spokenLogRef.current.map(({ id, text }) => ({ id, text })),
-        channel: {
-          name: "VOICE",
-          mode: runtime.handsFree ? "HANDS-FREE" : "PUSH-TO-TALK",
-        },
+        channel: { name: "VOICE" },
         transcript: transcriptRef.current,
       };
       dispatch({
@@ -140,7 +137,7 @@ export function RuntimeIntegration() {
         data: message,
       });
     },
-    [dispatch, runtime.handsFree, runtime.route],
+    [dispatch, runtime.route],
   );
 
   // The runtime is created once; these handlers are replaced as the scene
@@ -416,8 +413,9 @@ export function RuntimeIntegration() {
     sendReport(action.report);
   }, [state, sendReport, reportNonce]);
 
-  // The Damocles presence is the call's one control: it starts a turn, sends
-  // the one being recorded, or forces a reconnect when the line is down.
+  // The page's controls on the call: the Damocles presence starts a turn,
+  // sends the one being recorded, or forces a reconnect when the line is
+  // down, and the corner stack's MODE switches hands-free listening.
   useEffect(() => {
     if (!callRuntime) return;
     const toggleTurn = () => {
@@ -432,9 +430,14 @@ export function RuntimeIntegration() {
       toggleTurn,
       sendText: (text) => callRuntime.sendText(text),
       getVoiceLevel: () => callRuntime.currentVoiceLevel,
+      // The corner stack's MODE reads this and switches it (#180). The
+      // runtime owns the policy: it loads the wake-word detector on the
+      // first switch and refuses one while the line is down.
+      handsFree: runtime.handsFree,
+      toggleHandsFree: () => callRuntime.toggleHandsFree(),
     });
     return () => registerVoiceRuntime(null);
-  }, [callRuntime, registerVoiceRuntime, runtime.connected, runtime.recording]);
+  }, [callRuntime, registerVoiceRuntime, runtime.connected, runtime.handsFree, runtime.recording]);
 
   return null;
 }

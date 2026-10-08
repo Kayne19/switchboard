@@ -24,6 +24,14 @@ export interface VoiceRuntime {
   sendText: (text: string) => boolean;
   /** Current microphone or playback RMS, sampled by the indicator's RAF. */
   getVoiceLevel?: () => number | null;
+  /**
+   * Whether hands-free wake-word listening is on, as the transport reports
+   * it. The page draws MODE from this (`ChannelStack`); it keeps no
+   * listening state of its own.
+   */
+  handsFree: boolean;
+  /** Switches between push-to-talk and hands-free listening (the transport owns the policy). */
+  toggleHandsFree: () => void;
 }
 
 interface ControllerContextValue {
