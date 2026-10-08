@@ -518,6 +518,52 @@ fn clip_verdicts_are_bounded_and_keep_the_latest_word() {
     assert_eq!(verdicts.oldest_first.len(), REMEMBERED_CLIP_VERDICTS);
 }
 
+#[tokio::test]
+async fn an_arriving_clip_is_logged_with_the_mime_the_browser_recorded() {
+    // The journal is the only place that can say what a caller's browser
+    // recorded. Every iPad browser is WebKit and records `audio/mp4`, which
+    // the sidecar may or may not decode; without the format next to the
+    // clip, a failed transcription names no suspect.
+    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+    let state = state_with_stt(Some("printf 'words'".into()));
+    let mut connection = state.0.delivery.register();
+    let bus = crate::debug::DebugBus::new();
+    let subscriber = tracing_subscriber::registry()
+        .with(EnvFilter::new("switchboard=info"))
+        .with(crate::debug::DebugLogLayer::new(bus.clone()));
+    let guard = tracing::subscriber::set_default(subscriber);
+    let mut header = None;
+    handle_text_frame(
+        &state,
+        connection.epoch,
+        &mut header,
+        &mut None,
+        &json!({"type":"clip", "id":"ipad-1", "mime":"audio/mp4"}).to_string(),
+    )
+    .await
+    .unwrap();
+    handle_audio_frame(
+        &state,
+        connection.epoch,
+        &mut header,
+        &mut None,
+        b"speech".to_vec(),
+    )
+    .await
+    .unwrap();
+    drop(guard);
+    let arrived: Vec<_> = bus
+        .snapshot()
+        .logs
+        .iter()
+        .filter(|log| log.message == "clip arrived")
+        .map(|log| (log.fields["clip"].clone(), log.fields["mime"].clone()))
+        .collect();
+    assert_eq!(arrived, vec![(json!("ipad-1"), json!("audio/mp4"))]);
+    let frames = frames_until(&mut connection, "accepted").await;
+    assert_eq!(frames.last().unwrap()["id"], "ipad-1");
+}
+
 const HEARD_WHILE_CONNECTING: &str = "cat >/dev/null; printf 'and check the logs'";
 
 /// Uploads a complete clip the way the browser does, stamped with the epoch it

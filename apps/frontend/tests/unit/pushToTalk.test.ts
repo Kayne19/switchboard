@@ -59,6 +59,21 @@ class FakeMeterContext {
   close() { return Promise.resolve(); }
 }
 
+/** A WebKit context whose `resume()` promise is never settled. */
+class PendingResumeContext extends FakeMeterContext {
+  state = "suspended";
+  resume() {
+    return new Promise<void>(() => {});
+  }
+}
+
+/** A context that cannot put the microphone into a graph. */
+class BrokenGraphContext extends FakeMeterContext {
+  createMediaStreamSource(): MediaStreamAudioSourceNode {
+    throw new Error("no graph here");
+  }
+}
+
 function harness(overrides: Partial<PushToTalkOptions> = {}) {
   const outbox: Clip[] = [];
   const status = { text: "", error: false as boolean | undefined };
@@ -250,4 +265,67 @@ describe("PushToTalk", () => {
     h.ptt.stop(false);
   });
 
+  // WebKit's `AudioContext.resume()` can be left pending when the page's
+  // audio session is taken away, and the meter's context is created and
+  // resumed inside the press. Waited for, that press never reached the
+  // recorder, `starting` stayed true for the rest of the page's life, and
+  // every later press returned at the guard with nothing said.
+  it("records when the meter's audio context never resumes", async () => {
+    vi.stubGlobal("AudioContext", PendingResumeContext);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const h = harness({ onAudioLevel: () => {} });
+    const start = h.ptt.start();
+    h.resolveMedia(fakeStream());
+    await start;
+    expect(h.ptt.isRecording(), "the recorder runs without the meter").toBe(true);
+    expect(h.ptt.isStarting).toBe(false);
+    expect(h.recording).toEqual([true]);
+    expect(h.status.text).toMatch(/Recording/);
+    h.ptt.stop(true);
+    expect(h.ptt.isActive, "and the press after it is free to start").toBe(false);
+  });
+
+  // A meter that cannot be built at all is still only a picture of the voice.
+  it("records when the meter's graph cannot be built", async () => {
+    vi.stubGlobal("AudioContext", BrokenGraphContext);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const h = harness({ onAudioLevel: () => {} });
+    const start = h.ptt.start();
+    h.resolveMedia(fakeStream());
+    await start;
+    expect(h.ptt.isRecording()).toBe(true);
+    expect(h.status.text).toMatch(/Recording/);
+    h.ptt.stop(false);
+  });
+
+  // `navigator.mediaDevices` is undefined on a page that is not a secure
+  // origin, which reached the caller as "Microphone unavailable (TypeError)".
+  it("names https when the browser offers no microphone API", async () => {
+    const status = { text: "", error: undefined as boolean | undefined };
+    const ptt = new PushToTalk({
+      idleText: "idle",
+      createRecorder: () => new FakeRecorder() as unknown as MediaRecorder,
+      newClipId: () => "clip-1",
+      context: () => ({ epoch: 0, transferEra: null, streamingSelected: false }),
+      openSocket: () => null,
+      enqueue: () => true,
+      flush: () => {},
+      onRecordingChange: () => {},
+      onStatus: (text, error) => {
+        status.text = text;
+        if (error !== undefined) status.error = error;
+      },
+      pauseHandsFree: () => {},
+      resumeHandsFree: () => {},
+    });
+    expect(navigator.mediaDevices, "the test page is not a secure origin").toBe(
+      undefined,
+    );
+    await ptt.start();
+    expect(status.text).toMatch(/https/);
+    expect(status.error).toBe(true);
+    expect(ptt.isActive, "and the next press is free to try again").toBe(false);
+  });
 });

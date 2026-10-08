@@ -152,6 +152,22 @@ owns no DOM. `runtime.tsx` validates
 incoming display actions, dispatches them, and reports the rendered scene back
 to the backend. Neither contains layout logic.
 
+Every failure the runtime cannot recover from is reported as status text with
+`statusError` set -- no microphone, a browser that cannot record, a recorder
+that stopped, a line that will not connect. `runtime.tsx` puts that text on
+screen through `runtime_say`, the same surface a server `error` reaches, once
+per text. Ordinary status is not drawn: the presence itself shows what the
+line is doing. An error with nowhere to go is a browser that fails silently,
+which is what a caller tapping Damocles on an iPad saw.
+
+Capture itself is in `src/runtime/pushToTalk.ts`, and its order is
+load-bearing. The press creates the level meter's `AudioContext` -- that is
+where a browser still grants it an audio session -- and asks for the
+microphone, and nothing else: the meter's graph is built after
+`recorder.start()` has returned, and `resume()` is never waited for. A meter
+is a picture of the caller's voice, and a browser that cannot draw one still
+has to record.
+
 ## Extension strategy
 
 Add a new content type in this order:

@@ -735,6 +735,11 @@ pub(crate) async fn handle_audio_frame(
         )
         .await;
     };
+    // What the browser recorded, named as it arrives. The mime is the
+    // browser's own answer about its recorder: Safari and every iPad browser
+    // record `audio/mp4` where the rest record `audio/webm;codecs=opus`, and
+    // a sidecar verdict is only readable next to the format it was handed.
+    tracing::info!(clip = %id, bytes = audio.len(), mime = %mime, "clip arrived");
     if let Some(replayed) = replay_clip_verdict(state, epoch, &id).await {
         return replayed;
     }
