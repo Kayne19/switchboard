@@ -417,7 +417,7 @@ pub(crate) async fn thinking(
     };
     let started = std::time::Instant::now();
     tracing::info!(thinking = %req.level, route = %state.0.coordinator.route(), "the page asked for a thinking level");
-    let redials = state.0.redials.clone();
+    let redials = state.0.redial_planner();
     let controlled = run_redial_control(&state, "thinking change", async move {
         redials.thinking_change(&req.level).await
     })
@@ -453,7 +453,7 @@ pub(crate) async fn model(
     };
     let started = std::time::Instant::now();
     tracing::info!(model = %req.model, route = %state.0.coordinator.route(), "the page asked for a model");
-    let redials = state.0.redials.clone();
+    let redials = state.0.redial_planner();
     let controlled = run_redial_control(&state, "model change", async move {
         redials.model_change(&req.model).await
     })
