@@ -332,7 +332,14 @@ test('the now: its time on a tag in the gutter, and a rule across today\u2019s c
   await open(page, 'calendar');
   // Hit-testing finds what is painted on top; the mark takes no pointer, so let it for the question.
   await page.addStyleTag({ content: '.calendar-grid__now, .calendar-grid__now * { pointer-events: auto !important; }' });
-  const placed = await page.evaluate(() => {
+  const placed = await page.evaluate(async () => {
+    // What is on top is asked of the page as painted: a browser answers
+    // elementFromPoint from the render tree it last laid out, and the style
+    // added above has just changed it. WebKit then answered from a tree
+    // without the calendar in it (2 of 25 runs: the stack under the point
+    // was the scene's own columns; the same point two frames later was the
+    // event). So let it paint first.
+    await new Promise((settle) => requestAnimationFrame(() => requestAnimationFrame(settle)));
     const scope = document.querySelector('.scene [data-testid="calendar"]')!;
     const rule = scope.querySelector('.calendar-grid__now-line')!.getBoundingClientRect();
     const tag = scope.querySelector('.calendar-grid__now-text')!.getBoundingClientRect();
