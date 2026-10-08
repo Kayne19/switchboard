@@ -441,6 +441,13 @@ request as it starts.
 The browser page is `https://switchboard.home.arpa` (via caddy). It has to be
 https: browsers only grant microphone access on a secure context, so hitting
 `http://192.168.1.217:8765` directly will load the page and then fail to record.
+On a page that is not a secure origin WebKit (Safari, and so every browser on
+an iPad) leaves `navigator.mediaDevices` undefined, so the page now answers a
+tap on Damocles with "No microphone on this page: open it over https, not by
+address" instead of recording nothing. Every clip the service accepts is
+logged with the mime its browser recorded it as (`clip arrived`), which is
+how the journal says whether a caller's browser sent `audio/webm;codecs=opus`
+or the `audio/mp4` every iPad browser records.
 
 Restarting drops whatever call is in progress and repeats the startup prewarm.
 Speech-to-text runs in its own service (`switchboard-stt`) and is not restarted
