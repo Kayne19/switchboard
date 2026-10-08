@@ -261,9 +261,9 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
   const places = Math.max(1, Math.floor(columnWidth / MIN_PART_PX));
   const laidOut = segments.map((list) => crowdedColumns(list, places, minDuration));
 
-  // Every box carries its event's id (a viewport counts each box past an
-  // edge where it lies). The NOTE badge goes on the first place the marked
-  // event is drawn, or on the count that holds it where it is not drawn.
+  // Every box carries its event's id (the name a note uses for it). The
+  // NOTE badge goes on the first place the marked event is drawn, or on the
+  // count that holds it where it is not drawn.
   const named = new Set<string>();
   const firstBox = (id: string) => {
     if (named.has(id)) return false;

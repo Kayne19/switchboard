@@ -398,9 +398,8 @@ export function WeatherPrimitive({ data, marked, slot = 'primary' }: { data: Wea
     return watchElement(line, measure, { children: true, changes: true });
   }, [arrangement]);
   // Down the box, the forecast is one column read top to bottom, and it
-  // scrolls as one when it is longer than the box, counting the days past
-  // the edge; beside one another, each part keeps its place and the days
-  // scroll in their own.
+  // scrolls as one when it is longer than the box; beside one another,
+  // each part keeps its place and the days scroll in their own.
   const tall = arrangement === 'tall';
   const parts = ['now', layout.hourly ? 'hourly' : null, layout.daily ? 'daily' : null].filter(Boolean).join(' ');
   // The item a note names that no list here draws (a small slot).

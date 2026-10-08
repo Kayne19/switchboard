@@ -61,8 +61,6 @@ function CellText({ cell }: { cell: TableCell }) {
   return <span className={className}>{cellText(cell)}</span>;
 }
 
-// What the rims count a table's rows as.
-
 // Rows of named columns inside the interrupted-rails frame, scrolling only
 // when they overflow it and clipped to its inside (the same mask the code
 // viewport uses). Thin rules separate rows; a highlighted row carries the
@@ -70,8 +68,8 @@ function CellText({ cell }: { cell: TableCell }) {
 // in the mask's top row, beside the frame's top-right step, above the
 // scroll, so the sticky header is the scroll's top edge and a row
 // scrolling up passes under it rather than showing above it. A table that
-// scrolls does so in the list viewport, which counts its rows past each edge
-// below the header and pages it by the keys every scroller takes. In the
+// scrolls does so in the list viewport, which pages it below the header by
+// the keys every scroller takes. In the
 // main slot the scene frame above shows the title (MetaTitle).
 export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; slot?: Slot }) {
   const alignment = useMemo(() => inferColumnAlignment(data), [data]);

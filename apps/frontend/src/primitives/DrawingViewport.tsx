@@ -29,10 +29,10 @@ import {
 } from './drawingScroll';
 
 // How much room the viewport's scroll bar takes, measured once on a probe
-// styled as a scrolling viewport. The drawing's own map and rails stand in
-// for a bar, so the stylesheet hides it and this reads 0; a browser that
-// will not hide it still gets its room in the fit (drawingFit), though
-// the rails and fades do not keep off it.
+// styled as a scrolling viewport. The drawing's own map stands in for a
+// bar, so the stylesheet hides it and this reads 0; a browser that will
+// not hide it still gets its room in the fit (drawingFit), though the
+// names of the lines that leave do not keep off it.
 let scrollbarThickness: number | null = null;
 function measureScrollbar(): number {
   if (scrollbarThickness !== null) return scrollbarThickness;
@@ -142,8 +142,8 @@ const cut = (label: string) => (textCells(label) > EXIT_CHARS ? `${headCells(lab
  * A drawing that scrolls says where its reader is (drawingScroll.ts, given
  * its `map`): it rests only where the edge it is read from cuts no part,
  * opening on `lead` (what its note names, or where it begins); each edge it
- * continues past counts what lies that way and fades over what it still
- * cuts; a line that leaves the view names the part it goes to, at the rim;
+ * continues past draws nothing over what it cuts (#177); a line that
+ * leaves the view names the part it goes to, at the rim;
  * and a map of the whole, the view boxed on it, stands in its `strip`
  * beside the drawing, where a tap or a drag moves the view. The strip is
  * the primitive's to reserve (drawingScroll `viewWithMap`), since the
@@ -195,7 +195,8 @@ export function DrawingViewport({
     setReading((current) => (sameReading(current, next) ? current : next));
   }, [scrolling, fit.width]);
 
-  // Scroll events come faster than frames: the rims are read once a frame.
+  // Scroll events come faster than frames: where the reader stands is read
+  // once a frame.
   const onScroll = useOncePerFrame(read);
 
   // Where the drawing sits in the scroller (centred across an axis it does
@@ -273,8 +274,9 @@ export function DrawingViewport({
       element.scrollTop = leadBox ? leadStop(opened.y, [leadBox.top, leadBox.bottom], sizes.height, pinnedDepth, boxes.map((box): Span => [box.top, box.bottom])) : 0;
     }
     shownShape.current = shape;
-    // The rims and the band follow every render: a resize or an update
-    // can change what lies past each edge without moving the reader.
+    // The band and the names of the lines that leave follow every render: a
+    // resize or an update can change what lies past each edge without
+    // moving the reader.
     read();
   });
 
@@ -334,7 +336,7 @@ export function DrawingViewport({
   // A wheel or a trackpad moves the drawing freely, then it settles. A
   // wheel turned over a drawing that scrolls only across scrolls it across:
   // a mouse has no other way there. It is heard over the whole viewport,
-  // the map and the rails' counts as well as the drawing.
+  // the map and the names on its rims as well as the drawing.
   useEffect(() => {
     const element = scrollRef.current;
     const viewport = viewportRef.current;
@@ -409,14 +411,14 @@ export function DrawingViewport({
     }
   };
 
-  // What the rims say, from where the reader stands.
+  // What the edges say, from where the reader stands.
   const inset = reading && reading.top > 0.5 ? pinnedDepth : 0;
   const view = useMemo<View | null>(
     () => (reading ? { left: reading.left, top: reading.top + inset, right: reading.left + reading.width, bottom: reading.top + reading.height } : null),
     [reading, inset],
   );
-  // An axis it overflows by no more than a rail is its own margin: it
-  // rests at its start (restStops) and has no rails.
+  // An axis it overflows by no more than a rim is its own margin: it
+  // rests at its start (restStops) and continues past no edge.
   const continues = useMemo<Record<Side, boolean>>(() => {
     if (!reading) return { left: false, right: false, top: false, bottom: false };
     const across = contentWidth - reading.width > RAIL;

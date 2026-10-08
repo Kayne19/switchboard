@@ -151,20 +151,16 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   drawing's end rather than a cut part. Across a drawing that scrolls
   both ways there may be no gap every row leaves: it rests where the
   rail cuts the fewest parts. The far edge of the view can still cut the
-  part beyond it: there a fade as deep as that part reaches in makes it
-  read as the next one coming.
-- **Each edge it continues past carries a rail.** A dashed orange line on
-  the cut, the count of what lies that way ("13 NODES", "23 MESSAGES")
-  and a chevron pointing there; a tap on the count turns a page. Text on
-  the left and right rails runs along them, so a rail costs the drawing a
-  line of small type. A tap on a count or on the map does not expand the
-  object, as a tap on the drawing does; the control marks the tap handled
-  and lets it go on, so the page still hears it as the gesture that lets
-  it play audio (`FocusableSurface`: no control inside it stops an
-  event).
-- **A line that leaves the view says where it goes.** On the rail where
+  part beyond it, and nothing is drawn over the cut: an edge a scroller
+  continues past carries no rim at all -- no dashed cut line, no count
+  tag, and no fade (#177).
+- **A line that leaves the view says where it goes.** On the rim where
   it crosses, the name of the node at its far end, in the line's colour,
-  pointing out; several lines to one node are one name.
+  pointing out; several lines to one node are one name. A tap on a name
+  or on the map does not expand the object, as a tap on the drawing does;
+  the control marks the tap handled and lets it go on, so the page still
+  hears it as the gesture that lets it play audio (`FocusableSurface`: no
+  control inside it stops an event).
 - **A map shows the whole.** A drawing that scrolls 1.6 views or more
   carries a small map: every node and line, the view boxed in orange. A
   tap or a drag on it moves the view. The map stands in a strip of its
@@ -290,23 +286,21 @@ Kayne approved the portrait goldens:
   least that tall (measured, `useRailFit` in `components/Scenes.tsx`): the
   main column gives up what the note needs past the rail's share, and
   keeps the larger share. A note longer than half the content grid (about
-  two fifths of the stage) scrolls in the rail, its foot fading; a tap on
-  a note object expands it in focus.
+  two fifths of the stage) scrolls in the rail; a tap on a note object
+  expands it in focus.
 - **What else the rail carries does not size it.** Where the metrics,
   progress or live response and the note do not all fit (each at its own
   height and margins), the note leads the column, whole, and the rest
-  follows in its scroll. An edge the column continues past fades as every
-  scroller's does (`ScrollRim`'s fade, with no tag: what lies past is the
-  rail's own). The activity panel stands at the column's foot only where
-  it fits there whole; where it does not, it is set aside, unseen but
-  still read by assistive technology, and Damocles's caption, which names
+  follows in its scroll. The activity panel stands at the column's foot
+  only where it fits there whole; where it does not, it is set aside,
+  unseen but still read by assistive technology, and Damocles's caption, which names
   the tool at work wherever the rail stands, is what the caller sees of
   it. What the rail decides is committed before the frame is painted, so
   a rotation or a new note never shows a rail half decided.
 - **A primary that outgrows its share scrolls in it or is drawn smaller;
   it never takes the rail's room.** A drawing past its least readable
   scale, a table, code, a document, a list or a long plan scrolls inside
-  its frame with its rims; a figure is drawn smaller, never cropped; a bar
+  its frame; a figure is drawn smaller, never cropped; a bar
   chart too long for its rows lies on its side and scrolls; a calendar too
   short for its hour grid draws its agenda. Decided by what the slot
   holds and how tall it is, never by the object's type.
@@ -381,8 +375,8 @@ in that share (`--panel-inset` for the panel frame), never by a padding in
 stage units, which falls short on a tall slot. The calendar, the to-do
 list, the inbox and a figure stand in the panel's inner box; a table's and
 a source's scroll stands between the code frame's steps by one rule, a gap
-from each, so their rows and lines, at rest or scrolled, and their rims
-never run under a step (a table's meta line stands beside the top-right
+from each, so their rows and lines, at rest or scrolled, never run under a
+step (a table's meta line stands beside the top-right
 step, above its scroll); a document's meta line stands under its frame's
 top line; a portrait chart's foot clears the panel's lower step.
 `frame.spec.ts` checks every primitive, as the primary, in focus and in
@@ -426,9 +420,9 @@ over them; one with no sections counts the whole list on its meta line.
   task (its day on one line, done tasks counted, no detail or tags), a
   message as its sender and subject.
 - A list that outgrows its slot scrolls inside its frame in the list
-  viewport (`ListViewport`): the scroll rim a drawing has (`ScrollRim`:
-  the fade, the cut line and the count of the items past each edge), and
-  it opens on the item a note names. Focus gives it the stage, and keeps that note beside it.
+  viewport (`ListViewport`), with nothing drawn on the edges it continues
+  past, and it opens on the item a note names. Focus gives it the stage,
+  and keeps that note beside it.
 
 **A note on one item** (`anchor.item`) marks that item wherever its object
 is drawn, as a diagram marks the node a note names, while that note is the
@@ -531,26 +525,19 @@ over their field. The forecast's head names its place in every role.
 A list longer than its slot (a forecast's days, timers in a small slot,
 and the other assistant lists), and a table, source or document longer
 than its frame, scrolls up and down inside its frame in a `ListViewport`,
-the HTML twin of a drawing's viewport: on each edge it continues past it
-draws the same fade, dashed cut line and tag (one `ScrollRim`), the tag
-counting the items that lie that way in two digits at least, as every rim
-counts ("06 TASKS", "33 ROWS", "54 LINES", "04 PARAGRAPHS", a week's
-hidden days "MON-TUE / 07 EVENTS"); a row of which no more than a sliver
-shows counts as past the edge; an item drawn as several rows (an event
-on each day it runs, or cut at midnight across two columns: one
-`data-item` name) counts once, and only where every one of them lies
-past that edge; it says MORE where none does. A table's rows pass under
-its header: they are counted, and its top edge drawn, below the header.
-A tap on the tag turns a page and does not expand the object. A focused
+the HTML twin of a drawing's viewport. An edge it continues past carries
+nothing: the rows are cut there and the reader scrolls on (#177 took the
+rim's dashed cut line, its count tag and the edge fade). A focused
 list takes the keys a drawing takes (an arrow moves it a line, Space and
 Page Down a page on, Shift+Space and Page Up a page back, Home and End
 to the ends), each marked handled so Space never expands the object;
-Enter still does. A pane that scrolls only across (a wide table on a
-phone, source with long lines) takes them across, as a drawing that
-scrolls only across does: the left and right arrows a line, Space and
-the page keys a page, Home and End to either side. It opens on the item
-a note names, never under the fade, and keeps the reader's place through
-an update. Focus gives the list the whole stage.
+Enter still does. A table's rows pass under its header, and a page is a
+page of what shows below it. A pane that scrolls only across (a wide
+table on a phone, source with long lines) takes the keys across, as a
+drawing that scrolls only across does: the left and right arrows a line,
+Space and the page keys a page, Home and End to either side. It opens on
+the item a note names and keeps the reader's place through an update.
+Focus gives the list the whole stage.
 
 ### Composition & focus
 
@@ -709,8 +696,8 @@ straight above, below or beside its point.)
 not draw elsewhere (on a chart, in a band, as the primary, in the aux row):
 first the one about the primary (or, on a chart page, the first about a visual
 off the charts), then the rest in the order they were shown, each read whole
-at its own height. Where they do not all fit, the rail's column scrolls and an
-edge it continues past fades, as a scroller's does. An object marks the node,
+at its own height. Where they do not all fit, the rail's column scrolls,
+with nothing drawn on the edge it continues past. An object marks the node,
 actor or item the first of them about it names, and only that card carries
 the NOTE badge, so a badge always has its mark on screen.
 

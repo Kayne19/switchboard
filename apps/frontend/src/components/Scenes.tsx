@@ -725,8 +725,7 @@ function AuxRow({
   /** The notes the page draws: each cell marks what the first about its object names. */
   drawn: NoteData[];
 }) {
-  // A row with no room for every cell scrolls under the rim every scroller
-  // draws, counting the cells wholly past each edge (ListViewport); it opens
+  // A row with no room for every cell scrolls (ListViewport); it opens
   // at its top, whatever its cells lead with.
   return (
     <ListViewport lead={null} className="composed-aux-viewport" scrollClassName="composed-aux" label="More on stage">
