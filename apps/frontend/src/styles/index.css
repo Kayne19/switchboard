@@ -2234,6 +2234,18 @@ button {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  /* The pane's place is the primitive's to decide: where the reader left it,
+     or where `leadScrollTop` opens it on its lead. Scroll anchoring is the
+     browser deciding instead -- it picks a row and keeps that row still as
+     the rows around it are laid out, which moves the offset. An agenda in an
+     aux cell is laid out from the cell it was given and its rows arrive after
+     it, so the anchor moves the pane right after the open: in WebKit 26.5 a
+     218 px cell over 1303 px of rows, opened at 433, is back at 0 a frame
+     later, and a 148 px cell over 2965 px, opened at 827, goes to 451 and
+     then on to 827 again 300 ms later. The lead is off the cell, and the
+     reader has to go and find today. Off, both engines keep the offset they
+     were given. */
+  overflow-anchor: none;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.46) transparent;
