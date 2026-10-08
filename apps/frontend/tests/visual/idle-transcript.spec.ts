@@ -36,7 +36,14 @@ for (const geometry of GEOMETRIES) {
     // short of the glyph, with its float's travel to spare.
     expect(band.x).toBe(0);
     expect(band.width).toBe(geometry.width);
-    expect(band.y + band.height).toBe(geometry.height);
+    // The band is flush with the bottom, to within the subpixel its engine
+    // lays out in: WebKit's unit is a 64th, and at 390x844 it gives the
+    // idle scene itself a height of 843.984375 (844 - 1/64), the band
+    // reaching that bottom exactly (measured: band.bottom 843.984375 ==
+    // scene.bottom 843.984375, where Chromium reads 844 == 844). Half a
+    // pixel, then: a band that really stopped short would miss by the
+    // toggle's float, not by a 64th.
+    expect(band.y + band.height).toBeCloseTo(geometry.height, 0);
     expect(idle.y).toBeGreaterThan(band.y);
     expect(presence.y + presence.height + 16).toBeLessThan(band.y);
 
