@@ -35,8 +35,9 @@ export default defineConfig({
       // The wake-word engine and ONNX Runtime are served as committed files
       // under /openwakeword/ and resolved through the import map in
       // index.html, so the bundle neither inlines them nor emits its own copy
-      // of the runtime's WASM.
-      external: ['openwakeword-wasm-browser'],
+      // of the runtime's WASM. The Silero endpointer (src/silero_vad.ts)
+      // imports the runtime by the same specifier.
+      external: ['openwakeword-wasm-browser', 'onnxruntime-web'],
     },
   },
 });

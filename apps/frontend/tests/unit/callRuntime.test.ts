@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HandsFreeController,
   HandsFreeControllerOptions,
+  SpeechEndpointer,
   WakeDetector,
 } from "../../src/hands_free";
 import type { ScreenStateReport } from "../../src/controller/types";
@@ -770,14 +771,18 @@ describe("CallRuntime hands-free", () => {
   it("loads the wake detector once and reports the armed state", async () => {
     const handsFree = fakeHandsFree();
     const loadWakeDetector = vi.fn(async () => ({}) as WakeDetector);
+    const loadSpeechEndpointer = vi.fn(async () => ({}) as SpeechEndpointer);
     const { runtime, latestState } = makeRuntime({
       loadWakeDetector,
+      loadSpeechEndpointer,
       createHandsFree: handsFree.create,
     });
     await connectAt(runtime, 5);
     runtime.toggleHandsFree();
     await settle();
     expect(loadWakeDetector).toHaveBeenCalledTimes(1);
+    expect(loadSpeechEndpointer).toHaveBeenCalledTimes(1);
+    expect(handsFree.options().speechEndpointer).toBeTruthy();
     expect(latestState()).toMatchObject({ handsFree: true, handsFreeStatus: "Listening locally." });
     expect(handsFree.options().currentEpoch()).toBe(5);
 
@@ -787,6 +792,7 @@ describe("CallRuntime hands-free", () => {
     runtime.toggleHandsFree();
     await settle();
     expect(loadWakeDetector).toHaveBeenCalledTimes(1);
+    expect(loadSpeechEndpointer).toHaveBeenCalledTimes(1);
     expect(latestState().handsFree).toBe(true);
     runtime.dispose();
   });
@@ -796,6 +802,7 @@ describe("CallRuntime hands-free", () => {
       loadWakeDetector: async () => {
         throw new Error("model missing");
       },
+      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
     });
     await connectAt(runtime);
     runtime.toggleHandsFree();
@@ -812,6 +819,7 @@ describe("CallRuntime hands-free", () => {
     const handsFree = fakeHandsFree();
     const { runtime } = makeRuntime({
       loadWakeDetector: async () => ({}) as WakeDetector,
+      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
       createHandsFree: handsFree.create,
     });
     const socket = await connectAt(runtime, 5);
@@ -838,6 +846,7 @@ describe("CallRuntime hands-free", () => {
     const handsFree = fakeHandsFree();
     const { runtime } = makeRuntime({
       loadWakeDetector: async () => ({}) as WakeDetector,
+      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
       createHandsFree: handsFree.create,
     });
     const socket = await connectAt(runtime, 7);
@@ -854,6 +863,7 @@ describe("CallRuntime hands-free", () => {
     const handsFree = fakeHandsFree();
     const { runtime } = makeRuntime({
       loadWakeDetector: async () => ({}) as WakeDetector,
+      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
       createHandsFree: handsFree.create,
     });
     await connectAt(runtime);
