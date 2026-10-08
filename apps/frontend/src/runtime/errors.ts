@@ -2,7 +2,11 @@
 // keep that text consistent across the socket, recorder, and playback paths.
 
 export function errorName(error: unknown): string {
-  return error instanceof Error ? error.name : "unknown error";
+  if (!(error instanceof Error)) return "unknown error";
+  // A DOMException names the fault (`NotAllowedError`, `AbortError`). A
+  // plain `Error` is named "Error", which names nothing; the cause we wrote
+  // is in its message, so say that instead (#203).
+  return error.name === "Error" && error.message ? error.message : error.name;
 }
 
 export function errorText(error: unknown): string {

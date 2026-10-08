@@ -7,7 +7,11 @@ import { AudioPlayback } from "../../src/runtime/audioPlayback";
 
 type Handler = () => void;
 
-function fakePlayer() {
+/**
+ * `onAttach` is called with each source the element is given, the way a
+ * browser acts on it: it is what opens a `MediaSource` (`FakeMediaSource`).
+ */
+function fakePlayer(onAttach?: (url: string) => void) {
   const listeners = new Map<string, Set<Handler>>();
   let currentSource = "";
   const player = {
@@ -40,7 +44,10 @@ function fakePlayer() {
     },
     set src(value: string) {
       currentSource = value;
-      if (value) player.ended = false;
+      if (value) {
+        player.ended = false;
+        onAttach?.(value);
+      }
     },
     play() {
       player.playCalls.push(player.src);
@@ -457,11 +464,30 @@ describe("AudioPlayback streaming", () => {
 
   class FakeMediaSource {
     static isTypeSupported = () => true;
-    readyState = "open";
+    // A MediaSource is closed until a media element attaches its URL, and
+    // `sourceopen` fires then and not before. A fake that opens on its own
+    // let the streaming path pass a test no browser can run (#203).
+    readyState = "closed";
     buffer = new FakeSourceBuffer();
     ended = false;
-    addEventListener() {}
+    listeners = new Map<string, Set<Handler>>();
+    addEventListener(name: string, handler: Handler) {
+      if (!this.listeners.has(name)) this.listeners.set(name, new Set());
+      this.listeners.get(name)!.add(handler);
+    }
+    /** What the browser does when the element is given this source's URL. */
+    attach() {
+      if (this.readyState !== "closed") return;
+      this.readyState = "open";
+      for (const handler of [...(this.listeners.get("sourceopen") || [])])
+        handler();
+    }
     addSourceBuffer() {
+      if (this.readyState !== "open") {
+        const error = new Error("source is not open");
+        error.name = "InvalidStateError";
+        throw error;
+      }
       return this.buffer;
     }
     endOfStream() {
@@ -475,12 +501,15 @@ describe("AudioPlayback streaming", () => {
     statuses?: Array<[string, boolean | undefined]>,
     stallMs?: number,
   ) {
-    const player = fakePlayer();
+    const { urls } = stubObjectUrls();
+    const player = fakePlayer((url) => {
+      const source = urls.get(url);
+      if (source instanceof FakeMediaSource) source.attach();
+    });
     player.play = () => {
       player.playCalls.push(player.src);
       return Promise.resolve();
     };
-    const { urls } = stubObjectUrls();
     vi.stubGlobal("MediaSource", FakeMediaSource);
     const playback = new AudioPlayback({
       player: player as unknown as HTMLAudioElement,
@@ -496,6 +525,21 @@ describe("AudioPlayback streaming", () => {
   }
 
   const bytes = (text: string) => new TextEncoder().encode(text).buffer;
+
+  it("attaches the source to the element, which is what opens it", () => {
+    // #203: the source was created and waited on, never attached, so it
+    // never opened. Nothing played and nothing was reported.
+    const { player, urls, playback } = streamingPlayback();
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    const source = urls.get(player.src) as FakeMediaSource;
+    expect(source, "the element took the source's URL").toBeInstanceOf(
+      FakeMediaSource,
+    );
+    expect(source.readyState, "attaching opened it").toBe("open");
+    playback.receiveAudioChunk(bytes("one"));
+    expect(source.buffer.appended.length, "and the chunk went in").toBe(1);
+    expect(player.playCalls.length, "and it started playing").toBe(1);
+  });
 
   it("plays each utterance through its own MediaSource as it arrives", () => {
     const { player, urls, playback } = streamingPlayback();
@@ -544,6 +588,42 @@ describe("AudioPlayback streaming", () => {
       replays[0],
     );
     expect(playback.streamingEnabled).toBe(false);
+  });
+
+  it("stays off for the rest of the call once a stream could not sound", () => {
+    // WebKit takes a stream and never sounds it. The first failure names
+    // itself and the whole replay follows; the rest of the call must not pay
+    // the silence watch and read the same line again, and a reconnect's
+    // `hello_ack` must not offer streaming back (#203).
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const { player, urls, playback } = streamingPlayback(undefined, statuses);
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    (urls.get(player.src) as FakeMediaSource).buffer.fail = true;
+    playback.receiveAudioChunk(bytes("first"));
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    expect(playback.streamingEnabled).toBe(false);
+    const reported = () => statuses.filter(([, error]) => error === true);
+    expect(reported().length, "the cause is read once").toBe(1);
+    player.ended = true;
+    player.emit("ended");
+
+    // A reconnect says hello again and the service offers MSE again.
+    playback.setStreamingEnabled(true);
+    expect(playback.streamingEnabled, "this browser already refused").toBe(
+      false,
+    );
+
+    playback.receiveAudioStart({ generation: 0, sequence: 2, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("second"));
+    playback.receiveAudioDone({ generation: 0, sequence: 2, done: true });
+    const replay = urls.get(player.src);
+    expect(replay instanceof Blob, "straight to the whole replay").toBe(true);
+    expect(reported().length, "and no second line about it").toBe(1);
+    expect(
+      [...urls.values()].filter((value) => value instanceof FakeMediaSource)
+        .length,
+      "no second MediaSource was made",
+    ).toBe(1);
   });
 
   it("lets a handoff's goodbye finish and plays the new leg after it", () => {
@@ -632,6 +712,73 @@ describe("AudioPlayback streaming", () => {
 
   // WebKit resolves `play()` on a MediaSource it cannot play and then never
   // advances: silent, no `ended`, no `error`, no fallback (#189).
+  it("falls back when a stream's play() never settles at all", () => {
+    // #203: WebKit takes a MediaSource of MP3, buffers every append, never
+    // reaches `canplay`, and leaves `play()` pending for good. The watch was
+    // armed inside the resolve handler, so nothing was ever watched: no
+    // sound, no rejection, no report, for the rest of the call.
+    vi.useFakeTimers();
+    try {
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const { player, playback } = streamingPlayback(undefined, statuses, 3000);
+      player.play = () => {
+        player.playCalls.push(player.src);
+        return new Promise<void>(() => {});
+      };
+      playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("one"));
+      playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+      expect(player.playCalls.length, "the stream was started").toBe(1);
+      vi.advanceTimersByTime(2999);
+      expect(statuses, "a clip is given its time first").toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(statuses).toEqual([
+        [
+          "Streaming audio failed; using the complete replay (no playback progress).",
+          true,
+        ],
+      ]);
+      expect(player.playCalls.length, "and the whole replay follows").toBe(2);
+      expect(playback.streamingEnabled, "and nothing streams again").toBe(
+        false,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the play() rejection it caused itself off the caller's screen", async () => {
+    // Reloading the element to fall back aborts the pending `play()`. That
+    // rejection belongs to a clip that is already gone; it reached the
+    // caller as "Audio blocked by the browser" while the replay played (#203).
+    vi.useFakeTimers();
+    try {
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const { player, playback } = streamingPlayback(undefined, statuses, 3000);
+      const rejects: Array<(error: unknown) => void> = [];
+      player.play = () => {
+        player.playCalls.push(player.src);
+        return new Promise<void>((_, reject) => rejects.push(reject));
+      };
+      playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("one"));
+      playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+      vi.advanceTimersByTime(3000);
+      const aborted = new Error("interrupted by load()");
+      aborted.name = "AbortError";
+      rejects[0](aborted);
+      await Promise.resolve();
+      expect(
+        statuses.map(([text]) => text),
+        "only the cause, once",
+      ).toEqual([
+        "Streaming audio failed; using the complete replay (no playback progress).",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back when the stream starts and plays nothing", async () => {
     vi.useFakeTimers();
     try {
@@ -648,7 +795,10 @@ describe("AudioPlayback streaming", () => {
 
       vi.advanceTimersByTime(1000);
       expect(statuses).toEqual([
-        ["Streaming audio failed; using the complete replay (Error).", true],
+        [
+          "Streaming audio failed; using the complete replay (no playback progress).",
+          true,
+        ],
       ]);
       expect(playback.streamingEnabled).toBe(false);
       expect(playback.isPlaying).toBe(false);
@@ -770,6 +920,37 @@ describe("AudioPlayback silent playback", () => {
     }
   });
 
+  it("reports a replay whose play() never settles either", async () => {
+    // The same hazard on the replay path: a `play()` that never resolves is
+    // a clip that produced no sound, and the watch is armed on the attempt
+    // so it is noticed either way (#203).
+    vi.useFakeTimers();
+    try {
+      const player = fakePlayer();
+      stubObjectUrls();
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const playback = new AudioPlayback({
+        player: player as unknown as HTMLAudioElement,
+        idleText: "idle",
+        onStatus: (text, error) => statuses.push([text, error]),
+        onChange: () => {},
+        gapMs: 0,
+        stallMs: 1000,
+      });
+      playback.audioQueue.push(new Blob(["silent"]));
+      playback.playNext();
+      // Nothing resolves or rejects the attempt.
+      vi.advanceTimersByTime(1000);
+      expect(statuses[0]).toEqual([
+        "Audio started but produced no sound (nothing played in 1000ms).",
+        true,
+      ]);
+      expect(playback.isDrained()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves a clip that is playing alone", async () => {
     vi.useFakeTimers();
     try {
@@ -851,12 +1032,15 @@ describe("AudioPlayback level", () => {
   });
 
   it("meters a stream against the chunks that have arrived", async () => {
-    const player = fakePlayer();
+    const { urls } = stubObjectUrls();
+    const player = fakePlayer((url) => {
+      const source = urls.get(url) as { attach?: () => void };
+      source?.attach?.();
+    });
     player.play = () => {
       player.playCalls.push(player.src);
       return Promise.resolve();
     };
-    stubObjectUrls();
     const levels: number[] = [];
     const frames: FrameRequestCallback[] = [];
     // One MPEG-1 Layer III frame at 128 kbps, 44.1 kHz: 417 bytes, 26ms.
@@ -874,10 +1058,18 @@ describe("AudioPlayback level", () => {
       removeEventListener() {}
       appendBuffer() {}
     }
+    // Closed until the element attaches it, as a real one is (#203).
     class FakeMediaSource {
       static isTypeSupported = () => true;
-      readyState = "open";
-      addEventListener() {}
+      readyState = "closed";
+      opens: Array<() => void> = [];
+      addEventListener(name: string, handler: () => void) {
+        if (name === "sourceopen") this.opens.push(handler);
+      }
+      attach() {
+        this.readyState = "open";
+        for (const handler of [...this.opens]) handler();
+      }
       addSourceBuffer() {
         return new FakeSourceBuffer();
       }
