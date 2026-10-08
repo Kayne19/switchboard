@@ -25,19 +25,43 @@ not use a CDN or runtime dependency download.
 The package's public `start()` method owns its own microphone graph, which would
 break PTT ownership and duplicate the controller's endpointing. The
 `WakeWordDetectorAdapter` therefore feeds the package engine's serialized
-16-kHz PCM processing seam while `vad-worklet.js` remains the separate speech
-endpoint detector. Package inference is asynchronous and queued; reset stamps
-a new detector generation so stale work cannot open a wake grace period after a
-PTT pause, page rescue, or epoch change. Detector failures stop hands-free and
-are reported in `handsFreeStatus`. There is no acoustic wake
+16-kHz PCM processing seam. Package inference is asynchronous and queued; reset
+stamps a new detector generation so stale work cannot open a wake grace period
+after a PTT pause, page rescue, or epoch change. Detector failures stop
+hands-free and are reported in `handsFreeStatus`. There is no acoustic wake
 heuristic fallback.
+
+## Speech endpointing with Silero VAD
+
+Endpointing is Silero VAD, the `silero_vad.onnx` model the same openWakeWord
+package ships. `apps/frontend/src/silero_vad.ts` loads it on the same ONNX
+Runtime Web the wake engine uses, through the same import map and
+`/openwakeword/` static paths, and feeds it the v4 signature the committed
+model declares: `input`, a scalar `sr`, and the recurrent state as `h` and `c`
+shaped `[2, 1, 64]`, with `output`, `hn` and `cn` back. The adapter carries
+`hn`/`cn` into the next window, so the state runs with the speech.
+
+`apps/frontend/src/speech_endpoint.ts` is the endpoint itself. It cuts the
+controller's 1,280-sample frames into Silero's 512-sample (32 ms) windows,
+scores each one, and reports a speech start and a speech end. Inference is
+asynchronous and queued, as the wake detector's is, and a reset stamps a new
+generation so a window scored before a reset cannot start or end a turn after
+it. The endpointer is reset where the wake detector is: on enable, on a wake
+grace period, when an expired grace period re-arms, on a follow-up lease, on a
+PTT pause, and on disable or an epoch change.
+
+`vad-worklet.js` is the capture seam only: it posts 16-kHz PCM frames and the
+level the voice indicator reads. There is no energy-threshold endpointer
+beside the model, and no fallback to one: a model that cannot load or cannot
+score stops hands-free and reports it in `handsFreeStatus`, as a wake-detector
+failure does (`docs/architecture.md` rule 9).
 
 ## Privacy boundary
 
 After permission, microphone samples flow only into the browser's
 `AudioWorklet` and local ONNX inference. The worklet transfers 16-kHz PCM frames
-to the main-thread detector and separately posts energy and speech boundary
-features. The energy messages also drive the live voice indicator while the
+to the main-thread wake detector and speech endpointer, and separately posts
+the frame energy. The energy messages drive the live voice indicator while the
 caller is listening. Push-to-talk uses a short-lived `AnalyserNode` on its
 microphone stream for the same indicator; neither level path sends samples to
 the server. `MediaRecorder` is created only after the real model detects Hey
@@ -48,7 +72,11 @@ framing; detector PCM and model inputs never enter the server path.
 ## Timing and states
 
 The local VAD uses 900 ms trailing silence, a 2 s wake-to-speech grace period,
-and a 30 s utterance ceiling. A settled response opens one browser-local 8,000
+and a 30 s utterance ceiling. A window above `SPEECH_START_PROBABILITY` (0.5)
+starts speech and only a window below `SPEECH_END_PROBABILITY` (0.35) counts
+towards the trailing silence, so a quiet syllable does not cut the caller off.
+Those two thresholds and every timing here are written once, in
+`apps/frontend/src/hands_free.ts`. A settled response opens one browser-local 8,000
 ms follow-up lease after the server barrier and playback queue have both
 settled, with a 400 ms drain debounce. The lease admits one no-wake utterance; a
 later utterance needs Hey Jarvis again.
@@ -72,8 +100,10 @@ listening behavior or accessibility announcements.
   `package-lock.json` pins its npm tarball integrity and its
   `onnxruntime-web` dependency; the staged
   ONNX Runtime Web bundle is MIT licensed by Microsoft.
-- `hey_jarvis_v0.1.onnx`, `melspectrogram.onnx`, `embedding_model.onnx`, and
-  `silero_vad.onnx` are the package's OpenWakeWord model assets. OpenWakeWord
+- `silero_vad.onnx` is [Silero VAD](https://github.com/snakers4/silero-vad),
+  MIT licensed by the Silero Team, which the package redistributes.
+- `hey_jarvis_v0.1.onnx`, `melspectrogram.onnx`, and `embedding_model.onnx`
+  are the package's OpenWakeWord model assets. OpenWakeWord
   documents its pretrained models under
   [CC BY-NC-SA 4.0](https://github.com/dscripka/openWakeWord#license), so these
   assets carry attribution, noncommercial-use, and ShareAlike obligations.

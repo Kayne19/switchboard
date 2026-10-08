@@ -342,7 +342,7 @@ container, and the post-deploy checklist.
 | `apps/backend/tests/` | Rust tests, one file per source module |
 | `apps/frontend/src/` | V17.2 React presentation and its call runtime |
 | `apps/frontend/src/runtime/` | the browser's side of a call: backend WebSocket, push-to-talk, playback, hands-free wiring |
-| `apps/frontend/src/hands_free.ts` | hands-free controller, real wake adapter, and separate VAD endpointing |
+| `apps/frontend/src/hands_free.ts` | hands-free controller, with the wake adapter (`wake_detector.ts`) and the Silero speech endpointer (`speech_endpoint.ts`) beside it |
 | `apps/frontend/tests/` | browser, display, and operator-extension tests |
 | `static/index.html`, `static/v17-assets/`, `static/vad-worklet.js` | committed deterministic browser build output |
 | `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |

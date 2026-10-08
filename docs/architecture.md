@@ -220,7 +220,8 @@ configuration, not the browser protocol, turn epochs, or PBX lifecycle.
 `apps/frontend/src/runtime/` owns the call:
 
 - microphone permission and capture
-- wake/VAD state (reusing `hands_free.ts` and the local wake detector)
+- wake/VAD state (reusing `hands_free.ts`, the local wake detector, and the
+  Silero speech endpointer)
 - WebSocket framing from the browser side
 - audio playback and MSE fallback
 
