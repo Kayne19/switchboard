@@ -309,8 +309,8 @@ export class AudioPlayback {
       this.notifyPlaybackChange();
       this.options.onStatus(
         owner.awaitingEnded
-          ? "Audio finishing — click anywhere on this page to continue."
-          : "Audio paused — click anywhere on this page to resume.",
+          ? "Audio finishing — tap or click anywhere on this page to continue."
+          : "Audio paused — tap or click anywhere on this page to resume.",
       );
     };
     const error: EventListener = () => {
@@ -569,7 +569,7 @@ export class AudioPlayback {
     // next user gesture retries it instead of silently losing it.
     this.audioQueue.unshift(owner.blob);
     this.options.onStatus(
-      "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
+      "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (" +
         errorName(error) +
         ").",
       true,
@@ -671,7 +671,7 @@ export class AudioPlayback {
         this.playing = false;
         this.notifyPlaybackChange();
         this.options.onStatus(
-          "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
+          "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (" +
             errorName(error) +
             ").",
           true,

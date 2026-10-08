@@ -365,7 +365,7 @@ describe("AudioPlayback replay ownership", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(statuses.at(-1)).toEqual([
-      "Audio blocked by the browser — click anywhere on this page once, then it will play (NotAllowedError).",
+      "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (NotAllowedError).",
       true,
     ]);
     expect(playback.audioQueue.length).toBe(1);
