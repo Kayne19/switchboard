@@ -20,6 +20,13 @@ export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
  * always keeps the voice's own timing.
  */
 export const INTER_UTTERANCE_GAP_MS = 0;
+/**
+ * How long a clip the element accepted has to produce sound. `play()` can
+ * resolve on an element that never advances -- the usual WebKit outcome for a
+ * MediaSource it cannot play -- and nothing noticed: the call went on
+ * "speaking" in silence for the rest of its life (#189).
+ */
+export const NO_PROGRESS_MS = 3000;
 
 interface PlaybackOwner {
   blob: Blob;
@@ -63,6 +70,11 @@ export interface AudioPlaybackOptions {
   onChange: () => void;
   /** The pause between two messages. Defaults to `INTER_UTTERANCE_GAP_MS`. */
   gapMs?: number;
+  /**
+   * How long an accepted clip has to advance `currentTime` before it is
+   * called silent. Defaults to `NO_PROGRESS_MS`; 0 turns the watch off.
+   */
+  stallMs?: number;
   /** Receives the live output level without entering React state. */
   onAudioLevel?: (level: number) => void;
   /**
@@ -94,6 +106,8 @@ export class AudioPlayback {
   private mseReplayBytes = 0;
   /** The pause before the next message; nothing starts while it runs. */
   private gapTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Watches an accepted clip for sound; see `NO_PROGRESS_MS`. */
+  private progressTimer: ReturnType<typeof setTimeout> | null = null;
   private audioContext: AudioContext | null = null;
   private audioSource: MediaElementAudioSourceNode | null = null;
   private levelMonitor: AudioLevelMonitor | null = null;
@@ -117,6 +131,39 @@ export class AudioPlayback {
       next();
       this.notifyPlaybackChange();
     }, gap);
+  }
+
+  /**
+   * Calls `onStall` if the element has not advanced by the time the watch
+   * runs out. A clip that did advance has proved itself and is not watched
+   * again: a stall after sound was heard ends in `ended` or `error`.
+   */
+  private watchProgress(onStall: () => void): void {
+    this.clearProgressWatch();
+    const player = this.player;
+    const ms = this.options.stallMs ?? NO_PROGRESS_MS;
+    if (ms <= 0) return;
+    const startedAt = Number.isFinite(player.currentTime)
+      ? player.currentTime
+      : 0;
+    this.progressTimer = setTimeout(() => {
+      this.progressTimer = null;
+      const now = Number.isFinite(player.currentTime) ? player.currentTime : 0;
+      if (now <= startedAt) onStall();
+    }, ms);
+  }
+
+  private clearProgressWatch(): void {
+    if (this.progressTimer !== null) clearTimeout(this.progressTimer);
+    this.progressTimer = null;
+  }
+
+  /** The text a silent clip is reported with. */
+  private silentText(): string {
+    const ms = this.options.stallMs ?? NO_PROGRESS_MS;
+    return (
+      "Audio started but produced no sound (nothing played in " + ms + "ms)."
+    );
   }
 
   private clearGap(): void {
@@ -181,6 +228,7 @@ export class AudioPlayback {
   /** Stops playback for good; used when the runtime is torn down. */
   dispose(): void {
     this.clearGap();
+    this.clearProgressWatch();
     this.audioQueue.length = 0;
     this.clearMsePlayback();
     if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
@@ -254,6 +302,7 @@ export class AudioPlayback {
       )
         return;
       owner.paused = true;
+      this.clearProgressWatch();
       this.levelMonitor?.stop();
       owner.awaitingEnded = owner.seeked && this.terminalSeek();
       this.playing = false;
@@ -472,6 +521,7 @@ export class AudioPlayback {
 
   private cleanupOwner(owner: PlaybackOwner): void {
     const player = this.player;
+    this.clearProgressWatch();
     if (this.playbackOwner === owner) this.playbackOwner = null;
     owner.pendingAttempt = null;
     for (const [name, handler] of owner.handlers) {
@@ -526,6 +576,13 @@ export class AudioPlayback {
     );
   }
 
+  /** The element took the clip, started, and played nothing. */
+  private replayStalled(owner: PlaybackOwner): void {
+    if (this.playbackOwner !== owner || owner.consumed) return;
+    this.options.onStatus(this.silentText(), true);
+    this.consumeOwner(owner);
+  }
+
   private attemptPlay(owner: PlaybackOwner): void {
     if (
       this.playbackOwner !== owner ||
@@ -558,6 +615,8 @@ export class AudioPlayback {
           return;
         owner.pendingAttempt = null;
         this.playing = !owner.paused;
+        if (this.playing)
+          this.watchProgress(() => this.replayStalled(owner));
         this.notifyPlaybackChange();
       },
       (error) => this.playFailed(owner, attempt, error),
@@ -593,21 +652,32 @@ export class AudioPlayback {
 
   private msePlay(): void {
     if (!this.mseActive || this.mseActive.failed || this.playing) return;
+    const utterance = this.mseActive;
     this.resumeAudioGraph();
     this.levelMonitor?.start();
     this.playing = true;
     this.notifyPlaybackChange();
-    Promise.resolve(this.player.play()).catch((error) => {
-      this.levelMonitor?.stop();
-      this.playing = false;
-      this.notifyPlaybackChange();
-      this.options.onStatus(
-        "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
-          errorName(error) +
-          ").",
-        true,
-      );
-    });
+    Promise.resolve(this.player.play()).then(
+      () => {
+        if (this.mseActive !== utterance || utterance.failed) return;
+        // The element accepted the stream. If it never advances, this is a
+        // MediaSource it cannot play: say so and use the whole replay (#189).
+        this.watchProgress(() =>
+          this.mseFail(utterance, new Error("no playback progress")),
+        );
+      },
+      (error) => {
+        this.levelMonitor?.stop();
+        this.playing = false;
+        this.notifyPlaybackChange();
+        this.options.onStatus(
+          "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
+            errorName(error) +
+            ").",
+          true,
+        );
+      },
+    );
   }
 
   private mseFinishSource(utterance: MseUtterance): void {
@@ -653,6 +723,7 @@ export class AudioPlayback {
     utterance.failed = true;
     const player = this.player;
     if (this.mseActive === utterance) {
+      this.clearProgressWatch();
       this.levelMonitor?.stop();
       this.playing = false;
       this.notifyPlaybackChange();
@@ -746,6 +817,7 @@ export class AudioPlayback {
 
   private clearMsePlayback(): void {
     this.clearGap();
+    this.clearProgressWatch();
     const player = this.player;
     for (const utterance of [this.mseActive, ...this.mseQueue].filter(
       Boolean,
