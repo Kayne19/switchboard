@@ -11,10 +11,11 @@ interface SpokenLogProps {
 }
 
 /**
- * The live response's text: the recent lines the caller heard as a log,
- * newest at the bottom and pinned there, with earlier lines above it to
- * scroll back to (#113). It is the card's own text area, not a second card.
- * A message without lines shows its segments as before, read from the top.
+ * The live response's text: the recent sections the caller heard as a log,
+ * the newest resting at the top of the box with blank space below it, and
+ * the earlier ones above it to scroll back to (#113, #178). It is the card's
+ * own text area, not a second card. A message without lines shows its
+ * segments as before, read from the top.
  */
 export function SpokenLog({ message, className, innerClassName }: SpokenLogProps) {
   const lines = message.lines ?? [];
@@ -39,8 +40,16 @@ export function SpokenLog({ message, className, innerClassName }: SpokenLogProps
     <RichText segments={message.segments} />
   );
   return (
-    <div className={className} ref={ref} onScroll={onScroll} data-testid="spoken-log">
+    <div
+      className={isLog ? `${className} spoken-log-box` : className}
+      ref={ref}
+      onScroll={onScroll}
+      data-testid="spoken-log"
+    >
       {innerClassName ? <div className={innerClassName}>{body}</div> : body}
+      {/* The blank space under the newest section, a box tall, that lets it
+          rest at the top of the box (#178). It is not log content. */}
+      {isLog ? <div className="spoken-log__space" aria-hidden="true" /> : null}
     </div>
   );
 }

@@ -558,8 +558,9 @@ button {
   padding-right: clamp(6px, 1cqw, 16px);
 }
 /* The live response's log of what was said (#113), in the card's own text
-   area: the line being heard reads in full, and the lines before it recede
-   above it. The area scrolls, pinned to the newest line. */
+   area: the section being heard reads in full at the top of the box, and the
+   sections before it are above it, out of view. The area scrolls, pinned to
+   the newest section. */
 .spoken-log {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -572,6 +573,17 @@ button {
 }
 .spoken-log__line--current {
   color: inherit;
+}
+/* The blank space under the newest section, a box tall, so that section can
+   rest at the top of the box with nothing drawn below it (#178). */
+.spoken-log__space {
+  height: 100%;
+}
+/* A log is read from its newest section down, so the box lays its text from
+   the top; a message that is not a log stays centred in it. */
+.spoken-log-box .conversation-answer__text-inner {
+  min-height: 0;
+  align-content: start;
 }
 /* The CHANNEL / MODE stack every page carries in its bottom-left corner
    (#180, `ChannelStack`), where the conversation page's static stack stood.

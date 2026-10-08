@@ -30,8 +30,10 @@ const said = (count: number): SpokenLine[] =>
   Array.from({ length: count }, (_, index) => ({ id: index, text: `Line ${index + 1}.` }));
 
 // jsdom lays nothing out. Here each line is `height(line)` tall (40px unless
-// a test says otherwise), and the log's window is 100px.
+// a test says otherwise), the log's window is 100px, and the blank space the
+// log keeps under its newest section is one window tall (#178).
 let height: (line: Element) => number = () => 40;
+const WINDOW_PX = 100;
 
 function linesOf(log: Element): Element[] {
   return [...log.querySelectorAll('.spoken-log__line')];
@@ -40,10 +42,11 @@ function linesOf(log: Element): Element[] {
 function layOut() {
   const scroller = (element: Element) => element.closest('[data-testid="spoken-log"]');
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
-    return scroller(this) === this ? 100 : 0;
+    return scroller(this) === this ? WINDOW_PX : 0;
   });
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
-    return linesOf(this).reduce((total, line) => total + height(line), 0);
+    const lines = linesOf(this).reduce((total, line) => total + height(line), 0);
+    return lines + (this.querySelector('.spoken-log__space') ? WINDOW_PX : 0);
   });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     const log = scroller(this);
@@ -84,40 +87,60 @@ describe('SpokenLog', () => {
     expect(host.textContent).toBe('Line open.');
   });
 
-  it('stays pinned to the newest line while lines arrive', () => {
+  // #178: the newest section rests at the top of the box, the blank space
+  // under it taking the rest; the earlier sections are above, out of view.
+  it('rests with the newest section at the top of the box while sections arrive', () => {
     const log = render(said(3));
     render(said(4));
-    // Four 40px lines in a 100px window: the bottom is at 60.
-    expect(log.scrollTop).toBe(60);
+    // Four 40px sections: the fourth starts at 120, and the blank space
+    // below it is what lets it rest there.
+    expect(log.scrollTop).toBe(120);
     render(said(5));
-    expect(log.scrollTop).toBe(100);
+    expect(log.scrollTop).toBe(160);
   });
 
-  it('lets the caller scroll back while lines arrive, and pins again at the bottom', () => {
+  it('keeps a box of blank space under the newest section, outside the log', () => {
+    const log = render(said(2));
+    const space = log.querySelector('.spoken-log__space')!;
+    expect(space).not.toBeNull();
+    expect(space.getAttribute('aria-hidden')).toBe('true');
+    // It is the box's own space, not a line of the log read out to a caller.
+    expect(log.querySelector('[role="log"]')!.contains(space)).toBe(false);
+    expect(log.classList.contains('spoken-log-box')).toBe(true);
+  });
+
+  it('keeps no blank space under a message that is not a log', () => {
+    rerender(host, <SpokenLog message={{ segments: [{ text: 'An agent message.' }] }} className="log" />);
+    const log = host.querySelector<HTMLElement>('[data-testid="spoken-log"]')!;
+    expect(log.querySelector('.spoken-log__space')).toBeNull();
+    expect(log.classList.contains('spoken-log-box')).toBe(false);
+  });
+
+  it('lets the caller scroll back while lines arrive, and pins again at the newest section', () => {
     const log = render(said(4));
     render(said(5));
-    expect(log.scrollTop).toBe(100);
+    expect(log.scrollTop).toBe(160);
 
-    // Scrolled up to read an earlier line: a new line does not move it.
+    // Scrolled up to read an earlier section: a new one does not move it.
     scrollTo(log, 40);
     render(said(6));
     expect(log.scrollTop).toBe(40);
 
-    // Back at the bottom (six lines), it is pinned again.
-    scrollTo(log, 140);
+    // Back at the newest section (six of them), it is pinned again.
+    scrollTo(log, 200);
     render(said(7));
-    expect(log.scrollTop).toBe(180);
+    expect(log.scrollTop).toBe(240);
   });
 
-  it('starts a line taller than the window at its first words', () => {
+  it('starts a section taller than the window at its first words', () => {
     height = (line) => (line.textContent === 'Line 3.' ? 300 : 40);
     const log = render(said(3));
-    // Lines 1 and 2 take 80px; the line being heard starts there.
+    // Lines 1 and 2 take 80px; the section being heard starts there.
     expect(log.scrollTop).toBe(80);
     // Reading on through it keeps the log pinned.
     scrollTo(log, 200);
     render(said(4));
-    expect(log.scrollTop).toBe(320);
+    expect(log.scrollTop).toBe(380);
   });
 
   it('leaves a message that is not a log where the reader put it', () => {

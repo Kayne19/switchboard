@@ -1734,3 +1734,62 @@ test('a secondary chart is drawn in the composed aux row', async ({ page }) => {
   await expect(page.locator('[data-scene="composed"]')).toBeVisible();
   await expect(page.locator('.composed-aux [data-testid="chart"]')).toBeVisible();
 });
+
+
+// The iPad's portrait stage with a document on it and a caption log beside
+// it, the layout #178 and #188 were seen on (#187).
+async function openCaptionLog(page: Page) {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 11 });
+  const { wsUrl } = await fixtureServer.start();
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+  await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === 'hello')).toBe(true);
+  fixtureServer.broadcast({
+    type: 'display',
+    action: {
+      op: 'show', id: 'brief', type: 'document', role: 'primary',
+      data: {
+        subject: 'THE BRIEF',
+        paragraphs: ['The first paragraph of the document on the left.', 'A second paragraph to read under it.'],
+      },
+    },
+  });
+  const sections = [
+    'The first thing I said, long enough that it wraps across a couple of lines in the rail box.',
+    'Then a section with `inline code` and **bold** words, and a list:\n\n- one\n- two',
+    'The newest section, the one being heard now, which rests at the top of the box.',
+  ];
+  for (const text of sections) {
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text, voiced: true }) });
+  }
+  const log = page.locator('.live-chat-card__text');
+  await expect(log.locator('.spoken-log__line')).toHaveCount(sections.length);
+  await expect(log.locator('.spoken-log__line--current')).toContainText('The newest section');
+  return { fixtureServer, log };
+}
+
+// #178: the caption log rests with the newest section at the top of the box,
+// blank space below it, and the earlier sections above, out of view.
+test('the rail caption log rests with its newest section at the top of the box (#178)', async ({ page }) => {
+  const { fixtureServer, log } = await openCaptionLog(page);
+  try {
+    const resting = () =>
+      log.evaluate((element) => {
+        const current = element.querySelector<HTMLElement>('[aria-current="true"]')!;
+        const space = element.querySelector<HTMLElement>('.spoken-log__space')!;
+        return {
+          currentTop: current.getBoundingClientRect().top - element.getBoundingClientRect().top,
+          space: space.getBoundingClientRect().height - element.clientHeight,
+          scrolled: element.scrollTop,
+        };
+      });
+    await expect.poll(async () => Math.abs((await resting()).currentTop) <= 1).toBe(true);
+    const at = await resting();
+    // What is under the newest section is the log's blank space, a box tall.
+    expect(Math.abs(at.space)).toBeLessThanOrEqual(1);
+    // The earlier sections are above it, out of view.
+    expect(at.scrolled).toBeGreaterThan(0);
+  } finally {
+    await fixtureServer.stop();
+  }
+});

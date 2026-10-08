@@ -5,9 +5,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 const PIN_SLACK_PX = 8;
 
 /**
- * Where a pinned log rests: at the bottom, or, when the line being heard is
- * taller than the window, at that line's start, so the caller reads it from
- * the words they are hearing. The line is the element marked
+ * Where a pinned log rests: at the start of the section being heard, so that
+ * section sits at the top of the window and the caller reads it from the
+ * words they are hearing (#178). The blank space the log keeps under its
+ * newest section is what lets that start reach the top; a log without it
+ * rests at the bottom. The section is the element marked
  * `aria-current="true"`.
  */
 function pinTop(element: HTMLElement): number {
@@ -20,7 +22,7 @@ function pinTop(element: HTMLElement): number {
 }
 
 /**
- * Keeps a scrolling log pinned to its newest line (#113). While pinned, new
+ * Keeps a scrolling log pinned to its newest section (#113, #178). While pinned, new
  * content and a resize keep it there. Scrolling up unpins it, so earlier
  * lines can be read while new ones arrive, and scrolling back down pins it
  * again. `content` is what the log renders; a change to it is new content.
