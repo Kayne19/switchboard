@@ -208,6 +208,7 @@ button {
 .damocles-presence__button:focus-visible,
 .annotation-card__history:focus-visible,
 .live-chat-card__history:focus-visible,
+.channel-stack__mode:focus-visible,
 .transcript-toggle:focus-visible,
 .focus-layer__return:focus-visible,
 .transcript__return:focus-visible,
@@ -563,13 +564,55 @@ button {
 .spoken-log__line--current {
   color: inherit;
 }
-.conversation-channel {
+/* The CHANNEL / MODE stack every page carries in its bottom-left corner
+   (#180, `ChannelStack`), where the conversation page's static stack stood.
+   A content page's footer keeps its caption on the right of the same band,
+   so the stack takes that page's edge and footer line instead. */
+.channel-stack {
   position: absolute;
+  /* Above the idle page's bottom band (`transcript-reveal`), a hover region
+     that would otherwise take every click meant for MODE. The conversation
+     page's toggle stands above the stack in turn: on a 390px-wide phone the
+     two boxes overlap by 25px, and that toggle keeps all of its clicks
+     (issues.spec.ts, "leaves the transcript toggle clickable"); MODE keeps
+     its left 78px there and its tab stop everywhere. */
+  z-index: 3;
   left: 6.2cqw;
   bottom: 7.3cqh;
+  display: grid;
+  justify-items: start;
+  /* CHANNEL is text, so only the MODE words take a click. */
+  pointer-events: none;
   color: rgba(var(--paper-rgb), 0.34);
 }
+.scene--content .channel-stack {
+  left: var(--edge);
+  bottom: var(--footer-y);
+  color: rgba(var(--paper-rgb), 0.28);
+}
+.channel-stack__mode {
+  pointer-events: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+.channel-stack__mode:hover:enabled {
+  color: var(--orange);
+}
+.channel-stack__mode:disabled {
+  cursor: default;
+}
 .transcript-toggle {
+  /* Over the corner stack where they overlap (see `channel-stack`). On the
+     idle page this is scoped inside the bottom band's own layer, so there
+     the stack stays on top of both. */
+  z-index: 4;
   position: absolute;
   left: 50%;
   bottom: 6.1cqh;
@@ -838,9 +881,17 @@ button {
   bottom: var(--footer-y);
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  /* The caption keeps the right of the band. A scene labels the left no
+     longer -- the corner stack stands there (#180) -- and the debug page,
+     which labels both ends, is spaced apart by the pair. */
+  justify-content: flex-end;
+  gap: 1em;
   color: rgba(var(--paper-rgb), 0.28);
   pointer-events: none;
+}
+/* The debug page's left label, where a page has one, keeps the left. */
+.scene-footer > span:not(:last-child) {
+  margin-right: auto;
 }
 
 .annotation-card {
@@ -5401,7 +5452,7 @@ button {
     right: 4.5%;
     bottom: 6.5%;
   }
-  .conversation-channel {
+  .channel-stack {
     left: 6cqw;
     bottom: 7.2cqh;
   }

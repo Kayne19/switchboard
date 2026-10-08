@@ -66,6 +66,8 @@ function FakeVoiceRuntime() {
         sentTexts.push(text);
         return true;
       },
+      handsFree: false,
+      toggleHandsFree: () => {},
     });
     return () => registerVoiceRuntime(null);
   }, [registerVoiceRuntime]);
@@ -170,6 +172,8 @@ describe('the transcript toggle on the idle stage', () => {
         registerVoiceRuntime({
           toggleTurn: () => {},
           sendText: () => true,
+          handsFree: false,
+          toggleHandsFree: () => {},
         });
         return () => registerVoiceRuntime(null);
       }, [connected, registerVoiceRuntime]);
