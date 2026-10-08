@@ -51,7 +51,6 @@ never breakpoints.
 
 | Where | What | Why |
 |---|---|---|
-| `apps/frontend/src/runtime/audioPlayback.ts`, `isWebKitMediaElementAudioSource` | user-agent branch: WebKit keeps native playback and gets no analyser level | an MSE to `MediaElementAudioSourceNode` bug in WebKit; the comment names no WebKit bug yet |
 | `apps/frontend/src/styles/index.css`, `.calendar-event__title` | `display: -webkit-box` with `-webkit-line-clamp` | the prefixed form is the one both engines support for clamping lines |
 | `apps/frontend/src/styles/index.css`, `::-webkit-scrollbar` beside `scrollbar-width: none` | prefixed scrollbar hiding | Safari before 18.2 has no `scrollbar-width` |
 
