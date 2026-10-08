@@ -436,6 +436,27 @@ test about the page clock uses vitest's fake timers
 the fake time with `vi.getMockedSystemTime()` or `new Date()`, since the gate
 refuses `Date.now` whatever clock it reads.
 
+## A test that takes the first screen-state report
+
+The page reports its screen state whenever that state changes, and the first
+change is not the one a test about a drawing cares about. On connect the
+socket delivers `hello_ack`, the epoch and the status, and the status is what
+makes the transport ready: the page sends a report right there, describing an
+empty screen. A replayed `display` action arrives after it, and only the
+report that follows that render names the object.
+
+So a test that polls for *a* report and then reads the newest one is reading a
+race. The two orders both happen on an idle box; under load the empty report
+is what the poll sees. `callRuntime.spec`'s replay test asserted
+`has_visual` on it and failed 2 times in 20 repeats at load 32, and once on
+CI (#192), on a branch that touched nothing near the visual channel.
+
+The rule: wait for the render, then for the report that describes it — never
+for merely the first report. The replay test waits for the metric row to be
+visible and then polls until the newest report carries the generation,
+`has_visual` and the object id it expects. That is the shape the same spec
+already uses for every later drawing in it.
+
 ## A broken pipe reported instead of the error that caused it
 
 With the `ETXTBSY` noise gone, a second failure appeared at roughly two runs in
