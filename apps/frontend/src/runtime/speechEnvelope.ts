@@ -184,8 +184,13 @@ export class StreamingEnvelope implements LevelTimeline {
   private readonly stepMs: number;
   private received: Uint8Array[] = [];
   private bytes = 0;
-  /** The prefix length the current envelope was decoded from. */
-  private decodedBytes = 0;
+  /**
+   * The prefix length that has been handed to the decoder, whether or not it
+   * came back. No span is decoded twice: a decode that fails fails for its
+   * bytes, and the next whole frame is the next thing to try. Retrying the
+   * same bytes is how a rejecting decoder became a spin that never yielded.
+   */
+  private attemptedBytes = 0;
   private envelope: SpeechEnvelope | null = null;
   private decoding = false;
 
@@ -227,18 +232,22 @@ export class StreamingEnvelope implements LevelTimeline {
     if (this.decoding) return;
     const all = this.joined();
     const boundary = mp3FrameBoundary(all);
-    if (boundary <= this.decodedBytes) return;
+    if (boundary <= this.attemptedBytes) return;
     this.decoding = true;
+    // Claimed before the await: a prefix is offered to the decoder once,
+    // whatever it answers, so an utterance costs at most one decode per
+    // frame boundary that arrives.
+    this.attemptedBytes = boundary;
     try {
       const buffer = await this.decoder.decodeAudioData(
         all.slice(0, boundary).buffer as ArrayBuffer,
       );
       if (buffer && buffer.length > 0) {
         this.envelope = envelopeOfBuffer(buffer, this.stepMs);
-        this.decodedBytes = boundary;
       }
     } catch {
-      // An undecodable prefix is a flat level, never a canned animation.
+      // Bytes the decoder will not take are a flat level, never a canned
+      // animation and never a retry; a longer prefix may still decode.
     } finally {
       this.decoding = false;
     }

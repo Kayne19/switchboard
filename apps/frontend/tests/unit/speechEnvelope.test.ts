@@ -184,6 +184,34 @@ describe("StreamingEnvelope", () => {
     expect(streaming.levelAt(60), "past the clip is silence").toBe(0);
   });
 
+  it("offers a failing prefix once, instead of retrying the same bytes", async () => {
+    const whole = mp3Stream(4);
+    const calls: number[] = [];
+    // Rejects every prefix, then gives in. The giving in is only so that a
+    // build which retries the same bytes ends this test instead of spinning
+    // in it: there, the count runs away before the twelfth call stops it.
+    const decoder = {
+      decodeAudioData(data: ArrayBuffer) {
+        calls.push(data.byteLength);
+        if (calls.length < 12) return Promise.reject(new Error("not audio"));
+        return frameDecoder().decodeAudioData(data);
+      },
+    };
+    const streaming = new StreamingEnvelope(decoder);
+    // A partial trailing frame: bytes past the last whole frame. That is
+    // what sent the decode loop back to the same boundary again.
+    streaming.append(whole.slice(0, 2 * FRAME_BYTES + 7).buffer as ArrayBuffer);
+    await settle();
+    expect(calls.length, "one decode per boundary, taken or refused").toBe(1);
+    expect(streaming.levelAt(0), "refused bytes are a flat level").toBe(0);
+    expect(streaming.steps).toBe(0);
+
+    // A longer prefix is new bytes, so it is still offered.
+    streaming.append(whole.slice(2 * FRAME_BYTES + 7).buffer as ArrayBuffer);
+    await settle();
+    expect(calls.length).toBe(2);
+  });
+
   it("decodes an arriving clip once per chunk at most", async () => {
     const whole = mp3Stream(4);
     const decoder = frameDecoder();
