@@ -131,15 +131,52 @@ test('a week in a narrow portrait box pages its columns from today, names the hi
   await expect(page.locator('.focus-layer')).toHaveCount(0);
 });
 
-// A finger swipe, as a touch screen sends it: down, across in steps, up.
+/**
+ * A finger swipe, as a touch screen sends it: down, across in steps, up —
+ * dispatched in the page, with the pointer events a touch sends beside it.
+ * Playwright's whole touch surface is `Touchscreen.tap`, so there is no
+ * engine-neutral touch *drag* to drive from the harness, and the CDP this
+ * drove before is Chromium's alone (#187). Which touch factory the page
+ * offers is a feature test, not an engine test: a `Touch` constructor where
+ * there is one, `document.createTouch` where there is not.
+ *
+ * What a synthetic sequence cannot cover: it does not exercise the
+ * browser's own pan, so these tests no longer prove the browser leaves the
+ * pointer alone across a `touch-action: pan-y` scroller — which is the bug
+ * they were written for. What is left of that engine-neutrally is the
+ * computed `touch-action` the test below asserts; the rest is a manual
+ * check on the iPad (docs/ipad.md).
+ */
 async function swipe(page: Page, x: number, y: number, dx: number) {
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
-  for (let step = 1; step <= 12; step += 1) {
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + (dx * step) / 12, y }] });
-  }
-  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  await cdp.detach();
+  await page.evaluate(({ x, y, dx }) => {
+    type TouchDocument = Document & {
+      createTouch?: (view: Window, target: EventTarget, id: number, pageX: number, pageY: number, screenX: number, screenY: number) => Touch;
+      createTouchList?: (...touches: Touch[]) => TouchList;
+    };
+    const pageDocument = document as TouchDocument;
+    const target = document.elementFromPoint(x, y);
+    if (!target) throw new Error(`nothing under the finger at ${x}, ${y}`);
+    const touch = (across: number) => {
+      try {
+        return new Touch({ identifier: 1, target, clientX: across, clientY: y, pageX: across, pageY: y });
+      } catch {
+        return pageDocument.createTouch!(window, target, 1, across, y, across, y);
+      }
+    };
+    const list = (...touches: Touch[]) => (pageDocument.createTouchList
+      ? (pageDocument.createTouchList(...touches) as unknown as Touch[])
+      : touches);
+    const send = (type: 'touchstart' | 'touchmove' | 'touchend', across: number) => {
+      const finger = touch(across);
+      const held = type === 'touchend' ? list() : list(finger);
+      target.dispatchEvent(new TouchEvent(type, { bubbles: true, cancelable: true, touches: held, targetTouches: held, changedTouches: list(finger) }));
+      const pointer = { touchstart: 'pointerdown', touchmove: 'pointermove', touchend: 'pointerup' }[type];
+      target.dispatchEvent(new PointerEvent(pointer, { bubbles: true, cancelable: true, clientX: across, clientY: y, pointerType: 'touch', pointerId: 1, isPrimary: true }));
+    };
+    send('touchstart', x);
+    for (let step = 1; step <= 12; step += 1) send('touchmove', x + (dx * step) / 12);
+    send('touchend', x + dx);
+  }, { x, y, dx });
 }
 
 test.describe('a touch screen', () => {
