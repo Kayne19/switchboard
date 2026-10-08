@@ -175,13 +175,29 @@ which is what a caller tapping Damocles on an iPad saw.
 
 Playback is in `src/runtime/audioPlayback.ts`, and every way it can fail is
 reported the same way. A clip the element refuses, a stream it will not take,
-a clip that starts and plays nothing (`NO_PROGRESS_MS`: `play()` resolves on
-an element that never advances), and a clip autoplay refused all go on screen
-as status text with `statusError` set; a stream that fails falls back to the
-whole replay. Blocked audio is retried on the next page gesture, and `click`
-is not the only one: iOS Safari does not deliver a click through event
+a clip that starts and plays nothing, and a clip autoplay refused all go on
+screen as status text with `statusError` set; a stream that fails falls back
+to the whole replay. Blocked audio is retried on the next page gesture, and
+`click` is not the only one: iOS Safari does not deliver a click through event
 delegation for a tap on an ordinary element, so `pointerdown`, `touchend` and
 `keydown` are gestures too (`GESTURE_EVENTS` in `callRuntime.ts`).
+
+A clip that produced no sound is noticed whatever `play()` does with its
+promise. `NO_PROGRESS_MS` is armed when the attempt is made, not when
+`play()` resolves: WebKit takes a `MediaSource` of MP3, buffers every append,
+never reaches `canplay`, and leaves `play()` pending for the rest of the call
+(#203). A rejection that arrives after that watch gave up belongs to a clip
+that is already gone and is not reported -- falling back reloads the element,
+which aborts the pending `play()` itself.
+
+A streamed utterance's `MediaSource` is attached to the element as soon as it
+is made: a `MediaSource` is `closed` until an element takes its URL, and
+`sourceopen` -- where the `SourceBuffer` is added and the chunks go in --
+fires from that attach. Waiting for the event before attaching waits for an
+event that cannot come, which is what made every page offering `mse_mp3`
+(Chrome, an iPad) hear nothing at all. A page offers it when it has a
+`MediaSource` that supports `audio/mpeg`; Firefox does not and has always
+taken the whole replay.
 
 A caption waits for the audio that voices it (#112) but never for audio that
 is not coming. `SpokenLines` is told whether playback is sounding; while it is
