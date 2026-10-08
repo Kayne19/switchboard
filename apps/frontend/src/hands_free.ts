@@ -2,7 +2,7 @@ function normalizeAudioEnergy(energy: number): number {
 	return Number.isFinite(energy) ? Math.max(0, Math.min(1, energy * 8)) : 0;
 }
 
-export const WAKE_PHRASE = "Hey Jarvis";
+export const WAKE_PHRASE = "Damocles";
 export const WAKE_SAMPLE_RATE = 16_000;
 export const WAKE_FRAME_SAMPLES = 1_280;
 export const VAD_TRAILING_SILENCE_MS = 900;

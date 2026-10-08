@@ -3,6 +3,7 @@ declare module "openwakeword-wasm-browser" {
 		baseAssetUrl?: string;
 		ortWasmPath?: string;
 		keywords?: string[];
+		modelFiles?: Record<string, string>;
 		detectionThreshold?: number;
 		cooldownMs?: number;
 		executionProviders?: string[];
