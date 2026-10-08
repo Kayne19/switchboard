@@ -1793,3 +1793,24 @@ test('the rail caption log rests with its newest section at the top of the box (
     await fixtureServer.stop();
   }
 });
+
+// #188: every section of the log reads at one size, the size of the body
+// text on the main content beside it; code in a section is not smaller.
+test('the rail caption log reads at one size, the reading size of the content beside it (#188)', async ({ page }) => {
+  const { fixtureServer, log } = await openCaptionLog(page);
+  try {
+    const sizes = await log.evaluate((element) => {
+      const size = (node: Element) => getComputedStyle(node).fontSize;
+      const inside = [...element.querySelectorAll('.spoken-log__line, .spoken-log__line *')];
+      return {
+        log: size(element),
+        document: size(document.querySelector('.document-viewport__body p')!),
+        inside: [...new Set(inside.map(size))],
+      };
+    });
+    expect(sizes.inside).toEqual([sizes.log]);
+    expect(sizes.log).toBe(sizes.document);
+  } finally {
+    await fixtureServer.stop();
+  }
+});
