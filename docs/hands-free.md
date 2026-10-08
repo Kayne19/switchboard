@@ -8,9 +8,17 @@ the hands-free graph.
 The call runtime (`apps/frontend/src/runtime/callRuntime.ts`) owns the
 controller: `toggleHandsFree()` loads the detector on first use and enables or
 disables listening, and the controller's state is published as the runtime's
-`handsFree`, `handsFreeStatus`, and `handsFreeLease` fields. The approved V17
-design does not yet expose a hands-free control, so nothing on the page calls
-`toggleHandsFree()` today.
+`handsFree`, `handsFreeStatus`, and `handsFreeLease` fields.
+
+The page's one control for it is MODE, in the CHANNEL / MODE stack the scene
+shell draws in every page's bottom-left corner (#180,
+`apps/frontend/src/primitives/ChannelStack.tsx`). It reads `handsFree` from
+the registered voice runtime and switches it by calling `toggleHandsFree()`;
+while listening it names the wake word (`MODE / HANDS-FREE · HEY JARVIS`).
+The page holds no listening state of its own, and the refusals below stay the
+runtime's: a switch while the line is down, during startup, or with
+push-to-talk active is refused there and reported in `handsFreeStatus`. The
+demo page registers no runtime, so the control is disabled there.
 
 ## Real wake-word detector
 

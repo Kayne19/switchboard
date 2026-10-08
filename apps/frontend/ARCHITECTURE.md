@@ -68,11 +68,24 @@ A visual primary's composition is named for its type (`sceneKind`, from `VISUAL_
 Every composition is drawn by one `SceneShell` (`src/components/Scenes.tsx`).
 The shell owns what every page has: the frame and heading, the Damocles
 presence, the rail (metrics, live response, note, progress, tool activity),
-the footer and corner text, and the transcript entry point. A composition
-only fills the main slot and names what its rail carries. A feature that
-crosses compositions is added to the shell once; it is never wired into a
-composition by hand. The presence reads the voice level from the registered
-voice runtime, so no page can leave it out.
+the footer caption, the CHANNEL / MODE stack in the bottom-left corner, and
+the transcript entry point. A composition only fills the main slot and names
+what its rail carries. A feature that crosses compositions is added to the
+shell once; it is never wired into a composition by hand. The presence reads
+the voice level from the registered voice runtime, so no page can leave it
+out.
+
+The corner stack (`ChannelStack`, #180) is the page's one input-mode
+control. CHANNEL names how the caller is on the line -- voice today; a text
+channel is a later issue, so the line is shown and does nothing. MODE reads
+the hands-free state the registered voice runtime reports and switches it
+through that runtime (`toggleHandsFree` in `src/runtime/callRuntime.ts`,
+which owns the wake-word detector and the microphone): the page keeps no
+listening state of its own, so it cannot disagree with the transport about
+what the microphone is doing. With no runtime -- the demo page -- there is
+nothing to switch and the control is disabled. No composition labels that
+corner: a per-page `DISPLAY / ...` label stood there before, and the
+conversation page carried a static stack that always read PUSH-TO-TALK.
 
 The shell also owns the main column (`MainWithAux`): a composition's main
 slot over the aux row. A composition names the objects its slot does not
@@ -119,7 +132,7 @@ horizontal field
 vertical field
 | primary content |
 | explanation + presence |   (the note whole beside Damocles; a primary that outgrows its share scrolls in it)
-| shared footer |
+| shared footer |            (the CHANNEL / MODE stack at its left, the page's caption at its right)
 ```
 
 The renderer can later evolve into a more general constraint solver without changing the model protocol.
