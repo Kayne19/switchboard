@@ -8,7 +8,7 @@
 // late event from a replaced clip can never advance or requeue the new one.
 
 import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
-import { errorName } from "./errors";
+import { errorName, mediaErrorName } from "./errors";
 import { AudioLevelMonitor } from "./audioLevel";
 
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
@@ -49,6 +49,7 @@ interface MseUtterance {
   url: string | null;
   started: boolean;
   endedHandler?: EventListener;
+  errorHandler?: EventListener;
 }
 
 export interface AudioPlaybackOptions {
@@ -266,6 +267,13 @@ export class AudioPlayback {
     const error: EventListener = () => {
       if (this.playbackOwner !== owner || owner.consumed || !player.error)
         return;
+      // The element refused the clip. Say so: a browser that cannot decode
+      // what was sent used to drop every utterance in silence, with nothing
+      // on screen for the caller to report (#189).
+      this.options.onStatus(
+        "Audio failed to play (" + mediaErrorName(player.error) + ").",
+        true,
+      );
       this.consumeOwner(owner);
     };
     const resetTerminal = () => {
@@ -648,8 +656,7 @@ export class AudioPlayback {
       this.levelMonitor?.stop();
       this.playing = false;
       this.notifyPlaybackChange();
-      if (utterance.endedHandler)
-        player.removeEventListener("ended", utterance.endedHandler);
+      this.mseDetach(utterance);
       player.pause();
       player.removeAttribute("src");
       player.load();
@@ -658,7 +665,7 @@ export class AudioPlayback {
     }
     this.options.onStatus(
       "Streaming audio failed; using the complete replay (" +
-        errorName(error) +
+        mediaErrorName(error) +
         ").",
       true,
     );
@@ -702,7 +709,7 @@ export class AudioPlayback {
     utterance.url = URL.createObjectURL(utterance.media);
     utterance.endedHandler = () => {
       if (this.mseActive !== utterance) return;
-      player.removeEventListener("ended", utterance.endedHandler!);
+      this.mseDetach(utterance);
       this.mseActive = null;
       this.levelMonitor?.stop();
       this.playing = false;
@@ -712,6 +719,15 @@ export class AudioPlayback {
       this.notifyPlaybackChange();
     };
     player.addEventListener("ended", utterance.endedHandler);
+    // The element can refuse what was appended -- a SourceBuffer WebKit
+    // cannot parse sets a MediaError and stops. Without this the clip stayed
+    // "playing" for the rest of the call: no sound, no fallback, no message
+    // (#189).
+    utterance.errorHandler = () => {
+      if (this.mseActive !== utterance || !player.error) return;
+      this.mseFail(utterance, player.error);
+    };
+    player.addEventListener("error", utterance.errorHandler);
     utterance.media.addEventListener(
       "sourceopen",
       () => this.mseOpen(utterance),
@@ -720,14 +736,21 @@ export class AudioPlayback {
     if (utterance.media.readyState === "open") this.mseOpen(utterance);
   }
 
+  /** Takes an utterance's element handlers back off the element. */
+  private mseDetach(utterance: MseUtterance): void {
+    if (utterance.endedHandler)
+      this.player.removeEventListener("ended", utterance.endedHandler);
+    if (utterance.errorHandler)
+      this.player.removeEventListener("error", utterance.errorHandler);
+  }
+
   private clearMsePlayback(): void {
     this.clearGap();
     const player = this.player;
     for (const utterance of [this.mseActive, ...this.mseQueue].filter(
       Boolean,
     ) as MseUtterance[]) {
-      if (utterance.endedHandler)
-        player.removeEventListener("ended", utterance.endedHandler);
+      this.mseDetach(utterance);
       if (utterance.url) URL.revokeObjectURL(utterance.url);
     }
     this.mseActive = null;

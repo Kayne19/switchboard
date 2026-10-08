@@ -502,7 +502,10 @@ describe("AudioPlayback streaming", () => {
     }
   }
 
-  function streamingPlayback(onUtterance?: (sequence: number) => void) {
+  function streamingPlayback(
+    onUtterance?: (sequence: number) => void,
+    statuses?: Array<[string, boolean | undefined]>,
+  ) {
     const player = fakePlayer();
     player.play = () => {
       player.playCalls.push(player.src);
@@ -513,7 +516,7 @@ describe("AudioPlayback streaming", () => {
     const playback = new AudioPlayback({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
-      onStatus: () => {},
+      onStatus: (text, error) => statuses?.push([text, error]),
       onChange: () => {},
       onUtterance,
       gapMs: 0,
@@ -626,6 +629,37 @@ describe("AudioPlayback streaming", () => {
     expect(reached).toEqual([1, 2, 3]);
   });
 
+  // On WebKit an unsupported SourceBuffer payload sets a MediaError on the
+  // element instead of throwing: the clip stayed "playing" for the rest of
+  // the call, silent, with no fallback and nothing on screen (#189).
+  it("falls back and names the cause when the element refuses the stream", async () => {
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const { player, urls, playback } = streamingPlayback(undefined, statuses);
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("refused"));
+    expect(playback.isPlaying).toBe(true);
+
+    player.error = { code: 4 };
+    player.emit("error");
+    expect(playback.isPlaying, "a refused stream stops playing").toBe(false);
+    expect(statuses).toEqual([
+      [
+        "Streaming audio failed; using the complete replay (MEDIA_ERR_SRC_NOT_SUPPORTED).",
+        true,
+      ],
+    ]);
+    expect(playback.streamingEnabled).toBe(false);
+
+    player.error = null;
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    const replays = [...urls.values()].filter(
+      (value): value is Blob => value instanceof Blob,
+    );
+    expect(replays.length, "the whole utterance is replayed once").toBe(1);
+    expect(await replays[0].text()).toBe("refused");
+    expect(urls.get(player.src)).toBe(replays[0]);
+  });
+
   it("ignores audio stamped with another generation", () => {
     const { player, urls, playback } = streamingPlayback();
     playback.resetForGeneration(4);
@@ -661,6 +695,35 @@ describe("AudioPlayback complete replays", () => {
     player.ended = true;
     player.emit("ended");
     expect(reached).toEqual([4, 5]);
+  });
+});
+
+describe("AudioPlayback failure reporting", () => {
+  // A browser that refuses the clip used to drop every utterance in silence:
+  // no sound, and nothing on screen for the caller to report (#189).
+  it("names a media element error instead of dropping the clip silently", async () => {
+    const player = fakePlayer();
+    stubObjectUrls();
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: (text, error) => statuses.push([text, error]),
+      onChange: () => {},
+      gapMs: 0,
+    });
+    playback.audioQueue.push(new Blob(["clip"]));
+    playback.playNext();
+    player.playPromises[0].resolve();
+    await Promise.resolve();
+
+    player.error = { code: 3 };
+    player.emit("error");
+    expect(statuses).toEqual([
+      ["Audio failed to play (MEDIA_ERR_DECODE).", true],
+      ["idle", false],
+    ]);
+    expect(playback.isDrained()).toBe(true);
   });
 });
 
