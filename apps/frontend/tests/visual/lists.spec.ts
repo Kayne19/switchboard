@@ -46,11 +46,7 @@ const noteOn = (target: string, item: string) => ({
 for (const viewport of geometries) {
   test(`an inbox opens on the message a note names, in full view / ${viewport.width}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=idle&chrome=0');
-    // Chromium's scroll anchoring would hold the row in place through a
-    // relayout and hide a lead taken for the wrong layout; Safari has none.
-    await page.addStyleTag({ content: '* { overflow-anchor: none !important; }' });
-    await show(page, [{ op: 'show', id: 'inbox', type: 'inbox', role: 'primary', data: fifty }, noteOn('inbox', 'm27')], false);
+    await show(page, [{ op: 'show', id: 'inbox', type: 'inbox', role: 'primary', data: fifty }, noteOn('inbox', 'm27')]);
     await expect(page.locator('[data-item="m27"] .note-badge')).toBeVisible();
     await settle(page);
     const box = await page.evaluate(() => {
