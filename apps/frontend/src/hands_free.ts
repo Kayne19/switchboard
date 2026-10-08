@@ -590,8 +590,9 @@ export class HandsFreeController {
 		);
 	}
 
+	/** Both detectors forget the audio before this moment. */
 	private resetListening(): void {
-		this.resetListening();
+		this.detector?.reset();
 		this.endpointer?.reset();
 	}
 
