@@ -8,6 +8,7 @@
 // non-scaling, and the dash pattern Motion writes to trace them breaks on
 // exactly that mismatch.
 
+import type { CSSProperties } from 'react';
 import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 
 interface FramePath {
@@ -69,7 +70,9 @@ const frames = {
 export type FrameVariant = keyof typeof frames | 'answer';
 
 // #conversation .answer-shell: the one closed frame, cut at two corners, with
-// an edge that runs from orange to green and a dark fill of its own.
+// an edge that runs from orange to green and a dark fill of its own. Its
+// edge is one pixel wide, so it stands in by the default half pixel
+// (.tech-frame in index.css).
 function AnswerFrame({ className }: { className?: string }) {
   const ids = useSvgIds();
   return (
@@ -94,8 +97,17 @@ function AnswerFrame({ className }: { className?: string }) {
 export function TechFrame({ variant = 'panel', className }: { variant?: FrameVariant; className?: string }) {
   if (variant === 'answer') return <AnswerFrame className={className} />;
   const frame: FrameSpec = frames[variant];
+  // The drawing stands in from the box by half its widest stroke, so every
+  // line lies inside the box it frames (.tech-frame in index.css).
+  const inset = Math.max(...frame.paths.map((path) => path.width ?? 1)) / 2;
   return (
-    <svg className={`tech-frame ${className ?? ''}`} viewBox={frame.viewBox} preserveAspectRatio="none" aria-hidden="true">
+    <svg
+      className={`tech-frame ${className ?? ''}`}
+      viewBox={frame.viewBox}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+      style={{ '--frame-inset': `${inset}px` } as CSSProperties}
+    >
       {frame.paths.map((path, index) => (
         <path
           className="tech-frame__path"
