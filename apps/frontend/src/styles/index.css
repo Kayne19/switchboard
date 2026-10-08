@@ -325,12 +325,21 @@ button {
   stroke: rgba(127, 214, 61, 0.3);
 }
 
+/* A frame is drawn inside the box it frames. Its strokes are centred on
+   the drawing's edges, so the drawing stands in from the box by half the
+   widest stroke (--frame-inset, TechFrame.tsx), and each line's outer edge
+   lies on the box's own. A line centred on the box's edge kept only the
+   half a clip at that edge left it, and where the box stood at a fraction
+   of a pixel one engine drew that half and another dropped it (#190). An
+   absolutely placed SVG does not stretch between its insets, so its size
+   is the box's less both insets. */
 .tech-frame {
+  --frame-inset: 0.5px;
   position: absolute;
-  inset: 0;
+  inset: var(--frame-inset);
   z-index: 0;
-  width: 100%;
-  height: 100%;
+  width: calc(100% - 2 * var(--frame-inset));
+  height: calc(100% - 2 * var(--frame-inset));
   pointer-events: none;
   overflow: visible;
 }
