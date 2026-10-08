@@ -103,10 +103,14 @@ test.describe('the page clock', () => {
     await page.goto('/?scene=timer&chrome=0');
     const fill = page.locator('[data-scene="timer"] [data-item="pasta"] .timer__fill');
     await expect(fill).toBeVisible();
-    const sweep = () => fill.evaluate((element) => parseFloat(getComputedStyle(element).transitionDuration));
-    await expect.poll(sweep).toBeLessThan(0.01);
+    // The width's transition, or none: reduced motion turns transitions off (index.css).
+    const sweep = () => fill.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return style.transitionProperty === 'none' ? 'none' : `${style.transitionProperty} ${parseFloat(style.transitionDuration)}s`;
+    });
+    await expect.poll(sweep).toBe('none');
     await page.emulateMedia({ reducedMotion: 'no-preference' });
-    await expect.poll(sweep).toBe(1);
+    await expect.poll(sweep).toBe('width 1s');
   });
 });
 
