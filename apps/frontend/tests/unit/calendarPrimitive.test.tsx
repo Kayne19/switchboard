@@ -109,21 +109,15 @@ describe('the week', () => {
     expect(render(assistantWeek, 'no-such-event').querySelectorAll('.note-badge')).toHaveLength(0);
   });
 
-  it('pages a week too narrow for seven columns, opening on the marked event\u2019s day, the hidden days named on rails', () => {
+  it('pages a week too narrow for seven columns, opening on the marked event’s day, with no rim on its edges (#177)', () => {
     const calendar = render(assistantWeek, 'flight', { width: 330, height: 480 });
     expect(calendar.getAttribute('data-columns')).toBe('3');
     const heads = () => [...calendar.querySelectorAll('.calendar-grid__weekday')].map((cell) => cell.textContent);
     expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
-    const rims = () => [...calendar.querySelectorAll('.calendar-pages__rim')].map((rim) => rim.textContent);
-    expect(rims()).toEqual([expect.stringMatching(/^MON-THU \/ \d\d EVENTS$/)]);
-    // A tap on the rail turns back a page, and is handled: the surface around it does not expand.
-    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
-    act(() => {
-      calendar.querySelector('.calendar-pages__rim')!.dispatchEvent(click);
-    });
-    expect(click.defaultPrevented).toBe(true);
-    expect(heads()).toEqual(['TUE', 'WED', 'THU']);
-    expect(rims()).toHaveLength(2);
+    // The days it hides are named in the group's label, not on a rail with a
+    // count tag over the days.
+    expect(calendar.querySelector('.calendar-pages__rim, .calendar-pages__edges, .scroll-rim__rail, .scroll-rim__count')).toBeNull();
+    expect(calendar.querySelector('.calendar-pages')!.getAttribute('aria-label')).toMatch(/Earlier: MON-THU \/ \d+ EVENTS/);
   });
 
   it('turns the days with the arrow keys, handled so nothing else hears them', () => {
@@ -339,7 +333,9 @@ describe('the layout a box gives a view', () => {
   it('keeps every column where they fit, pages them where two or more fit, and is the agenda where fewer do', () => {
     expect(chooseLayout(week, { width: 900, height: 500 }, 7)).toEqual({ layout: 'grid', columns: 7 });
     expect(chooseLayout(week, { width: 330, height: 500 }, 7)).toEqual({ layout: 'grid', columns: 3 });
-    expect(chooseLayout(week, { width: 200, height: 500 }, 7).layout).toBe('agenda');
+    expect(chooseLayout(week, { width: 200, height: 500 }, 7)).toEqual({ layout: 'grid', columns: 2 });
+    // Room for one column of the least width is read as the agenda instead.
+    expect(chooseLayout(week, { width: 180, height: 500 }, 7).layout).toBe('agenda');
   });
   it('is the agenda where the grid under its day row and lanes would hold fewer than eight hours', () => {
     // An aux cell on a tall portrait stage: 254 px, of which the day row and two lanes take 80.
@@ -409,7 +405,7 @@ describe('the time grid\u2019s fold', () => {
   it('spans the days as the hour rules do, never the gutter', () => {
     // A band out to the calendar's edge ran under the hours' scale and reached for the frame.
     expect(declared('.calendar-grid__fold', 'left')).toEqual(['var(--grid-lead, var(--calendar-gutter))']);
-    expect(declared('.calendar-grid__fold', 'right')).toEqual(['var(--grid-trail, 0px)']);
+    expect(declared('.calendar-grid__fold', 'right')).toEqual(['0']);
     expect(declared('.calendar-grid__hour::after', 'left')).toEqual(declared('.calendar-grid__fold', 'left'));
   });
 });

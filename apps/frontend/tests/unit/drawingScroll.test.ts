@@ -208,17 +208,11 @@ describe('the hard diagrams at rest in the stage geometries', () => {
 describe('what each rim says', () => {
   const parts = [view(0, 0, 100, 50), view(150, 0, 250, 50), view(300, 0, 400, 50), view(450, 0, 550, 50), view(200, 300, 260, 340)];
 
-  it('counts the parts past each edge the drawing continues past, a part under the rail with them', () => {
+  it('says nothing of an edge that cuts no part', () => {
     const rim = readRim(parts, view(130, 0, 420, 200), { ...none, left: true, right: true, bottom: true });
-    expect(rim.left?.beyond).toBe(1);
-    // [150, 250] reaches under the left rail (140 to 158).
-    expect(readRim(parts, view(140, 0, 420, 200), { ...none, left: true }).left?.beyond).toBe(2);
-    // [300, 400] reaches under the right rail (402 to 420).
-    expect(rim.right?.beyond).toBe(1);
-    expect(rim.bottom?.beyond).toBe(1);
+    // [150, 250] is clear of the left rail (130 to 148).
+    expect(rim.left?.depth).toBe(0);
     expect(rim.top).toBeNull();
-    const deeper = readRim(parts, view(140, 0, 390, 200), { ...none, right: true });
-    expect(deeper.right?.beyond).toBe(2);
   });
 
   it('fades as deep as a cut part reaches in, and as deep as a cut label', () => {
@@ -228,15 +222,15 @@ describe('what each rim says', () => {
     expect(rim.right?.depth).toBe(30);
     const labelled = readRim(parts, view(120, 0, 330, 200), { ...none, left: true }, [view(110, 60, 160, 70)]);
     expect(labelled.left?.depth).toBe(40);
-    expect(labelled.left?.beyond).toBe(1);
   });
 
   it('fades only what is in view across the edge', () => {
-    // Scrolled both ways: a part wholly above the view reaches past its left rim.
+    // Scrolled both ways: a part wholly above the view reaches past its left
+    // rim, and is faded at neither edge -- it is in view across neither.
     const above = [view(0, 0, 300, 50)];
     const rim = readRim(above, view(100, 100, 500, 400), { ...none, left: true, top: true });
-    expect(rim.left).toEqual({ beyond: 1, depth: 0 });
-    expect(rim.top?.beyond).toBe(1);
+    expect(rim.left).toEqual({ depth: 0 });
+    expect(rim.top).toEqual({ depth: 0 });
   });
 
   it('says nothing of an edge the drawing ends at', () => {
@@ -286,7 +280,7 @@ describe('a line that leaves the view', () => {
     expect(findExits(parts, map.links, labels, place, view(420, 50, 580, 90))).toEqual([]);
   });
 
-  it('places each name on its rail near where its line crosses, clear of the rail\'s count and the map, never on another', () => {
+  it('places each name on its rail near where its line crosses, never on another', () => {
     const exits = [
       { side: 'right' as const, at: 100, part: 1, label: 'ElevenLabs TTS', tone: 'x' },
       { side: 'right' as const, at: 110, part: 2, label: 'Display gate', tone: 'x' },
@@ -294,18 +288,16 @@ describe('a line that leaves the view', () => {
       { side: 'right' as const, at: 470, part: 4, label: 'Skill socket', tone: 'x' },
       { side: 'bottom' as const, at: 300, part: 5, label: 'PBX', tone: 'x' },
     ];
-    const avoid = { left: [], right: [[230, 290] as Span, [400, 500] as Span], top: [], bottom: [] };
-    const placedTags = placeExits(exits, { left: 0, top: 0 }, { width: 800, height: 500 }, avoid);
+    const placedTags = placeExits(exits, { left: 0, top: 0 }, { width: 800, height: 500 });
     const right = placedTags.filter((tag) => tag.side === 'right');
-    // In order along the rail; one with no room left before the map is left out.
-    expect(right.map((tag) => tag.label)).toEqual(['ElevenLabs TTS', 'Display gate']);
+    // In order along the rail.
+    expect(right.map((tag) => tag.label)).toEqual(['ElevenLabs TTS', 'Display gate', 'Debug page', 'Skill socket']);
     expect(right[0].y + right[0].height / 2).toBeCloseTo(100);
     for (const tag of right) {
       expect(tag.width).toBe(15);
       expect(tag.height).toBe(tagLength(tag.label.length));
       expect(tag.x + tag.width).toBeLessThanOrEqual(800);
       expect(tag.x).toBeGreaterThanOrEqual(800 - RAIL);
-      for (const [low, high] of avoid.right) expect(tag.y + tag.height <= low || tag.y >= high).toBe(true);
     }
     for (let index = 1; index < right.length; index += 1) expect(right[index].y).toBeGreaterThanOrEqual(right[index - 1].y + right[index - 1].height);
     const [bottom] = placedTags.filter((tag) => tag.side === 'bottom');

@@ -126,30 +126,27 @@ describe('a scrolled graph at rest', () => {
     });
   }
 
-  it('counts on each rail the nodes that lie that way, and names where a line leaving the view goes', () => {
+  it('names where a line leaving the view goes, and draws no rail or count on the edge (#177)', () => {
     size = { width: 914, height: 526 };
     render(<DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />);
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
     const left = scroller.scrollLeft;
-    const right = left + view().width;
     const boxes = nodeBoxes();
-    const past = { left: boxes.filter((box) => box.left < left + RAIL - 0.5), right: boxes.filter((box) => box.right > right - RAIL + 0.5) };
+    const past = { left: boxes.filter((box) => box.left < left + RAIL - 0.5) };
     expect(past.left.length).toBeGreaterThan(0);
-    const count = (side: string) => host.querySelector(`.scroll-rim__count--${side}`)?.textContent ?? '';
-    expect(count('left')).toBe(`${String(past.left.length).padStart(2, '0')} NODES`);
-    if (past.right.length) expect(count('right')).toBe(`${String(past.right.length).padStart(2, '0')} ${past.right.length === 1 ? 'NODE' : 'NODES'}`);
-    expect(host.querySelector('.scroll-rim__rail--left')).not.toBeNull();
+    expect(host.querySelector('.scroll-rim__rail, .scroll-rim__count')).toBeNull();
+    expect(host.querySelector('.scroll-rim__fade--left')).not.toBeNull();
     // Every name on the left rail is a node out of view on the left.
     const names = [...host.querySelectorAll('.drawing-viewport__exit--left')].map((exit) => exit.textContent);
     expect(names.length).toBeGreaterThan(0);
     for (const name of names) expect(past.left.map((box) => box.label.replace(/\s+/g, ' ')).some((label) => label.startsWith(name!.replace('\u2026', '')))).toBe(true);
   });
 
-  it('turns a page to the next place to rest when its count is tapped, without expanding the object', () => {
+  it('a tap on its map does not expand the object, and the page still hears the click', () => {
     size = { width: 914, height: 526 };
     const activated: string[] = [];
     // The page hears every click at the document: the gesture that unlocks
-    // audio (callRuntime). A tap on a count or the map is one too.
+    // audio (callRuntime). A tap on the map is one too.
     const heard: EventTarget[] = [];
     const listen = (event: Event) => heard.push(event.target!);
     document.addEventListener('click', listen);
@@ -160,22 +157,15 @@ describe('a scrolled graph at rest', () => {
         </FocusableSurface>,
       );
       const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
-      const before = scroller.scrollLeft;
-      const count = host.querySelector<HTMLElement>('.scroll-rim__count--left')!;
-      act(() => count.click());
-      expect(scroller.scrollLeft).toBeLessThan(before);
-      const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.left));
-      expect(stops).toContain(scroller.scrollLeft);
       const map = host.querySelector<HTMLElement>('.drawing-viewport__map')!;
       act(() => map.click());
       expect(activated).toEqual([]);
-      // Before: the count and the map stopped their clicks, so the page never
-      // heard them.
-      expect(heard).toEqual([count, map]);
+      // Before: the map stopped its click, so the page never heard it.
+      expect(heard).toEqual([map]);
       // The drawing itself still expands.
       act(() => scroller.click());
       expect(activated).toEqual(['expand']);
-      expect(heard).toEqual([count, map, scroller]);
+      expect(heard).toEqual([map, scroller]);
     } finally {
       document.removeEventListener('click', listen);
     }
@@ -385,13 +375,13 @@ describe('a scrolled graph at rest', () => {
     expect(scroller.style.scrollSnapType).toBe('');
   });
 
-  it('hears a wheel over its map and its counts, not only over the drawing', () => {
+  it('hears a wheel over its map and its exits, not only over the drawing', () => {
     vi.useFakeTimers();
     size = { width: 914, height: 526 };
     render(<DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />);
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
     const before = scroller.scrollLeft;
-    for (const target of [host.querySelector('.drawing-viewport__map')!, host.querySelector('.scroll-rim__count--left')!]) {
+    for (const target of [host.querySelector('.drawing-viewport__map')!, host.querySelector('.drawing-viewport__exit--left')!]) {
       act(() => {
         target.dispatchEvent(new WheelEvent('wheel', { deltaY: -40, bubbles: true, cancelable: true }));
       });
@@ -418,7 +408,10 @@ describe('a scrolled graph at rest', () => {
         scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true }));
       });
       act(() => vi.advanceTimersByTime(200));
-      act(() => host.querySelector<HTMLElement>('.scroll-rim__count--right')?.click());
+      act(() => {
+        scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true }));
+      });
+      act(() => vi.advanceTimersByTime(200));
       expect(calls.length).toBeGreaterThanOrEqual(2);
       expect(calls.every((call) => call?.behavior === 'auto')).toBe(true);
       expect(scroller.style.scrollSnapType).toBe('');
@@ -458,24 +451,24 @@ describe('a long exchange scrolled down', () => {
     expect(scroller.scrollTop).toBe(600);
   });
 
-  it('counts the messages below on its bottom rail, and above under the pinned headers once scrolled', async () => {
+  it('fades its foot, and its top under the pinned headers once scrolled', async () => {
     size = { width: 914, height: 526 };
     render(<SequencePrimitive data={traceDiagram} id="trace" />);
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
     expect(scroller.scrollTop).toBe(0);
-    expect(host.querySelector('.scroll-rim__count--bottom')?.textContent).toMatch(/^\d\d MESSAGES$/);
-    expect(host.querySelector('.scroll-rim__count--top')).toBeNull();
+    expect(host.querySelector('.scroll-rim__fade--bottom')).not.toBeNull();
+    expect(host.querySelector('.scroll-rim__fade--top')).toBeNull();
     const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.top));
     act(() => {
       scroller.scrollTop = stops[3];
       scroller.dispatchEvent(new Event('scroll'));
     });
-    // The rails are read once a frame.
+    // The edges are read once a frame.
     await act(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
     const pinned = host.querySelector<HTMLElement>('.drawing-viewport__pinned--shown');
     expect(pinned).not.toBeNull();
-    const top = host.querySelector<HTMLElement>('.scroll-rim__count--top');
-    expect(top?.textContent).toMatch(/^\d\d MESSAGES$/);
+    const top = host.querySelector<HTMLElement>('.scroll-rim__fade--top');
+    expect(top).not.toBeNull();
     expect(parseFloat(top!.style.top)).toBeCloseTo(parseFloat(pinned!.style.height));
   });
 });

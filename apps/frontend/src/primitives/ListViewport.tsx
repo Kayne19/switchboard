@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
-import { rimCount, type Noun } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import { ScrollRim } from './ScrollRim';
 import { PAGE_SHARE, scrollMove, type ScrollMove } from './drawingScroll';
@@ -10,36 +9,18 @@ import { drawnScale, watchElement } from '../hooks/watchElement';
 // list, an inbox, an agenda, a forecast's days, a table's rows, source, a
 // document's body): the list scrolls inside it, up and down only (sideways
 // too where the content asks), and on each edge it continues past the
-// viewport draws the rim DrawingViewport draws for a drawing (ScrollRim),
-// so the two read as one instrument: a fade as the edge's rows run under it,
-// the dashed cut line, and a count of the items wholly past that edge with
-// a chevron pointing there (a tap turns a page that way). A list that fits
-// has none of them and does not scroll.
-//
-// Items are the elements under the scroll that carry `data-item` (the name
-// a note uses for them, `app/noteItems.ts`), or those `countSelector`
-// picks where only some of them are what the list is a list of; anything
-// else in the list (a group heading, a day rule) is not counted. They are counted by their
-// boxes against the scroll's edges, whatever their layout: rows, a time
-// grid with several to a row, cards. Elements that share a name are one
-// item (an agenda's event on each day it runs), counted once (`countPast`).
+// viewport draws the fade DrawingViewport draws for a drawing (ScrollRim),
+// so the two read as one instrument: the edge's rows run under it, and a
+// row cut there reads as the next one coming. A list that fits has none of
+// it and does not scroll.
 //
 // It opens on its lead, once per shape (the lead, the item count, the
 // viewport's height): the item `lead` names, else an element marked
 // `data-lead` (a calendar's now line), brought into view a little below
 // the top. An update that keeps the shape keeps the reader's place.
 
-/** What lies past each edge of a list's view, counted in whole items. */
-export interface ListPast {
-  above: number;
-  below: number;
-}
-
 /**
  * The edges a list continues past: more of it than a sliver lies that way.
- * An edge is marked even where no item lies past it (a forecast's
- * conditions above its days): the count names what it can, and the edge
- * still says the list goes on.
  */
 export function continuesPast(scrollTop: number, viewHeight: number, contentHeight: number): { top: boolean; bottom: boolean } {
   return { top: scrollTop > SLIVER, bottom: contentHeight - viewHeight - scrollTop > SLIVER };
@@ -53,43 +34,8 @@ export interface Extent {
 
 // Half a pixel either way is the edge itself, not past it.
 const EDGE = 0.5;
-// An item with no more of it in view than this is past the edge: what
-// shows of it is its padding, not its words. The least of a few pixels and
-// a share of its height.
+// No more of a list than this past an edge is a sliver, not more to read.
 const SLIVER = 16;
-const SLIVER_SHARE = 0.4;
-
-/** How much of an item may show in the view while it still counts as past the edge. */
-const sliver = (item: Extent) => Math.max(EDGE, Math.min(SLIVER, (item.bottom - item.top) * SLIVER_SHARE));
-
-/** An item's box, and the name of the item it draws (`data-item`) where it has one. */
-export interface ItemBox extends Extent {
-  name?: string | null;
-}
-
-/**
- * How many items lie past each edge of `view`: wholly, or with only a
- * sliver of them in view. Boxes that share a name draw one item (an
- * agenda draws an event on every day it runs; a time grid draws one cut at
- * midnight in two columns), which counts once, and only where every one
- * of its boxes lies past that edge: one in view, or some past each edge,
- * and it lies neither way. A box with no name is an item of its own.
- */
-export function countPast(items: readonly ItemBox[], view: Extent): ListPast {
-  const sides = new Map<string | number, 'above' | 'below' | null>();
-  items.forEach((item, index) => {
-    const side = item.bottom <= view.top + sliver(item) ? 'above' : item.top >= view.bottom - sliver(item) ? 'below' : null;
-    const key = item.name ?? index;
-    sides.set(key, sides.has(key) && sides.get(key) !== side ? null : side);
-  });
-  let above = 0;
-  let below = 0;
-  for (const side of sides.values()) {
-    if (side === 'above') above += 1;
-    else if (side === 'below') below += 1;
-  }
-  return { above, below };
-}
 
 /**
  * Where the scroll rests to show `lead` (in content coordinates): where it
@@ -160,12 +106,8 @@ function cssEscape(value: string): string {
 
 interface ListViewportProps {
   children: ReactNode;
-  /** How the counts name the items: `['TASK', 'TASKS']`. */
-  noun: Noun;
   /** The `data-item` of the item to open on; absent, an element marked `data-lead`, if any; null, none (a row of objects, whose leads are their own). */
   lead?: string | null;
-  /** Which items the counts count, when not every `data-item` is one (a forecast counts its days, not its hours). */
-  countSelector?: string;
   /** Pinned above the scroll inside the same frame: a list's header, a calendar's day row. */
   head?: ReactNode;
   /** The viewport's own class, beside `list-viewport`. */
@@ -178,17 +120,17 @@ interface ListViewportProps {
   label?: string;
   /**
    * The band at the top of the scroll that the rows pass under (a table's
-   * sticky header), by a selector inside it: the counts, the top edge and a
-   * page start below it. The lead (`lead`) does not reckon with it: no list
-   * with a band has a lead.
+   * sticky header), by a selector inside it: the top edge and a page start
+   * below it. The lead (`lead`) does not reckon with it: no list with a
+   * band has a lead.
    */
   pinned?: string;
 }
 
-export function ListViewport({ children, noun, lead, countSelector = '[data-item]', head, className, scrollClassName, scrollRef: givenRef, label, pinned }: ListViewportProps) {
+export function ListViewport({ children, lead, head, className, scrollClassName, scrollRef: givenRef, label, pinned }: ListViewportProps) {
   const ownRef = useRef<HTMLDivElement>(null);
   const scrollRef = givenRef ?? ownRef;
-  const [past, setPast] = useState<ListPast & { top: boolean; bottom: boolean }>({ above: 0, below: 0, top: false, bottom: false });
+  const [past, setPast] = useState<{ top: boolean; bottom: boolean }>({ top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
   // A pane that scrolls across (a table's, source's or document's) may
   // overflow only sideways (long lines, a wide table on a phone): it is a
@@ -204,33 +146,25 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
   const measure = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
-    // The rows' rects and the box's are on screen, scaled with it while a
-    // focus opens or a cell of the aux row settles; they are brought back to
-    // the list's own pixels, in which a sliver is measured, so a count read
-    // mid-animation is the count at rest. Nothing reads them again when such
-    // an animation ends.
+    // The box's rect is on screen, scaled with it while a focus opens or a
+    // cell of the aux row settles; the pinned band's depth is brought back
+    // to the list's own pixels, so a depth read mid-animation is the depth
+    // at rest. Nothing reads it again when such an animation ends.
     const box = element.getBoundingClientRect();
     const k = drawnScale(box.height, element.offsetHeight);
-    const items = Array.from(element.querySelectorAll<HTMLElement>(countSelector)).map((item) => {
-      const rect = item.getBoundingClientRect();
-      return { top: (rect.top - box.top) / k, bottom: (rect.bottom - box.top) / k, name: item.getAttribute('data-item') };
-    });
     const band = pinned ? element.querySelector<HTMLElement>(pinned) : null;
     const depth = band ? band.getBoundingClientRect().height / k : 0;
     const overflows = element.scrollHeight > element.clientHeight + 1;
-    const counts = overflows ? countPast(items, { top: depth, bottom: element.clientHeight }) : { above: 0, below: 0 };
-    const goes = overflows ? continuesPast(element.scrollTop, element.clientHeight, element.scrollHeight) : { top: false, bottom: false };
-    const next = { ...counts, top: goes.top || counts.above > 0, bottom: goes.bottom || counts.below > 0 };
-    setPast((current) =>
-      current.above === next.above && current.below === next.below && current.top === next.top && current.bottom === next.bottom ? current : next,
-    );
+    const next = overflows ? continuesPast(element.scrollTop, element.clientHeight, element.scrollHeight) : { top: false, bottom: false };
+    setPast((current) => (current.top === next.top && current.bottom === next.bottom ? current : next));
     setScrolls(element.scrollHeight > element.clientHeight + 1);
     // Across only where the pane can scroll that way: a list clips what
     // sticks out sideways (overflow-x: hidden), which scrollWidth still counts.
     setAcross(element.scrollWidth > element.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(element).overflowX));
     setViewHeight(element.clientHeight);
     setPinnedDepth(depth);
-  }, [scrollRef, countSelector, pinned]);
+  }, [scrollRef, pinned]);
+
   const onScroll = useOncePerFrame(measure);
 
   useEffect(() => {
@@ -274,26 +208,11 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
     event.preventDefault();
     element.scrollTo({ [sideways ? 'left' : 'top']: to, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
-  // A tap on an edge's count turns a page that way (ScrollRim marks it handled).
-  const page = (direction: -1 | 1) => {
-    const element = scrollRef.current;
-    if (!element) return;
-    element.scrollBy({ top: direction * pageLength(element.clientHeight - pinnedDepth), behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
-  };
-
   const fade = fadeDepth(viewHeight - pinnedDepth);
-  // An edge the list continues past: the fade, the cut line, and the count
-  // of the items that lie that way, or MORE where none of them does.
-  const edge = (side: 'top' | 'bottom', continues: boolean, count: number) =>
-    continues ? (
-      <ScrollRim
-        side={side}
-        fade={fade}
-        text={count > 0 ? rimCount(count, noun) : 'MORE'}
-        onPage={() => page(side === 'top' ? -1 : 1)}
-        inset={pinned ? pinnedDepth : undefined}
-      />
-    ) : null;
+  // An edge the list continues past fades, so a row cut there reads as the
+  // next one coming.
+  const edge = (side: 'top' | 'bottom', continues: boolean) =>
+    continues ? <ScrollRim side={side} fade={fade} inset={pinned ? pinnedDepth : undefined} /> : null;
 
   return (
     <div className={`list-viewport${scrolls ? ' list-viewport--scrolling' : ''}${className ? ` ${className}` : ''}`}>
@@ -310,8 +229,8 @@ export function ListViewport({ children, noun, lead, countSelector = '[data-item
         >
           {children}
         </div>
-        {edge('top', past.top, past.above)}
-        {edge('bottom', past.bottom, past.below)}
+        {edge('top', past.top)}
+        {edge('bottom', past.bottom)}
       </div>
     </div>
   );

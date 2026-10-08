@@ -20,7 +20,7 @@ import { calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
 import { NOTES_PLACED_IN_FULL } from '../primitives/notePlacement';
-import { countText, type Noun } from '../primitives/countText';
+import { countText } from '../primitives/countText';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { ListViewport, continuesPast, fadeDepth } from '../primitives/ListViewport';
 import { LiveChatCard } from '../primitives/LiveChatCard';
@@ -771,7 +771,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
 
 // ---- The aux row: every visual a main slot does not draw ----
 
-const PANEL: Noun = ['PANEL', 'PANELS'];
 
 // The row under a primary: each object the main slot does not draw and the
 // rail does not carry gets a framed cell of its own, so an accepted object is
@@ -796,7 +795,7 @@ function AuxRow({
   // draws, counting the cells wholly past each edge (ListViewport); it opens
   // at its top, whatever its cells lead with.
   return (
-    <ListViewport noun={PANEL} lead={null} countSelector=":scope > .composed-aux-object" className="composed-aux-viewport" scrollClassName="composed-aux" label="More on stage">
+    <ListViewport lead={null} className="composed-aux-viewport" scrollClassName="composed-aux" label="More on stage">
       {objects.map((object) => (
         <ObjectMotion
           key={object.id}

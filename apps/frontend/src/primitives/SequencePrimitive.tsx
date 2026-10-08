@@ -78,7 +78,6 @@ export function SequencePrimitive({
     });
     return {
       parts,
-      noun: ['MESSAGE', 'MESSAGES'],
       marks: [],
       links: [],
       sketch: {

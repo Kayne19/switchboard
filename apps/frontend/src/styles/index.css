@@ -2093,107 +2093,6 @@ button {
   bottom: 0;
   background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.8) 10px, rgba(0, 0, 0, 0.96));
 }
-/* On the rim, the rail (drawingScroll.ts RAIL deep): the drawing's cut,
-   a dashed orange line on the outside and a faint one within, holding the
-   edge's count and the names of the lines that leave there. */
-.scroll-rim__rail {
-  position: absolute;
-  z-index: 2;
-  pointer-events: none;
-  --cut: rgba(var(--orange-rgb), 0.62);
-  --within: rgba(var(--orange-rgb), 0.16);
-}
-.scroll-rim__rail--left,
-.scroll-rim__rail--right {
-  top: 0;
-  bottom: 0;
-  width: 18px;
-}
-.scroll-rim__rail--top,
-.scroll-rim__rail--bottom {
-  left: 0;
-  right: 0;
-  height: 18px;
-}
-.scroll-rim__rail--left {
-  left: 0;
-  border-left: 1px dashed var(--cut);
-  box-shadow: inset -1px 0 var(--within);
-}
-.scroll-rim__rail--right {
-  right: 0;
-  border-right: 1px dashed var(--cut);
-  box-shadow: inset 1px 0 var(--within);
-}
-.scroll-rim__rail--top {
-  top: 0;
-  border-top: 1px dashed var(--cut);
-  box-shadow: inset 0 -1px var(--within);
-}
-.scroll-rim__rail--bottom {
-  bottom: 0;
-  border-bottom: 1px dashed var(--cut);
-  box-shadow: inset 0 1px var(--within);
-}
-/* A rail's count: how many parts lie that way, and a chevron pointing
-   there, set along the rail in the rail face (drawingScroll.ts
-   `tagLength`). A tap on it turns a page that way. On the left and right
-   rails a tag is turned a quarter so it runs along the rail, its top (and
-   its chevron) facing out: the left one reads up, as a spine does. */
-.scroll-rim__count {
-  position: absolute;
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 18px;
-  box-sizing: border-box;
-  padding: 0 5px;
-  border: 1px solid rgba(var(--orange-rgb), 0.85);
-  background: #000;
-  color: var(--orange);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.scroll-rim__count--left,
-.scroll-rim__count--right {
-  top: 50%;
-  translate: -50% -50%;
-}
-.scroll-rim__count--left {
-  left: 9px;
-  rotate: -90deg;
-}
-.scroll-rim__count--right {
-  left: calc(100% - 9px);
-  rotate: 90deg;
-}
-.scroll-rim__count--top,
-.scroll-rim__count--bottom {
-  left: 50%;
-  translate: -50% 0;
-}
-.scroll-rim__count--top {
-  top: 0;
-}
-.scroll-rim__count--bottom {
-  bottom: 0;
-}
-/* The one chevron (ScrollRim `Chevron`), on a rim's count. */
-.scroll-rim__chevron {
-  flex: none;
-  width: 8px;
-  height: 6px;
-  fill: currentColor;
-}
-.scroll-rim__count--bottom .scroll-rim__chevron {
-  rotate: 180deg;
-}
 /* A line that leaves the view: on the rail where it leaves, the name of
    the part it goes to, in the line's colour, its chevron pointing out,
    turned as a rail's count is. drawingScroll.ts places it by this face and
@@ -4511,7 +4410,7 @@ button {
   content: "";
   position: absolute;
   left: var(--grid-lead, var(--calendar-gutter));
-  right: var(--grid-trail, 0px);
+  right: 0;
   border-top: 1px solid rgba(var(--paper-rgb), 0.08);
 }
 .calendar-grid__hour-text {
@@ -4530,7 +4429,7 @@ button {
 .calendar-grid__fold {
   position: absolute;
   left: var(--grid-lead, var(--calendar-gutter));
-  right: var(--grid-trail, 0px);
+  right: 0;
   display: flex;
   align-items: center;
   border-top: 1px dashed rgba(var(--paper-rgb), 0.18);
@@ -4606,8 +4505,8 @@ button {
 .calendar-grid__now-line {
   position: absolute;
   top: 0;
-  left: calc(var(--grid-lead) + (100% - var(--grid-lead) - var(--grid-trail)) * var(--now-column) / var(--columns));
-  width: calc((100% - var(--grid-lead) - var(--grid-trail)) / var(--columns));
+  left: calc(var(--grid-lead) + (100% - var(--grid-lead)) * var(--now-column) / var(--columns));
+  width: calc((100% - var(--grid-lead)) / var(--columns));
   height: 1px;
   background: var(--orange);
 }
@@ -4827,29 +4726,15 @@ button {
   margin-left: auto;
 }
 
-/* The paged week: the days a narrow grid has no room for are named on a
-   rail at each side, as a scrolled drawing's rails count its parts. A
-   swipe across the days is the page's (PagedDays): the browser keeps only
-   the pan up and down. The hours scroll on their own, and a browser reads
+/* The paged week: the days a narrow grid has no room for are turned to by
+   a swipe across the days (PagedDays) or the keys every scroller takes;
+   the browser keeps only the pan up and down. The hours scroll on their own, and a browser reads
    a touch's touch-action only up to the nearest scroll, so they say it
    too, or a swipe in them (most of a phone's grid) is taken as a pan
    across and never turns the days. */
 .calendar-pages,
 .calendar-pages .calendar-grid__scroll {
   touch-action: pan-y;
-}
-.calendar-pages__edges {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-}
-.calendar-pages__edges > .scroll-rim__rail {
-  width: 20px;
-}
-.calendar-pages__rim {
-  pointer-events: auto;
 }
 
 /* The month: a week to a row, Monday first. */

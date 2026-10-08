@@ -210,7 +210,7 @@ export function TasksPrimitive({ data, slot = 'primary', marked }: { data: Tasks
     );
   return (
     <div className={`tasks-primitive tasks-primitive--${READING[slot]}`} data-testid="tasks">
-      <ListViewport noun={['TASK', 'TASKS']} lead={marked} head={head} scrollClassName="tasks-primitive__scroll" label={data.title ?? 'Tasks'}>
+      <ListViewport lead={marked} head={head} scrollClassName="tasks-primitive__scroll" label={data.title ?? 'Tasks'}>
         <div className={`tasks-primitive__sections${grouped ? '' : ' tasks-primitive__sections--plain'}`}>
           {sections.map((section, index) => {
             // A task a note names stays listed when its section counts the rest.

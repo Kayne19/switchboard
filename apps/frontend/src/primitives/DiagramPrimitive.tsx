@@ -113,7 +113,6 @@ export function DiagramPrimitive({
     const stubNames = [...new Set(layout.edges.flatMap(({ stubs }) => (stubs ? [stubs.from.label, stubs.to.label] : [])))];
     return {
       parts: layout.nodes.map(({ node, box }) => ({ box, label: node.label })),
-      noun: ['NODE', 'NODES'],
       marks: [...layout.edges.flatMap(({ label }) => (label ? [label.box] : [])), ...stubNames.map((label) => label.box)],
       links,
       sketch: {

@@ -305,8 +305,6 @@ export function ChartPrimitive({
       // Scrolled, it reads as a list does: the rows past each edge counted
       // there, a tap turning a page; its value axis pinned over the rows.
       <ListViewport
-        noun={data.series.length > 1 ? ['GROUP', 'GROUPS'] : ['BAR', 'BARS']}
-        countSelector=".chart-grid__category"
         lead={lead === undefined ? undefined : String(lead)}
         head={<ValueAxisHead scales={scales} width={width} scale={drawnScale}/>}
         className="chart-primitive__viewport"

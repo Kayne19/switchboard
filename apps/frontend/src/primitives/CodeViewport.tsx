@@ -1,6 +1,5 @@
 import type { CodeData } from '../controller/types';
 import type { ReactNode } from 'react';
-import type { Noun } from './countText';
 import { ListViewport } from './ListViewport';
 import type { Slot } from './slot';
 import { TechFrame } from './TechFrame';
@@ -26,12 +25,11 @@ function highlightLine(line:string,lineIndex:number):ReactNode[]{
 }
 
 // What the rims count a source's lines as.
-const LINE: Noun = ['LINE', 'LINES'];
 
 // Source in the interrupted-rails frame, clipped to its inside. Source that
 // outgrows the frame scrolls in the list viewport, which counts its lines
 // past each edge and pages it by the keys every scroller takes.
 export function CodeViewport({data,slot='primary'}:{data:CodeData;slot?:Slot}){
   const lines=data.source.text.split('\n'),highlighted=new Set(data.source.highlight??[]);
-  return <div className={`code-viewport${slot==='focus'?' code-viewport--focused':''}`} data-testid="code"><TechFrame variant="code"/><div className="code-viewport__mask"><ListViewport noun={LINE} countSelector=".code-line" scrollClassName="code-viewport__scroll" label={data.title??'Source'}><pre>{lines.map((line,index)=>{const lineNumber=index+1;return <span className={`code-line${highlighted.has(lineNumber)?' code-line--hot':''}`} key={lineNumber}><span className="code-line__number">{lineNumber}</span><span className="code-line__source">{highlightLine(line,index)}</span></span>;})}</pre></ListViewport></div></div>;
+  return <div className={`code-viewport${slot==='focus'?' code-viewport--focused':''}`} data-testid="code"><TechFrame variant="code"/><div className="code-viewport__mask"><ListViewport scrollClassName="code-viewport__scroll" label={data.title??'Source'}><pre>{lines.map((line,index)=>{const lineNumber=index+1;return <span className={`code-line${highlighted.has(lineNumber)?' code-line--hot':''}`} key={lineNumber}><span className="code-line__number">{lineNumber}</span><span className="code-line__source">{highlightLine(line,index)}</span></span>;})}</pre></ListViewport></div></div>;
 }

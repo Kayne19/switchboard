@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import type { TableCell, TableData } from '../controller/types';
-import type { Noun } from './countText';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import type { Slot } from './slot';
@@ -63,7 +62,6 @@ function CellText({ cell }: { cell: TableCell }) {
 }
 
 // What the rims count a table's rows as.
-const ROW: Noun = ['ROW', 'ROWS'];
 
 // Rows of named columns inside the interrupted-rails frame, scrolling only
 // when they overflow it and clipped to its inside (the same mask the code
@@ -89,7 +87,7 @@ export function TablePrimitive({ data, slot = 'primary' }: { data: TableData; sl
       <TechFrame variant="code" />
       <div className="table-viewport__mask">
         {meta}
-        <ListViewport noun={ROW} countSelector="tr[data-row]" pinned="thead" scrollClassName="table-viewport__scroll" label={data.title ?? 'Table'}>
+        <ListViewport pinned="thead" scrollClassName="table-viewport__scroll" label={data.title ?? 'Table'}>
           <table className="table-grid">
             <thead>
               <tr>

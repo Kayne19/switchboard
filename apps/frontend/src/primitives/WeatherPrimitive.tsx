@@ -342,7 +342,6 @@ function Days({ days, marked, scroll }: { days: WeatherDay[]; marked?: string; s
     <section className="weather-daily">
       {scroll ? (
         <ListViewport
-          noun={['DAY', 'DAYS']}
           lead={days.some((day) => day.date === marked) ? marked : undefined}
           head={head}
           scrollClassName="weather-daily__scroll"
@@ -420,7 +419,7 @@ export function WeatherPrimitive({ data, marked, slot = 'primary' }: { data: Wea
       {/* The box the forecast is laid out for, inside any padding its slot gives it. */}
       <div ref={boxRef} className="weather__box">
         {tall ? (
-          <ListViewport noun={['DAY', 'DAYS']} countSelector=".weather-day" lead={named} scrollClassName="weather__scroll" label="Forecast">
+          <ListViewport lead={named} scrollClassName="weather__scroll" label="Forecast">
             {field}
           </ListViewport>
         ) : (

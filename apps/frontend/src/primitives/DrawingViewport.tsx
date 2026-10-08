@@ -4,7 +4,6 @@ import { useElementSize } from '../hooks/useElementSize';
 import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import type { DrawingFit, Viewport } from './drawingFit';
 import type { Box, Size } from './geometry';
-import { rimCount } from './countText';
 import { prefersReducedMotion } from './reducedMotion';
 import { ScrollRim } from './ScrollRim';
 import {
@@ -18,14 +17,12 @@ import {
   mapInStrip,
   MAP_MARGIN,
   MAP_PAD,
-  pageStop,
   placeExits,
   placed,
   readRim,
   restEnd,
   restStops,
   settleStop,
-  tagLength,
   type DrawingMap,
   type MapStrip,
   type Placement,
@@ -423,18 +420,6 @@ export function DrawingViewport({
     }
   };
 
-  // A tap on a rim's count turns a page that way (ScrollRim marks it handled).
-  const page = (side: Side) => {
-    const element = scrollRef.current;
-    if (!element || !stops) return;
-    const across = side === 'left' || side === 'right';
-    const direction = side === 'left' || side === 'top' ? -1 : 1;
-    const target = across
-      ? pageStop(stops.x, standing(element, true), element.clientWidth, direction)
-      : pageStop(stops.y, standing(element, false), element.clientHeight - pinnedDepth, direction);
-    glide(element, across, target);
-  };
-
   // What the rims say, from where the reader stands.
   const inset = reading && reading.top > 0.5 ? pinnedDepth : 0;
   const view = useMemo<View | null>(
@@ -459,30 +444,11 @@ export function DrawingViewport({
   // and as long as the drawing's shape makes it.
   const stripLength = strip?.side === 'bottom' ? boxWidth : boxHeight;
   const mapBox = useMemo(() => (strip && stripLength ? mapInStrip(drawing, strip, stripLength) : null), [drawing, strip, stripLength]);
-  // Each rim's count of what lies that way: "07 NODES".
-  const rimTexts = useMemo(() => {
-    const text = (side: Side) => {
-      const count = rim?.[side]?.beyond ?? 0;
-      return count > 0 ? rimCount(count, map.noun) : '';
-    };
-    return { left: text('left'), right: text('right'), top: text('top'), bottom: text('bottom') };
-  }, [rim, map]);
-  // Where each rail's count stands: in its middle (the side rails start
-  // under a pinned band).
-  const rails = useMemo(() => {
-    const centre = (side: Side) => (side === 'left' || side === 'right' ? (inset + boxHeight) / 2 : boxWidth / 2);
-    return { left: centre('left'), right: centre('right'), top: centre('top'), bottom: centre('bottom') };
-  }, [inset, boxWidth, boxHeight]);
   const exits = useMemo(() => {
     if (!reading || !place || !view || map.links.length === 0) return [];
-    // Along each rail, the names keep off its count.
-    const along = (side: Side): Span[] => {
-      const text = rimTexts[side];
-      return text ? [[rails[side] - tagLength(text.length) / 2 - 4, rails[side] + tagLength(text.length) / 2 + 4]] : [];
-    };
     const found = findExits(parts, map.links, map.parts.map((part) => part.label), place, clearOf(view, continues));
-    return placeExits(found, reading, reading, { left: along('left'), right: along('right'), top: along('top'), bottom: along('bottom') }, inset);
-  }, [map, reading, place, view, continues, parts, rimTexts, rails, inset]);
+    return placeExits(found, reading, reading, inset);
+  }, [map, reading, place, view, continues, parts, inset]);
 
   // The map: a tap or a drag centres the view where it points.
   const dragging = useRef(false);
@@ -595,7 +561,7 @@ export function DrawingViewport({
             </div>
           </div>
         ) : null}
-        {/* The names of the lines that leave, under the rims' counts, which keep clear of them. */}
+        {/* The names of the lines that leave, on the edges they leave by. */}
         {exits.length > 0 ? (
           <div className="drawing-viewport__exits" aria-hidden="true">
             {exits.map((exit) => (
@@ -619,10 +585,7 @@ export function DrawingViewport({
             key={side}
             side={side}
             fade={continues[side] ? fadeDepth(side) : null}
-            text={rimTexts[side] || null}
-            onPage={() => page(side)}
             inset={inset}
-            at={rails[side]}
           />
         ))}
       </div>

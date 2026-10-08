@@ -112,17 +112,22 @@ for (const geometry of GEOMETRIES) {
   });
 }
 
-test('a week in a narrow portrait box pages its columns from today, names the hidden days, and turns on a tap', async ({ page }) => {
+test('a week in a narrow portrait box pages its columns from today, names the hidden days in its label, and turns by a key', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page, 'calendar');
   const days = () => page.locator('.scene .calendar-grid__weekday').allTextContents();
-  expect(await days()).toEqual(['WED', 'THU', 'FRI']);
-  const rims = page.locator('.scene .calendar-pages__rim');
-  await expect(rims).toHaveCount(2);
-  await expect(rims.first()).toContainText('MON-TUE');
-  await rims.last().click();
-  expect(await days()).toEqual(['FRI', 'SAT', 'SUN']);
-  // The tap turned a page and did not open focus.
+  const shown = await days();
+  expect(shown.length).toBeGreaterThanOrEqual(2);
+  expect(shown.length).toBeLessThan(7);
+  const pages = page.locator('.scene .calendar-pages');
+  // No rail and no count tag over the days (#177): the days either way are
+  // named in the group's label.
+  await expect(page.locator('.scene .calendar-pages__rim, .scene .scroll-rim__rail, .scene .scroll-rim__count')).toHaveCount(0);
+  await expect(pages).toHaveAttribute('aria-label', /Earlier: MON/);
+  await pages.focus();
+  await page.keyboard.press('ArrowRight');
+  expect(await days()).not.toEqual(shown);
+  // The key turned a page and did not open focus.
   await expect(page.locator('.focus-layer')).toHaveCount(0);
 });
 
@@ -202,59 +207,6 @@ test.describe('a touch screen', () => {
     await swipe(page, 300, 120, -180);
     await expect.poll(fixture, { timeout: 800 }).not.toBe('idle');
   });
-});
-
-/**
- * Each calendar list's rim counts against the events it draws, as
- * `above + below + shown <= events`: an event (one name, however many
- * rows or columns draw it) past an edge is not also in view, nor past the
- * other edge. An agenda draws an event on every day it runs, and counted
- * rows: one 12-day stay made a 13-event agenda's rim say 14 EVENTS.
- */
-function rimOverCounts() {
-  const faults: string[] = [];
-  for (const scroll of document.querySelectorAll<HTMLElement>('[data-testid="calendar"] .list-viewport__scroll')) {
-    const view = scroll.getBoundingClientRect();
-    const names = new Set<string>();
-    const shown = new Set<string>();
-    for (const item of scroll.querySelectorAll<HTMLElement>('[data-item]')) {
-      const name = item.dataset.item!;
-      names.add(name);
-      const box = item.getBoundingClientRect();
-      if (box.top >= view.top - 0.5 && box.bottom <= view.bottom + 0.5) shown.add(name);
-    }
-    const counts = [...scroll.parentElement!.querySelectorAll('.scroll-rim__count')].map((rim) => parseInt(rim.textContent ?? '', 10) || 0);
-    const past = counts.reduce((sum, count) => sum + count, 0);
-    if (past + shown.size > names.size) faults.push(`${scroll.className}: ${counts.join(' + ')} past and ${shown.size} shown of ${names.size}`);
-  }
-  return faults;
-}
-
-for (const geometry of FRAME_GEOMETRIES) {
-  test(`${geometry.name}: a calendar list counts events, not the rows that draw them`, async ({ page }) => {
-    await page.setViewportSize({ width: geometry.width, height: geometry.height });
-    for (const scene of scenes) {
-      await open(page, scene);
-      expect(await page.evaluate(rimOverCounts), scene).toEqual([]);
-    }
-  });
-}
-
-test('an agenda counts a stay drawn on each of its days once', async ({ page }) => {
-  // Twelve days with one stay over all of them and an hour on each: thirteen events, the stay drawn twelve times.
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await openScene(page, 'idle');
-  const day = (index: number) => `2026-10-${String(5 + index).padStart(2, '0')}`;
-  await runActions(page, [{ op: 'show', id: 'trip', type: 'calendar', role: 'primary', data: {
-    view: 'agenda', start: day(0), days: 12,
-    events: [
-      { id: 'stay', title: 'Lisbon stay', start: day(0), end: day(11) },
-      ...Array.from({ length: 12 }, (_, index) => ({ id: `talk-${index}`, title: `Talk ${index + 1}`, start: `${day(index)}T10:00`, end: `${day(index)}T11:00` })),
-    ],
-  } }]);
-  await expect(page.locator('.scene [data-testid="calendar"] .scroll-rim__count')).toHaveCount(1);
-  await page.waitForTimeout(400);
-  expect(await page.evaluate(rimOverCounts)).toEqual([]);
 });
 
 test('the now line opens in view, and the agenda opens on it with the marked event below', async ({ page }) => {

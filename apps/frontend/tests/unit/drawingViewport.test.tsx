@@ -36,7 +36,6 @@ const scrollsDown: DrawingFit = { scale: 0.8, width: 320, height: 1600, scrollX:
 // Twenty rows, 80 units deep with 20 between: on screen, rows of 64 px with 16 px gaps.
 const rows: DrawingMap = {
   parts: Array.from({ length: 20 }, (_, index) => ({ box: { x: 0, y: index * 100 + 10, width: 400, height: 80 }, label: `ROW ${index}` })),
-  noun: ['ROW', 'ROWS'],
   marks: [],
   links: [],
   sketch: { boxes: [], lines: [] },
@@ -132,7 +131,7 @@ describe('a drawing viewport', () => {
     }
   });
 
-  it('moves on from where a key or a count is taking it, not from where the scroll has got to', () => {
+  it('moves on from where a key is taking it, not from where the scroll has got to', () => {
     // A smooth scroll still on its way: the scroller has not moved yet.
     const asked: number[] = [];
     const scrollTo = HTMLElement.prototype.scrollTo;
@@ -153,11 +152,9 @@ describe('a drawing viewport', () => {
         });
       press('ArrowDown');
       press('ArrowDown');
+      press('ArrowDown');
       // Before: the second press read the scroller, still at 0, and asked for the same stop.
-      expect(asked).toEqual([stops[1], stops[2]]);
-      act(() => host.querySelector<HTMLElement>('.scroll-rim__count--bottom')!.click());
-      expect(asked[2]).toBeGreaterThan(stops[2]);
-      expect(stops).toContain(asked[2]);
+      expect(asked).toEqual([stops[1], stops[2], stops[3]]);
     } finally {
       HTMLElement.prototype.scrollTo = scrollTo;
     }

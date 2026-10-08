@@ -118,7 +118,7 @@ export function TimerPrimitive({ data, marked, slot = 'primary' }: { data: Timer
         {layout.kind === 'grid' ? (
           <ol className="timer-grid">{items}</ol>
         ) : (
-          <ListViewport noun={['TIMER', 'TIMERS']} lead={marked} scrollClassName="timer-list" label={data.title ?? 'Timers'}>
+          <ListViewport lead={marked} scrollClassName="timer-list" label={data.title ?? 'Timers'}>
             <ol className="timer-list__rows">{items}</ol>
           </ListViewport>
         )}

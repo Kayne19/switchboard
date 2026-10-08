@@ -6,8 +6,7 @@
 // - It rests only where the edge it is read from cuts no part: between two
 //   layers of a graph, between two messages of a sequence (`restStops`),
 //   and opens on its lead at such a place (`leadStop`).
-// - Each edge it continues past carries a rail: how many parts lie that
-//   way, and a fade over whatever the edge still cuts (`readRim`).
+// - Each edge it continues past fades over whatever it cuts (`readRim`).
 // - A line that leaves the view names the part at its far end, on the
 //   rail where it leaves (`findExits`, `placeExits`).
 // - A map of the whole drawing, the view boxed on it, stands in a strip of
@@ -16,7 +15,6 @@
 
 import { textCells } from '../design/textCells';
 import { monoAdvance } from '../design/tokens';
-import type { Noun } from './countText';
 import type { Box, Point, Rect, Size } from './geometry';
 
 /**
@@ -24,11 +22,9 @@ import type { Box, Point, Rect, Size } from './geometry';
  * units, to say where its reader is.
  */
 export interface DrawingMap {
-  /** What a reader counts past each edge, and what a view at rest keeps whole at the edge it is read from: a graph's nodes, a sequence's messages. */
+  /** What a view at rest keeps whole at the edge it is read from: a graph's nodes, a sequence's messages. */
   parts: Array<{ box: Box; label: string }>;
-  /** What one part, and several, are called in those counts. */
-  noun: Noun;
-  /** Regions a view at rest does not cut either, where it can help it, and whose cut it fades, but does not count: a graph's edge labels. */
+  /** Regions a view at rest does not cut either, where it can help it, and whose cut it fades: a graph's edge labels. */
   marks: Box[];
   /** Lines from one part to another (a graph's edges, by index into `parts`): where one leaves the view, the rim names the part at its far end. */
   links: Array<{ points: Point[]; from: number; to: number; tone: string }>;
@@ -301,17 +297,14 @@ export function keyStop(key: string, shift: boolean, across: boolean, stops: rea
 // The rims
 
 export interface RimSide {
-  /** How many parts lie wholly or partly past this edge. */
-  beyond: number;
   /** How far into the view a part this edge cuts reaches, CSS pixels: the depth the fade there covers. 0 when it cuts none. */
   depth: number;
 }
 
 /**
- * What lies past each edge of `view` that the drawing continues past
- * (`continues`): the parts that lie that way, wholly or in part, past the
- * rail on that edge, and how deep the deepest part or mark the rail cuts,
- * of those in view across the edge, reaches into the view from the rim.
+ * What each edge of `view` that the drawing continues past (`continues`)
+ * cuts: how deep the deepest part or mark it cuts, of those in view across
+ * the edge, reaches into the view from the rim.
  */
 export function readRim(parts: readonly View[], view: View, continues: Record<Side, boolean>, marks: readonly View[] = []): Record<Side, RimSide | null> {
   const clear = clearOf(view, continues);
@@ -332,16 +325,14 @@ export function readRim(parts: readonly View[], view: View, continues: Record<Si
     side === 'left' || side === 'right' ? box.bottom > view.top + EPSILON && box.top < view.bottom - EPSILON : box.right > view.left + EPSILON && box.left < view.right - EPSILON;
   const read = (side: Side): RimSide | null => {
     if (!continues[side]) return null;
-    let beyond = 0;
     let depth = 0;
     for (const part of parts) {
       const past = reach(side, part);
       if (past === null) continue;
-      beyond += 1;
       if (across(side, part)) depth = Math.max(depth, past);
     }
     for (const mark of marks) if (across(side, mark)) depth = Math.max(depth, reach(side, mark) ?? 0);
-    return { beyond, depth };
+    return { depth };
   };
   return { left: read('left'), right: read('right'), top: read('top'), bottom: read('bottom') };
 }
@@ -441,36 +432,22 @@ export interface PlacedExit extends Exit, Box {}
 
 /**
  * Places each exit's tag on its rail, as near where its line crosses as
- * the others allow, clear of `avoid` (stretches of the rail taken by its
- * count and the map, in viewport pixels from the rail's start). A tag with
- * no room is left out; its rail's count still says the drawing goes on
- * that way. `inset` is the band pinned over the viewport's top, which the
- * side rails start under.
+ * the others allow. A tag with no room is left out. `inset` is the band
+ * pinned over the viewport's top, which the side rails start under.
  */
-export function placeExits(
-  exits: readonly Exit[],
-  scroll: { left: number; top: number },
-  viewport: Size,
-  avoid: Record<Side, ReadonlyArray<Span>>,
-  inset = 0,
-): PlacedExit[] {
+export function placeExits(exits: readonly Exit[], scroll: { left: number; top: number }, viewport: Size, inset = 0): PlacedExit[] {
   const tags: PlacedExit[] = [];
   for (const side of SIDES) {
     const vertical = side === 'left' || side === 'right';
     const start = vertical ? inset : 0;
     const end = vertical ? viewport.height : viewport.width;
-    const blocked = [...avoid[side]].sort((a, b) => a[0] - b[0]);
     const mine = exits
       .filter((exit) => exit.side === side)
       .map((exit) => ({ exit, length: tagLength(Math.min(textCells(exit.label), EXIT_CHARS)), centre: exit.at - (vertical ? scroll.top : scroll.left) }))
       .sort((a, b) => a.centre - b.centre);
     let cursor = start;
     for (const { exit, length, centre } of mine) {
-      let from = Math.max(cursor, Math.min(centre - length / 2, end - length));
-      // Past each taken stretch it would overlap.
-      for (const [low, high] of blocked) {
-        if (from < high && from + length > low) from = Math.max(from, high + TAG_GAP);
-      }
+      const from = Math.max(cursor, Math.min(centre - length / 2, end - length));
       if (from + length > end) continue;
       cursor = from + length + TAG_GAP;
       // Centred across its rail.
