@@ -160,6 +160,30 @@ per text. Ordinary status is not drawn: the presence itself shows what the
 line is doing. An error with nowhere to go is a browser that fails silently,
 which is what a caller tapping Damocles on an iPad saw.
 
+Playback is in `src/runtime/audioPlayback.ts`, and every way it can fail is
+reported the same way. A clip the element refuses, a stream it will not take,
+a clip that starts and plays nothing (`NO_PROGRESS_MS`: `play()` resolves on
+an element that never advances), and a clip autoplay refused all go on screen
+as status text with `statusError` set; a stream that fails falls back to the
+whole replay. Blocked audio is retried on the next page gesture, and `click`
+is not the only one: iOS Safari does not deliver a click through event
+delegation for a tap on an ordinary element, so `pointerdown`, `touchend` and
+`keydown` are gestures too (`GESTURE_EVENTS` in `callRuntime.ts`).
+
+A caption waits for the audio that voices it (#112) but never for audio that
+is not coming. `SpokenLines` is told whether playback is sounding; while it is
+not, every waiting line is heard `CAPTION_WAIT_MS` later, in order.
+
+The agent's level has one meaning and two readers, decided once per browser in
+`ensureAudioGraph`. Where the element can be routed through
+`createMediaElementSource` it is the `AnalyserNode` on that graph. Where it
+cannot -- WebKit silences a routed element that holds a `MediaSource` -- the
+level is read from the utterance's own bytes: `speechEnvelope.ts` decodes the
+replay in an `OfflineAudioContext` and `EnvelopeMeter` reports the step the
+element's `currentTime` has reached. A browser never runs both, and a browser
+that can do neither draws flat bars; the canned loop belongs to the demo
+scenes, which have no voice runtime at all.
+
 Capture itself is in `src/runtime/pushToTalk.ts`, and its order is
 load-bearing. The press creates the level meter's `AudioContext` -- that is
 where a browser still grants it an audio session -- and asks for the
