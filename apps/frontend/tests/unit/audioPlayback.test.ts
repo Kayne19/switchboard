@@ -590,6 +590,42 @@ describe("AudioPlayback streaming", () => {
     expect(playback.streamingEnabled).toBe(false);
   });
 
+  it("stays off for the rest of the call once a stream could not sound", () => {
+    // WebKit takes a stream and never sounds it. The first failure names
+    // itself and the whole replay follows; the rest of the call must not pay
+    // the silence watch and read the same line again, and a reconnect's
+    // `hello_ack` must not offer streaming back (#203).
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const { player, urls, playback } = streamingPlayback(undefined, statuses);
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    (urls.get(player.src) as FakeMediaSource).buffer.fail = true;
+    playback.receiveAudioChunk(bytes("first"));
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    expect(playback.streamingEnabled).toBe(false);
+    const reported = () => statuses.filter(([, error]) => error === true);
+    expect(reported().length, "the cause is read once").toBe(1);
+    player.ended = true;
+    player.emit("ended");
+
+    // A reconnect says hello again and the service offers MSE again.
+    playback.setStreamingEnabled(true);
+    expect(playback.streamingEnabled, "this browser already refused").toBe(
+      false,
+    );
+
+    playback.receiveAudioStart({ generation: 0, sequence: 2, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("second"));
+    playback.receiveAudioDone({ generation: 0, sequence: 2, done: true });
+    const replay = urls.get(player.src);
+    expect(replay instanceof Blob, "straight to the whole replay").toBe(true);
+    expect(reported().length, "and no second line about it").toBe(1);
+    expect(
+      [...urls.values()].filter((value) => value instanceof FakeMediaSource)
+        .length,
+      "no second MediaSource was made",
+    ).toBe(1);
+  });
+
   it("lets a handoff's goodbye finish and plays the new leg after it", () => {
     const { player, urls, playback } = streamingPlayback();
     playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });

@@ -190,6 +190,12 @@ never reaches `canplay`, and leaves `play()` pending for the rest of the call
 that is already gone and is not reported -- falling back reloads the element,
 which aborts the pending `play()` itself.
 
+A browser that takes a stream and cannot sound it is asked once. The first
+named failure turns streaming off for the whole call -- later utterances go
+straight to the whole replay with no silence watch and no second status line
+-- and a reconnect's `hello_ack`, which offers MSE again, cannot turn it back
+on: the engine does not change mid-call.
+
 A streamed utterance's `MediaSource` is attached to the element as soon as it
 is made: a `MediaSource` is `closed` until an element takes its URL, and
 `sourceopen` -- where the `SourceBuffer` is added and the chunks go in --

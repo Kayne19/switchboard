@@ -108,6 +108,14 @@ export class AudioPlayback {
   private playAttemptToken = 0;
   private audioEpoch = 0;
   private mseEnabled = false;
+  /**
+   * Set once this browser has taken a stream it could not sound. The engine
+   * does not change mid-call, so neither does the answer: later utterances go
+   * straight to the whole replay, and a reconnect's `hello_ack` cannot offer
+   * streaming again. Otherwise every utterance pays `NO_PROGRESS_MS` and the
+   * caller reads the same failure over and over (#203).
+   */
+  private mseRefused = false;
   private mseQueue: MseUtterance[] = [];
   private mseActive: MseUtterance | null = null;
   private msePending: MseUtterance | null = null;
@@ -208,8 +216,12 @@ export class AudioPlayback {
 
   /** Streams MP3 through MediaSource when the backend and this browser agree. */
   setStreamingEnabled(requested: boolean): void {
-    this.mseEnabled = requested && mseRuntimeSupported();
-    if (!this.mseEnabled) this.clearMsePlayback();
+    const enabled = requested && !this.mseRefused && mseRuntimeSupported();
+    // A repeat of what is already set retires nothing: every reconnect's
+    // `hello_ack` arrives here, and clearing would cut the clip playing.
+    if (enabled === this.mseEnabled) return;
+    this.mseEnabled = enabled;
+    if (!enabled) this.clearMsePlayback();
   }
 
   /**
@@ -749,6 +761,7 @@ export class AudioPlayback {
       true,
     );
     this.mseEnabled = false;
+    this.mseRefused = true;
     if (utterance.done && this.mseActive === utterance) {
       this.queueMseFallback(utterance);
       this.mseActive = null;
