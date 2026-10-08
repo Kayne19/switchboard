@@ -46,11 +46,7 @@ const noteOn = (target: string, item: string) => ({
 for (const viewport of geometries) {
   test(`an inbox opens on the message a note names, in full view / ${viewport.width}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=idle&chrome=0');
-    // Chromium's scroll anchoring would hold the row in place through a
-    // relayout and hide a lead taken for the wrong layout; Safari has none.
-    await page.addStyleTag({ content: '* { overflow-anchor: none !important; }' });
-    await show(page, [{ op: 'show', id: 'inbox', type: 'inbox', role: 'primary', data: fifty }, noteOn('inbox', 'm27')], false);
+    await show(page, [{ op: 'show', id: 'inbox', type: 'inbox', role: 'primary', data: fifty }, noteOn('inbox', 'm27')]);
     await expect(page.locator('[data-item="m27"] .note-badge')).toBeVisible();
     await settle(page);
     const box = await page.evaluate(() => {
@@ -62,6 +58,34 @@ for (const viewport of geometries) {
     expect(box.rowBottom).toBeLessThanOrEqual(box.scrollBottom + 1);
   });
 }
+
+// A pane's place is ListViewport's: where it opened the pane on its lead, or
+// where the reader left it. A row that lays out again above the lead after
+// the open (an aux cell's agenda gets its rows after its cell) must not move
+// the pane. Scroll anchoring did: the browser picked a row and kept that row
+// still, and the offset the open asked for went with it. WebKit sent an aux
+// agenda opened at 433 back to 0, with today below the cell (#196); Chromium
+// moves the pane by whatever grew above its anchor.
+test('a pane opened on its lead stays where it was put while rows above the lead lay out again', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await show(page, [{ op: 'show', id: 'inbox', type: 'inbox', role: 'primary', data: fifty }, noteOn('inbox', 'm27')]);
+  await expect(page.locator('[data-item="m27"] .note-badge')).toBeVisible();
+  await settle(page);
+  const pane = '[data-testid="inbox"] .list-viewport__scroll';
+  const opened = await page.locator(pane).evaluate((element) => element.scrollTop);
+  expect(opened, 'opened on its lead').toBeGreaterThan(0);
+  // A row scrolled past, above the view and the lead, grows, as rows laid out after the open do.
+  const above = await page.evaluate((selector) => {
+    const scroll = document.querySelector<HTMLElement>(selector)!;
+    const top = scroll.getBoundingClientRect().top;
+    const past = [...scroll.querySelectorAll<HTMLElement>('[data-item]')].filter((item) => item.getBoundingClientRect().bottom < top - 1);
+    return past.at(-1)?.dataset.item ?? null;
+  }, pane);
+  expect(above, 'a row above the view').not.toBeNull();
+  await page.addStyleTag({ content: `[data-item="${above}"] { padding-top: 160px !important; }` });
+  await settle(page);
+  expect(await page.locator(pane).evaluate((element) => element.scrollTop), 'the offset the open asked for').toBeCloseTo(opened, 0);
+});
 
 for (const viewport of [geometries[0], geometries[2]]) {
   test(`a long task wraps whole, never cut / ${viewport.width}`, async ({ page }) => {
