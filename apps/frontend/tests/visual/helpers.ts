@@ -19,10 +19,20 @@ export const FRAME_GEOMETRIES = [
   { name: 'landscape-hd', width: 1280, height: 720 },
 ] as const;
 
-/** Opens a canonical fixture scene without the page chrome, and waits for the stage. */
+/** Opens a canonical fixture scene without the page chrome, and waits for the fixture. */
 export async function openScene(page: Page, scene: string): Promise<void> {
   await page.goto(`/?scene=${scene}&chrome=0`);
   await expect(page.locator('.stage')).toBeVisible();
+  // The stage is drawn on the first commit, before the effects that install
+  // the controller and load the fixture; the scene is open once the fixture
+  // is in the controller's state. Loading one dispatches `clear` first, so
+  // the revision leaves 0 for every fixture, `idle` included. Without this
+  // wait a spec read an empty state and sent its actions from nothing: in
+  // WebKit about one openScene call in three returned before the fixture
+  // was there (#187).
+  await expect
+    .poll(() => page.evaluate(() => window.SwitchboardController?.state().revision ?? 0))
+    .toBeGreaterThan(0);
 }
 
 /** Runs actions through the page's controller, in order, as an agent's display calls arrive. */
