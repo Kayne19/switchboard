@@ -68,6 +68,38 @@ function defaultCreateRecorder(stream: MediaStream): MediaRecorder {
     : new MediaRecorder(stream);
 }
 
+/**
+ * The browser offers no microphone API on this page at all. A browser only
+ * grants capture on a secure origin, and WebKit leaves `navigator.mediaDevices`
+ * undefined on a plain-http page rather than refusing the call, so the failure
+ * used to reach the caller as a bare `TypeError`.
+ */
+export class NoCaptureApi extends Error {
+  constructor() {
+    super("this browser offers no microphone on this page");
+    this.name = "NoCaptureApi";
+  }
+}
+
+function defaultGetUserMedia(
+  constraints: MediaStreamConstraints,
+): Promise<MediaStream> {
+  const devices = navigator.mediaDevices as MediaDevices | undefined;
+  if (!devices?.getUserMedia) return Promise.reject(new NoCaptureApi());
+  return devices.getUserMedia(constraints);
+}
+
+/** Takes the level meter off a recording and gives its context back. */
+function releaseMeter(recording: ActiveRecording): void {
+  recording.levelMonitor?.disconnect();
+  recording.levelSink?.disconnect();
+  recording.levelMonitor = undefined;
+  recording.levelSink = undefined;
+  if (recording.levelContext)
+    void recording.levelContext.close().catch(() => undefined);
+  recording.levelContext = undefined;
+}
+
 export class PushToTalk {
   private readonly options: PushToTalkOptions;
   private readonly getUserMedia: NonNullable<PushToTalkOptions["getUserMedia"]>;
@@ -89,9 +121,7 @@ export class PushToTalk {
 
   constructor(options: PushToTalkOptions) {
     this.options = options;
-    this.getUserMedia =
-      options.getUserMedia ??
-      ((constraints) => navigator.mediaDevices.getUserMedia(constraints));
+    this.getUserMedia = options.getUserMedia ?? defaultGetUserMedia;
     this.createRecorder = options.createRecorder ?? defaultCreateRecorder;
     this.createAudioContext =
       options.createAudioContext ?? (() => new AudioContext());
@@ -122,9 +152,13 @@ export class PushToTalk {
     this.options.pauseHandsFree();
     this.starting = true;
     this.startCancelled = false;
-    // Start/resume the context inside the press handler. The stream arrives
-    // after the permission promise, which may no longer retain user gesture
-    // activation in some browsers.
+    // Create the meter's context inside the press handler: that is where a
+    // browser still gives it an audio session. Resuming it is never waited
+    // for -- a WebKit `resume()` that an audio session interruption leaves
+    // pending would otherwise hold `starting` true for the rest of the page's
+    // life, and every later press returns at the guard above with the
+    // microphone light on and nothing said. Nothing about the level meter may
+    // stand between the press and the recorder.
     let levelContext: AudioContext | undefined;
     if (this.options.onAudioLevel && typeof AudioContext !== "undefined") {
       try {
@@ -142,7 +176,12 @@ export class PushToTalk {
       this.starting = false;
       if (levelContext) void levelContext.close().catch(() => undefined);
       this.options.resumeHandsFree();
-      onStatus("Microphone unavailable (" + errorName(err) + ").", true);
+      onStatus(
+        err instanceof NoCaptureApi
+          ? "No microphone on this page: open it over https, not by address."
+          : "Microphone unavailable (" + errorName(err) + ").",
+        true,
+      );
       return;
     }
     // Discard/Send pressed during the permission await: honour it instead of
@@ -156,31 +195,6 @@ export class PushToTalk {
       this.options.onRecordingChange(false);
       return;
     }
-    let levelMonitor: AudioLevelMonitor | undefined;
-    const onAudioLevel = this.options.onAudioLevel;
-    let levelSink: GainNode | undefined;
-    if (levelContext && onAudioLevel) {
-      try {
-        if (levelContext.state === "suspended") await levelContext.resume();
-        const source = levelContext.createMediaStreamSource(stream);
-        levelSink = levelContext.createGain();
-        levelSink.gain.value = 0;
-        levelSink.connect(levelContext.destination);
-        levelMonitor = new AudioLevelMonitor(
-          levelContext,
-          source,
-          onAudioLevel,
-          levelSink,
-        );
-        levelMonitor.start();
-      } catch {
-        levelMonitor?.disconnect();
-        levelSink?.disconnect();
-        levelMonitor = undefined;
-        if (levelContext) void levelContext.close().catch(() => undefined);
-        levelContext = undefined;
-      }
-    }
     let recorder: MediaRecorder;
     try {
       // Safari does not support the opus mimeType and the constructor throws
@@ -191,8 +205,6 @@ export class PushToTalk {
       this.mediaRecorder = recorder;
     } catch (err) {
       this.starting = false;
-      levelMonitor?.disconnect();
-      levelSink?.disconnect();
       if (levelContext) void levelContext.close().catch(() => undefined);
       stream.getTracks().forEach((t) => t.stop());
       this.options.resumeHandsFree();
@@ -230,8 +242,6 @@ export class PushToTalk {
       chunks,
       sequence: 0,
       transferEra: recordingTransferEra,
-      levelMonitor,
-      levelSink,
       levelContext,
     };
     this.activeRecording = recording;
@@ -270,10 +280,7 @@ export class PushToTalk {
       }
     }
     recorder.onstop = () => {
-      recording.levelMonitor?.disconnect();
-      recording.levelSink?.disconnect();
-      if (recording.levelContext)
-        void recording.levelContext.close().catch(() => undefined);
+      releaseMeter(recording);
       releaseStream();
       this.options.resumeHandsFree();
       if (this.activeRecording?.recorder === recorder)
@@ -319,10 +326,7 @@ export class PushToTalk {
         this.activeRecording = null;
       if (this.mediaRecorder === recorder) this.mediaRecorder = null;
       this.starting = false;
-      recording.levelMonitor?.disconnect();
-      recording.levelSink?.disconnect();
-      if (recording.levelContext)
-        void recording.levelContext.close().catch(() => undefined);
+      releaseMeter(recording);
       releaseStream();
       this.options.resumeHandsFree();
       this.options.onRecordingChange(false);
@@ -339,13 +343,11 @@ export class PushToTalk {
       recorderFailed = true;
       if (this.activeRecording?.recorder === recorder)
         this.activeRecording = null;
-      levelMonitor?.disconnect();
-      levelSink?.disconnect();
-      if (levelContext) void levelContext.close().catch(() => undefined);
+      releaseMeter(recording);
       releaseStream();
-      this.options.resumeHandsFree();
       this.mediaRecorder = null;
       this.starting = false;
+      this.options.resumeHandsFree();
       this.options.onRecordingChange(false);
       onStatus(
         "This browser cannot record audio (" + errorName(err) + ").",
@@ -359,6 +361,40 @@ export class PushToTalk {
       "Recording... Send when you are done, Discard to throw it away.",
       false,
     );
+    // The meter is the last thing built, after the recorder is running: it is
+    // a picture of the caller's voice, and a browser that cannot draw it
+    // still has to record.
+    this.attachMeter(recording, stream);
+  }
+
+  /**
+   * Puts the level meter on a running recording. A failure here costs the
+   * caller the moving bars and nothing else.
+   */
+  private attachMeter(recording: ActiveRecording, stream: MediaStream): void {
+    const levelContext = recording.levelContext;
+    const onAudioLevel = this.options.onAudioLevel;
+    if (!levelContext || !onAudioLevel) return;
+    if (this.activeRecording !== recording) {
+      releaseMeter(recording);
+      return;
+    }
+    try {
+      const source = levelContext.createMediaStreamSource(stream);
+      const levelSink = levelContext.createGain();
+      levelSink.gain.value = 0;
+      levelSink.connect(levelContext.destination);
+      recording.levelSink = levelSink;
+      recording.levelMonitor = new AudioLevelMonitor(
+        levelContext,
+        source,
+        onAudioLevel,
+        levelSink,
+      );
+      recording.levelMonitor.start();
+    } catch {
+      releaseMeter(recording);
+    }
   }
 
   stop(send: boolean): void {
