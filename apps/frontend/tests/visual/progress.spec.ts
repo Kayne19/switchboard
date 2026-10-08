@@ -57,7 +57,7 @@ const railSteps = Array.from({ length: 7 }, (_, i) => ({ label: `STEP ${i + 1}`,
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
   test(`the plan in the rail reads as the metrics above it / ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=architecture&chrome=0');
+    await openScene(page, 'architecture');
     await runActions(page, [
       { op: 'clear' },
       { op: 'show', id: 'map', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }], edges: [{ from: 'a', to: 'b' }] } },

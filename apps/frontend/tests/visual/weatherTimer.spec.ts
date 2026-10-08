@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { GEOMETRIES, runActions } from './helpers';
+import { GEOMETRIES, openScene, runActions } from './helpers';
 
 // The timer and the forecast where jsdom cannot see them: the browser's
 // clock, reduced motion, and boxes at every canonical geometry. The page
@@ -78,7 +78,7 @@ test.describe('the page clock', () => {
   test('a countdown moves on the clock, stays when paused, and is done at exactly zero, under reduced motion', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.clock.install({ time: T0 });
-    await page.goto('/?scene=idle&chrome=0');
+    await openScene(page, 'idle');
     await page.clock.pauseAt(T0 + 20_000);
     await show(page, [{ op: 'show', id: 'kitchen', type: 'timer', role: 'primary', data: { timers: [
       { id: 'eggs', label: 'Eggs', startedAt: at(0), endsAt: at(23) },
@@ -100,7 +100,7 @@ test.describe('the page clock', () => {
   test('the bar sweeps between ticks, and with reduced motion it steps', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.clock.setFixedTime(T0);
-    await page.goto('/?scene=timer&chrome=0');
+    await openScene(page, 'timer');
     const fill = page.locator('[data-scene="timer"] [data-item="pasta"] .timer__fill');
     await expect(fill).toBeVisible();
     // The width's transition, or none: reduced motion turns transitions off (index.css).
@@ -120,7 +120,7 @@ for (const geometry of GEOMETRIES) {
 
     test('the timers read whole: digits inside their cells, text at or above the floors', async ({ page }) => {
       await page.clock.setFixedTime(T0);
-      await page.goto('/?scene=timer&chrome=0');
+      await openScene(page, 'timer');
       await expect(page.locator('[data-scene="timer"] [data-testid="timer"]')).toBeVisible();
       expect(await readingFaults(page, '[data-scene="timer"] [data-testid="timer"]')).toEqual([]);
       const done = page.locator('[data-item="tea"]');
@@ -130,7 +130,7 @@ for (const geometry of GEOMETRIES) {
 
     test('the forecast reads whole, its hour labels apart, its days in line, its marked day named in the rail', async ({ page }) => {
       await page.clock.setFixedTime(T0);
-      await page.goto('/?scene=weather&chrome=0');
+      await openScene(page, 'weather');
       const weather = page.locator('[data-scene="weather"] [data-testid="weather"]');
       await expect(weather).toBeVisible();
       await page.waitForTimeout(300);
@@ -156,7 +156,7 @@ for (const geometry of GEOMETRIES) {
     test('in focus the forecast and the timers read whole', async ({ page }) => {
       await page.clock.setFixedTime(T0);
       for (const [fixture, id, testid] of [['weather', 'weather', 'weather'], ['timer', 'kitchen', 'timer']] as const) {
-        await page.goto(`/?scene=${fixture}&chrome=0`);
+        await openScene(page, fixture);
         await page.evaluate((target) => window.SwitchboardController!.dispatch({ op: 'focus', id: target }), id);
         const focused = page.locator(`.focus-layer [data-testid="${testid}"]`);
         await expect(focused).toBeVisible();
@@ -167,7 +167,7 @@ for (const geometry of GEOMETRIES) {
 
     test('a cold forecast in tenths reads whole: the conditions alone, and days below zero', async ({ page }) => {
       await page.clock.setFixedTime(T0);
-      await page.goto('/?scene=idle&chrome=0');
+      await openScene(page, 'idle');
       const current = { temp: -12.5, condition: 'snow', summary: 'Blowing snow until the evening', high: -8.5, low: -17.5, feelsLike: -21.5, humidity: 88, wind: 'NE 40 km/h, gusts 70' };
       await show(page, [{ op: 'show', id: 'cold', type: 'weather', role: 'primary', data: { location: 'Tromsø', units: 'C', current } }]);
       await expect(page.locator('[data-scene="weather"] .weather__field')).toHaveAttribute('data-parts', 'now');
@@ -181,7 +181,7 @@ for (const geometry of GEOMETRIES) {
 
     test('a forecast in a small slot with its note on an hour reads whole', async ({ page }) => {
       await page.clock.setFixedTime(T0);
-      await page.goto('/?scene=today&chrome=0');
+      await openScene(page, 'today');
       await page.evaluate(() => window.SwitchboardController!.dispatch({
         op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'RAIN', anchor: { target: 'weather', item: '2026-10-08T03:00' }, segments: [{ text: 'Heaviest at 3 am.' }] },
       }));
@@ -193,7 +193,7 @@ for (const geometry of GEOMETRIES) {
 
     test('in the today scene the forecast is a small slot and reads whole', async ({ page }) => {
       await page.clock.setFixedTime(T0);
-      await page.goto('/?scene=today&chrome=0');
+      await openScene(page, 'today');
       const weather = page.locator('.composed-aux [data-testid="weather"]');
       await expect(weather).toHaveAttribute('data-layout', 'compact');
       expect(await readingFaults(page, '.composed-aux [data-testid="weather"]')).toEqual([]);
@@ -206,7 +206,7 @@ test('on a phone the today scene\'s forecast cell stands the days beside the con
   // conditions, which once stood there alone.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.clock.setFixedTime(T0);
-  await page.goto('/?scene=today&chrome=0');
+  await openScene(page, 'today');
   const weather = page.locator('.composed-aux [data-testid="weather"]');
   await expect(weather).toHaveAttribute('data-layout', 'compact');
   const days = weather.locator('.weather-outlook__day');
@@ -226,7 +226,7 @@ test('a forecast cell too short for the outlook\'s columns keeps the conditions 
   // 844x390: the today scene's forecast cell is under 100px tall.
   await page.setViewportSize({ width: 844, height: 390 });
   await page.clock.setFixedTime(T0);
-  await page.goto('/?scene=today&chrome=0');
+  await openScene(page, 'today');
   const weather = page.locator('.composed-aux [data-testid="weather"]');
   await expect(weather).toHaveAttribute('data-layout', 'compact');
   await page.waitForTimeout(200);
@@ -237,7 +237,7 @@ test('a forecast cell too short for the outlook\'s columns keeps the conditions 
 // The today scene's forecast, sent again cold, in tenths, with a long
 // condition: what a short cell has to hold at its widest.
 async function coldToday(page: Page, note?: string, alert = 'Gale warning on the coast until 21:00', current: Record<string, unknown> = { temp: -12.5, condition: 'partly-cloudy', high: -8.5, low: -17.5 }) {
-  await page.goto('/?scene=today&chrome=0');
+  await openScene(page, 'today');
   const daily = Array.from({ length: 6 }, (_, index) => ({ date: `2026-10-${String(7 + index).padStart(2, '0')}`, high: -8.5 - index, low: -17.5 - index, condition: 'partly-cloudy', precip: 20 }));
   await runActions(page, [
     { op: 'show', id: 'weather', type: 'weather', role: 'secondary', data: { location: 'Tromsø', units: 'C', current, daily, ...(alert ? { alert } : {}) } },
@@ -286,7 +286,7 @@ test('at 844x390 the forecast cell gives the alert\'s line to the hour a note na
   // rail's card.
   await page.setViewportSize({ width: 844, height: 390 });
   await page.clock.setFixedTime(T0);
-  await page.goto('/?scene=today&chrome=0');
+  await openScene(page, 'today');
   await runActions(page, [
     { op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'RAIN', anchor: { target: 'weather', item: '2026-10-08T03:00' }, segments: [{ text: 'Heaviest at 3 am.' }] } },
   ]);
@@ -306,7 +306,7 @@ test('a narrow forecast cell\'s spot line drops the chance of rain whole before 
   // cell (219px at 820x1180): the day's line read `53° /…` and `3…`.
   await page.setViewportSize({ width: 820, height: 1180 });
   await page.clock.setFixedTime(T0);
-  await page.goto('/?scene=today&chrome=0');
+  await openScene(page, 'today');
   await runActions(page, [
     { op: 'show', id: 'kitchen', type: 'timer', role: 'secondary', data: { timers: [{ id: 'pasta', label: 'Pasta', endsAt: '2026-10-07T23:00:00-07:00' }] } },
     { op: 'show', id: 'dentist-note', type: 'note', data: { tag: 'RAIN', anchor: { target: 'weather', item: '2026-10-09' }, segments: [{ text: 'Friday stays dry for the flight.' }] } },
@@ -331,7 +331,7 @@ test('a narrow forecast cell\'s spot line drops the chance of rain whole before 
 test('a forecast longer than a phone frame scrolls inside it and says so', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.clock.setFixedTime(T0);
-  await page.goto('/?scene=weather&chrome=0');
+  await openScene(page, 'weather');
   const scroll = page.locator('[data-scene="weather"] .weather__scroll');
   await expect(scroll).toBeVisible();
   expect(await scroll.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);

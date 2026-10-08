@@ -90,7 +90,7 @@ test('a pane opened on its lead stays where it was put while rows above the lead
 for (const viewport of [geometries[0], geometries[2]]) {
   test(`a long task wraps whole, never cut / ${viewport.width}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=tasks&chrome=0');
+    await openScene(page, 'tasks');
     const text = page.locator('[data-item="claim"] .task-row__text');
     await expect(text).toBeVisible();
     const shape = await text.evaluate((element) => ({
@@ -104,7 +104,7 @@ for (const viewport of [geometries[0], geometries[2]]) {
 
 test('an inbox puts a message on one line where it has 50em, and stacks it where it has not', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?scene=inbox&chrome=0');
+  await openScene(page, 'inbox');
   await expect(page.locator('.inbox-primitive__rows--line')).toBeVisible();
   const line = await page.evaluate(() => {
     const row = document.querySelector<HTMLElement>('[data-item="united"]')!;
@@ -132,7 +132,7 @@ test('an inbox puts a message on one line where it has 50em, and stacks it where
 for (const viewport of geometries) {
   test(`an inbox's senders and times stand in columns, tinted rows too / ${viewport.width}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=inbox&chrome=0');
+    await openScene(page, 'inbox');
     await expect(page.locator('[data-testid="inbox"] [data-item]').first()).toBeVisible();
     const columns = await page.evaluate(() => {
       const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="inbox"] [data-item]')];
@@ -145,7 +145,7 @@ for (const viewport of geometries) {
 
 test('sections stand side by side where the column holds two, and stack where it does not', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?scene=tasks&chrome=0');
+  await openScene(page, 'tasks');
   await expect(page.locator('.task-section').first()).toBeVisible();
   const boxes = () => page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.task-section')].slice(0, 2).map((section) => {
     const box = section.getBoundingClientRect();
@@ -163,7 +163,7 @@ test('sections stand side by side where the column holds two, and stack where it
 for (const viewport of [geometries[0], geometries[2]]) {
   test(`the task a note names opens inside the view in a short cell / ${viewport.width}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=tasks&chrome=0');
+    await openScene(page, 'tasks');
     await expect(page.locator('[data-testid="tasks"]')).toBeVisible();
     const tasks = await page.evaluate(() => window.SwitchboardController!.state().agentObjects.todo.data);
     await show(page, [
@@ -186,7 +186,7 @@ for (const viewport of [geometries[0], geometries[2]]) {
 
 test('a tinted message a note names carries the marked edge as well as its tint', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?scene=inbox&chrome=0');
+  await openScene(page, 'inbox');
   await expect(page.locator('[data-testid="inbox"]')).toBeVisible();
   const inbox = await page.evaluate(() => window.SwitchboardController!.state().agentObjects.inbox.data);
   await show(page, [{ op: 'show', id: 'inbox', type: 'inbox', role: 'primary', data: inbox }, noteOn('inbox', 'ci')]);
@@ -205,7 +205,7 @@ test('a tinted message a note names carries the marked edge as well as its tint'
 for (const viewport of geometries) {
   test(`a list's counts are never cut at its edge in the today scene / ${viewport.width}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=today&chrome=0');
+    await openScene(page, 'today');
     await expect(page.locator('.composed-aux [data-testid="inbox"]')).toBeVisible();
     await settle(page);
     const cut = await page.evaluate(() =>

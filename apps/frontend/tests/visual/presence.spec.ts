@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { GEOMETRIES } from './helpers';
+import { GEOMETRIES, openScene } from './helpers';
 
 // The listening signal below the glyph is wider than the presence on narrow
 // geometries. It must overflow around the presence's centre, never widen the
@@ -25,7 +25,7 @@ async function glyphGeometry(page: Page) {
 for (const geometry of GEOMETRIES) {
   test(`presence keeps its glyph geometry across listening / ${geometry.name}`, async ({ page }) => {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
-    await page.goto('/?scene=architecture&chrome=0');
+    await openScene(page, 'architecture');
     await page.waitForSelector('[data-testid="damocles-presence"]');
     await page.waitForTimeout(600);
     const resting = await glyphGeometry(page);
@@ -84,7 +84,7 @@ const resizeRun = [
 
 test('presence stays centred on the sword through a continuous resize', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?scene=architecture&chrome=0');
+  await openScene(page, 'architecture');
   await page.waitForSelector('[data-testid="damocles-presence"]');
   await page.waitForTimeout(600);
 
@@ -115,7 +115,7 @@ test('presence stays centred on the sword through a continuous resize', async ({
 // page, whichever came first: portrait-tablet code passed or failed by that.
 test('under reduced motion the presence is already in place on the first frame', async ({ page }) => {
   await page.setViewportSize({ width: 820, height: 1180 });
-  await page.goto('/?scene=code&chrome=0');
+  await openScene(page, 'code');
   await page.waitForSelector('[data-scene="code"]', { state: 'visible' });
   const stage = page.locator('.stage');
   const first = await stage.screenshot({ animations: 'disabled', caret: 'hide' });
@@ -130,7 +130,7 @@ test('under reduced motion the presence is already in place on the first frame',
 // there was when the shared identity hid the leaving copy.
 test('under reduced motion a scene change shows one Damocles at a time', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?scene=idle&chrome=0');
+  await openScene(page, 'idle');
   await page.waitForSelector('[data-testid="damocles-presence"]');
   await page.waitForTimeout(600);
   await page.evaluate(() => window.SwitchboardController.load('code'));

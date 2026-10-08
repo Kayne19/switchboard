@@ -178,7 +178,7 @@ test.describe('a touch screen', () => {
   // across a list or a scrolled drawing.
   test('on a demo page a swipe that a calendar, a list or a drawing takes loads no other fixture', async ({ page }) => {
     const fixture = () => page.evaluate(() => document.querySelector('.stage')?.getAttribute('data-scene-kind'));
-    await page.goto('/?scene=calendar&chrome=0');
+    await openScene(page, 'calendar');
     await expect(page.locator('.scene [data-testid="calendar"]')).toBeVisible();
     await page.waitForTimeout(400);
     const days = () => page.locator('.scene .calendar-grid__weekday').allTextContents();
@@ -190,7 +190,7 @@ test.describe('a touch screen', () => {
     await page.waitForTimeout(800);
     expect(await days()).toEqual(['FRI', 'SAT', 'SUN']);
     for (const [scene, scroller] of [['tasks', '.list-viewport--scrolling .list-viewport__scroll'], ['topology', '.drawing-viewport--scrolling .drawing-viewport__scroll']] as const) {
-      await page.goto(`/?scene=${scene}&chrome=0`);
+      await openScene(page, scene);
       await expect(page.locator(`.scene ${scroller}`).first()).toBeVisible();
       await page.waitForTimeout(400);
       const kind = await fixture();
@@ -202,7 +202,7 @@ test.describe('a touch screen', () => {
       await expect(page.locator(`.scene ${scroller}`).first()).toBeVisible();
     }
     // Elsewhere on the stage a swipe still loads the next fixture.
-    await page.goto('/?scene=idle&chrome=0');
+    await openScene(page, 'idle');
     await page.waitForTimeout(400);
     await swipe(page, 300, 120, -180);
     await expect.poll(fixture, { timeout: 800 }).not.toBe('idle');
