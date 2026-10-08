@@ -35,14 +35,23 @@ test.describe("call runtime", () => {
         .poll(() => fixtureServer.frames.some((frame) => frame.type === "hello"))
         .toBe(true);
 
+      // Issue #192: the page reports as soon as the socket's status lands,
+      // and the replayed action arrives after it, so the first report
+      // describes an empty screen. Wait for the first render, then for the
+      // report that follows it -- never for merely the first report.
+      await expect(
+        page.locator(".metric-row").filter({ hasText: "LOAD" }),
+      ).toBeVisible({ timeout: 10_000 });
       await expect
-        .poll(() => fixtureServer.reports.length, { timeout: 10_000 })
-        .toBeGreaterThan(0);
-      const initialReport =
-        fixtureServer.reports[fixtureServer.reports.length - 1];
-      expect(initialReport.generation).toBe(1);
-      expect(initialReport.has_visual).toBe(true);
-      expect(initialReport.object_ids).toContain("system-load");
+        .poll(() => {
+          const latest = fixtureServer.reports[fixtureServer.reports.length - 1];
+          return (
+            latest?.generation === 1 &&
+            latest?.has_visual === true &&
+            latest?.object_ids?.includes("system-load")
+          );
+        }, { timeout: 10_000 })
+        .toBe(true);
 
       fixtureServer.broadcast({
         type: "display",
