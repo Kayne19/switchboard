@@ -14,6 +14,7 @@ import {
 } from "../../src/runtime/callRuntime";
 import type { HelloAckMessage, ServerMessage } from "../../src/protocol";
 import { AudioPlayback } from "../../src/runtime/audioPlayback";
+import { CAPTION_WAIT_MS } from "../../src/runtime/spokenLines";
 import { helloAck, statusMessage } from "../fixtures/serverMessages";
 
 class FakeSocket {
@@ -169,6 +170,129 @@ describe("CallRuntime speaking state", () => {
     });
     await settle();
     expect(latestState().speaking).toBe(true);
+    runtime.dispose();
+  });
+});
+
+describe("CallRuntime blocked audio recovery", () => {
+  // iOS Safari does not deliver a click through event delegation for a tap
+  // on an ordinary element, so a `click` listener on `document` never saw an
+  // iPad tap and blocked audio waited for ever (#189).
+  it("retries blocked audio on a touch, a pointer, or a key", async () => {
+    const handlers = new Map<string, Set<EventListener>>();
+    const document = {
+      addEventListener(type: string, listener: EventListener) {
+        if (!handlers.has(type)) handlers.set(type, new Set());
+        handlers.get(type)!.add(listener);
+      },
+      removeEventListener(type: string, listener: EventListener) {
+        handlers.get(type)?.delete(listener);
+      },
+    };
+    const playCalls: number[] = [];
+    let blocked = true;
+    const player = {
+      addEventListener() {},
+      removeEventListener() {},
+      pause() {},
+      removeAttribute() {},
+      load() {},
+      currentTime: 0,
+      error: null,
+      play: () => {
+        playCalls.push(playCalls.length);
+        if (!blocked) return Promise.resolve();
+        const error = new Error("blocked");
+        error.name = "NotAllowedError";
+        return Promise.reject(error);
+      },
+      src: "",
+    } as unknown as HTMLAudioElement;
+    const { runtime, latestState } = makeRuntime({
+      player,
+      document: document as unknown as Document,
+    });
+    const socket = await connectAt(runtime, 0);
+    socket.receive({
+      type: "audio_start",
+      generation: 0,
+      sequence: 1,
+      mime: "audio/mpeg",
+      format: "mp3",
+    });
+    socket.onmessage?.({
+      data: new TextEncoder().encode("speech").buffer,
+    } as MessageEvent);
+    socket.receive({ type: "audio_done", generation: 0, sequence: 1, done: true });
+    await settle();
+    expect(playCalls.length, "the first attempt is refused").toBe(1);
+    expect(latestState().statusError, "the refusal is on screen").toBe(true);
+
+    blocked = false;
+    const fire = (type: string) => {
+      for (const handler of [...(handlers.get(type) || [])])
+        handler({ target: null } as unknown as Event);
+    };
+    fire("touchend");
+    await settle();
+    expect(playCalls.length, "a touch is a gesture").toBe(2);
+
+    runtime.dispose();
+    for (const type of ["click", "pointerdown", "touchend", "keydown"]) {
+      expect(handlers.get(type)?.size ?? 0, `${type} is released`).toBe(0);
+    }
+  });
+
+  it("listens for every gesture the page can report", async () => {
+    const handlers = new Set<string>();
+    const document = {
+      addEventListener(type: string) {
+        handlers.add(type);
+      },
+      removeEventListener() {},
+    };
+    const { runtime } = makeRuntime({
+      document: document as unknown as Document,
+    });
+    runtime.start();
+    for (const type of ["click", "pointerdown", "touchend", "keydown"]) {
+      expect(handlers.has(type), `${type} is a gesture`).toBe(true);
+    }
+    runtime.dispose();
+  });
+});
+
+describe("CallRuntime captions when playback fails", () => {
+  // A caption waits for the audio that voices it (#112). When that audio is
+  // refused, fails, or never comes -- every WebKit playback failure in #189
+  // -- the line used to wait for ever: the caption log froze on an old line
+  // while the transcript drawer had every later one.
+  it("shows a line whose audio never arrives", async () => {
+    vi.useFakeTimers();
+    const heard: string[] = [];
+    const { runtime } = makeRuntime({
+      onHeard: (line) => heard.push(line.text),
+    });
+    const socket = await connectAt(runtime, 0);
+    socket.receive({
+      type: "spoken",
+      entry: {
+        role: "agent",
+        text: "Putting you through.",
+        route: "operator",
+        ts: 0,
+        voiced: true,
+      },
+      sequence: 1,
+    });
+    await settle();
+    expect(heard, "the line waits for its audio first").toEqual([]);
+
+    vi.advanceTimersByTime(CAPTION_WAIT_MS);
+    await settle();
+    expect(heard, "the caller reads what was said").toEqual([
+      "Putting you through.",
+    ]);
     runtime.dispose();
   });
 });

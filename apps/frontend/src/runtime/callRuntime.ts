@@ -108,6 +108,12 @@ export const INITIAL_RUNTIME_STATE: RuntimeState = {
   thinkingDisabled: false,
 };
 
+/**
+ * The page events that count as the gesture blocked audio is waiting for.
+ * `click` is not enough on iOS (see `start`).
+ */
+const GESTURE_EVENTS = ["click", "pointerdown", "touchend", "keydown"] as const;
+
 interface EventSource {
   addEventListener(type: string, listener: EventListener): void;
   removeEventListener(type: string, listener: EventListener): void;
@@ -201,7 +207,7 @@ export class CallRuntime {
     timer: ReturnType<typeof setTimeout> | null;
   } | null = null;
 
-  private readonly onDocumentClick = (event: Event) =>
+  private readonly onDocumentGesture = (event: Event) =>
     this.playback.handleGesture(event?.target ?? null);
   private readonly onVisibilityChange = () => {
     if (this.options.document?.visibilityState === "hidden") {
@@ -231,6 +237,10 @@ export class CallRuntime {
         }
       },
       onChange: () => {
+        // A caption waits for the audio that voices it, but not for audio
+        // that is not coming: the caption clock is told whether playback is
+        // sounding, and frees a waiting line when it is not (#189).
+        this.spokenLines.playbackActive(this.playback.isPlaying);
         this.update({ speaking: this.playback.isPlaying });
         this.maybeCompleteResponseBarrier();
       },
@@ -282,7 +292,15 @@ export class CallRuntime {
   start(): void {
     if (this.started || this.disposed) return;
     this.started = true;
-    this.options.document?.addEventListener("click", this.onDocumentClick);
+    // Blocked audio waits for a gesture, and `click` alone does not find one
+    // on an iPad: iOS Safari does not deliver a click through event
+    // delegation for a tap on an ordinary element, so a tap on the page body
+    // never reached `document` and the caller heard nothing however often
+    // they tapped (#189). A pointer or touch on the page is a gesture for
+    // `play()` just the same, and a key is one for a keyboard.
+    for (const type of GESTURE_EVENTS) {
+      this.options.document?.addEventListener(type, this.onDocumentGesture);
+    }
     this.options.document?.addEventListener(
       "visibilitychange",
       this.onVisibilityChange,
@@ -295,7 +313,9 @@ export class CallRuntime {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.options.document?.removeEventListener("click", this.onDocumentClick);
+    for (const type of GESTURE_EVENTS) {
+      this.options.document?.removeEventListener(type, this.onDocumentGesture);
+    }
     this.options.document?.removeEventListener(
       "visibilitychange",
       this.onVisibilityChange,
@@ -319,6 +339,7 @@ export class CallRuntime {
     this.handsFree?.disable("Hands-free stopped when the page was left.");
     this.clearResponseBarrier();
     this.playback.dispose();
+    this.spokenLines.clear();
   }
 
   // --- Commands ---------------------------------------------------------

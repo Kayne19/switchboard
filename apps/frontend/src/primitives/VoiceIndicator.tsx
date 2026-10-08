@@ -19,6 +19,17 @@ export function VoiceIndicator({ compact = false, getLevel }: { compact?: boolea
 
   useEffect(() => {
     if (!getLevel) return;
+    // A call has a level source, so the bars start flat and stay flat until
+    // it reports something: the canned loop is for a page with no voice
+    // runtime at all (the demo scenes). On WebKit the playback analyser is
+    // unavailable, and the caller watched the canned loop run through the
+    // whole call -- it told them nothing about who was speaking (#189).
+    for (const [index, bar] of barsRef.current.entries()) {
+      if (!bar || bar.style.transform) continue;
+      const scale = mapVoiceLevelToBar(0, index);
+      bar.style.transform = `scaleY(${scale})`;
+      bar.style.opacity = String(0.35 + scale * 0.65);
+    }
     if (prefersReducedMotion()) return;
     let frame: number | null = null;
     let smoothed = 0;
@@ -59,8 +70,8 @@ export function VoiceIndicator({ compact = false, getLevel }: { compact?: boolea
             key={index}
             ref={(element) => { barsRef.current[index] = element; }}
             style={{ height }}
-            animate={levelReady ? undefined : { scaleY: [0.3,1,0.48,0.78,0.3], opacity: [0.35,0.95,0.58,0.78,0.35] }}
-            transition={levelReady ? undefined : { duration: 1.05, ease: 'easeInOut', repeat: Infinity, delay: -((index * 0.13) % 0.9) }}
+            animate={levelReady || getLevel ? undefined : { scaleY: [0.3,1,0.48,0.78,0.3], opacity: [0.35,0.95,0.58,0.78,0.35] }}
+            transition={levelReady || getLevel ? undefined : { duration: 1.05, ease: 'easeInOut', repeat: Infinity, delay: -((index * 0.13) % 0.9) }}
           />
         ))}
       </div>

@@ -8,8 +8,14 @@
 // late event from a replaced clip can never advance or requeue the new one.
 
 import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
-import { errorName } from "./errors";
+import { errorName, mediaErrorName } from "./errors";
 import { AudioLevelMonitor } from "./audioLevel";
+import {
+  createEnvelopeDecoder,
+  decodeEnvelope,
+  EnvelopeMeter,
+  type EnvelopeDecoder,
+} from "./speechEnvelope";
 
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
 export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
@@ -20,6 +26,13 @@ export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
  * always keeps the voice's own timing.
  */
 export const INTER_UTTERANCE_GAP_MS = 0;
+/**
+ * How long a clip the element accepted has to produce sound. `play()` can
+ * resolve on an element that never advances -- the usual WebKit outcome for a
+ * MediaSource it cannot play -- and nothing noticed: the call went on
+ * "speaking" in silence for the rest of its life (#189).
+ */
+export const NO_PROGRESS_MS = 3000;
 
 interface PlaybackOwner {
   blob: Blob;
@@ -49,6 +62,7 @@ interface MseUtterance {
   url: string | null;
   started: boolean;
   endedHandler?: EventListener;
+  errorHandler?: EventListener;
 }
 
 export interface AudioPlaybackOptions {
@@ -62,6 +76,11 @@ export interface AudioPlaybackOptions {
   onChange: () => void;
   /** The pause between two messages. Defaults to `INTER_UTTERANCE_GAP_MS`. */
   gapMs?: number;
+  /**
+   * How long an accepted clip has to advance `currentTime` before it is
+   * called silent. Defaults to `NO_PROGRESS_MS`; 0 turns the watch off.
+   */
+  stallMs?: number;
   /** Receives the live output level without entering React state. */
   onAudioLevel?: (level: number) => void;
   /**
@@ -93,10 +112,22 @@ export class AudioPlayback {
   private mseReplayBytes = 0;
   /** The pause before the next message; nothing starts while it runs. */
   private gapTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Watches an accepted clip for sound; see `NO_PROGRESS_MS`. */
+  private progressTimer: ReturnType<typeof setTimeout> | null = null;
   private audioContext: AudioContext | null = null;
   private audioSource: MediaElementAudioSourceNode | null = null;
   private levelMonitor: AudioLevelMonitor | null = null;
   private audioGraphAttempted = false;
+  /**
+   * The meter for a browser whose element cannot be analysed. There is one
+   * level, from one of two readers, and which one a browser gets is decided
+   * once in `ensureAudioGraph`: the analyser where the element can be routed
+   * through `createMediaElementSource`, the utterance's own envelope where it
+   * cannot (WebKit, #189). A browser never runs both.
+   */
+  private envelopeDecoder: EnvelopeDecoder | null = null;
+  private envelopeMeter: EnvelopeMeter | null = null;
+  private envelopeToken = 0;
 
   constructor(options: AudioPlaybackOptions) {
     this.options = options;
@@ -116,6 +147,39 @@ export class AudioPlayback {
       next();
       this.notifyPlaybackChange();
     }, gap);
+  }
+
+  /**
+   * Calls `onStall` if the element has not advanced by the time the watch
+   * runs out. A clip that did advance has proved itself and is not watched
+   * again: a stall after sound was heard ends in `ended` or `error`.
+   */
+  private watchProgress(onStall: () => void): void {
+    this.clearProgressWatch();
+    const player = this.player;
+    const ms = this.options.stallMs ?? NO_PROGRESS_MS;
+    if (ms <= 0) return;
+    const startedAt = Number.isFinite(player.currentTime)
+      ? player.currentTime
+      : 0;
+    this.progressTimer = setTimeout(() => {
+      this.progressTimer = null;
+      const now = Number.isFinite(player.currentTime) ? player.currentTime : 0;
+      if (now <= startedAt) onStall();
+    }, ms);
+  }
+
+  private clearProgressWatch(): void {
+    if (this.progressTimer !== null) clearTimeout(this.progressTimer);
+    this.progressTimer = null;
+  }
+
+  /** The text a silent clip is reported with. */
+  private silentText(): string {
+    const ms = this.options.stallMs ?? NO_PROGRESS_MS;
+    return (
+      "Audio started but produced no sound (nothing played in " + ms + "ms)."
+    );
   }
 
   private clearGap(): void {
@@ -180,9 +244,11 @@ export class AudioPlayback {
   /** Stops playback for good; used when the runtime is torn down. */
   dispose(): void {
     this.clearGap();
+    this.clearProgressWatch();
     this.audioQueue.length = 0;
     this.clearMsePlayback();
     if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
+    this.stopEnvelopeMeter();
     this.levelMonitor?.disconnect();
     this.levelMonitor = null;
     this.audioSource?.disconnect();
@@ -209,6 +275,53 @@ export class AudioPlayback {
     this.attemptPlay(owner);
   }
 
+  /**
+   * True when this browser refused the analyser graph for good, so the level
+   * has to come from the audio's own envelope.
+   */
+  private envelopeMetering(): boolean {
+    if (!this.options.onAudioLevel) return false;
+    this.ensureAudioGraph();
+    return this.audioGraphAttempted && this.levelMonitor === null;
+  }
+
+  /** Decodes the clip aside and meters the element against its envelope. */
+  private startEnvelopeMeter(blob: Blob): void {
+    const onLevel = this.options.onAudioLevel;
+    if (!onLevel) return;
+    if (!this.envelopeDecoder) this.envelopeDecoder = createEnvelopeDecoder();
+    const decoder = this.envelopeDecoder;
+    if (!decoder) return;
+    const token = ++this.envelopeToken;
+    void blob
+      .arrayBuffer()
+      .then((bytes) => decodeEnvelope(bytes, decoder))
+      .then((envelope) => {
+        if (!envelope || this.envelopeToken !== token) return;
+        const meter = new EnvelopeMeter(this.player, envelope, onLevel);
+        this.envelopeMeter = meter;
+        if (this.playing) meter.start();
+      })
+      .catch(() => undefined);
+  }
+
+  /** Both level readers; a browser has only one of them (see `EnvelopeMeter`). */
+  private startMeter(): void {
+    this.levelMonitor?.start();
+    this.envelopeMeter?.start();
+  }
+
+  private stopMeter(): void {
+    this.levelMonitor?.stop();
+    this.envelopeMeter?.stop();
+  }
+
+  private stopEnvelopeMeter(): void {
+    this.envelopeToken += 1;
+    this.envelopeMeter?.stop();
+    this.envelopeMeter = null;
+  }
+
   playNext(): void {
     if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
     const blob = this.audioQueue.shift();
@@ -232,6 +345,7 @@ export class AudioPlayback {
       handlers: [],
     };
     this.playbackOwner = owner;
+    if (this.envelopeMetering()) this.startEnvelopeMeter(blob);
     const sequence = this.replaySequences.get(blob);
     if (sequence !== undefined) this.options.onUtterance?.(sequence);
     this.notifyPlaybackChange();
@@ -253,19 +367,27 @@ export class AudioPlayback {
       )
         return;
       owner.paused = true;
-      this.levelMonitor?.stop();
+      this.clearProgressWatch();
+      this.stopMeter();
       owner.awaitingEnded = owner.seeked && this.terminalSeek();
       this.playing = false;
       this.notifyPlaybackChange();
       this.options.onStatus(
         owner.awaitingEnded
-          ? "Audio finishing — click anywhere on this page to continue."
-          : "Audio paused — click anywhere on this page to resume.",
+          ? "Audio finishing — tap or click anywhere on this page to continue."
+          : "Audio paused — tap or click anywhere on this page to resume.",
       );
     };
     const error: EventListener = () => {
       if (this.playbackOwner !== owner || owner.consumed || !player.error)
         return;
+      // The element refused the clip. Say so: a browser that cannot decode
+      // what was sent used to drop every utterance in silence, with nothing
+      // on screen for the caller to report (#189).
+      this.options.onStatus(
+        "Audio failed to play (" + mediaErrorName(player.error) + ").",
+        true,
+      );
       this.consumeOwner(owner);
     };
     const resetTerminal = () => {
@@ -464,13 +586,15 @@ export class AudioPlayback {
 
   private cleanupOwner(owner: PlaybackOwner): void {
     const player = this.player;
+    this.clearProgressWatch();
+    this.stopEnvelopeMeter();
     if (this.playbackOwner === owner) this.playbackOwner = null;
     owner.pendingAttempt = null;
     for (const [name, handler] of owner.handlers) {
       player.removeEventListener(name, handler);
     }
     owner.handlers = [];
-    this.levelMonitor?.stop();
+    this.stopMeter();
     player.pause();
     player.removeAttribute("src");
     player.load();
@@ -511,11 +635,18 @@ export class AudioPlayback {
     // next user gesture retries it instead of silently losing it.
     this.audioQueue.unshift(owner.blob);
     this.options.onStatus(
-      "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
+      "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (" +
         errorName(error) +
         ").",
       true,
     );
+  }
+
+  /** The element took the clip, started, and played nothing. */
+  private replayStalled(owner: PlaybackOwner): void {
+    if (this.playbackOwner !== owner || owner.consumed) return;
+    this.options.onStatus(this.silentText(), true);
+    this.consumeOwner(owner);
   }
 
   private attemptPlay(owner: PlaybackOwner): void {
@@ -528,7 +659,7 @@ export class AudioPlayback {
     owner.paused = false;
     owner.seeked = false;
     this.resumeAudioGraph();
-    this.levelMonitor?.start();
+    this.startMeter();
     this.playing = true;
     this.notifyPlaybackChange();
     const attempt = ++this.playAttemptToken;
@@ -550,6 +681,8 @@ export class AudioPlayback {
           return;
         owner.pendingAttempt = null;
         this.playing = !owner.paused;
+        if (this.playing)
+          this.watchProgress(() => this.replayStalled(owner));
         this.notifyPlaybackChange();
       },
       (error) => this.playFailed(owner, attempt, error),
@@ -585,21 +718,32 @@ export class AudioPlayback {
 
   private msePlay(): void {
     if (!this.mseActive || this.mseActive.failed || this.playing) return;
+    const utterance = this.mseActive;
     this.resumeAudioGraph();
-    this.levelMonitor?.start();
+    this.startMeter();
     this.playing = true;
     this.notifyPlaybackChange();
-    Promise.resolve(this.player.play()).catch((error) => {
-      this.levelMonitor?.stop();
-      this.playing = false;
-      this.notifyPlaybackChange();
-      this.options.onStatus(
-        "Audio blocked by the browser — click anywhere on this page once, then it will play (" +
-          errorName(error) +
-          ").",
-        true,
-      );
-    });
+    Promise.resolve(this.player.play()).then(
+      () => {
+        if (this.mseActive !== utterance || utterance.failed) return;
+        // The element accepted the stream. If it never advances, this is a
+        // MediaSource it cannot play: say so and use the whole replay (#189).
+        this.watchProgress(() =>
+          this.mseFail(utterance, new Error("no playback progress")),
+        );
+      },
+      (error) => {
+        this.stopMeter();
+        this.playing = false;
+        this.notifyPlaybackChange();
+        this.options.onStatus(
+          "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (" +
+            errorName(error) +
+            ").",
+          true,
+        );
+      },
+    );
   }
 
   private mseFinishSource(utterance: MseUtterance): void {
@@ -645,11 +789,11 @@ export class AudioPlayback {
     utterance.failed = true;
     const player = this.player;
     if (this.mseActive === utterance) {
-      this.levelMonitor?.stop();
+      this.clearProgressWatch();
+      this.stopMeter();
       this.playing = false;
       this.notifyPlaybackChange();
-      if (utterance.endedHandler)
-        player.removeEventListener("ended", utterance.endedHandler);
+      this.mseDetach(utterance);
       player.pause();
       player.removeAttribute("src");
       player.load();
@@ -658,7 +802,7 @@ export class AudioPlayback {
     }
     this.options.onStatus(
       "Streaming audio failed; using the complete replay (" +
-        errorName(error) +
+        mediaErrorName(error) +
         ").",
       true,
     );
@@ -702,9 +846,9 @@ export class AudioPlayback {
     utterance.url = URL.createObjectURL(utterance.media);
     utterance.endedHandler = () => {
       if (this.mseActive !== utterance) return;
-      player.removeEventListener("ended", utterance.endedHandler!);
+      this.mseDetach(utterance);
       this.mseActive = null;
-      this.levelMonitor?.stop();
+      this.stopMeter();
       this.playing = false;
       this.notifyPlaybackChange();
       if (utterance.url) URL.revokeObjectURL(utterance.url);
@@ -712,6 +856,15 @@ export class AudioPlayback {
       this.notifyPlaybackChange();
     };
     player.addEventListener("ended", utterance.endedHandler);
+    // The element can refuse what was appended -- a SourceBuffer WebKit
+    // cannot parse sets a MediaError and stops. Without this the clip stayed
+    // "playing" for the rest of the call: no sound, no fallback, no message
+    // (#189).
+    utterance.errorHandler = () => {
+      if (this.mseActive !== utterance || !player.error) return;
+      this.mseFail(utterance, player.error);
+    };
+    player.addEventListener("error", utterance.errorHandler);
     utterance.media.addEventListener(
       "sourceopen",
       () => this.mseOpen(utterance),
@@ -720,21 +873,29 @@ export class AudioPlayback {
     if (utterance.media.readyState === "open") this.mseOpen(utterance);
   }
 
+  /** Takes an utterance's element handlers back off the element. */
+  private mseDetach(utterance: MseUtterance): void {
+    if (utterance.endedHandler)
+      this.player.removeEventListener("ended", utterance.endedHandler);
+    if (utterance.errorHandler)
+      this.player.removeEventListener("error", utterance.errorHandler);
+  }
+
   private clearMsePlayback(): void {
     this.clearGap();
+    this.clearProgressWatch();
     const player = this.player;
     for (const utterance of [this.mseActive, ...this.mseQueue].filter(
       Boolean,
     ) as MseUtterance[]) {
-      if (utterance.endedHandler)
-        player.removeEventListener("ended", utterance.endedHandler);
+      this.mseDetach(utterance);
       if (utterance.url) URL.revokeObjectURL(utterance.url);
     }
     this.mseActive = null;
     this.mseQueue = [];
     this.msePending = null;
     this.mseReplayBytes = 0;
-    this.levelMonitor?.stop();
+    this.stopMeter();
     this.playing = false;
     this.notifyPlaybackChange();
     player.pause();

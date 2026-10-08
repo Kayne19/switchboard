@@ -365,7 +365,7 @@ describe("AudioPlayback replay ownership", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(statuses.at(-1)).toEqual([
-      "Audio blocked by the browser — click anywhere on this page once, then it will play (NotAllowedError).",
+      "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (NotAllowedError).",
       true,
     ]);
     expect(playback.audioQueue.length).toBe(1);
@@ -502,7 +502,11 @@ describe("AudioPlayback streaming", () => {
     }
   }
 
-  function streamingPlayback(onUtterance?: (sequence: number) => void) {
+  function streamingPlayback(
+    onUtterance?: (sequence: number) => void,
+    statuses?: Array<[string, boolean | undefined]>,
+    stallMs?: number,
+  ) {
     const player = fakePlayer();
     player.play = () => {
       player.playCalls.push(player.src);
@@ -513,10 +517,11 @@ describe("AudioPlayback streaming", () => {
     const playback = new AudioPlayback({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
-      onStatus: () => {},
+      onStatus: (text, error) => statuses?.push([text, error]),
       onChange: () => {},
       onUtterance,
       gapMs: 0,
+      stallMs,
     });
     playback.setStreamingEnabled(true);
     return { player, urls, playback };
@@ -626,6 +631,71 @@ describe("AudioPlayback streaming", () => {
     expect(reached).toEqual([1, 2, 3]);
   });
 
+  // On WebKit an unsupported SourceBuffer payload sets a MediaError on the
+  // element instead of throwing: the clip stayed "playing" for the rest of
+  // the call, silent, with no fallback and nothing on screen (#189).
+  it("falls back and names the cause when the element refuses the stream", async () => {
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const { player, urls, playback } = streamingPlayback(undefined, statuses);
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("refused"));
+    expect(playback.isPlaying).toBe(true);
+
+    player.error = { code: 4 };
+    player.emit("error");
+    expect(playback.isPlaying, "a refused stream stops playing").toBe(false);
+    expect(statuses).toEqual([
+      [
+        "Streaming audio failed; using the complete replay (MEDIA_ERR_SRC_NOT_SUPPORTED).",
+        true,
+      ],
+    ]);
+    expect(playback.streamingEnabled).toBe(false);
+
+    player.error = null;
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    const replays = [...urls.values()].filter(
+      (value): value is Blob => value instanceof Blob,
+    );
+    expect(replays.length, "the whole utterance is replayed once").toBe(1);
+    expect(await replays[0].text()).toBe("refused");
+    expect(urls.get(player.src)).toBe(replays[0]);
+  });
+
+  // WebKit resolves `play()` on a MediaSource it cannot play and then never
+  // advances: silent, no `ended`, no `error`, no fallback (#189).
+  it("falls back when the stream starts and plays nothing", async () => {
+    vi.useFakeTimers();
+    try {
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const { player, urls, playback } = streamingPlayback(
+        undefined,
+        statuses,
+        1000,
+      );
+      playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("silent"));
+      expect(player.playCalls.length).toBe(1);
+      await Promise.resolve();
+
+      vi.advanceTimersByTime(1000);
+      expect(statuses).toEqual([
+        ["Streaming audio failed; using the complete replay (Error).", true],
+      ]);
+      expect(playback.streamingEnabled).toBe(false);
+      expect(playback.isPlaying).toBe(false);
+
+      playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+      const replays = [...urls.values()].filter(
+        (value): value is Blob => value instanceof Blob,
+      );
+      expect(replays.length).toBe(1);
+      expect(urls.get(player.src)).toBe(replays[0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("ignores audio stamped with another generation", () => {
     const { player, urls, playback } = streamingPlayback();
     playback.resetForGeneration(4);
@@ -661,6 +731,166 @@ describe("AudioPlayback complete replays", () => {
     player.ended = true;
     player.emit("ended");
     expect(reached).toEqual([4, 5]);
+  });
+});
+
+describe("AudioPlayback failure reporting", () => {
+  // A browser that refuses the clip used to drop every utterance in silence:
+  // no sound, and nothing on screen for the caller to report (#189).
+  it("names a media element error instead of dropping the clip silently", async () => {
+    const player = fakePlayer();
+    stubObjectUrls();
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: (text, error) => statuses.push([text, error]),
+      onChange: () => {},
+      gapMs: 0,
+    });
+    playback.audioQueue.push(new Blob(["clip"]));
+    playback.playNext();
+    player.playPromises[0].resolve();
+    await Promise.resolve();
+
+    player.error = { code: 3 };
+    player.emit("error");
+    expect(statuses).toEqual([
+      ["Audio failed to play (MEDIA_ERR_DECODE).", true],
+      ["idle", false],
+    ]);
+    expect(playback.isDrained()).toBe(true);
+  });
+});
+
+describe("AudioPlayback silent playback", () => {
+  // `play()` resolving proves nothing: on WebKit an element with a
+  // MediaSource it cannot play resolves and never advances. The call then
+  // "spoke" in silence for the rest of its life, with nothing on screen and
+  // no caption, because `ended` never came either (#189).
+  it("reports a replay that starts and plays nothing", async () => {
+    vi.useFakeTimers();
+    try {
+      const player = fakePlayer();
+      stubObjectUrls();
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const playback = new AudioPlayback({
+        player: player as unknown as HTMLAudioElement,
+        idleText: "idle",
+        onStatus: (text, error) => statuses.push([text, error]),
+        onChange: () => {},
+        gapMs: 0,
+        stallMs: 1000,
+      });
+      playback.audioQueue.push(new Blob(["silent"]));
+      playback.playNext();
+      player.playPromises[0].resolve();
+      await Promise.resolve();
+      expect(playback.isPlaying).toBe(true);
+
+      vi.advanceTimersByTime(999);
+      expect(statuses, "the watch gives the clip its time").toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(statuses[0]).toEqual([
+        "Audio started but produced no sound (nothing played in 1000ms).",
+        true,
+      ]);
+      expect(playback.isPlaying, "a silent clip stops speaking").toBe(false);
+      expect(playback.isDrained()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a clip that is playing alone", async () => {
+    vi.useFakeTimers();
+    try {
+      const player = fakePlayer();
+      stubObjectUrls();
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const playback = new AudioPlayback({
+        player: player as unknown as HTMLAudioElement,
+        idleText: "idle",
+        onStatus: (text, error) => statuses.push([text, error]),
+        onChange: () => {},
+        gapMs: 0,
+        stallMs: 1000,
+      });
+      playback.audioQueue.push(new Blob(["heard"]));
+      playback.playNext();
+      player.playPromises[0].resolve();
+      await Promise.resolve();
+      player.currentTime += 0.5;
+      vi.advanceTimersByTime(2000);
+      expect(statuses).toEqual([]);
+      expect(playback.isPlaying).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("AudioPlayback level on a browser that cannot be analysed", () => {
+  // WebKit silences an element routed through `createMediaElementSource`, so
+  // the analyser is refused there on purpose and the level used to be null
+  // for the whole call (#189). The utterance's own bytes carry it instead.
+  it("meters the replay against its decoded envelope", async () => {
+    const player = fakePlayer();
+    stubObjectUrls();
+    const levels: number[] = [];
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("navigator", {
+      userAgent:
+        "Mozilla/5.0 (iPad; CPU OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    });
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        state = "running";
+      },
+    );
+    const samples = new Float32Array(1000).fill(0.5);
+    vi.stubGlobal(
+      "OfflineAudioContext",
+      class {
+        decodeAudioData() {
+          return Promise.resolve({
+            sampleRate: 1000,
+            length: samples.length,
+            getChannelData: () => samples,
+          } as unknown as AudioBuffer);
+        }
+      },
+    );
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: () => {},
+      onChange: () => {},
+      onAudioLevel: (level) => levels.push(level),
+      gapMs: 0,
+    });
+
+    playback.audioQueue.push(new Blob(["mp3 bytes"]));
+    playback.playNext();
+    player.currentTime = 0.5;
+    player.playPromises[0].resolve();
+    for (let step = 0; step < 8; step += 1) await Promise.resolve();
+    expect(levels.length, "the envelope is metered once decoded").toBeGreaterThan(0);
+    expect(levels[levels.length - 1]).toBeCloseTo(1, 5);
+
+    player.currentTime = 100;
+    frames.pop()?.(0);
+    expect(levels[levels.length - 1], "past the clip is silence").toBe(0);
+
+    player.ended = true;
+    player.emit("ended");
+    expect(levels[levels.length - 1], "a finished clip reports nothing").toBe(0);
   });
 });
 
