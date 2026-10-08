@@ -222,8 +222,9 @@ export class HandsFreeController {
 		);
 		const token = ++this.runtimeToken;
 		try {
-			await this.detector.load?.();
-			await this.endpointer.load?.();
+			// Two models, one wait: either one failing is the same start
+			// failure, reported by the catch below.
+			await Promise.all([this.detector.load?.(), this.endpointer.load?.()]);
 			if (!this.enabled || token !== this.runtimeToken) return false;
 			this.context = this.createAudioContext();
 			if (typeof this.context.audioWorklet?.addModule !== "function")
