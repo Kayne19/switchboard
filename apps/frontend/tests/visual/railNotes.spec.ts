@@ -15,7 +15,7 @@ const table: ControllerAction = { op: 'show', id: 'grid', type: 'table', role: '
 const notes = [note('about-grid', { target: 'grid' }), note('general'), note('later'), note('last')];
 
 for (const size of FRAME_GEOMETRIES) {
-  test(`${size.width}x${size.height}: the rail shows every note, each whole, and fades an edge it continues past`, async ({ page }) => {
+  test(`${size.width}x${size.height}: the rail shows every note, each whole, with nothing drawn on an edge it continues past`, async ({ page }) => {
     await page.setViewportSize({ width: size.width, height: size.height });
     await openScene(page, 'idle');
     await runActions(page, [table, ...notes]);
@@ -28,13 +28,13 @@ for (const size of FRAME_GEOMETRIES) {
         tags: cards.map((card) => card.querySelector('.annotation-card__tag')?.textContent),
         // Each card reads whole: its text does not scroll inside it.
         cut: cards.filter((card) => card.scrollHeight > card.clientHeight + 1).length,
-        overflows: column.scrollHeight > column.clientHeight + 1,
-        fadeBelow: document.querySelector('.content-rail .scroll-rim__fade--bottom') !== null,
+        // Nothing is drawn over an edge the column continues past (#177).
+        rims: document.querySelectorAll('.content-rail [class*="scroll-rim"]').length,
       };
     });
     expect(seen.tags).toEqual(['ABOUT-GRID', 'GENERAL', 'LATER', 'LAST']);
     expect(seen.cut).toBe(0);
-    expect(seen.fadeBelow).toBe(seen.overflows);
+    expect(seen.rims).toBe(0);
   });
 }
 

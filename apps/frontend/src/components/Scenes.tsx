@@ -20,16 +20,15 @@ import { calendarFrame } from '../primitives/CalendarPrimitive';
 import { ChartPrimitive } from '../primitives/ChartPrimitive';
 import { chartKind } from '../primitives/chartGeometry';
 import { NOTES_PLACED_IN_FULL } from '../primitives/notePlacement';
-import { countText, type Noun } from '../primitives/countText';
+import { countText } from '../primitives/countText';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
-import { ListViewport, continuesPast, fadeDepth } from '../primitives/ListViewport';
+import { ListViewport } from '../primitives/ListViewport';
 import { LiveChatCard } from '../primitives/LiveChatCard';
 import { SpokenLog } from '../primitives/SpokenLog';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
 import { SceneFooter } from '../primitives/SceneFooter';
-import { ScrollRim } from '../primitives/ScrollRim';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame, type FrameVariant } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
@@ -235,13 +234,9 @@ interface RailFit {
   leads: boolean;
   /** The column's foot has no room for the activity panel whole: it is set aside. */
   away: boolean;
-  /** The column continues past its top or its foot: that edge fades (ScrollRim), as a scroller's does, `fade` px deep. */
-  above: boolean;
-  below: boolean;
-  fade: number;
 }
-const FITS: RailFit = { leads: false, away: false, above: false, below: false, fade: 0 };
-const sameFit = (a: RailFit, b: RailFit) => a.leads === b.leads && a.away === b.away && a.above === b.above && a.below === b.below && a.fade === b.fade;
+const FITS: RailFit = { leads: false, away: false };
+const sameFit = (a: RailFit, b: RailFit) => a.leads === b.leads && a.away === b.away;
 
 // Under the main column (a portrait stage) the rail is Damocles beside the
 // note, and the note reads whole there, as Kayne approved the portrait
@@ -252,9 +247,7 @@ const sameFit = (a: RailFit, b: RailFit) => a.leads === b.leads && a.away === b.
 // leads, whole, the rest after it in the column's scroll; and the activity
 // panel stands at the column's foot only where it fits there whole -- where
 // it does not, Damocles's caption, which names the tool at work wherever
-// the rail stands, is what the caller sees of it. An edge the column
-// continues past fades as a scroller's edge does, so a part cut there
-// reads as the next one coming, not as broken.
+// the rail stands, is what the caller sees of it.
 //
 // A part counts at its own height and margins (a live response, which
 // grows into the column's free space, at its least), never at what these
@@ -273,14 +266,6 @@ function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFlo
       return undefined;
     }
     const commit = (next: RailFit) => setFit((current) => (sameFit(current, next) ? current : next));
-    // The edges from the column's flow as decided (what its class changes do
-    // to it are not observed), and where its scroll stands.
-    let decided: Pick<RailFit, 'leads' | 'away'> = FITS;
-    let flow = 0;
-    const edges = (): RailFit => {
-      const goes = continuesPast(column.scrollTop, column.clientHeight, flow);
-      return { ...decided, above: goes.top, below: goes.bottom, fade: fadeDepth(column.clientHeight) };
-    };
     const measure = () => {
       const children = Array.from(column.children) as HTMLElement[];
       const slot = children.find((child) => child.classList.contains('tool-activity-slot'));
@@ -296,12 +281,10 @@ function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFlo
       const panel = slot && slot.offsetHeight > 0 ? (parts.length > 0 ? gap : 0) + slot.offsetHeight : 0;
       const room = column.clientHeight;
       onFloor(note ? Math.ceil(least(note)) : null);
-      decided = {
+      commit({
         leads: note !== undefined && parts.length > 1 && content > room + 1,
         away: panel > 0 && content + panel > room + 1,
-      };
-      flow = content + (decided.away ? 0 : panel);
-      commit(edges());
+      });
     };
     // The first measure is the layout effect's own; the observers' are
     // committed at once (flushSync), before the frame they report is painted.
@@ -309,19 +292,8 @@ function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFlo
     const stop = watchElement(column, () => (observing ? flushSync(measure) : measure()), { children: true, changes: true });
     observing = true;
     remeasure.current = measure;
-    // A scroll moves only the edges, read once a frame.
-    let frame = 0;
-    const scrolled = () => {
-      if (frame === 0) frame = requestAnimationFrame(() => {
-        frame = 0;
-        commit(edges());
-      });
-    };
-    column.addEventListener('scroll', scrolled, { passive: true });
     return () => {
       stop();
-      cancelAnimationFrame(frame);
-      column.removeEventListener('scroll', scrolled);
       remeasure.current = () => {};
     };
   }, [ref, under, onFloor]);
@@ -329,37 +301,6 @@ function useRailFit(ref: RefObject<HTMLDivElement | null>, under: boolean, onFlo
   // commit, so the first frame is drawn in the rail the floor makes.
   useLayoutEffect(() => remeasure.current(), [floor]);
   return under ? fit : FITS;
-}
-
-// Beside the main column, where the rail carries more than one note, the
-// column scrolls where they do not all fit, and an edge it continues past
-// fades as a scroller's edge does (under the column, useRailFit says so).
-function useColumnEdges(ref: RefObject<HTMLDivElement | null>, watching: boolean): Pick<RailFit, 'above' | 'below' | 'fade'> {
-  const [edges, setEdges] = useState({ above: false, below: false, fade: 0 });
-  useLayoutEffect(() => {
-    const column = ref.current;
-    if (!watching || !column) return undefined;
-    const measure = () => {
-      const next = { above: column.scrollTop > 1, below: column.scrollTop + column.clientHeight < column.scrollHeight - 1, fade: fadeDepth(column.clientHeight) };
-      setEdges((current) => (current.above === next.above && current.below === next.below && current.fade === next.fade ? current : next));
-    };
-    measure();
-    const stop = watchElement(column, measure, { children: true, changes: true });
-    let frame = 0;
-    const scrolled = () => {
-      if (frame === 0) frame = requestAnimationFrame(() => {
-        frame = 0;
-        measure();
-      });
-    };
-    column.addEventListener('scroll', scrolled, { passive: true });
-    return () => {
-      stop();
-      cancelAnimationFrame(frame);
-      column.removeEventListener('scroll', scrolled);
-    };
-  }, [ref, watching]);
-  return watching ? edges : FITS;
 }
 
 const noFloor = () => {};
@@ -379,8 +320,6 @@ function RailDetails({ state, metrics, note, noteObject, moreNotes = NO_NOTES, p
   const crowded = useCrowded(columnRef, !under && noteLeads && (note !== null || moreNotes.length > 0));
   const fit = useRailFit(columnRef, under, onFloor, floor);
   const stacked = moreNotes.length > 0;
-  const beside = useColumnEdges(columnRef, !under && stacked);
-  const edges = under ? fit : beside;
   // The response and the note stretch into the column's free space, so while
   // either is shown the activity slot stays reserved and a tool starting or
   // clearing never resizes them. Metrics and progress keep their own size at
@@ -391,19 +330,14 @@ function RailDetails({ state, metrics, note, noteObject, moreNotes = NO_NOTES, p
   // about it names, and only that card carries the badge.
   const drawn = pageNotes ?? [...(note ? [note] : []), ...moreNotes.map((object) => object.data)];
   return (
-    <>
-      <div ref={columnRef} className="content-rail__details">
-        {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} slot="rail" /> : null}
-        <RailProgress progressList={progressList} onFocus={onFocus} />
-        {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
-        <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={railNoteTarget(state.agentObjects, drawn, note)} leads={leads} stacked={stacked} />
-        <RailMoreNotes notes={moreNotes} drawn={drawn} onFocus={onFocus} objects={state.agentObjects} leads={leads} />
-        <ToolActivity activity={state.activity} reserveSpace={reserveActivity} away={fit.away} />
-      </div>
-      {/* The column's edges as every scroller draws them: a fade, with no tag (what lies past is the rail's own). */}
-      {edges.above ? <ScrollRim side="top" fade={edges.fade} /> : null}
-      {edges.below ? <ScrollRim side="bottom" fade={edges.fade} /> : null}
-    </>
+    <div ref={columnRef} className="content-rail__details">
+      {metrics.length > 0 ? <MetricsPrimitive metrics={metrics} slot="rail" /> : null}
+      <RailProgress progressList={progressList} onFocus={onFocus} />
+      {liveMessage ? <LiveChatCard message={liveMessage} onOpenHistory={onOpenHistory} /> : null}
+      <RailNote note={note} noteObject={noteObject} onFocus={onFocus} onOpenHistory={onOpenHistory} named={railNoteTarget(state.agentObjects, drawn, note)} leads={leads} stacked={stacked} />
+      <RailMoreNotes notes={moreNotes} drawn={drawn} onFocus={onFocus} objects={state.agentObjects} leads={leads} />
+      <ToolActivity activity={state.activity} reserveSpace={reserveActivity} away={fit.away} />
+    </div>
   );
 }
 
@@ -771,7 +705,6 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
 
 // ---- The aux row: every visual a main slot does not draw ----
 
-const PANEL: Noun = ['PANEL', 'PANELS'];
 
 // The row under a primary: each object the main slot does not draw and the
 // rail does not carry gets a framed cell of its own, so an accepted object is
@@ -792,11 +725,10 @@ function AuxRow({
   /** The notes the page draws: each cell marks what the first about its object names. */
   drawn: NoteData[];
 }) {
-  // A row with no room for every cell scrolls under the rim every scroller
-  // draws, counting the cells wholly past each edge (ListViewport); it opens
+  // A row with no room for every cell scrolls (ListViewport); it opens
   // at its top, whatever its cells lead with.
   return (
-    <ListViewport noun={PANEL} lead={null} countSelector=":scope > .composed-aux-object" className="composed-aux-viewport" scrollClassName="composed-aux" label="More on stage">
+    <ListViewport lead={null} className="composed-aux-viewport" scrollClassName="composed-aux" label="More on stage">
       {objects.map((object) => (
         <ObjectMotion
           key={object.id}

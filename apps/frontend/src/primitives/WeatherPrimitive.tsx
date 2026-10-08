@@ -342,7 +342,6 @@ function Days({ days, marked, scroll }: { days: WeatherDay[]; marked?: string; s
     <section className="weather-daily">
       {scroll ? (
         <ListViewport
-          noun={['DAY', 'DAYS']}
           lead={days.some((day) => day.date === marked) ? marked : undefined}
           head={head}
           scrollClassName="weather-daily__scroll"
@@ -399,9 +398,8 @@ export function WeatherPrimitive({ data, marked, slot = 'primary' }: { data: Wea
     return watchElement(line, measure, { children: true, changes: true });
   }, [arrangement]);
   // Down the box, the forecast is one column read top to bottom, and it
-  // scrolls as one when it is longer than the box, counting the days past
-  // the edge; beside one another, each part keeps its place and the days
-  // scroll in their own.
+  // scrolls as one when it is longer than the box; beside one another,
+  // each part keeps its place and the days scroll in their own.
   const tall = arrangement === 'tall';
   const parts = ['now', layout.hourly ? 'hourly' : null, layout.daily ? 'daily' : null].filter(Boolean).join(' ');
   // The item a note names that no list here draws (a small slot).
@@ -420,7 +418,7 @@ export function WeatherPrimitive({ data, marked, slot = 'primary' }: { data: Wea
       {/* The box the forecast is laid out for, inside any padding its slot gives it. */}
       <div ref={boxRef} className="weather__box">
         {tall ? (
-          <ListViewport noun={['DAY', 'DAYS']} countSelector=".weather-day" lead={named} scrollClassName="weather__scroll" label="Forecast">
+          <ListViewport lead={named} scrollClassName="weather__scroll" label="Forecast">
             {field}
           </ListViewport>
         ) : (

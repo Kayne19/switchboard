@@ -415,12 +415,12 @@ for (const viewport of viewports) {
 }
 
 // A live response used as the explanation grows into the column's free
-// space and scrolls inside its own box; it streams, so it is never "whole".
-// Where it continues past an edge, that edge fades as every scroller's does
-// (ScrollRim), so a line cut there reads as more to come, not as broken.
-// On a 390x844 phone its last visible line was cut in half with no cue.
+// space and scrolls inside its own box; it streams, so it is never
+// "whole". The fade that was drawn over the line its box cuts is gone
+// (#177): the box cuts the line and nothing is drawn over it, and the
+// reader scrolls the response to read on.
 for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }]) {
-  test(`a live response cut by its box fades at the cut at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+  test(`a live response cut by its box scrolls, with nothing drawn over the cut, at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
     await page.setViewportSize(viewport);
     const fixtureServer = new DisplayFixtureServer({ initialGeneration: testInfo.workerIndex + 90 });
     const { wsUrl } = await fixtureServer.start();
@@ -441,14 +441,12 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 844, height: 390 }
       await page.waitForTimeout(400);
       const cut = await text.evaluate((element) => element.scrollHeight > element.clientHeight + 1);
       expect(cut, 'the response is longer than its box here').toBe(true);
-      const fade = page.locator('.content-rail .live-chat-card .scroll-rim__fade--bottom');
-      await expect(fade).toBeVisible();
-      const [box, faded] = await Promise.all([text.boundingBox(), fade.boundingBox()]);
-      expect(Math.abs(faded!.y + faded!.height - (box!.y + box!.height))).toBeLessThanOrEqual(1);
-      // Read to its end, the response no longer continues below: the fade moves to the top.
+      await expect(page.locator('.content-rail [class*="scroll-rim"]')).toHaveCount(0);
+      // Read to its end, the reader is at the response's foot.
       await text.evaluate((element) => { element.scrollTop = element.scrollHeight; });
-      await expect(page.locator('.content-rail .live-chat-card .scroll-rim__fade--top')).toBeVisible();
-      await expect(fade).toHaveCount(0);
+      await page.waitForTimeout(100);
+      const atEnd = await text.evaluate((element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 1);
+      expect(atEnd).toBe(true);
     } finally {
       await fixtureServer.stop();
     }

@@ -66,8 +66,8 @@ export function SequencePrimitive({
   );
   const { hostRef, layout, fit, strip } = useDrawingView(view);
   // What the viewport tells a reader of an exchange that scrolls: its
-  // messages, counted past each edge and kept whole at rest, and the
-  // sketch its map draws (headers, lifelines, the arrows).
+  // messages, kept whole at rest, and the sketch its map draws (headers,
+  // lifelines, the arrows).
   const map = useMemo<DrawingMap>(() => {
     const parts = layout.messages.map((item) => {
       const xs = [...item.points.map((point) => point.x), item.label.box.x, item.label.box.x + item.label.box.width];
@@ -78,7 +78,6 @@ export function SequencePrimitive({
     });
     return {
       parts,
-      noun: ['MESSAGE', 'MESSAGES'],
       marks: [],
       links: [],
       sketch: {

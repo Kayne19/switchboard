@@ -302,11 +302,9 @@ export function ChartPrimitive({
   const drawnScale = size.width / width;
   return <div ref={hostRef} className={`chart-primitive${slot==='focus'?' chart-primitive--focused':''}${scroll===null?'':' chart-primitive--scrolls'}`} data-testid="chart" data-kind={kind} data-orientation={horizontal?'horizontal':'upright'}>
     {scroll===null ? svg : (
-      // Scrolled, it reads as a list does: the rows past each edge counted
-      // there, a tap turning a page; its value axis pinned over the rows.
+      // Scrolled, it reads as a list does, by the keys every scroller
+      // takes; its value axis pinned over the rows.
       <ListViewport
-        noun={data.series.length > 1 ? ['GROUP', 'GROUPS'] : ['BAR', 'BARS']}
-        countSelector=".chart-grid__category"
         lead={lead === undefined ? undefined : String(lead)}
         head={<ValueAxisHead scales={scales} width={width} scale={drawnScale}/>}
         className="chart-primitive__viewport"

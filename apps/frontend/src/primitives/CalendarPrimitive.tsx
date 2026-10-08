@@ -35,13 +35,12 @@ import {
   type PlacedEvent,
   type TimeAxis,
 } from './calendarLayout';
-import { countText, rimCount } from './countText';
+import { countText } from './countText';
 import { scrollMove } from './drawingScroll';
 import type { Size } from './geometry';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
-import { ScrollRim } from './ScrollRim';
 import type { Slot } from './slot';
 import { clockText, monthName, weekdayName } from './timeLabels';
 
@@ -61,8 +60,9 @@ import { clockText, monthName, weekdayName } from './timeLabels';
 
 /** The time gutter of a day or week grid. */
 const GUTTER_PX = 42;
-/** A paged grid's rail on each side of its days, naming the days it hides. */
-const PAGE_RAIL_PX = 20;
+/** A paged grid keeps this much clear at each side of its days, so the day
+ * the page cuts there does not run into the frame. */
+const PAGE_EDGE_PX = 20;
 /** The least width a day column holds a title in. */
 const MIN_COLUMN_PX = 76;
 /** The fewest hours a time grid shows at its least hour before the view is better read as the agenda. */
@@ -147,7 +147,10 @@ export function chooseLayout(data: CalendarData, size: Size, dayCount: number, h
   if (size.height - headPx < MIN_GRID_HOURS * AXIS.minHourPx) return { layout: 'agenda', columns: dayCount };
   const fit = Math.floor((size.width - GUTTER_PX) / MIN_COLUMN_PX);
   if (fit >= dayCount) return { layout: 'grid', columns: dayCount };
-  const paged = Math.floor((size.width - GUTTER_PX - 2 * PAGE_RAIL_PX) / MIN_COLUMN_PX);
+  // Fewer days than it has, turned a page at a time (PagedDays), inside the
+  // room it keeps clear at each side; fewer than two of them is read as the
+  // agenda instead.
+  const paged = Math.floor((size.width - GUTTER_PX - 2 * PAGE_EDGE_PX) / MIN_COLUMN_PX);
   if (paged >= 2) return { layout: 'grid', columns: paged };
   return { layout: 'agenda', columns: dayCount };
 }
@@ -225,13 +228,14 @@ function firstColumnFor(model: CalendarModel, marked: string | undefined, column
   return Math.max(0, Math.min(model.days.length - columns, at < 0 ? 0 : at));
 }
 
+/** The days either way of a paged grid, as its label names them to a reader who cannot see them. */
 function runText(days: number[], placed: PlacedEvent[]): string {
   if (days.length === 0) return '';
   const first = days[0];
   const last = days[days.length - 1];
   const count = placed.filter((item) => item.firstDay <= last && item.lastDay >= first).length;
   const name = days.length === 1 ? weekdayName(first) : `${weekdayName(first)}-${weekdayName(last)}`;
-  return `${name} / ${rimCount(count, ['EVENT', 'EVENTS'])}`;
+  return `${name} / ${countText(count, ['EVENT', 'EVENTS'])}`;
 }
 
 function TimeGrid({ data, model, marked, size, columns }: GridProps) {
@@ -254,8 +258,8 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
   const room = size.height > 0 ? size.height - headHeight : 520;
   const axis = timeAxis(segments, nowMinute, room, MIN_BOX_MINUTES);
   const minDuration = (MIN_EVENT_PX / axis.hourPx) * 60;
-  const rail = pages ? PAGE_RAIL_PX : 0;
-  const columnWidth = size.width > 0 ? (size.width - GUTTER_PX - 2 * rail) / columns : 160;
+  const edge = pages ? PAGE_EDGE_PX : 0;
+  const columnWidth = size.width > 0 ? (size.width - GUTTER_PX - 2 * edge) / columns : 160;
   const maxSteps = Math.max(0, Math.floor((columnWidth - MIN_PART_PX) / STEP_INSET_PX));
   for (const list of segments) packColumns(list, minDuration, (STEP_GAP_PX / axis.hourPx) * 60, maxSteps);
   // A cluster wider than a column holds at a readable part width draws what
@@ -263,9 +267,9 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
   const places = Math.max(1, Math.floor(columnWidth / MIN_PART_PX));
   const laidOut = segments.map((list) => crowdedColumns(list, places, minDuration));
 
-  // Every box carries its event's id (a viewport counts each box past an
-  // edge where it lies). The NOTE badge goes on the first place the marked
-  // event is drawn, or on the count that holds it where it is not drawn.
+  // Every box carries its event's id (the name a note uses for it). The
+  // NOTE badge goes on the first place the marked event is drawn, or on the
+  // count that holds it where it is not drawn.
   const named = new Set<string>();
   const firstBox = (id: string) => {
     if (named.has(id)) return false;
@@ -276,12 +280,14 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
   // else on the now line.
   const markedInHours = marked !== undefined && laidOut.some(({ drawn }) => drawn.some((segment) => segment.placed.event.id === marked));
 
-  // A paged grid keeps a rail's width clear on each side of its days, so
-  // the rails that name the hidden days never lie over the shown ones.
+  // The days stand after the time gutter, which the hour rules and the
+  // folds keep clear of (`--grid-lead`); a paged grid keeps room clear at
+  // each side of them as well, so the day it cuts there does not run into
+  // the frame (`--grid-trail`).
   const template: CSSProperties = {
-    gridTemplateColumns: pages ? `${GUTTER_PX}px ${rail}px repeat(${columns}, minmax(0, 1fr)) ${rail}px` : `${GUTTER_PX}px repeat(${columns}, minmax(0, 1fr))`,
-    '--grid-lead': `${GUTTER_PX + rail}px`,
-    '--grid-trail': `${rail}px`,
+    gridTemplateColumns: pages ? `${GUTTER_PX}px ${edge}px repeat(${columns}, minmax(0, 1fr)) ${edge}px` : `${GUTTER_PX}px repeat(${columns}, minmax(0, 1fr))`,
+    '--grid-lead': `${GUTTER_PX + edge}px`,
+    '--grid-trail': `${edge}px`,
   } as CSSProperties;
   const at = (index: number) => index + (pages ? 3 : 2);
   const head = (
@@ -323,7 +329,6 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
 
   const grid = (
     <ListViewport
-      noun={['EVENT', 'EVENTS']}
       lead={markedInHours ? marked : undefined}
       head={head}
       className="calendar-grid__viewport"
@@ -517,19 +522,15 @@ function DayBarBox({ bar, model, marked, first, column }: { bar: DayBar; model: 
 }
 
 /**
- * Days a grid has no room for: the grid draws the columns that fit, and on
- * each side it hides days a rail names them and counts their events, as a
- * scrolled drawing's rail counts its parts (the same cut line and tag). A
- * tap on the tag, or a swipe across the days, turns to the next of them.
- * A grid that holds all its days (`paged` false) stands in the same box,
- * with no rails and nothing to turn.
+ * Days a grid has no room for: the grid draws the columns that fit, and a
+ * swipe across the days, or the keys every scroller takes, turns to the
+ * next of them; what lies either way is named to a reader who cannot see
+ * it (`before`, `after`, in the group's label). A grid that holds all its
+ * days (`paged` false) stands in the same box, with nothing to turn.
  */
 function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: boolean; before: string | null; after: string | null; shown: string; onTurn: (direction: -1 | 1, toEnd?: boolean) => void; children: ReactNode }) {
   const start = useRef<{ x: number; y: number } | null>(null);
   const swiped = useRef(false);
-  const tag = (side: 'left' | 'right', text: string) => (
-    <ScrollRim side={side} text={text} onPage={() => onTurn(side === 'left' ? -1 : 1)} className="calendar-pages__rim" />
-  );
   if (!paged) return <div className="calendar-grid">{children}</div>;
   return (
     <div
@@ -578,10 +579,6 @@ function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: b
       }}
     >
       {children}
-      <div className="calendar-pages__edges" style={{ left: `${GUTTER_PX}px` }} data-rail={PAGE_RAIL_PX}>
-        {before ? tag('left', before) : null}
-        {after ? tag('right', after) : null}
-      </div>
     </div>
   );
 }
@@ -844,7 +841,6 @@ function AgendaList({ model, days, marked, compact = false }: { model: CalendarM
   const lead = agendaLead(entries, marked);
   return (
     <ListViewport
-      noun={['EVENT', 'EVENTS']}
       lead={lead}
       className={`calendar-agenda__viewport${compact ? ' calendar-agenda__viewport--compact' : ''}`}
       scrollClassName="calendar-agenda__scroll"

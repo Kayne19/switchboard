@@ -137,7 +137,7 @@ test('sections stand side by side where the column holds two, and stack where it
 });
 
 for (const viewport of [geometries[0], geometries[2]]) {
-  test(`the task a note names opens clear of the edge's fade in a short cell / ${viewport.width}`, async ({ page }) => {
+  test(`the task a note names opens inside the view in a short cell / ${viewport.width}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.goto('/?scene=tasks&chrome=0');
     await expect(page.locator('[data-testid="tasks"]')).toBeVisible();
@@ -153,8 +153,7 @@ for (const viewport of [geometries[0], geometries[2]]) {
       const cell = document.querySelector<HTMLElement>('.composed-aux [data-testid="tasks"]')!;
       const scroll = cell.querySelector<HTMLElement>('.list-viewport__scroll')!.getBoundingClientRect();
       const row = cell.querySelector<HTMLElement>('[data-item="pack"]')!.getBoundingClientRect();
-      const fade = cell.querySelector<HTMLElement>('.scroll-rim__fade--bottom')?.getBoundingClientRect();
-      return { rowTop: row.top, rowBottom: row.bottom, top: scroll.top, bottom: fade ? fade.top : scroll.bottom };
+      return { rowTop: row.top, rowBottom: row.bottom, top: scroll.top, bottom: scroll.bottom };
     });
     expect(box.rowTop).toBeGreaterThanOrEqual(box.top - 1);
     expect(box.rowBottom).toBeLessThanOrEqual(box.bottom + 1);

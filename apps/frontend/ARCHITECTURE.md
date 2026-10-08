@@ -92,7 +92,7 @@ beside the note, and the note reads whole (`useRailFit` in `RailDetails`):
 it keeps its own height, and the grid gives the rail at least that height
 (`--rail-floor`), the main column keeping the larger share. Where what the
 rail carries does not all fit, the note leads and the rest scrolls under
-it, an edge the column continues past fading (`ScrollRim`'s fade); the
+it, with nothing drawn on an edge the column continues past (#177); the
 activity panel stands at the column's foot only where it fits there whole.
 What the observers measure is committed before the frame is painted. A primary that outgrows its share scrolls in it or is
 drawn smaller; it never takes the rail's room. On a chart page the shell

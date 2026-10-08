@@ -116,7 +116,8 @@ function render(actions: ControllerAction[]) {
     floor: scene.querySelector<HTMLElement>('.content-grid')!.style.getPropertyValue('--rail-floor'),
     leads: scene.querySelector('.rail-note--leads') !== null,
     away: scene.querySelector('.tool-activity-slot--away') !== null,
-    fades: Array.from(scene.querySelectorAll('.content-rail > .scroll-rim__fade')).map((fade) => fade.classList[1]),
+    // Nothing is drawn over an edge the column continues past (#177).
+    rims: scene.querySelectorAll('[class*="scroll-rim"]').length,
     order: Array.from(scene.querySelector('.content-rail__details')!.children).map((child) => child.classList[0]),
   };
 }
@@ -128,7 +129,7 @@ describe('the rail under the main column', () => {
     expect(rail.floor).toBe('182px');
     expect(rail.leads).toBe(false);
     expect(rail.away).toBe(true);
-    expect(rail.fades).toEqual([]);
+    expect(rail.rims).toBe(0);
   });
 
   it('keeps the activity panel at its foot where a short note leaves it room', () => {
@@ -138,22 +139,22 @@ describe('the rail under the main column', () => {
     expect(rail.away).toBe(false);
   });
 
-  it('leads with the note, whole, where the column cannot hold all it carries, the rest fading under it', () => {
+  it('leads with the note, whole, where the column cannot hold all it carries', () => {
     noteHeight = 84;
     // The plan fixture: two metrics and a progress over the note.
     const rail = render([...fixtures.plan]);
     expect(rail.order).toEqual(['metrics', 'rail-progress', 'rail-note', 'tool-activity-slot']);
     expect(rail.leads).toBe(true);
     expect(rail.away).toBe(true);
-    expect(rail.fades).toEqual(['scroll-rim__fade--bottom']);
+    expect(rail.rims).toBe(0);
   });
 
-  it('holds a note longer than half the grid at half, its foot fading', () => {
+  it('holds a note longer than half the grid at half', () => {
     noteHeight = 400;
     const rail = render([...fixtures.architecture]);
     // The floor says the note's height; the grid holds the rail at half (the room stub).
     expect(rail.floor).toBe('400px');
-    expect(rail.fades).toEqual(['scroll-rim__fade--bottom']);
+    expect(rail.rims).toBe(0);
   });
 
   it('lets go of all it decided when the rail turns to stand beside the column', () => {
@@ -169,7 +170,6 @@ describe('the rail under the main column', () => {
     expect(scene.querySelector<HTMLElement>('.content-grid')!.style.getPropertyValue('--rail-floor')).toBe('');
     expect(scene.querySelector('.rail-note--leads')).toBeNull();
     expect(scene.querySelector('.tool-activity-slot--away')).toBeNull();
-    expect(scene.querySelector('.content-rail > .scroll-rim__fade')).toBeNull();
     // Upright again: decided afresh.
     landscape = false;
     settle();
@@ -184,6 +184,6 @@ describe('the rail under the main column', () => {
     expect(rail.floor).toBe('');
     expect(rail.leads).toBe(false);
     expect(rail.away).toBe(false);
-    expect(rail.fades).toEqual([]);
+    expect(rail.rims).toBe(0);
   });
 });

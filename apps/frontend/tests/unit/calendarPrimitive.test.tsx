@@ -109,21 +109,15 @@ describe('the week', () => {
     expect(render(assistantWeek, 'no-such-event').querySelectorAll('.note-badge')).toHaveLength(0);
   });
 
-  it('pages a week too narrow for seven columns, opening on the marked event\u2019s day, the hidden days named on rails', () => {
+  it('pages a week too narrow for seven columns, opening on the marked event’s day, with no rim on its edges (#177)', () => {
     const calendar = render(assistantWeek, 'flight', { width: 330, height: 480 });
     expect(calendar.getAttribute('data-columns')).toBe('3');
     const heads = () => [...calendar.querySelectorAll('.calendar-grid__weekday')].map((cell) => cell.textContent);
     expect(heads()).toEqual(['FRI', 'SAT', 'SUN']);
-    const rims = () => [...calendar.querySelectorAll('.calendar-pages__rim')].map((rim) => rim.textContent);
-    expect(rims()).toEqual([expect.stringMatching(/^MON-THU \/ \d\d EVENTS$/)]);
-    // A tap on the rail turns back a page, and is handled: the surface around it does not expand.
-    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
-    act(() => {
-      calendar.querySelector('.calendar-pages__rim')!.dispatchEvent(click);
-    });
-    expect(click.defaultPrevented).toBe(true);
-    expect(heads()).toEqual(['TUE', 'WED', 'THU']);
-    expect(rims()).toHaveLength(2);
+    // The days it hides are named in the group's label, not on a rail with a
+    // count tag over the days.
+    expect(calendar.querySelector('.calendar-pages__rim, .calendar-pages__edges, .scroll-rim__rail, .scroll-rim__count')).toBeNull();
+    expect(calendar.querySelector('.calendar-pages')!.getAttribute('aria-label')).toMatch(/Earlier: MON-THU \/ \d+ EVENTS/);
   });
 
   it('turns the days with the arrow keys, handled so nothing else hears them', () => {

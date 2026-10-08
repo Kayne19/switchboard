@@ -19,6 +19,16 @@ const panes: Array<[string, string, ControllerAction]> = [
 
 const press = (element: HTMLElement, key: string) => act(() => element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));
 
+// The viewport measures when the list or its box changes (watchElement's
+// MutationObserver), not as it scrolls: a comment appended to the scroll
+// stands in for a change here.
+async function measured(scroll: HTMLElement) {
+  await act(async () => {
+    scroll.append(document.createComment('measured'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 // A pane that overflows only sideways (a wide table on a phone, source with
 // long lines) is a tab stop too, and took no keys: Space reached the
 // surface and opened focus. It takes them across, as a drawing that
@@ -41,10 +51,7 @@ describe('a table, code or document pane that scrolls only sideways', () => {
     scroll.style.overflowX = 'auto';
     const moves: ScrollToOptions[] = [];
     scroll.scrollTo = ((options: ScrollToOptions) => moves.push(options)) as typeof scroll.scrollTo;
-    await act(async () => {
-      scroll.dispatchEvent(new Event('scroll'));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    });
+    await measured(scroll);
     expect(scroll.tabIndex).toBe(0);
     scroll.focus();
     press(scroll, ' ');
@@ -67,10 +74,7 @@ describe('a scrolling table, code or document pane', () => {
     }
     const moves: number[] = [];
     scroll.scrollTo = ((options: ScrollToOptions) => moves.push(options.top ?? Number.NaN)) as typeof scroll.scrollTo;
-    await act(async () => {
-      scroll.dispatchEvent(new Event('scroll'));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    });
+    await measured(scroll);
     scroll.focus();
     press(scroll, ' ');
     expect(host.querySelector('.focus-layer')).toBeNull();

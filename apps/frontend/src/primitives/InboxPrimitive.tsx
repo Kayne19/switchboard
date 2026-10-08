@@ -163,7 +163,6 @@ export function InboxPrimitive({ data, slot = 'primary', marked }: { data: Inbox
           message a note names, at its place in the rows now drawn. */}
       <ListViewport
         key={layout}
-        noun={MESSAGE}
         lead={marked}
         head={head}
         scrollClassName="inbox-primitive__scroll"

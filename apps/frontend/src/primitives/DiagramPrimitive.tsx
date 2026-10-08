@@ -93,14 +93,13 @@ export function DiagramPrimitive({
     return { x, y, width: Math.max(...first.map((box) => box.x + box.width)) - x, height: Math.max(...first.map((box) => box.y + box.height)) - y };
   }, [layout, anchor]);
   // What the viewport tells a reader of a graph that scrolls: its nodes,
-  // counted past each edge and kept whole at rest; its edges, named for
-  // the node at the far end where they leave the view; and the sketch its
-  // map draws.
+  // kept whole at rest; its edges, named for the node at the far end where
+  // they leave the view; and the sketch its map draws.
   const map = useMemo<DrawingMap>(() => {
     const indexOf = new Map(layout.nodes.map(({ node }, index) => [node.id, index]));
     const toneOf = (semantic?: Semantic) => SEMANTIC_COLOR[semantic ?? 'paper'];
     // An edge drawn as stubs is linked by its two stub lines: where one
-    // leaves the view, the rim names the edge's far end, as its names do (a
+    // leaves the view, the view names the edge's far end, as its names do (a
     // line several edges share is a link for each, so each far end is
     // named). The map draws each line once.
     const links = layout.edges.flatMap(({ edge, points, stubs }) => {
@@ -113,7 +112,6 @@ export function DiagramPrimitive({
     const stubNames = [...new Set(layout.edges.flatMap(({ stubs }) => (stubs ? [stubs.from.label, stubs.to.label] : [])))];
     return {
       parts: layout.nodes.map(({ node, box }) => ({ box, label: node.label })),
-      noun: ['NODE', 'NODES'],
       marks: [...layout.edges.flatMap(({ label }) => (label ? [label.box] : [])), ...stubNames.map((label) => label.box)],
       links,
       sketch: {
