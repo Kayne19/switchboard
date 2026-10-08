@@ -76,6 +76,19 @@ describe('leadScrollTop', () => {
   it('brings a lead below the view a quarter of the way down', () => {
     expect(leadScrollTop({ top: 300, bottom: 330 }, 0, 100, 400)).toBe(275);
   });
+  // A lead resting against an edge the list continues past is cut there,
+  // and its NOTE badge was clipped by the frame around it (calendar.spec,
+  // "no calendar part crosses its frame's inner box").
+  it('keeps the lead clear of an edge the list continues past', () => {
+    // In the box (75-95 of 0-100) but inside the bottom band of 20.
+    expect(leadScrollTop({ top: 75, bottom: 95 }, 0, 100, 400, 20)).toBe(50);
+    // At the list's end there is no band: the last row is in view.
+    expect(leadScrollTop({ top: 375, bottom: 395 }, 300, 100, 400, 20)).toBe(300);
+    // Nor at the top when the list stands at its start.
+    expect(leadScrollTop({ top: 0, bottom: 20 }, 0, 100, 400, 20)).toBe(0);
+    expect(leadScrollTop({ top: 105, bottom: 115 }, 100, 100, 400, 20)).toBe(80);
+  });
+
   it('never scrolls past either end', () => {
     expect(leadScrollTop({ top: 390, bottom: 400 }, 0, 100, 400)).toBe(300);
     expect(leadScrollTop({ top: -40, bottom: -10 }, 50, 100, 400)).toBe(0);

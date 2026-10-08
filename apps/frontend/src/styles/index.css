@@ -4367,7 +4367,7 @@ button {
   content: "";
   position: absolute;
   left: var(--grid-lead, var(--calendar-gutter));
-  right: 0;
+  right: var(--grid-trail, 0px);
   border-top: 1px solid rgba(var(--paper-rgb), 0.08);
 }
 .calendar-grid__hour-text {
@@ -4386,7 +4386,7 @@ button {
 .calendar-grid__fold {
   position: absolute;
   left: var(--grid-lead, var(--calendar-gutter));
-  right: 0;
+  right: var(--grid-trail, 0px);
   display: flex;
   align-items: center;
   border-top: 1px dashed rgba(var(--paper-rgb), 0.18);
@@ -4462,8 +4462,8 @@ button {
 .calendar-grid__now-line {
   position: absolute;
   top: 0;
-  left: calc(var(--grid-lead) + (100% - var(--grid-lead)) * var(--now-column) / var(--columns));
-  width: calc((100% - var(--grid-lead)) / var(--columns));
+  left: calc(var(--grid-lead) + (100% - var(--grid-lead) - var(--grid-trail)) * var(--now-column) / var(--columns));
+  width: calc((100% - var(--grid-lead) - var(--grid-trail)) / var(--columns));
   height: 1px;
   background: var(--orange);
 }

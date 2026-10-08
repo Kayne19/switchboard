@@ -8,7 +8,8 @@ import { drawnScale, watchElement } from '../hooks/watchElement';
 // document's body): the list scrolls inside it, up and down only (sideways
 // too where the content asks), and takes the keys every scroller takes. It
 // draws nothing on the edges it continues past -- no rim, and no fade over
-// the rows there (#177). A list that fits does not scroll.
+// the rows there (#177); it opens on its lead clear of them (`leadBand`).
+// A list that fits does not scroll.
 //
 // It opens on its lead, once per shape (the lead, the item count, the
 // viewport's height): the item `lead` names, else an element marked
@@ -26,18 +27,31 @@ const EDGE = 0.5;
 
 /**
  * Where the scroll rests to show `lead` (in content coordinates): where it
- * stands already when the lead is wholly in view, else with the lead a
- * quarter of the way down, or at the top when it is taller than that room.
+ * stands already when the lead is wholly in the clear part of the view,
+ * else with the lead a quarter of the way down, or at the top when it is
+ * taller than that room. The clear part leaves out the band (`band`,
+ * `leadBand`) at each edge the list continues past: a lead the edge cuts
+ * is not in view, and one resting against the cut had its NOTE badge
+ * clipped by the frame.
  */
-export function leadScrollTop(lead: Extent, scrollTop: number, viewHeight: number, contentHeight: number): number {
+export function leadScrollTop(lead: Extent, scrollTop: number, viewHeight: number, contentHeight: number, band = 0): number {
   const max = Math.max(0, contentHeight - viewHeight);
-  const top = scrollTop;
-  const bottom = scrollTop + viewHeight;
+  const top = scrollTop + (scrollTop > EDGE ? band : 0);
+  const bottom = scrollTop + viewHeight - (scrollTop < max - EDGE ? band : 0);
   if (lead.top >= top - EDGE && lead.bottom <= bottom + EDGE) return scrollTop;
   const above = lead.bottom - lead.top > viewHeight * 0.75 ? 0 : Math.round(viewHeight * 0.25);
   return Math.max(0, Math.min(max, Math.round(lead.top - above)));
 }
 
+/** The room a list opening on its lead keeps at an edge it continues past, for a view `viewHeight` tall. */
+export function leadBand(viewHeight: number): number {
+  return Math.round(Math.max(BAND_MIN, Math.min(BAND_MAX, viewHeight * BAND_SHARE)));
+}
+
+// The deepest that band reaches, as a share of the view, and its least depth.
+const BAND_SHARE = 0.18;
+const BAND_MAX = 36;
+const BAND_MIN = 18;
 // An arrow moves a list a line.
 const LINE = 40;
 
@@ -156,7 +170,7 @@ export function ListViewport({ children, lead, head, className, scrollClassName,
     const rect = target.getBoundingClientRect();
     const k = drawnScale(box.height, element.offsetHeight);
     const top = (rect.top - box.top) / k + element.scrollTop;
-    element.scrollTop = leadScrollTop({ top, bottom: top + rect.height / k }, element.scrollTop, element.clientHeight, element.scrollHeight);
+    element.scrollTop = leadScrollTop({ top, bottom: top + rect.height / k }, element.scrollTop, element.clientHeight, element.scrollHeight, leadBand(element.clientHeight));
   });
 
   // The keys that scroll a focused list scroll it here, and each one it

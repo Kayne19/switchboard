@@ -60,6 +60,9 @@ import { clockText, monthName, weekdayName } from './timeLabels';
 
 /** The time gutter of a day or week grid. */
 const GUTTER_PX = 42;
+/** A paged grid keeps this much clear at each side of its days, so the day
+ * the page cuts there does not run into the frame. */
+const PAGE_EDGE_PX = 20;
 /** The least width a day column holds a title in. */
 const MIN_COLUMN_PX = 76;
 /** The fewest hours a time grid shows at its least hour before the view is better read as the agenda. */
@@ -144,9 +147,11 @@ export function chooseLayout(data: CalendarData, size: Size, dayCount: number, h
   if (size.height - headPx < MIN_GRID_HOURS * AXIS.minHourPx) return { layout: 'agenda', columns: dayCount };
   const fit = Math.floor((size.width - GUTTER_PX) / MIN_COLUMN_PX);
   if (fit >= dayCount) return { layout: 'grid', columns: dayCount };
-  // Fewer days than it has, turned a page at a time (PagedDays); fewer than
-  // two of them is read as the agenda instead.
-  if (fit >= 2) return { layout: 'grid', columns: fit };
+  // Fewer days than it has, turned a page at a time (PagedDays), inside the
+  // room it keeps clear at each side; fewer than two of them is read as the
+  // agenda instead.
+  const paged = Math.floor((size.width - GUTTER_PX - 2 * PAGE_EDGE_PX) / MIN_COLUMN_PX);
+  if (paged >= 2) return { layout: 'grid', columns: paged };
   return { layout: 'agenda', columns: dayCount };
 }
 
@@ -253,7 +258,8 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
   const room = size.height > 0 ? size.height - headHeight : 520;
   const axis = timeAxis(segments, nowMinute, room, MIN_BOX_MINUTES);
   const minDuration = (MIN_EVENT_PX / axis.hourPx) * 60;
-  const columnWidth = size.width > 0 ? (size.width - GUTTER_PX) / columns : 160;
+  const edge = pages ? PAGE_EDGE_PX : 0;
+  const columnWidth = size.width > 0 ? (size.width - GUTTER_PX - 2 * edge) / columns : 160;
   const maxSteps = Math.max(0, Math.floor((columnWidth - MIN_PART_PX) / STEP_INSET_PX));
   for (const list of segments) packColumns(list, minDuration, (STEP_GAP_PX / axis.hourPx) * 60, maxSteps);
   // A cluster wider than a column holds at a readable part width draws what
@@ -275,12 +281,15 @@ function TimeGrid({ data, model, marked, size, columns }: GridProps) {
   const markedInHours = marked !== undefined && laidOut.some(({ drawn }) => drawn.some((segment) => segment.placed.event.id === marked));
 
   // The days stand after the time gutter, which the hour rules and the
-  // folds keep clear of (`--grid-lead`).
+  // folds keep clear of (`--grid-lead`); a paged grid keeps room clear at
+  // each side of them as well, so the day it cuts there does not run into
+  // the frame (`--grid-trail`).
   const template: CSSProperties = {
-    gridTemplateColumns: `${GUTTER_PX}px repeat(${columns}, minmax(0, 1fr))`,
-    '--grid-lead': `${GUTTER_PX}px`,
+    gridTemplateColumns: pages ? `${GUTTER_PX}px ${edge}px repeat(${columns}, minmax(0, 1fr)) ${edge}px` : `${GUTTER_PX}px repeat(${columns}, minmax(0, 1fr))`,
+    '--grid-lead': `${GUTTER_PX + edge}px`,
+    '--grid-trail': `${edge}px`,
   } as CSSProperties;
-  const at = (index: number) => index + 2;
+  const at = (index: number) => index + (pages ? 3 : 2);
   const head = (
     <div className="calendar-grid__head" style={template}>
       {days.map((day, index) => {

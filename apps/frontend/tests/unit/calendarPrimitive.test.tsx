@@ -333,9 +333,7 @@ describe('the layout a box gives a view', () => {
   it('keeps every column where they fit, pages them where two or more fit, and is the agenda where fewer do', () => {
     expect(chooseLayout(week, { width: 900, height: 500 }, 7)).toEqual({ layout: 'grid', columns: 7 });
     expect(chooseLayout(week, { width: 330, height: 500 }, 7)).toEqual({ layout: 'grid', columns: 3 });
-    expect(chooseLayout(week, { width: 200, height: 500 }, 7)).toEqual({ layout: 'grid', columns: 2 });
-    // Room for one column of the least width is read as the agenda instead.
-    expect(chooseLayout(week, { width: 180, height: 500 }, 7).layout).toBe('agenda');
+    expect(chooseLayout(week, { width: 200, height: 500 }, 7).layout).toBe('agenda');
   });
   it('is the agenda where the grid under its day row and lanes would hold fewer than eight hours', () => {
     // An aux cell on a tall portrait stage: 254 px, of which the day row and two lanes take 80.
@@ -405,7 +403,7 @@ describe('the time grid\u2019s fold', () => {
   it('spans the days as the hour rules do, never the gutter', () => {
     // A band out to the calendar's edge ran under the hours' scale and reached for the frame.
     expect(declared('.calendar-grid__fold', 'left')).toEqual(['var(--grid-lead, var(--calendar-gutter))']);
-    expect(declared('.calendar-grid__fold', 'right')).toEqual(['0']);
+    expect(declared('.calendar-grid__fold', 'right')).toEqual(['var(--grid-trail, 0px)']);
     expect(declared('.calendar-grid__hour::after', 'left')).toEqual(declared('.calendar-grid__fold', 'left'));
   });
 });

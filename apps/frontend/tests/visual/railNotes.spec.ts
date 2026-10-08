@@ -15,7 +15,7 @@ const table: ControllerAction = { op: 'show', id: 'grid', type: 'table', role: '
 const notes = [note('about-grid', { target: 'grid' }), note('general'), note('later'), note('last')];
 
 for (const size of FRAME_GEOMETRIES) {
-  test(`${size.width}x${size.height}: the rail shows every note, each whole, and fades an edge it continues past`, async ({ page }) => {
+  test(`${size.width}x${size.height}: the rail shows every note, each whole, with nothing drawn on an edge it continues past`, async ({ page }) => {
     await page.setViewportSize({ width: size.width, height: size.height });
     await openScene(page, 'idle');
     await runActions(page, [table, ...notes]);
