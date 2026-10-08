@@ -23,7 +23,17 @@ demo page registers no runtime, so the control is disabled there.
 ## Real wake-word detector
 
 Wake detection uses the pinned `openwakeword-wasm-browser@0.1.1` package with
-its `hey_jarvis_v0.1.onnx` model. The browser loads the package runtime, ONNX
+two models trained for this lab, `damocles_v0.1.onnx` and `damo_v0.1.onnx`
+(`docs/wake-word-training.md`). Either one wakes the page: "Damocles", or
+"Damo" said as day-mo or dammo. `apps/frontend/src/wake_models.ts` is the one
+place their files and thresholds are written; `damo` is short enough to collide
+with everyday speech, so it is held to a stricter score. The package engine
+carries a single `detectionThreshold`, so it runs at the lower of the two and
+`isWakeDetection` holds each event to its own model. A score between the two
+thresholds is not a detection, but it does start the engine's shared 2 s
+cooldown, exactly as a real detection would.
+
+The browser loads the package runtime, ONNX
 models, and ONNX Runtime Web WASM files from the committed `/openwakeword/`
 static paths through the import map in `apps/frontend/index.html`; Vite marks
 the package external, so the bundle carries neither the engine nor its own
@@ -72,8 +82,8 @@ to the main-thread wake detector and speech endpointer, and separately posts
 the frame energy. The energy messages drive the live voice indicator while the
 caller is listening. Push-to-talk uses a short-lived `AnalyserNode` on its
 microphone stream for the same indicator; neither level path sends samples to
-the server. `MediaRecorder` is created only after the real model detects Hey
-Jarvis followed by speech, or while the browser-local follow-up lease is
+the server. `MediaRecorder` is created only after a real model detects a
+wake word followed by speech, or while the browser-local follow-up lease is
 active. Only that completed clip enters the existing outbox and WebSocket
 framing; detector PCM and model inputs never enter the server path.
 
@@ -87,7 +97,7 @@ Those two thresholds and every timing here are written once, in
 `apps/frontend/src/hands_free.ts`. A settled response opens one browser-local 8,000
 ms follow-up lease after the server barrier and playback queue have both
 settled, with a 400 ms drain debounce. The lease admits one no-wake utterance; a
-later utterance needs Hey Jarvis again.
+later utterance needs a wake word again.
 
 The server emits one `final_response_audio_closed` event per completed input
 turn, after a response-scoped queue marker has passed all earlier audio slots.
@@ -110,13 +120,20 @@ listening behavior or accessibility announcements.
   ONNX Runtime Web bundle is MIT licensed by Microsoft.
 - `silero_vad.onnx` is [Silero VAD](https://github.com/snakers4/silero-vad),
   MIT licensed by the Silero Team, which the package redistributes.
-- `hey_jarvis_v0.1.onnx`, `melspectrogram.onnx`, and `embedding_model.onnx`
-  are the package's OpenWakeWord model assets. OpenWakeWord
-  documents its pretrained models under
+- `melspectrogram.onnx` and `embedding_model.onnx` are the package's
+  OpenWakeWord model assets. OpenWakeWord documents its pretrained models
+  under
   [CC BY-NC-SA 4.0](https://github.com/dscripka/openWakeWord#license), so these
   assets carry attribution, noncommercial-use, and ShareAlike obligations.
   This feature is not cleared for commercial deployment without reviewing the
   upstream model terms and obtaining any needed permission.
-- `npm run build` copies these exact package and runtime assets into committed
-  `static/openwakeword/` paths. Tests inspect asset presence and fake the engine
-  and sessions; they never load the ONNX models or invoke network inference.
+- `damocles_v0.1.onnx` and `damo_v0.1.onnx` are ours, trained by
+  `training/wake-words` (`docs/wake-word-training.md`). The heads are our work;
+  they are trained against, and at inference sit on top of, the CC BY-NC-SA
+  feature extractor above, so they inherit its ShareAlike reading and the same
+  noncommercial limit. They are committed in `training/wake-words/models/` and
+  staged from there, not from the package.
+- `npm run build` copies these exact package and runtime assets, and our two
+  keyword models, into committed `static/openwakeword/` paths. Tests inspect
+  asset presence and fake the engine and sessions; they never load the ONNX
+  models or invoke network inference.
