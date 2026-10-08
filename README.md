@@ -71,8 +71,8 @@ anything. If the agent does not call `speak`, its written reply stays in the
 transcript and on screen without being synthesized. A spoken line reaches the
 live box when its audio starts to play, not when its text arrives: each spoken
 line names the audio utterance that voices it. The live box keeps a short log of the
-lines heard, newest at the bottom, so a caller who stepped away can scroll
-back and catch up. A history snapshot does not
+lines heard, the newest at the top of the box with blank space below it, so a
+caller who stepped away can scroll back and catch up. A history snapshot does not
 guess which agent lines were spoken, so the live box waits for the next spoken
 line after a reconnect. Reply and history frames carry the same voiced flag, so
 a reconnect restores the last voiced line without putting written text on the
