@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
-// A list that outgrows its slot scrolls inside it, and each edge it
-// continues past fades, as a scrolled drawing's edges do -- no rail and no
-// count tag (#177). jsdom draws no boxes, so the rows' boxes are given here.
+// A list that outgrows its slot scrolls inside it and takes the keys every
+// scroller takes. It draws nothing on an edge it continues past: no rim,
+// and no fade (#177). jsdom draws no boxes, so the rows' boxes are given
+// here.
 import { act } from 'react';
 import { describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
 import { drawnScale } from '../../src/hooks/watchElement';
 import { keyStop } from '../../src/primitives/drawingScroll';
-import { continuesPast, keyScrollLeft, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
+import { keyScrollLeft, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 import { mount, rerender, stubResizeObserver } from './sceneHarness';
 
 let host: HTMLDivElement | undefined;
@@ -32,10 +33,13 @@ function layOut(scroll: HTMLElement, scrollTop: number, scale = 1) {
   });
 }
 
+// Nothing the viewport reads moves with the scroll: it measures when the
+// list or its box changes (watchElement's MutationObserver), which a
+// comment appended to the scroll stands in for here.
 async function measured(scroll: HTMLElement) {
   await act(async () => {
-    scroll.dispatchEvent(new Event('scroll'));
-    await new Promise((resolve) => requestAnimationFrame(resolve));
+    scroll.append(document.createComment('measured'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
 
@@ -56,15 +60,6 @@ const page = () => host!;
 
 const rows = (count: number) => Array.from({ length: count }, (_, index) => <div key={index} data-item={`t${index}`}>task {index}</div>);
 
-describe('continuesPast', () => {
-  it('is an edge more than a sliver of the list lies past', () => {
-    expect(continuesPast(0, 100, 400)).toEqual({ top: false, bottom: true });
-    expect(continuesPast(150, 100, 400)).toEqual({ top: true, bottom: true });
-    expect(continuesPast(290, 100, 400)).toEqual({ top: true, bottom: false });
-    expect(continuesPast(10, 100, 115)).toEqual({ top: false, bottom: false });
-  });
-});
-
 describe('drawnScale', () => {
   it('is the drawn height over the laid-out one, and 1 before there is a box', () => {
     expect(drawnScale(50, 100)).toBe(0.5);
@@ -81,16 +76,6 @@ describe('leadScrollTop', () => {
   it('brings a lead below the view a quarter of the way down', () => {
     expect(leadScrollTop({ top: 300, bottom: 330 }, 0, 100, 400)).toBe(275);
   });
-  it('a lead under the fade at an edge the list continues past is not in view', () => {
-    // In the box (60-90 of 0-100) but under the bottom band of 20.
-    expect(leadScrollTop({ top: 75, bottom: 95 }, 0, 100, 400, 20)).toBe(50);
-    // At the list's end there is no band: the last row is in view.
-    expect(leadScrollTop({ top: 375, bottom: 395 }, 300, 100, 400, 20)).toBe(300);
-    // Nor at the top when the list stands at its start.
-    expect(leadScrollTop({ top: 0, bottom: 20 }, 0, 100, 400, 20)).toBe(0);
-    expect(leadScrollTop({ top: 105, bottom: 115 }, 100, 100, 400, 20)).toBe(80);
-  });
-
   it('never scrolls past either end', () => {
     expect(leadScrollTop({ top: 390, bottom: 400 }, 0, 100, 400)).toBe(300);
     expect(leadScrollTop({ top: -40, bottom: -10 }, 50, 100, 400)).toBe(0);
@@ -98,24 +83,24 @@ describe('leadScrollTop', () => {
 });
 
 describe('ListViewport', () => {
-  it('a list that fits draws no edge and does not scroll', async () => {
+  it('a list that fits does not scroll', async () => {
     const scroll = render(rows(3));
     layOut(scroll, 0);
     await measured(scroll);
-    expect(page().querySelector('.scroll-rim__fade')).toBeNull();
     expect(page().querySelector('.list-viewport--scrolling')).toBeNull();
     expect(scroll.tabIndex).toBe(-1);
   });
 
-  // The rim a scroller drew on each edge -- a dashed cut line and a tag
-  // counting what lay that way, which a tap turned a page by -- is gone
-  // (#177): the fade is the whole of an edge.
-  it('draws no rail and no count tag on an edge it continues past', async () => {
+  // The rim a scroller drew on each edge it continues past -- a fade, a
+  // dashed cut line, and a tag counting what lay that way, which a tap
+  // turned a page by -- is gone (#177): the rows are cut at the edge and
+  // nothing is drawn over them.
+  it('draws nothing on an edge it continues past', async () => {
     const scroll = render(rows(10));
     layOut(scroll, 90);
     await measured(scroll);
-    expect(page().querySelectorAll('.scroll-rim__fade')).toHaveLength(2);
-    expect(page().querySelector('.scroll-rim__rail, .scroll-rim__count, .scroll-rim__text, .scroll-rim__chevron')).toBeNull();
+    expect(page().querySelector('.scroll-rim__fade, .scroll-rim__rail, .scroll-rim__count')).toBeNull();
+    expect(page().querySelector('.list-viewport__port')!.children).toHaveLength(1);
     expect(page().textContent).not.toMatch(/TASKS|MORE/);
   });
 
@@ -163,19 +148,7 @@ describe('ListViewport', () => {
     expect(surfaceClicks).toBe(1);
   });
 
-  it('fades each edge it continues past, and takes keys while it scrolls', async () => {
-    const scroll = render(rows(10));
-    layOut(scroll, 90);
-    await act(async () => {
-      scroll.dispatchEvent(new Event('scroll'));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    });
-    const fades = Array.from(page().querySelectorAll<HTMLElement>('.list-viewport .scroll-rim__fade'));
-    expect(fades.map((fade) => (fade.className.includes('--top') ? 'top' : 'bottom'))).toEqual(['top', 'bottom']);
-    expect(scroll.tabIndex).toBe(0);
-  });
-
-  it('draws its top edge and pages below a band pinned at its top (a table header)', async () => {
+  it('pages below a band pinned at its top (a table header)', async () => {
     const element = mount(
       <ListViewport pinned=".band">
         {[<div key="band" className="band">HEAD</div>, ...rows(10)]}
@@ -186,7 +159,6 @@ describe('ListViewport', () => {
     // The band covers the view's top 30px (40-70 on screen).
     element.querySelector<HTMLElement>('.band')!.getBoundingClientRect = () => ({ top: 40, bottom: 70, left: 0, right: 200, width: 200, height: 30, x: 0, y: 40, toJSON() {} }) as DOMRect;
     await measured(scroll);
-    expect(element.querySelector<HTMLElement>('.scroll-rim__fade--top')!.style.top).toBe('30px');
     const calls: ScrollToOptions[] = [];
     scroll.scrollTo = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollTo;
     act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true })));
@@ -215,10 +187,7 @@ describe('ListViewport', () => {
   it('scrolls by its keys while it scrolls; Space does not expand the object, Enter still does', async () => {
     const scroll = render(rows(10));
     layOut(scroll, 0);
-    await act(async () => {
-      scroll.dispatchEvent(new Event('scroll'));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    });
+    await measured(scroll);
     const calls: ScrollToOptions[] = [];
     scroll.scrollTo = ((options: ScrollToOptions) => calls.push(options)) as typeof scroll.scrollTo;
     const press = (key: string) => act(() => scroll.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));

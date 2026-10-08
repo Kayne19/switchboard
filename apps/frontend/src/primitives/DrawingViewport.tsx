@@ -5,12 +5,10 @@ import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import type { DrawingFit, Viewport } from './drawingFit';
 import type { Box, Size } from './geometry';
 import { prefersReducedMotion } from './reducedMotion';
-import { ScrollRim } from './ScrollRim';
 import {
   EXIT_CHARS,
   clearOf,
   RAIL,
-  SIDES,
   findExits,
   keyStop,
   leadStop,
@@ -19,7 +17,6 @@ import {
   MAP_PAD,
   placeExits,
   placed,
-  readRim,
   restEnd,
   restStops,
   settleStop,
@@ -81,14 +78,6 @@ interface Reading {
 }
 const sameReading = (a: Reading | null, b: Reading) => a !== null && a.left === b.left && a.top === b.top && a.width === b.width && a.height === b.height;
 
-// A fade reaches past its rail at least this far, and covers what its edge
-// cuts, up to this share of the view: a part mostly in view keeps the rest
-// of itself clear, only its cut end faded.
-const FADE_MIN = RAIL + 10;
-const FADE_MAX = 0.22;
-// The fade reaches this far past the inner edge of what it covers, so the
-// cut part's frame there is dimmed too.
-const FADE_LEAD = 10;
 // The cut of the map frame's corner that faces the drawing.
 const MAP_CUT = 7;
 // How long input that moves the drawing freely (a wheel, a drag on the
@@ -439,7 +428,6 @@ export function DrawingViewport({
       bottom: down && reading.top + reading.height < contentHeight - 0.5,
     };
   }, [reading, contentWidth, contentHeight]);
-  const rim = useMemo(() => (view ? readRim(parts, view, continues, marks) : null), [parts, marks, view, continues]);
   // The map, in its strip, at the strip's far end: as deep as the strip
   // and as long as the drawing's shape makes it.
   const stripLength = strip?.side === 'bottom' ? boxWidth : boxHeight;
@@ -519,13 +507,6 @@ export function DrawingViewport({
     settle();
   };
 
-  const fadeDepth = (side: Side) => {
-    const reach = rim?.[side];
-    if (!reach || !reading) return 0;
-    const span = side === 'left' || side === 'right' ? reading.width : reading.height;
-    return Math.max(FADE_MIN, Math.min(span * FADE_MAX, reach.depth > 0 ? reach.depth + FADE_LEAD : 0));
-  };
-
   return (
     <div
       ref={viewportRef}
@@ -580,14 +561,6 @@ export function DrawingViewport({
             ))}
           </div>
         ) : null}
-        {SIDES.map((side) => (
-          <ScrollRim
-            key={side}
-            side={side}
-            fade={continues[side] ? fadeDepth(side) : null}
-            inset={inset}
-          />
-        ))}
       </div>
       {strip ? (
         <div className="drawing-viewport__strip" style={{ [strip.side === 'bottom' ? 'height' : 'width']: `${strip.depth}px` }}>

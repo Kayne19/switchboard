@@ -1,30 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
-import { useOncePerFrame } from '../hooks/useOncePerFrame';
 import { prefersReducedMotion } from './reducedMotion';
-import { ScrollRim } from './ScrollRim';
 import { PAGE_SHARE, scrollMove, type ScrollMove } from './drawingScroll';
 import { drawnScale, watchElement } from '../hooks/watchElement';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
 // list, an inbox, an agenda, a forecast's days, a table's rows, source, a
 // document's body): the list scrolls inside it, up and down only (sideways
-// too where the content asks), and on each edge it continues past the
-// viewport draws the fade DrawingViewport draws for a drawing (ScrollRim),
-// so the two read as one instrument: the edge's rows run under it, and a
-// row cut there reads as the next one coming. A list that fits has none of
-// it and does not scroll.
+// too where the content asks), and takes the keys every scroller takes. It
+// draws nothing on the edges it continues past -- no rim, and no fade over
+// the rows there (#177). A list that fits does not scroll.
 //
 // It opens on its lead, once per shape (the lead, the item count, the
 // viewport's height): the item `lead` names, else an element marked
 // `data-lead` (a calendar's now line), brought into view a little below
 // the top. An update that keeps the shape keeps the reader's place.
-
-/**
- * The edges a list continues past: more of it than a sliver lies that way.
- */
-export function continuesPast(scrollTop: number, viewHeight: number, contentHeight: number): { top: boolean; bottom: boolean } {
-  return { top: scrollTop > SLIVER, bottom: contentHeight - viewHeight - scrollTop > SLIVER };
-}
 
 /** A box along the scroll axis, in one coordinate space. */
 export interface Extent {
@@ -34,35 +23,21 @@ export interface Extent {
 
 // Half a pixel either way is the edge itself, not past it.
 const EDGE = 0.5;
-// No more of a list than this past an edge is a sliver, not more to read.
-const SLIVER = 16;
 
 /**
  * Where the scroll rests to show `lead` (in content coordinates): where it
- * stands already when the lead is wholly in the clear part of the view,
- * else with the lead a quarter of the way down, or at the top when it is
- * taller than that room. The clear part leaves out the band (`band`, the
- * fade's depth) at each edge the list continues past, where the fade and
- * the count lie over the rows: a lead under them is not in view.
+ * stands already when the lead is wholly in view, else with the lead a
+ * quarter of the way down, or at the top when it is taller than that room.
  */
-export function leadScrollTop(lead: Extent, scrollTop: number, viewHeight: number, contentHeight: number, band = 0): number {
+export function leadScrollTop(lead: Extent, scrollTop: number, viewHeight: number, contentHeight: number): number {
   const max = Math.max(0, contentHeight - viewHeight);
-  const top = scrollTop + (scrollTop > EDGE ? band : 0);
-  const bottom = scrollTop + viewHeight - (scrollTop < max - EDGE ? band : 0);
+  const top = scrollTop;
+  const bottom = scrollTop + viewHeight;
   if (lead.top >= top - EDGE && lead.bottom <= bottom + EDGE) return scrollTop;
   const above = lead.bottom - lead.top > viewHeight * 0.75 ? 0 : Math.round(viewHeight * 0.25);
   return Math.max(0, Math.min(max, Math.round(lead.top - above)));
 }
 
-/** The depth of the fade at an edge a list continues past, for a view `viewHeight` tall. */
-export function fadeDepth(viewHeight: number): number {
-  return Math.round(Math.max(FADE_MIN, Math.min(FADE_MAX, viewHeight * FADE_SHARE)));
-}
-
-// The deepest a fade reaches, as a share of the view, and its least depth.
-const FADE_SHARE = 0.18;
-const FADE_MAX = 36;
-const FADE_MIN = 18;
 // An arrow moves a list a line.
 const LINE = 40;
 
@@ -130,7 +105,6 @@ interface ListViewportProps {
 export function ListViewport({ children, lead, head, className, scrollClassName, scrollRef: givenRef, label, pinned }: ListViewportProps) {
   const ownRef = useRef<HTMLDivElement>(null);
   const scrollRef = givenRef ?? ownRef;
-  const [past, setPast] = useState<{ top: boolean; bottom: boolean }>({ top: false, bottom: false });
   const [scrolls, setScrolls] = useState(false);
   // A pane that scrolls across (a table's, source's or document's) may
   // overflow only sideways (long lines, a wide table on a phone): it is a
@@ -138,11 +112,11 @@ export function ListViewport({ children, lead, head, className, scrollClassName,
   // pointer can scroll it, and Space pages it rather than reaching the
   // surface.
   const [across, setAcross] = useState(false);
-  const [viewHeight, setViewHeight] = useState(0);
   const [pinnedDepth, setPinnedDepth] = useState(0);
 
-  // What the edges say, from where the reader stands. Read on scroll at
-  // most once a frame, and whenever the list or its box changes.
+  // Whether it scrolls, which way, and how deep the band pinned over it
+  // is: read whenever the list or its box changes. Nothing here moves with
+  // the scroll.
   const measure = useCallback(() => {
     const element = scrollRef.current;
     if (!element) return;
@@ -154,18 +128,12 @@ export function ListViewport({ children, lead, head, className, scrollClassName,
     const k = drawnScale(box.height, element.offsetHeight);
     const band = pinned ? element.querySelector<HTMLElement>(pinned) : null;
     const depth = band ? band.getBoundingClientRect().height / k : 0;
-    const overflows = element.scrollHeight > element.clientHeight + 1;
-    const next = overflows ? continuesPast(element.scrollTop, element.clientHeight, element.scrollHeight) : { top: false, bottom: false };
-    setPast((current) => (current.top === next.top && current.bottom === next.bottom ? current : next));
     setScrolls(element.scrollHeight > element.clientHeight + 1);
     // Across only where the pane can scroll that way: a list clips what
     // sticks out sideways (overflow-x: hidden), which scrollWidth still counts.
     setAcross(element.scrollWidth > element.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(element).overflowX));
-    setViewHeight(element.clientHeight);
     setPinnedDepth(depth);
   }, [scrollRef, pinned]);
-
-  const onScroll = useOncePerFrame(measure);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -188,7 +156,7 @@ export function ListViewport({ children, lead, head, className, scrollClassName,
     const rect = target.getBoundingClientRect();
     const k = drawnScale(box.height, element.offsetHeight);
     const top = (rect.top - box.top) / k + element.scrollTop;
-    element.scrollTop = leadScrollTop({ top, bottom: top + rect.height / k }, element.scrollTop, element.clientHeight, element.scrollHeight, fadeDepth(element.clientHeight));
+    element.scrollTop = leadScrollTop({ top, bottom: top + rect.height / k }, element.scrollTop, element.clientHeight, element.scrollHeight);
   });
 
   // The keys that scroll a focused list scroll it here, and each one it
@@ -208,12 +176,6 @@ export function ListViewport({ children, lead, head, className, scrollClassName,
     event.preventDefault();
     element.scrollTo({ [sideways ? 'left' : 'top']: to, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
   };
-  const fade = fadeDepth(viewHeight - pinnedDepth);
-  // An edge the list continues past fades, so a row cut there reads as the
-  // next one coming.
-  const edge = (side: 'top' | 'bottom', continues: boolean) =>
-    continues ? <ScrollRim side={side} fade={fade} inset={pinned ? pinnedDepth : undefined} /> : null;
-
   return (
     <div className={`list-viewport${scrolls ? ' list-viewport--scrolling' : ''}${className ? ` ${className}` : ''}`}>
       {head ? <div className="list-viewport__head">{head}</div> : null}
@@ -224,13 +186,10 @@ export function ListViewport({ children, lead, head, className, scrollClassName,
           tabIndex={scrolls || across ? 0 : undefined}
           aria-label={label}
           role={label ? 'region' : undefined}
-          onScroll={onScroll}
           onKeyDown={scrolls || across ? scrollKeys : undefined}
         >
           {children}
         </div>
-        {edge('top', past.top)}
-        {edge('bottom', past.bottom)}
       </div>
     </div>
   );

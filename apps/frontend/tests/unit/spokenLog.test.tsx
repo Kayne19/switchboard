@@ -135,18 +135,16 @@ describe('SpokenLog', () => {
     expect(text.querySelectorAll('.spoken-log__line')).toHaveLength(2);
   });
 
-  it('fades each edge its text continues past, where the card asks for it', async () => {
-    rerender(host, <SpokenLog message={message(said(6))} className="log" edges />);
+  // The fades the card drew over the lines its box cuts are gone (#177):
+  // the text is cut at the box's edge and nothing is drawn over it.
+  it('draws nothing over the lines its box cuts', async () => {
+    rerender(host, <SpokenLog message={message(said(6))} className="log" />);
     const log = host.querySelector<HTMLElement>('[data-testid="spoken-log"]')!;
-    // Pinned to the newest line, the text goes on above it only.
-    expect(host.querySelector('.scroll-rim__fade--top')).not.toBeNull();
-    expect(host.querySelector('.scroll-rim__fade--bottom')).toBeNull();
+    expect(host.querySelector('.scroll-rim__fade--top, .scroll-rim__fade--bottom')).toBeNull();
     scrollTo(log, 0);
     await act(() => new Promise((done) => requestAnimationFrame(() => done(undefined))));
-    expect(host.querySelector('.scroll-rim__fade--top')).toBeNull();
-    expect(host.querySelector('.scroll-rim__fade--bottom')).not.toBeNull();
-    // Without `edges`, none.
-    rerender(host, <SpokenLog message={message(said(6))} className="log" />);
     expect(host.querySelector('.scroll-rim__fade--top, .scroll-rim__fade--bottom')).toBeNull();
+    rerender(host, <LiveChatCard message={message(said(6))} />);
+    expect(host.querySelector('[class*="scroll-rim"]')).toBeNull();
   });
 });

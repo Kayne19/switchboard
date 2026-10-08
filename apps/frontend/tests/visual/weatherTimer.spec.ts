@@ -331,7 +331,8 @@ test('a forecast longer than a phone frame scrolls inside it and says so', async
   const scroll = page.locator('[data-scene="weather"] .weather__scroll');
   await expect(scroll).toBeVisible();
   expect(await scroll.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-  // It opens on the day the note names, and the edges it continues past fade.
+  // It opens on the day the note names, with nothing drawn over the edges it
+  // continues past (#177).
   await expect(page.locator('[data-item="2026-10-08"]')).toBeInViewport();
-  await expect(page.locator('[data-scene="weather"] .list-viewport .scroll-rim__fade')).not.toHaveCount(0);
+  await expect(page.locator('[data-scene="weather"] [class*="scroll-rim"]')).toHaveCount(0);
 });

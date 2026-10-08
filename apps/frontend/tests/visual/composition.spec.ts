@@ -222,17 +222,16 @@ for (const scene of auxScenes) {
 // scroller draws (a fade, the cut line, a count of the cells wholly past
 // it), not as a strip. The today scene at 390x844 showed only the to-do
 // list's head under the forecast, with no sign the row went on.
-test('a crowded aux row fades the edge where it cuts a cell / 390x844', async ({ page }) => {
+test('a crowded aux row scrolls, with nothing drawn over the cell it cuts / 390x844', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await openScene(page, 'today');
   await page.waitForTimeout(800);
   const row = page.locator('.composed-aux');
   expect(await row.evaluate((element) => element.scrollHeight > element.clientHeight + 1)).toBe(true);
-  // No rail and no count tag (#177): the fade is the whole of the edge.
-  await expect(page.locator('.composed-aux-viewport .scroll-rim__rail, .composed-aux-viewport .scroll-rim__count')).toHaveCount(0);
-  await expect(page.locator('.composed-aux-viewport > .list-viewport__port > .scroll-rim__fade--bottom').first()).toBeVisible();
-  // Scrolled to its end, the fade moves to the top.
+  // No rim at all on the edge: no fade, no rail, no count tag (#177).
+  await expect(page.locator('.composed-aux-viewport [class*="scroll-rim"]')).toHaveCount(0);
   await row.evaluate((element) => { element.scrollTop = element.scrollHeight; });
   await page.waitForTimeout(300);
-  await expect(page.locator('.composed-aux-viewport > .list-viewport__port > .scroll-rim__fade--top').first()).toBeVisible();
+  const atEnd = await row.evaluate((element) => element.scrollTop + element.clientHeight >= element.scrollHeight - 1);
+  expect(atEnd).toBe(true);
 });

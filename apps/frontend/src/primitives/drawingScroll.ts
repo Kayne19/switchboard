@@ -6,7 +6,6 @@
 // - It rests only where the edge it is read from cuts no part: between two
 //   layers of a graph, between two messages of a sequence (`restStops`),
 //   and opens on its lead at such a place (`leadStop`).
-// - Each edge it continues past fades over whatever it cuts (`readRim`).
 // - A line that leaves the view names the part at its far end, on the
 //   rail where it leaves (`findExits`, `placeExits`).
 // - A map of the whole drawing, the view boxed on it, stands in a strip of
@@ -291,50 +290,6 @@ export function keyStop(key: string, shift: boolean, across: boolean, stops: rea
   if (move.kind === 'page') return pageStop(stops, position, view, move.direction);
   if (move.kind === 'end') return move.direction < 0 ? (stops[0] ?? 0) : (stops[stops.length - 1] ?? position);
   return (move.direction > 0 ? stops.find((stop) => stop > position + EPSILON) : [...stops].reverse().find((stop) => stop < position - EPSILON)) ?? position;
-}
-
-// ---------------------------------------------------------------------------
-// The rims
-
-export interface RimSide {
-  /** How far into the view a part this edge cuts reaches, CSS pixels: the depth the fade there covers. 0 when it cuts none. */
-  depth: number;
-}
-
-/**
- * What each edge of `view` that the drawing continues past (`continues`)
- * cuts: how deep the deepest part or mark it cuts, of those in view across
- * the edge, reaches into the view from the rim.
- */
-export function readRim(parts: readonly View[], view: View, continues: Record<Side, boolean>, marks: readonly View[] = []): Record<Side, RimSide | null> {
-  const clear = clearOf(view, continues);
-  const reach = (side: Side, box: View): number | null => {
-    switch (side) {
-      case 'left':
-        return box.left < clear.left - EPSILON ? Math.max(0, box.right - view.left) : null;
-      case 'right':
-        return box.right > clear.right + EPSILON ? Math.max(0, view.right - box.left) : null;
-      case 'top':
-        return box.top < clear.top - EPSILON ? Math.max(0, box.bottom - view.top) : null;
-      case 'bottom':
-        return box.bottom > clear.bottom + EPSILON ? Math.max(0, view.bottom - box.top) : null;
-    }
-  };
-  // Only what is in view across the edge can be faded at it.
-  const across = (side: Side, box: View) =>
-    side === 'left' || side === 'right' ? box.bottom > view.top + EPSILON && box.top < view.bottom - EPSILON : box.right > view.left + EPSILON && box.left < view.right - EPSILON;
-  const read = (side: Side): RimSide | null => {
-    if (!continues[side]) return null;
-    let depth = 0;
-    for (const part of parts) {
-      const past = reach(side, part);
-      if (past === null) continue;
-      if (across(side, part)) depth = Math.max(depth, past);
-    }
-    for (const mark of marks) if (across(side, mark)) depth = Math.max(depth, reach(side, mark) ?? 0);
-    return { depth };
-  };
-  return { left: read('left'), right: read('right'), top: read('top'), bottom: read('bottom') };
 }
 
 /** The view less the rails on the edges the drawing continues past: what is shown clear of them. */

@@ -15,7 +15,6 @@ import {
   pageStop,
   placeExits,
   placed,
-  readRim,
   restEnd,
   restStops,
   settleStop,
@@ -28,7 +27,6 @@ import {
 } from '../../src/primitives/drawingScroll';
 
 const view = (left: number, top: number, right: number, bottom: number): View => ({ left, top, right, bottom });
-const none = { left: false, right: false, top: false, bottom: false };
 
 describe('where a scrolled drawing rests', () => {
   // Three layers 200 px wide with 100 px gaps, in a 450 px view.
@@ -203,39 +201,6 @@ describe('the hard diagrams at rest in the stage geometries', () => {
       });
     }
   }
-});
-
-describe('what each rim says', () => {
-  const parts = [view(0, 0, 100, 50), view(150, 0, 250, 50), view(300, 0, 400, 50), view(450, 0, 550, 50), view(200, 300, 260, 340)];
-
-  it('says nothing of an edge that cuts no part', () => {
-    const rim = readRim(parts, view(130, 0, 420, 200), { ...none, left: true, right: true, bottom: true });
-    // [150, 250] is clear of the left rail (130 to 148).
-    expect(rim.left?.depth).toBe(0);
-    expect(rim.top).toBeNull();
-  });
-
-  it('fades as deep as a cut part reaches in, and as deep as a cut label', () => {
-    const rim = readRim(parts, view(120, 0, 330, 200), { ...none, left: true, right: true });
-    // [150, 250] is clear of the left rail (120 to 138); [300, 400] is cut 30 px in.
-    expect(rim.left?.depth).toBe(0);
-    expect(rim.right?.depth).toBe(30);
-    const labelled = readRim(parts, view(120, 0, 330, 200), { ...none, left: true }, [view(110, 60, 160, 70)]);
-    expect(labelled.left?.depth).toBe(40);
-  });
-
-  it('fades only what is in view across the edge', () => {
-    // Scrolled both ways: a part wholly above the view reaches past its left
-    // rim, and is faded at neither edge -- it is in view across neither.
-    const above = [view(0, 0, 300, 50)];
-    const rim = readRim(above, view(100, 100, 500, 400), { ...none, left: true, top: true });
-    expect(rim.left).toEqual({ depth: 0 });
-    expect(rim.top).toEqual({ depth: 0 });
-  });
-
-  it('says nothing of an edge the drawing ends at', () => {
-    expect(readRim(parts, view(0, 0, 600, 400), none)).toEqual({ left: null, right: null, top: null, bottom: null });
-  });
 });
 
 describe('a line that leaves the view', () => {

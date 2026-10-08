@@ -126,7 +126,7 @@ describe('a scrolled graph at rest', () => {
     });
   }
 
-  it('names where a line leaving the view goes, and draws no rail or count on the edge (#177)', () => {
+  it('names where a line leaving the view goes, and draws no rim on the edge (#177)', () => {
     size = { width: 914, height: 526 };
     render(<DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />);
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
@@ -134,8 +134,7 @@ describe('a scrolled graph at rest', () => {
     const boxes = nodeBoxes();
     const past = { left: boxes.filter((box) => box.left < left + RAIL - 0.5) };
     expect(past.left.length).toBeGreaterThan(0);
-    expect(host.querySelector('.scroll-rim__rail, .scroll-rim__count')).toBeNull();
-    expect(host.querySelector('.scroll-rim__fade--left')).not.toBeNull();
+    expect(host.querySelector('[class*="scroll-rim"]')).toBeNull();
     // Every name on the left rail is a node out of view on the left.
     const names = [...host.querySelectorAll('.drawing-viewport__exit--left')].map((exit) => exit.textContent);
     expect(names.length).toBeGreaterThan(0);
@@ -451,24 +450,19 @@ describe('a long exchange scrolled down', () => {
     expect(scroller.scrollTop).toBe(600);
   });
 
-  it('fades its foot, and its top under the pinned headers once scrolled', async () => {
+  it('pins the headers of the actors once scrolled, with nothing drawn over the edge it cuts', async () => {
     size = { width: 914, height: 526 };
     render(<SequencePrimitive data={traceDiagram} id="trace" />);
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
     expect(scroller.scrollTop).toBe(0);
-    expect(host.querySelector('.scroll-rim__fade--bottom')).not.toBeNull();
-    expect(host.querySelector('.scroll-rim__fade--top')).toBeNull();
     const stops = [...host.querySelectorAll<HTMLElement>('.drawing-viewport__stop')].map((stop) => parseFloat(stop.style.top));
     act(() => {
       scroller.scrollTop = stops[3];
       scroller.dispatchEvent(new Event('scroll'));
     });
-    // The edges are read once a frame.
+    // The band is read once a frame.
     await act(() => new Promise((resolve) => requestAnimationFrame(() => resolve(null))));
-    const pinned = host.querySelector<HTMLElement>('.drawing-viewport__pinned--shown');
-    expect(pinned).not.toBeNull();
-    const top = host.querySelector<HTMLElement>('.scroll-rim__fade--top');
-    expect(top).not.toBeNull();
-    expect(parseFloat(top!.style.top)).toBeCloseTo(parseFloat(pinned!.style.height));
+    expect(host.querySelector('.drawing-viewport__pinned--shown')).not.toBeNull();
+    expect(host.querySelector('[class*="scroll-rim"]')).toBeNull();
   });
 });

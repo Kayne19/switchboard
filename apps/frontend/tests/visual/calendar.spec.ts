@@ -89,7 +89,7 @@ for (const geometry of GEOMETRIES) {
             badges: badges.length,
             badgeInView: badge ? badge.bottom > port.top && badge.top < port.bottom : false,
             right: Math.round(box.right),
-            widest: Math.round(Math.max(...[...calendar.querySelectorAll<HTMLElement>('*')].filter((node) => node.getClientRects().length > 0 && !node.closest('.scroll-rim__count')).map((node) => node.getBoundingClientRect().right))),
+            widest: Math.round(Math.max(...[...calendar.querySelectorAll<HTMLElement>('*')].filter((node) => node.getClientRects().length > 0).map((node) => node.getBoundingClientRect().right))),
           };
         });
         expect(fit.sideways).toBeLessThanOrEqual(1);
@@ -122,7 +122,7 @@ test('a week in a narrow portrait box pages its columns from today, names the hi
   const pages = page.locator('.scene .calendar-pages');
   // No rail and no count tag over the days (#177): the days either way are
   // named in the group's label.
-  await expect(page.locator('.scene .calendar-pages__rim, .scene .scroll-rim__rail, .scene .scroll-rim__count')).toHaveCount(0);
+  await expect(page.locator('.scene .calendar-pages__rim, .scene [class*="scroll-rim"]')).toHaveCount(0);
   await expect(pages).toHaveAttribute('aria-label', /Earlier: MON/);
   await pages.focus();
   await page.keyboard.press('ArrowRight');

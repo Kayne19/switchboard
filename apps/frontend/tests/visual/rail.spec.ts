@@ -82,7 +82,8 @@ async function note(page: Page) {
       main: box(document.querySelector('.content-grid > .content-main')!),
       grid: box(document.querySelector('.content-grid')!),
       leads: card.classList.contains('rail-note--leads'),
-      fades: document.querySelector('.content-rail > .scroll-rim__fade--bottom') !== null,
+      // Nothing is drawn over an edge the column continues past (#177).
+      rims: document.querySelectorAll('.content-rail [class*="scroll-rim"]').length,
       // The activity panel's slot where it stands in the column's flow (not set aside).
       slot: (() => {
         const slot = document.querySelector('.content-rail__details > .tool-activity-slot:not(.tool-activity-slot--away)');
@@ -109,8 +110,7 @@ for (const size of [...PORTRAIT, { width: 360, height: 780 }]) {
         expect(now.textWhole, 'the note\'s text is whole').toBe(true);
         expect(now.card.top).toBeGreaterThanOrEqual(now.column.top - 1);
         expect(now.card.bottom).toBeLessThanOrEqual(now.column.bottom + 1);
-        // A column that holds it all has no edge to fade; one that leads with the note fades over the rest.
-        expect(now.fades).toBe(now.leads);
+        expect(now.rims).toBe(0);
         // The activity panel's slot, where it stands in the column, ends inside it.
         if (now.slot) expect(now.slot.bottom).toBeLessThanOrEqual(now.column.bottom + 1);
       });
@@ -119,7 +119,7 @@ for (const size of [...PORTRAIT, { width: 360, height: 780 }]) {
 }
 
 // The composed golden's scene: a metric over a one-line note. Its rail
-// holds all it carries, so nothing leads or fades, and the activity
+// holds all it carries, so nothing leads, and the activity
 // panel's slot stands inside the column or is set aside -- never cut at
 // its foot (the parts' margins count).
 const goldenComposed = [
@@ -135,7 +135,7 @@ for (const size of [{ width: 390, height: 844 }, { width: 360, height: 780 }]) {
     await runActions(page, goldenComposed);
     const rail = await note(page);
     expect(rail.leads).toBe(false);
-    expect(rail.fades).toBe(false);
+    expect(rail.rims).toBe(0);
     expect(rail.textWhole).toBe(true);
     if (rail.slot) expect(rail.slot.bottom).toBeLessThanOrEqual(rail.column.bottom + 1);
   });
@@ -152,11 +152,11 @@ test.describe('390x844 rail', () => {
     expect(grown.textWhole).toBe(true);
     expect(grown.rail.bottom - grown.rail.top).toBeGreaterThan(172 + 20);
     expect(grown.card.bottom).toBeLessThanOrEqual(grown.column.bottom + 1);
-    // Far too long: the rail stops at half the grid, the note scrolls in it and its foot fades.
+    // Far too long: the rail stops at half the grid and the note scrolls in it.
     await runActions(page, [{ op: 'show', id: 'architecture-note', type: 'note', data: { tag: 'NOTE', segments: [{ text: Array(6).fill(words).join(' ') }] } }]);
     const capped = await note(page);
     expect(capped.main.bottom - capped.main.top).toBeGreaterThanOrEqual(capped.rail.bottom - capped.rail.top - 1);
-    expect(capped.fades).toBe(true);
+    expect(capped.rims).toBe(0);
   });
 
   test('a rail too short for all it carries leads with its note, whole', async ({ page }) => {
@@ -165,7 +165,7 @@ test.describe('390x844 rail', () => {
     expect(plan.leads).toBe(true);
     expect(plan.textWhole).toBe(true);
     expect(plan.card.top).toBeCloseTo(plan.column.top, 0);
-    expect(plan.fades).toBe(true);
+    expect(plan.rims).toBe(0);
   });
 
   test('the activity panel stands aside where the rail has no room for it whole, and Damocles names the tool', async ({ page }) => {
