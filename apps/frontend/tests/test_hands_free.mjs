@@ -396,7 +396,7 @@ async function speak(state, probability, windows) {
 	assert.deepEqual(names(11), ["input", "sr", "h", "c"]);
 	assert.deepEqual(names(12), ["output", "hn", "cn"]);
 	for (const name of ["input", "sr", "h", "c"])
-		assert.match(sileroSource, new RegExp(`\\n\\t\\t\\t${name}:`));
+		assert.match(sileroSource, new RegExp(`\\n\\t+${name}:`));
 	assert.match(sileroSource, /results\.hn|results\["hn"\]/);
 	assert.match(sileroSource, /results\.cn|results\["cn"\]/);
 	assert.match(sileroSource, /results\.output|results\["output"\]/);

@@ -1,4 +1,5 @@
 import { WakeWordEngine } from "openwakeword-wasm-browser";
+import { runInference } from "./inference_queue.js";
 import { WakeWordDetectorAdapter } from "./wake_detector.js";
 import {
 	isWakeDetection,
@@ -29,9 +30,12 @@ export function createWakeWordDetector(): WakeWordDetectorAdapter {
 		_processChunk(samples: Float32Array): Promise<void>;
 	};
 	return new WakeWordDetectorAdapter({
-		load: () => packageEngine.load(),
+		// The engine's sessions share ONNX Runtime with the Silero endpointer;
+		// every load and chunk takes its turn on the page's one queue.
+		load: () => runInference(() => packageEngine.load()),
 		reset: () => packageEngine._resetState(),
-		processChunk: (samples) => packageEngine._processChunk(samples),
+		processChunk: (samples) =>
+			runInference(() => packageEngine._processChunk(samples)),
 		on: (event, callback) =>
 			packageEngine.on(event, (payload) => {
 				if (event === "detect" && !isWakeDetection(payload)) return;
