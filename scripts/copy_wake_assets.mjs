@@ -16,10 +16,18 @@ for (const model of [
 	"melspectrogram.onnx",
 	"embedding_model.onnx",
 	"silero_vad.onnx",
-	"hey_jarvis_v0.1.onnx",
 ]) {
 	copy(
 		`node_modules/openwakeword-wasm-browser/models/${model}`,
+		`static/openwakeword/models/${model}`,
+	);
+}
+// The keyword models are ours, trained by training/wake-words (see
+// docs/wake-word-training.md); only the feature extractor above comes from
+// the package.
+for (const model of ["damocles_v0.1.onnx", "damo_v0.1.onnx"]) {
+	copy(
+		`training/wake-words/models/${model}`,
 		`static/openwakeword/models/${model}`,
 	);
 }

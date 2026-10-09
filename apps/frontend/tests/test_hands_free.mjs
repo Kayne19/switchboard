@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import ts from "typescript";
 
 const source = readFileSync("apps/frontend/src/hands_free.ts", "utf8");
@@ -67,7 +67,7 @@ const { SileroSpeechEndpointer } = await import(
 	)
 );
 
-assert.equal(handsFree.WAKE_PHRASE, "Hey Jarvis");
+assert.equal(handsFree.WAKE_PHRASE, "Damocles");
 assert.equal(handsFree.WAKE_SAMPLE_RATE, 16000);
 assert.equal(handsFree.WAKE_FRAME_SAMPLES, 1280);
 assert.equal(handsFree.VAD_TRAILING_SILENCE_MS, 900);
@@ -97,7 +97,7 @@ class FakeSession {
 
 	async run(samples) {
 		this.inputs.push(samples);
-		this.emit({ keyword: "hey_jarvis", score: 0.91 });
+		this.emit({ keyword: "damocles", score: 0.91 });
 	}
 }
 
@@ -443,7 +443,8 @@ assert.ok(statSync("static/vad-worklet.js").size > 0, "the VAD worklet is built"
 assert.match(packageRuntime, /from 'onnxruntime-web'/);
 assert.match(ortRuntime, /ONNX Runtime Web/);
 for (const asset of [
-	"static/openwakeword/models/hey_jarvis_v0.1.onnx",
+	"static/openwakeword/models/damocles_v0.1.onnx",
+	"static/openwakeword/models/damo_v0.1.onnx",
 	"static/openwakeword/models/melspectrogram.onnx",
 	"static/openwakeword/models/embedding_model.onnx",
 	"static/openwakeword/models/silero_vad.onnx",
@@ -452,6 +453,62 @@ for (const asset of [
 ]) {
 	assert.ok(statSync(asset).size > 0, `${asset} is staged`);
 }
+assert.equal(
+	existsSync("static/openwakeword/models/hey_jarvis_v0.1.onnx"),
+	false,
+	"the package's Hey Jarvis model is no longer staged",
+);
+
+// Each keyword model carries its own threshold, and the engine, which has
+// only one, runs at the lowest of them.
+const wakeModels = await import(
+	`data:text/javascript;base64,${Buffer.from(
+		compile(
+			readFileSync("apps/frontend/src/wake_models.ts", "utf8"),
+			"wake_models.ts",
+		),
+	).toString("base64")}#wake-models`
+);
+assert.deepEqual(Object.keys(wakeModels.WAKE_WORD_MODELS), [
+	"damocles",
+	"damo",
+]);
+assert.ok(
+	wakeModels.WAKE_WORD_MODELS.damo.threshold >
+		wakeModels.WAKE_WORD_MODELS.damocles.threshold,
+	"damo is held to the stricter threshold",
+);
+assert.equal(
+	wakeModels.WAKE_WORD_ENGINE_THRESHOLD,
+	Math.min(
+		...Object.values(wakeModels.WAKE_WORD_MODELS).map(
+			(model) => model.threshold,
+		),
+	),
+);
+assert.equal(wakeModels.isWakeDetection({ keyword: "damo", score: 0.95 }), true);
+assert.equal(
+	wakeModels.isWakeDetection({
+		keyword: "damo",
+		score: wakeModels.WAKE_WORD_ENGINE_THRESHOLD + 0.01,
+	}),
+	false,
+	"a damo score under its own threshold is not a detection",
+);
+assert.equal(
+	wakeModels.isWakeDetection({ keyword: "damocles", score: 0.6 }),
+	true,
+);
+assert.equal(wakeModels.isWakeDetection({ keyword: "hey_jarvis", score: 1 }), false);
+assert.equal(wakeModels.isWakeDetection(undefined), false);
+assert.match(wakeWordSource, /isWakeDetection\(payload\)/);
+for (const model of Object.values(wakeModels.WAKE_WORD_MODELS)) {
+	assert.ok(
+		statSync(`training/wake-words/models/${model.file}`).size > 0,
+		`${model.file} is committed as the staged model's source`,
+	);
+}
+
 console.log(
 	"ok - real wake adapter, Silero endpointer, PCM worklet, barrier, and wake-word import map",
 );

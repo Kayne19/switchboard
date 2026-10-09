@@ -345,16 +345,18 @@ container, and the post-deploy checklist.
 | `apps/frontend/src/hands_free.ts` | hands-free controller, with the wake adapter (`wake_detector.ts`) and the Silero speech endpointer (`speech_endpoint.ts`) beside it |
 | `apps/frontend/tests/` | browser, display, and operator-extension tests |
 | `static/index.html`, `static/v17-assets/`, `static/vad-worklet.js` | committed deterministic browser build output |
-| `static/openwakeword/` | same-origin Hey Jarvis ONNX, wrapper, and ONNX Runtime WASM assets |
+| `static/openwakeword/` | same-origin wake-word ONNX models, wrapper, and ONNX Runtime WASM assets |
 | `static-debug/` | committed debug-page build output (`index.html`, `debug.js`, `debug.css`); embedded in the binary and served only by the debug listener (`docs/debug-page.md`) |
 | `extensions/operator-switchboard.ts` | the operator's pi extension |
 | `skills/switchboard/` | the `switchboard` Python skill module project agents use to reach the caller, and its tests |
+| `training/wake-words/` | the two wake-word models the page listens for, their openWakeWord training configs and scripts (`docs/wake-word-training.md`) |
 | `apps/host-agent/install.mjs` | installs or redeploys the host agent, the skill and the two systemd user units on a project host |
 | `docs/environment.md` | every environment variable the service reads, and what project sessions are given |
 | `docs/architecture.md` | ownership boundaries and the rules for where new behavior goes |
 | `docs/display-tool.md` | the `display` tool: payload, operations, layout, and composition |
 | `docs/hands-free.md` | hands-free lifecycle, asset provenance, and license obligations |
 | `docs/ipad.md` | the iPad (WebKit) as a first-class target: what CI checks in WebKit, what it cannot, engine-specific code, and the device checklist before a pin bump |
+| `docs/wake-word-training.md` | how the two wake-word models are trained, measured, and licensed |
 
 ## The environment contract
 
