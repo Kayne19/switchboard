@@ -202,7 +202,7 @@ test("explanations read Markdown, scroll, and open a history the caller can type
   }
 });
 
-test("the live response keeps a log of what was said, pinned to the newest line (#113)", async ({ page }) => {
+test("the live response keeps a log of what was said, the newest section at the top of the box (#113, #178)", async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 2 });
   const { wsUrl } = await fixtureServer.start();
   let said = 0;
@@ -226,9 +226,16 @@ test("the live response keeps a log of what was said, pinned to the newest line 
         top: Math.round(element.scrollTop),
         bottom: Math.round(element.scrollHeight - element.clientHeight),
       }));
-    // The log overflows the card and rests on its newest line.
+    // Where the section being heard sits in the box, and what is under it.
+    const atTop = () =>
+      log.evaluate((element) => {
+        const current = element.querySelector<HTMLElement>('[aria-current="true"]')!;
+        return Math.round(current.getBoundingClientRect().top - element.getBoundingClientRect().top);
+      });
+    // The log overflows the card and rests with its newest section at the top
+    // of the box, the blank space the log keeps under it taking the rest.
     await expect.poll(async () => (await position()).bottom).toBeGreaterThan(0);
-    await expect.poll(async () => { const at = await position(); return at.top === at.bottom; }).toBe(true);
+    await expect.poll(atTop).toBeLessThanOrEqual(1);
     await page.screenshot({ path: test.info().outputPath("spoken-log.png") });
 
     // Scrolled back up, the caller keeps their place while lines arrive.
@@ -250,7 +257,7 @@ test("the live response keeps a log of what was said, pinned to the newest line 
     await scrollTo("bottom");
     say();
     await expect(lines).toHaveCount(10);
-    await expect.poll(async () => { const at = await position(); return at.top === at.bottom; }).toBe(true);
+    await expect.poll(atTop).toBeLessThanOrEqual(1);
   } finally {
     await fixtureServer.stop();
   }

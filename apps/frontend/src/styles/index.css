@@ -100,11 +100,17 @@ button {
   container-type: size;
   container-name: stage;
 }
+/* The reading size of body text on the stage: the document reader's
+   paragraphs, and the caption log beside them, which reads at the same size
+   (#188). The aspect-ratio rules below restate it for a portrait and a wide
+   stage; a surface with a reading size of its own (the aux row's short
+   document, the conversation answer) keeps it. */
 .scene {
   position: absolute;
   inset: 0;
   overflow: hidden;
   background: #000;
+  --reading-text-size: clamp(15px, 1.28cqw, 22px);
 }
 .tech {
   font-family:
@@ -558,8 +564,9 @@ button {
   padding-right: clamp(6px, 1cqw, 16px);
 }
 /* The live response's log of what was said (#113), in the card's own text
-   area: the line being heard reads in full, and the lines before it recede
-   above it. The area scrolls, pinned to the newest line. */
+   area: the section being heard reads in full at the top of the box, and the
+   sections before it are above it, out of view. The area scrolls, pinned to
+   the newest section. */
 .spoken-log {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -572,6 +579,24 @@ button {
 }
 .spoken-log__line--current {
   color: inherit;
+}
+/* The log reads at one size, the sections differing only in colour (#188):
+   code inside a spoken section keeps its face and its ground, not a size of
+   its own. */
+.spoken-log .rich-text__code,
+.spoken-log .rich-text__code-block {
+  font-size: 1em;
+}
+/* The blank space under the newest section, a box tall, so that section can
+   rest at the top of the box with nothing drawn below it (#178). */
+.spoken-log__space {
+  height: 100%;
+}
+/* A log is read from its newest section down, so the box lays its text from
+   the top; a message that is not a log stays centred in it. */
+.spoken-log-box .conversation-answer__text-inner {
+  min-height: 0;
+  align-content: start;
 }
 /* The CHANNEL / MODE stack every page carries in its bottom-left corner
    (#180, `ChannelStack`), where the conversation page's static stack stood.
@@ -1009,7 +1034,9 @@ button {
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
   font-family: "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(13px, 1.06cqw, 18px);
+  /* The log reads at the stage's reading size, the size of the body text on
+     the main content beside it, not a smaller size of its own (#188). */
+  font-size: var(--reading-text-size);
   line-height: 1.48;
 }
 .annotation-card__text strong {
@@ -3372,7 +3399,7 @@ button {
   padding-right: clamp(8px, 1cqw, 16px);
   color: #cfcbc4;
   font-family: "Helvetica Neue", Arial, sans-serif;
-  font-size: clamp(15px, 1.28cqw, 22px);
+  font-size: var(--reading-text-size);
   line-height: 1.62;
   overflow-wrap: anywhere;
   scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
@@ -5706,8 +5733,10 @@ button {
   .document-viewport__reader {
     width: 100%;
   }
+  .scene {
+    --reading-text-size: clamp(14px, 2.8cqw, 19px);
+  }
   .document-viewport__body {
-    font-size: clamp(14px, 2.8cqw, 19px);
     line-height: 1.56;
   }
 
@@ -5847,8 +5876,10 @@ button {
     margin: 12px 0 10px;
     font-size: clamp(21px, 2.1cqw, 36px);
   }
+  .scene {
+    --reading-text-size: clamp(13px, 1.05cqw, 19px);
+  }
   .document-viewport__body {
-    font-size: clamp(13px, 1.05cqw, 19px);
     line-height: 1.45;
   }
   .code-viewport__mask,

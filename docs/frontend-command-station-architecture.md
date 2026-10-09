@@ -131,12 +131,17 @@ keep their existing non-navigable link behavior.
 ### The live response
 
 The live response (the conversation answer, and the live card beside a
-visual) shows what the caller is hearing, as a log of the recent spoken lines
-in the card's own text area (#113): the line being heard last and in full,
-the lines before it receding above it. It holds the last 50 lines. It stays
-pinned to the newest line while lines arrive; the caller can scroll back to
-read earlier ones, which unpins it, and scrolling back down pins it again. A
-line taller than the window rests at its first words. Only spoken lines go
+visual) shows what the caller is hearing, as a log of the recent spoken
+sections in the card's own text area (#113): the section being heard in full
+at the top of the box, with blank space below it, and the sections before it
+above, out of view (#178). It holds the last 50 lines. The log keeps a box of
+blank space under its newest section, which is what lets that section rest at
+the top. It stays pinned to the newest section while sections arrive; the
+caller can scroll back to read earlier ones, which unpins it, and scrolling
+back down pins it again. A section taller than the window rests at its first
+words, as every section does. Every section reads at one size -- the stage's
+reading size, the size of the body text on the content beside it -- and the
+sections differ only in colour (#188). Only spoken lines go
 in it: written replies and tool output stay in the transcript drawer. A
 reconnect starts it again from the lines the history marks as voiced.
 
