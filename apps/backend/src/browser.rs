@@ -90,6 +90,7 @@ async fn serve_connection(
     tracing::info!("browser connected");
     let (mut sink, mut incoming) = socket.split();
     let mut frames = connection.receiver;
+    let mut dropped = connection.dropped;
     let writer_state = state.clone();
     let deliver = async move {
         send_snapshot_sink(&mut sink, &writer_state, &snapshot_actions, watermark).await?;
@@ -121,6 +122,10 @@ async fn serve_connection(
         tokio::select! {
             result = &mut writer => {
                 if let Ok(Err(error)) = result { tracing::warn!(%error, "could not deliver an event to the browser"); }
+                break;
+            }
+            _ = &mut dropped => {
+                tracing::info!("delivery dropped the connection; closing its socket");
                 break;
             }
             changed = shutdown.changed() => {
