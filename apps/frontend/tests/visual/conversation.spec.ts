@@ -236,6 +236,10 @@ test("the live response keeps a log of what was said, the newest section at the 
     // of the box, the blank space the log keeps under it taking the rest.
     await expect.poll(async () => (await position()).bottom).toBeGreaterThan(0);
     await expect.poll(atTop).toBeLessThanOrEqual(1);
+    // The newest section is shorter than the box, and the log ends with it:
+    // there is no box of black under it to scroll on into (#213).
+    const rest = await position();
+    expect(rest.bottom - rest.top).toBeLessThanOrEqual(1);
     await page.screenshot({ path: test.info().outputPath("spoken-log.png") });
 
     // Scrolled back up, the caller keeps their place while lines arrive.

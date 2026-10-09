@@ -1769,26 +1769,70 @@ async function openCaptionLog(page: Page) {
 }
 
 // #178: the caption log rests with the newest section at the top of the box,
-// blank space below it, and the earlier sections above, out of view.
+// blank space below it, and the earlier sections above, out of view. #213:
+// the blank space is the box's rest, and no more: the log cannot be scrolled
+// on past it into a box of black.
 test('the rail caption log rests with its newest section at the top of the box (#178)', async ({ page }) => {
   const { fixtureServer, log } = await openCaptionLog(page);
   try {
     const resting = () =>
       log.evaluate((element) => {
         const current = element.querySelector<HTMLElement>('[aria-current="true"]')!;
-        const space = element.querySelector<HTMLElement>('.spoken-log__space')!;
         return {
           currentTop: current.getBoundingClientRect().top - element.getBoundingClientRect().top,
-          space: space.getBoundingClientRect().height - element.clientHeight,
           scrolled: element.scrollTop,
+          furthest: element.scrollHeight - element.clientHeight,
         };
       });
     await expect.poll(async () => Math.abs((await resting()).currentTop) <= 1).toBe(true);
     const at = await resting();
-    // What is under the newest section is the log's blank space, a box tall.
-    expect(Math.abs(at.space)).toBeLessThanOrEqual(1);
     // The earlier sections are above it, out of view.
     expect(at.scrolled).toBeGreaterThan(0);
+    // The newest section is shorter than the box: it rests where the log ends.
+    expect(at.furthest - at.scrolled).toBeLessThanOrEqual(1);
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+// #213: a newest section taller than the box rests at its first words, and
+// the log scrolls on only as far as its last: their foot stands at the
+// box's foot, not a box of black above it.
+test('the rail caption log scrolls no further than the last words of a long newest section (#213)', async ({ page }) => {
+  const { fixtureServer, log } = await openCaptionLog(page);
+  try {
+    const text = Array.from({ length: 24 }, (_, index) => `Sentence ${index + 1} of a long section that runs past the box.`).join(' ');
+    fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text, voiced: true }) });
+    await expect(log.locator('.spoken-log__line--current')).toContainText('Sentence 24');
+    const measure = () =>
+      log.evaluate((element) => {
+        const current = element.querySelector<HTMLElement>('[aria-current="true"]')!;
+        const words = document.createRange();
+        words.selectNodeContents(current);
+        const box = element.getBoundingClientRect();
+        return {
+          currentTop: current.getBoundingClientRect().top - box.top,
+          scrolled: element.scrollTop,
+          furthest: element.scrollHeight - element.clientHeight,
+          wordsTall: words.getBoundingClientRect().height,
+          wordsFoot: words.getBoundingClientRect().bottom,
+          boxFoot: box.top + element.clientHeight,
+          boxTall: element.clientHeight,
+          line: parseFloat(getComputedStyle(current).lineHeight),
+        };
+      });
+    await expect.poll(async () => Math.abs((await measure()).currentTop) <= 1).toBe(true);
+    const resting = await measure();
+    expect(resting.wordsTall, 'the section is taller than the box').toBeGreaterThan(resting.boxTall);
+    await log.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    const end = await measure();
+    expect(end.scrolled).toBe(end.furthest);
+    // Scrolled as far as it goes, the last words stand at the box's foot:
+    // under them is their line's own leading, not a line of black.
+    expect(end.boxFoot - end.wordsFoot).toBeGreaterThanOrEqual(-1);
+    expect(end.boxFoot - end.wordsFoot).toBeLessThan(end.line / 2);
   } finally {
     await fixtureServer.stop();
   }
