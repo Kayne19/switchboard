@@ -8,7 +8,11 @@ the hands-free graph.
 The call runtime (`apps/frontend/src/runtime/callRuntime.ts`) owns the
 controller: `toggleHandsFree()` loads the detector on first use and enables or
 disables listening, and the controller's state is published as the runtime's
-`handsFree`, `handsFreeStatus`, and `handsFreeLease` fields.
+`handsFree`, `handsFreeStatus`, and `handsFreeLease` fields. Nothing on the
+page draws `handsFreeStatus`, so a state of `error` (a refusal, a microphone
+hands-free could not get, a detector that could not load or that failed) is
+also the runtime's error status, which the page puts on screen as it does a
+push-to-talk failure.
 
 The page's one control for it is MODE, in the CHANNEL / MODE stack the scene
 shell draws in every page's bottom-left corner (#180,

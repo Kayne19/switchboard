@@ -957,6 +957,49 @@ describe("CallRuntime hands-free", () => {
     runtime.dispose();
   });
 
+  it("puts a hands-free failure on screen as an error, not only in handsFreeStatus", async () => {
+    const handsFree = fakeHandsFree();
+    const { runtime, latestState } = makeRuntime({
+      loadWakeDetector: async () => ({}) as WakeDetector,
+      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
+      createHandsFree: handsFree.create,
+    });
+    await connectAt(runtime);
+    runtime.toggleHandsFree();
+    await settle();
+    expect(latestState().handsFree).toBe(true);
+
+    // The speech detector fails after "armed", as it did on every engine.
+    handsFree.options().onState({
+      state: "error",
+      message: "Hands-free speech detector failed (Error).",
+      leaseRemainingMs: 0,
+    });
+    expect(latestState()).toMatchObject({
+      handsFree: false,
+      status: "Hands-free speech detector failed (Error).",
+      statusError: true,
+    });
+    runtime.dispose();
+  });
+
+  it("puts a detector that cannot load on screen as an error", async () => {
+    const { runtime, latestState } = makeRuntime({
+      loadWakeDetector: async () => {
+        throw new Error("model missing");
+      },
+      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
+    });
+    await connectAt(runtime);
+    runtime.toggleHandsFree();
+    await settle();
+    expect(latestState()).toMatchObject({
+      status: "Hands-free detector could not load (model missing).",
+      statusError: true,
+    });
+    runtime.dispose();
+  });
+
   it("stops on a new epoch and opens the follow-up lease once playback drains", async () => {
     vi.useFakeTimers();
     const handsFree = fakeHandsFree();
