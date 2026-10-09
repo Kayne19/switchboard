@@ -518,6 +518,13 @@ export class CallRuntime {
       handsFreeLease: leaseStates
         ? `Follow-up lease: ${Math.ceil(detail.leaseRemainingMs / 1000)} seconds remaining.`
         : "",
+      // A hands-free failure goes on screen the way a push-to-talk one does.
+      // Nothing on the page draws `handsFreeStatus`, so a detector that
+      // failed, or a microphone hands-free could not get, used to turn MODE
+      // back to push-to-talk with nothing said at all (#213).
+      ...(detail.state === "error"
+        ? { status: detail.message, statusError: true }
+        : {}),
     });
   }
 
