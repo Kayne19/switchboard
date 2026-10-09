@@ -10,7 +10,7 @@ import type {
   ProgressData,
   SceneObject,
 } from '../controller/types';
-import { RUNTIME_CONVERSATION_ID } from '../controller/types';
+import { RUNTIME_CONVERSATION_ID, RUNTIME_LINE_ERROR_ID } from '../controller/types';
 import { noteTarget, railNoteTarget } from '../app/noteItems';
 import { anchoredNote, besideVisuals, buildCompositionModel, cast, nameFields, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
 import { useLayoutMotion } from '../hooks/useLayoutMotion';
@@ -88,10 +88,12 @@ function annotationForScene(
   // transient explanation only when no note is present; it must never mutate
   // or visually replace an explicit note. A spoken reply already reads in the
   // live chat card when the scene shows one, so the slot then carries only
-  // speech the card does not: an agent `say`, or an error on the line.
+  // speech the card does not: an agent `say`, or an error on the line. An
+  // error is the line's, not Damocles's, and reads as one.
   if (noteObject) return noteObject.data;
   if (!state.speech) return null;
   if (liveMessage && state.speech.target === RUNTIME_CONVERSATION_ID) return null;
+  if (state.speech.target === RUNTIME_LINE_ERROR_ID) return { tag: 'LINE / ERROR', segments: [{ text: state.speech.text, semantic: 'red' }] };
   return { tag: 'DAMOCLES / EXPLANATION', segments: [{ text: state.speech.text }] };
 }
 

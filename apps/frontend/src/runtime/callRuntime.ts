@@ -381,17 +381,18 @@ export class CallRuntime {
       route === "operator"
         ? "Going back to the operator..."
         : "Connecting to " + route + "...",
+      false,
     );
     void this.requestLineChange("route", "/connect", { project: route });
   }
 
   selectModel(model: string): void {
-    this.setStatus("Switching to " + model + "...");
+    this.setStatus("Switching to " + model + "...", false);
     void this.requestLineChange("model", "/model", { model });
   }
 
   selectThinking(level: string): void {
-    this.setStatus("Setting thinking to " + level + "...");
+    this.setStatus("Setting thinking to " + level + "...", false);
     void this.requestLineChange("thinking", "/thinking", { level });
   }
 
@@ -475,13 +476,15 @@ export class CallRuntime {
     });
   }
 
-  /** `error` undefined leaves the current error flag as it is. */
-  private setStatus(text: string, error?: boolean): void {
-    this.update(
-      error === undefined
-        ? { status: text }
-        : { status: text, statusError: error },
-    );
+  /**
+   * Every status says whether it is an error. A status that is not one
+   * clears the flag: the page draws the error while the flag stands, and a
+   * routine status that kept a flag it did not set was drawn as an error in
+   * its place -- the turn after a failure put "Operator is listening..." and
+   * then the idle line on screen (#213).
+   */
+  private setStatus(text: string, error: boolean): void {
+    this.update({ status: text, statusError: error });
   }
 
   private applyLine(): void {
@@ -1036,7 +1039,7 @@ export class CallRuntime {
         if (clip) {
           clip.streaming = false;
           clip.sent = false;
-          this.setStatus("Streaming unavailable; sending complete clip...");
+          this.setStatus("Streaming unavailable; sending complete clip...", false);
           this.flushOutbox();
         }
         break;
@@ -1071,6 +1074,7 @@ export class CallRuntime {
           message.route === "operator"
             ? "Operator is listening..."
             : `${this.line.label || "working"} is working...`,
+          false,
         );
         break;
       case "queued": {
@@ -1088,7 +1092,7 @@ export class CallRuntime {
         break;
       }
       case "reply":
-        this.setStatus(IDLE_TEXT);
+        this.setStatus(IDLE_TEXT, false);
         this.transferEra = null;
         break;
       case "status":

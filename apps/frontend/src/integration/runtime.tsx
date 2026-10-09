@@ -9,7 +9,7 @@ import { interpretDisplayMessage } from "../app/displayMessage";
 import { planReportDispatch, shouldClearRejectionOnSend } from "../app/reportDispatch";
 import { useController } from "../controller/context";
 import type { MessageData, ScreenStateReport, SpokenLine } from "../controller/types";
-import { RUNTIME_CONVERSATION_ID } from "../controller/types";
+import { RUNTIME_CONVERSATION_ID, RUNTIME_LINE_ERROR_ID } from "../controller/types";
 import { two } from "../primitives/timeLabels";
 import type { ServerMessage, TranscriptEntry } from "../protocol";
 import {
@@ -288,7 +288,7 @@ export function RuntimeIntegration() {
         }
         case "error": {
           const body = message.message || "The line reported an error.";
-          dispatch({ op: "runtime_say", text: body });
+          dispatch({ op: "runtime_say", target: RUNTIME_LINE_ERROR_ID, text: body });
           break;
         }
         case "agents_state":
@@ -336,15 +336,18 @@ export function RuntimeIntegration() {
       // as status text with the error flag set. The page rendered neither
       // field, so on a browser where capture fails the caller tapped Damocles
       // and nothing at all happened, on screen or anywhere else. An error
-      // goes on screen the way a server `error` does; ordinary status text,
-      // which the presence itself already shows, does not.
+      // goes on screen the way a server `error` does, as a failure of the
+      // line; ordinary status text -- the idle line, a turn under way --
+      // never does. It leaves the screen when the runtime says the failure
+      // is over: a status reported without the flag.
       if (runtimeState.statusError) {
         if (runtimeState.status !== shownStatusRef.current) {
           shownStatusRef.current = runtimeState.status;
-          dispatch({ op: "runtime_say", text: runtimeState.status });
+          dispatch({ op: "runtime_say", target: RUNTIME_LINE_ERROR_ID, text: runtimeState.status });
         }
-      } else {
+      } else if (shownStatusRef.current) {
         shownStatusRef.current = "";
+        dispatch({ op: "runtime_unsay", target: RUNTIME_LINE_ERROR_ID });
       }
       dispatch({
         op: "listen",

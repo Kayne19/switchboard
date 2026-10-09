@@ -168,9 +168,15 @@ to the backend. Neither contains layout logic.
 Every failure the runtime cannot recover from is reported as status text with
 `statusError` set -- no microphone, a browser that cannot record, a recorder
 that stopped, a line that will not connect. `runtime.tsx` puts that text on
-screen through `runtime_say`, the same surface a server `error` reaches, once
-per text. Ordinary status is not drawn: the presence itself shows what the
-line is doing. An error with nowhere to go is a browser that fails silently,
+screen through `runtime_say` to `RUNTIME_LINE_ERROR_ID`, as a server `error`
+is, once per text; the rail draws it as `LINE / ERROR`, in red, never as
+Damocles's explanation. Every status says whether it is an error
+(`setStatus`'s flag is not optional), and the first that is not one withdraws
+the error (`runtime_unsay`). Ordinary status -- the idle line, a turn under
+way -- is never drawn: the presence itself shows what the line is doing. A
+status that kept the flag of an error before it was drawn as that error, so
+the turn after a failure put "Connected. Tap Talk and speak." beside the
+visual (#213). An error with nowhere to go is a browser that fails silently,
 which is what a caller tapping Damocles on an iPad saw.
 
 Playback is in `src/runtime/audioPlayback.ts`, and every way it can fail is
