@@ -339,6 +339,24 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
         );
       }
     }
+    case 'runtime_unsay': {
+      // Only what was said to the target goes: a line Damocles has spoken
+      // since stays.
+      if (state.runtimeSpeech?.target !== action.target) return state;
+      return syncCombinedState(
+        state,
+        state.agentObjects,
+        state.agentOrder,
+        state.agentSpeech,
+        state.runtimeObjects,
+        state.runtimeOrder,
+        null,
+        state.workspace,
+        state.focusId,
+        state.listening,
+        revision,
+      );
+    }
     case 'focus': {
       const targetId = action.id && (state.agentObjects[action.id] || state.runtimeObjects[action.id])
         ? action.id

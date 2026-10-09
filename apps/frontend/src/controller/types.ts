@@ -497,6 +497,13 @@ export interface SpeechState {
 
 export const RUNTIME_ID_PREFIX = '__runtime/';
 export const RUNTIME_CONVERSATION_ID = '__runtime/conversation';
+/**
+ * What the runtime says to this target is a failure of the line -- no
+ * microphone, audio the browser blocked, an error from the server -- and is
+ * drawn as one, never as Damocles's explanation. It is withdrawn
+ * (`runtime_unsay`) when the failure clears.
+ */
+export const RUNTIME_LINE_ERROR_ID = '__runtime/line-error';
 
 /**
  * A tool the agent on the line is running, from the backend's `activity`
@@ -606,6 +613,8 @@ export type RuntimeAction =
   | { op: 'runtime_show'; id: string; type: SceneObjectType; role?: SceneObjectRole; data: unknown }
   | { op: 'runtime_hide'; id: string }
   | { op: 'runtime_say'; text: string; target?: string | null; at?: SpeechState['at'] }
+  /** Withdraws the runtime's speech if it is still what was said to `target`. */
+  | { op: 'runtime_unsay'; target: string }
   /**
    * A tool call started (`activity`), or everything the agent was running
    * has settled (`null`). `at` is the runtime's clock, in milliseconds.

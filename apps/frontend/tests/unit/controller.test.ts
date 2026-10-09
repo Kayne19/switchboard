@@ -18,6 +18,7 @@ import type {
 } from '../../src/controller/types';
 import {
   RUNTIME_CONVERSATION_ID,
+  RUNTIME_LINE_ERROR_ID,
   RUNTIME_ID_PREFIX,
 } from '../../src/controller/types';
 
@@ -219,6 +220,14 @@ describe('controller reducer & ownership', () => {
     ]);
     expect(buildCompositionModel(state).primary?.id).toBe('sys-arch');
     expect(sceneKind(state)).toBe('architecture');
+  });
+
+  it('withdraws runtime speech only while it is still what was said to the target', () => {
+    const failed = reduceActions(createInitialState(), [{ op: 'runtime_say', target: RUNTIME_LINE_ERROR_ID, text: 'No microphone.' }]);
+    expect(controllerReducer(failed, { op: 'runtime_unsay', target: RUNTIME_LINE_ERROR_ID }).speech).toBeNull();
+    // A line Damocles spoke since is not the error, and stays.
+    const spoken = controllerReducer(failed, { op: 'runtime_say', target: RUNTIME_CONVERSATION_ID, text: 'Here it is.' });
+    expect(controllerReducer(spoken, { op: 'runtime_unsay', target: RUNTIME_LINE_ERROR_ID })).toBe(spoken);
   });
 
   it('keeps tool activity apart from speech', () => {
