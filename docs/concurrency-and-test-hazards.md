@@ -242,7 +242,13 @@ the sink and sends `epoch`, `status`, `history`, and the optional diagram before
 releasing live events queued during that read. Reader replies such as pong,
 accepted/error frames, and audio metadata use that same writer, so a reconnect
 cannot interleave a live frame into its snapshot. A bounded connection queue
-retires a lagging socket rather than blocking the call.
+(`DELIVERY_QUEUE` frames) retires a lagging socket rather than blocking the
+call. A connection whose queue is full when an event is published has lost
+that event, so `delivery.rs` drops it with a warning naming its connection,
+and the drop closes its socket at once: the writer does not first drain what
+was queued before the hole, which for audio would leave the page playing a
+stream that never ends. The page reconnects, which resets playback for the
+generation and delivers a whole snapshot.
 
 Audio reservations are generation-stamped and sequenced across mid-turn speech
 and settled replies. Cancellation releases a slot so a stale TTS result cannot
