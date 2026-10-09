@@ -196,6 +196,17 @@ never reaches `canplay`, and leaves `play()` pending for the rest of the call
 that is already gone and is not reported -- falling back reloads the element,
 which aborts the pending `play()` itself.
 
+The watch stays on for the whole clip, not just its start: a clip that
+stopped advancing partway is reported the same way, and a stream falls back
+to its whole replay (#213). `isPlaying`, and with it the presence's voice
+indicator, clears at once, so the page never says it is speaking over
+silence. A stream whose bytes are still landing holds the watch, since the
+element may be waiting for them; a clip standing at its end whose `ended`
+never came is finished, not stalled. A `pause` the page did not ask for (an
+iPad's audio session taken for the microphone or another app, a lock-screen
+control) stops a stream as it stops a replay: not playing, reported as an
+error, resumed by the next page gesture.
+
 A browser that takes a stream and cannot sound it is asked once. The first
 named failure turns streaming off for the whole call -- later utterances go
 straight to the whole replay with no silence watch and no second status line
