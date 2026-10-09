@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AudioPlayback } from "../../src/runtime/audioPlayback";
+import { mp3FrameBoundary } from "../../src/runtime/speechEnvelope";
 
 // Ported from the legacy runtime's playback regressions: one clip owns the
 // element at a time, and a late event from a replaced clip can never advance,
@@ -438,6 +441,7 @@ describe("AudioPlayback streaming", () => {
   class FakeSourceBuffer {
     listeners = new Map<string, Set<Handler>>();
     updating = false;
+    mode = "segments";
     appended: Uint8Array[] = [];
     fail = false;
     addEventListener(name: string, handler: Handler) {
@@ -568,6 +572,51 @@ describe("AudioPlayback streaming", () => {
     expect(second, "each utterance owns a MediaSource").not.toBe(first);
     second.buffer.emit("updateend");
     expect(second.ended).toBe(true);
+  });
+
+  it("gives the SourceBuffer whole MP3 frames, in sequence (#213)", () => {
+    // Chunks come off the socket cut anywhere. Appended as they came, a
+    // frame split across two appends reached an engine that parses each
+    // append alone (WebKit on an iPad): clicks, clipped syllables, and a gap
+    // it would not play across.
+    const voice = new Uint8Array(
+      readFileSync(
+        path.join(import.meta.dirname, "../fixtures/speech-pulse.mp3"),
+      ),
+    );
+    const { player, urls, playback } = streamingPlayback();
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    const source = urls.get(player.src) as FakeMediaSource;
+    expect(source.buffer.mode, "each append follows the last").toBe("sequence");
+    for (let at = 0; at < voice.length; at += 1_500) {
+      playback.receiveAudioChunk(voice.slice(at, at + 1_500).buffer);
+      while (source.buffer.updating) source.buffer.emit("updateend");
+    }
+    const appended = () => {
+      const all = new Uint8Array(
+        source.buffer.appended.reduce((total, part) => total + part.length, 0),
+      );
+      let at = 0;
+      for (const part of source.buffer.appended) {
+        all.set(part, at);
+        at += part.length;
+      }
+      return all;
+    };
+    expect(source.buffer.appended.length).toBeGreaterThan(1);
+    let through = 0;
+    const before = appended();
+    for (const part of source.buffer.appended) {
+      through += part.length;
+      expect(
+        mp3FrameBoundary(before.subarray(0, through)),
+        "every append ends where a frame ends",
+      ).toBe(through);
+    }
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    while (source.buffer.updating) source.buffer.emit("updateend");
+    expect(appended(), "and every byte is in by the end").toEqual(voice);
+    expect(source.ended).toBe(true);
   });
 
   it("falls back to the complete replay once when streaming fails", async () => {
