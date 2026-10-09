@@ -1,5 +1,6 @@
 import * as ort from "onnxruntime-web";
 import { WAKE_SAMPLE_RATE } from "./hands_free.js";
+import { runInference } from "./inference_queue.js";
 import {
 	SileroSpeechEndpointer,
 	type SpeechProbabilityPort,
@@ -31,9 +32,11 @@ class SileroVadModel implements SpeechProbabilityPort {
 	async load(): Promise<void> {
 		if (this.session) return;
 		ort.env.wasm.wasmPaths = ORT_WASM_PATH;
-		this.session = await ort.InferenceSession.create(MODEL_URL, {
-			executionProviders: ["wasm"],
-		});
+		this.session = await runInference(() =>
+			ort.InferenceSession.create(MODEL_URL, {
+				executionProviders: ["wasm"],
+			}),
+		);
 	}
 
 	reset(): void {
@@ -44,12 +47,15 @@ class SileroVadModel implements SpeechProbabilityPort {
 	async probability(window: Float32Array): Promise<number> {
 		const session = this.session;
 		if (!session) throw new Error("the speech model is not loaded");
-		const results = await session.run({
-			input: new ort.Tensor("float32", window, [1, window.length]),
-			sr: new ort.Tensor("int64", [BigInt(WAKE_SAMPLE_RATE)], []),
-			h: this.h,
-			c: this.c,
-		});
+		// The wake engine runs on the same ONNX Runtime; one run at a time.
+		const results = await runInference(() =>
+			session.run({
+				input: new ort.Tensor("float32", window, [1, window.length]),
+				sr: new ort.Tensor("int64", [BigInt(WAKE_SAMPLE_RATE)], []),
+				h: this.h,
+				c: this.c,
+			}),
+		);
 		this.h = results.hn as ort.Tensor;
 		this.c = results.cn as ort.Tensor;
 		return Number((results.output.data as Float32Array)[0]);

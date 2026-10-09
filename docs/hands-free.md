@@ -68,6 +68,17 @@ it. The endpointer is reset where the wake detector is: on enable, on a wake
 grace period, when an expired grace period re-arms, on a follow-up lease, on a
 PTT pause, and on disable or an epoch change.
 
+The two detectors share one ONNX Runtime Web instance, and its `run` is not
+re-entrant across sessions: a session that runs while another session's run
+is still awaiting corrupts that run's inputs, and both fail ("failed to call
+OrtRun()", "unaligned memory access"; Chromium can crash the tab). Each
+detector's own queue does not prevent this, because the controller feeds every
+frame to both. So every session create and run on the page goes through
+`runInference` (`apps/frontend/src/inference_queue.ts`): one at a time, in the
+order asked. Without it, the first frames after "armed" failed the endpointer,
+and hands-free let go of the microphone and turned itself off in every engine
+(#213).
+
 `vad-worklet.js` is the capture seam only: it posts 16-kHz PCM frames and the
 level the voice indicator reads. There is no energy-threshold endpointer
 beside the model, and no fallback to one: a model that cannot load or cannot
