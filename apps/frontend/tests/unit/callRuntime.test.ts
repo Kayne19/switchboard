@@ -632,6 +632,24 @@ describe("CallRuntime voice clips", () => {
     runtime.dispose();
   });
 
+  // #213: a routine status said after an error kept its flag, and the page
+  // drew the routine status as the error. Each says whether it is one.
+  it("clears the error flag with the routine status of the next turn", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime);
+    socket.receive({ type: "error", message: "The model refused." });
+    await settle();
+    expect(latestState()).toMatchObject({ status: "Error: The model refused.", statusError: true });
+    socket.receive({ type: "thinking", route: "operator", waiting: 0 });
+    await settle();
+    expect(latestState()).toMatchObject({ status: "Operator is listening...", statusError: false });
+    socket.receive({ type: "error", message: "The model refused again." });
+    socket.receive({ type: "reply", text: "Done.", route: "operator", voiced: false });
+    await settle();
+    expect(latestState()).toMatchObject({ status: IDLE_TEXT, statusError: false });
+    runtime.dispose();
+  });
+
   // Issue #71: the verdict on a clip that was on the wire can land while the
   // tab is away. The clip is sent again under the stamp it went out with, so
   // the server recognizes it and answers with the verdict the tab missed.

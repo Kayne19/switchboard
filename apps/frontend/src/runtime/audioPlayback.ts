@@ -73,7 +73,8 @@ export interface AudioPlaybackOptions {
   /** The status shown once nothing is left to play. */
   idleText: string;
   /** `error` undefined leaves the current error flag as it is. */
-  onStatus: (text: string, error?: boolean) => void;
+  /** Every status says whether it is an error (`CallRuntime.setStatus`). */
+  onStatus: (text: string, error: boolean) => void;
   /** Called whenever what is playing, or waiting to play, changes. */
   onChange: () => void;
   /** The pause between two messages. Defaults to `INTER_UTTERANCE_GAP_MS`. */
@@ -396,6 +397,7 @@ export class AudioPlayback {
         owner.awaitingEnded
           ? "Audio finishing — tap or click anywhere on this page to continue."
           : "Audio paused — tap or click anywhere on this page to resume.",
+        false,
       );
     };
     const error: EventListener = () => {

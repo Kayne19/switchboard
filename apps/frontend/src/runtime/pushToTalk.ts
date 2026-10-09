@@ -43,7 +43,8 @@ export interface PushToTalkOptions {
   flush: () => void;
   onRecordingChange: (recording: boolean) => void;
   /** `error` undefined leaves the current error flag as it is. */
-  onStatus: (text: string, error?: boolean) => void;
+  /** Every status says whether it is an error (`CallRuntime.setStatus`). */
+  onStatus: (text: string, error: boolean) => void;
   pauseHandsFree: () => void;
   resumeHandsFree: () => void;
 }
@@ -191,7 +192,7 @@ export class PushToTalk {
       if (levelContext) void levelContext.close().catch(() => undefined);
       stream.getTracks().forEach((t) => t.stop());
       this.options.resumeHandsFree();
-      onStatus(this.options.idleText);
+      onStatus(this.options.idleText, false);
       this.options.onRecordingChange(false);
       return;
     }
@@ -288,7 +289,7 @@ export class PushToTalk {
       if (this.mediaRecorder === recorder) this.mediaRecorder = null;
       if (recorderFailed) return;
       if (recording.discard) {
-        onStatus(this.options.idleText);
+        onStatus(this.options.idleText, false);
         return;
       }
       const blob = new Blob(chunks, {
