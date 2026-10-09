@@ -172,6 +172,65 @@ export function mp3FrameBoundary(bytes: Uint8Array): number {
 }
 
 /**
+ * The longest a Layer III frame can be: MPEG-1 at 320 kbps and 32 kHz, padded.
+ * Bytes held back past this are not waiting for a frame to finish.
+ */
+const MAX_MP3_FRAME_BYTES = 1441;
+
+/**
+ * Whether `bytes` can be the start of an MP3 stream or frame: a frame sync,
+ * or an ID3v2 tag, as far as the bytes go.
+ */
+function opensFrame(bytes: Uint8Array): boolean {
+  if (bytes.length === 0) return true;
+  if (bytes[0] === 0xff)
+    return bytes.length < 2 || (bytes[1] & 0xe0) === 0xe0;
+  const tag = [0x49, 0x44, 0x33];
+  return bytes.subarray(0, 3).every((byte, at) => byte === tag[at]);
+}
+
+/**
+ * Cuts a stream of MP3 bytes where frames end, for a `SourceBuffer`. Chunks
+ * come off the socket on no boundary, and an engine that parses each append
+ * on its own (WebKit on an iPad) can drop or mangle the frame an append cuts
+ * in two -- clicks and clipped syllables, or a gap it will not play across
+ * (#213). Each `take` returns every whole frame received so far and holds the
+ * part-frame after them for the next chunk; `flush` returns that part at the
+ * stream's end, so no byte is lost. A stream whose frames cannot be found --
+ * one that does not open on a frame or a tag, not Layer III, or broken
+ * partway -- is passed through as it arrives from then on, never held back.
+ */
+export class Mp3FrameAligner {
+  private held: Uint8Array<ArrayBuffer> = new Uint8Array(0);
+  private passThrough = false;
+
+  /** The whole frames this chunk completes; `null` when none is whole yet. */
+  take(chunk: ArrayBuffer): ArrayBuffer | null {
+    if (this.passThrough) return chunk;
+    const bytes = new Uint8Array(this.held.length + chunk.byteLength);
+    bytes.set(this.held);
+    bytes.set(new Uint8Array(chunk), this.held.length);
+    const boundary = mp3FrameBoundary(bytes);
+    // An opening ID3 tag is held whole with the first frame after it.
+    const allowance = MAX_MP3_FRAME_BYTES + (boundary === 0 ? afterId3(bytes) : 0);
+    if (!opensFrame(bytes) || bytes.length - boundary > allowance) {
+      this.passThrough = true;
+      this.held = new Uint8Array(0);
+      return bytes.buffer;
+    }
+    this.held = bytes.slice(boundary);
+    return boundary > 0 ? bytes.slice(0, boundary).buffer : null;
+  }
+
+  /** What is still held at the stream's end; `null` when nothing is. */
+  flush(): ArrayBuffer | null {
+    const rest = this.held;
+    this.held = new Uint8Array(0);
+    return rest.length > 0 ? rest.buffer : null;
+  }
+}
+
+/**
  * The envelope of an utterance that is still arriving. Chunks come off the
  * socket on no particular boundary, so each decode is of every whole frame
  * received so far: one timeline, growing, always starting at the utterance's

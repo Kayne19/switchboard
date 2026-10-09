@@ -6,6 +6,7 @@ import {
   EnvelopeMeter,
   envelopeOfBuffer,
   mp3FrameBoundary,
+  Mp3FrameAligner,
   SpeechEnvelope,
   StreamingEnvelope,
 } from "../../src/runtime/speechEnvelope";
@@ -136,6 +137,76 @@ describe("mp3FrameBoundary", () => {
     const partial = mp3FrameBoundary(half);
     expect(partial).toBeGreaterThan(0);
     expect(partial).toBeLessThanOrEqual(half.length);
+  });
+});
+
+describe("Mp3FrameAligner", () => {
+  const fixture = () =>
+    new Uint8Array(
+      readFileSync(
+        path.join(import.meta.dirname, "../fixtures/speech-pulse.mp3"),
+      ),
+    );
+
+  function joined(parts: ArrayBuffer[]): Uint8Array {
+    const all = new Uint8Array(
+      parts.reduce((total, part) => total + part.byteLength, 0),
+    );
+    let at = 0;
+    for (const part of parts) {
+      all.set(new Uint8Array(part), at);
+      at += part.byteLength;
+    }
+    return all;
+  }
+
+  it("gives whole frames only, and every byte by the end", () => {
+    // The socket cuts the voice anywhere; a SourceBuffer is given frames.
+    const bytes = fixture();
+    const aligner = new Mp3FrameAligner();
+    const out: ArrayBuffer[] = [];
+    for (let at = 0; at < bytes.length; at += 1_000) {
+      const whole = aligner.take(bytes.slice(at, at + 1_000).buffer);
+      if (!whole) continue;
+      out.push(whole);
+      const sofar = joined(out);
+      expect(mp3FrameBoundary(sofar), "it ends where a frame ends").toBe(
+        sofar.length,
+      );
+    }
+    const rest = aligner.flush();
+    if (rest) out.push(rest);
+    expect(joined(out)).toEqual(bytes);
+    expect(aligner.flush(), "nothing is held twice").toBeNull();
+  });
+
+  it("holds a frame cut in two until its second half arrives", () => {
+    const whole = mp3Stream(2);
+    const aligner = new Mp3FrameAligner();
+    expect(aligner.take(whole.slice(0, FRAME_BYTES + 100).buffer)).toEqual(
+      whole.slice(0, FRAME_BYTES).buffer,
+    );
+    expect(aligner.take(whole.slice(FRAME_BYTES + 100).buffer)).toEqual(
+      whole.slice(FRAME_BYTES).buffer,
+    );
+    expect(aligner.flush()).toBeNull();
+  });
+
+  it("passes through a stream whose frames it cannot find, never holding it", () => {
+    const aligner = new Mp3FrameAligner();
+    const text = new TextEncoder().encode("not mp3").buffer;
+    expect(aligner.take(text)).toEqual(text);
+
+    // Frames, then bytes that are no frame: held back no further than one
+    // frame's length, then everything goes through as it comes.
+    const broken = new Mp3FrameAligner();
+    const frames = mp3Stream(1);
+    expect(broken.take(frames.slice().buffer)).toEqual(frames.slice().buffer);
+    const junk = new Uint8Array(2_000).fill(7);
+    expect(broken.take(junk.slice().buffer)).toEqual(junk.slice().buffer);
+    const more = new Uint8Array([1, 2, 3]);
+    expect(broken.take(more.slice().buffer)).toEqual(more.slice().buffer);
+    expect(broken.flush()).toBeNull();
   });
 });
 

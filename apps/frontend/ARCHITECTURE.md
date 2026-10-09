@@ -222,6 +222,17 @@ event that cannot come, which is what made every page offering `mse_mp3`
 `MediaSource` that supports `audio/mpeg`; Firefox does not and has always
 taken the whole replay.
 
+The chunks go into the `SourceBuffer` as whole MP3 frames. They come off the
+socket cut anywhere, and an engine that parses each append on its own (WebKit
+on an iPad) can mangle the frame an append splits: clicks, clipped syllables,
+or a gap it will not play across (#213). `Mp3FrameAligner` (beside
+`mp3FrameBoundary` in `speechEnvelope.ts`, the one MP3 frame table) hands on
+every whole frame received and holds the part-frame after them for the next
+chunk; `audio_done` flushes what is held, so every byte goes in. A stream it
+cannot find frames in is passed through as it arrives, never held. The buffer
+is put in `sequence` mode, which the MSE spec already gives an MPEG audio
+buffer: each append is placed straight after the last.
+
 A caption waits for the audio that voices it (#112) but never for audio that
 is not coming. `SpokenLines` is told whether playback is sounding; while it is
 not, every waiting line is heard `CAPTION_WAIT_MS` later, in order.

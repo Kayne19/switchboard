@@ -13,6 +13,7 @@ import {
   createEnvelopeDecoder,
   decodeEnvelope,
   EnvelopeMeter,
+  Mp3FrameAligner,
   StreamingEnvelope,
   type EnvelopeDecoder,
 } from "./speechEnvelope";
@@ -60,6 +61,9 @@ interface MseUtterance {
   sequence: number;
   mime: string;
   parts: Blob[];
+  /** Cuts the stream where frames end before it reaches the SourceBuffer. */
+  frames: Mp3FrameAligner;
+  /** Whole frames waiting for the SourceBuffer, oldest first. */
   queued: ArrayBuffer[];
   bytes: number;
   done: boolean;
@@ -512,6 +516,7 @@ export class AudioPlayback {
       sequence,
       mime: message.mime === "audio/mpeg" ? message.mime : "audio/mpeg",
       parts: [],
+      frames: new Mp3FrameAligner(),
       queued: [],
       bytes: 0,
       done: false,
@@ -550,8 +555,11 @@ export class AudioPlayback {
     utterance.parts.push(new Blob([data], { type: utterance.mime }));
     utterance.envelope?.append(data);
     if (this.mseEnabled && !utterance.failed) {
-      utterance.queued.push(data);
-      if (utterance === this.mseActive) this.mseAppend(utterance);
+      const whole = utterance.frames.take(data);
+      if (whole) {
+        utterance.queued.push(whole);
+        if (utterance === this.mseActive) this.mseAppend(utterance);
+      }
     }
     this.notifyPlaybackChange();
   }
@@ -576,6 +584,9 @@ export class AudioPlayback {
       this.notifyPlaybackChange();
       return;
     }
+    // The stream is complete: the part-frame held back goes in last.
+    const rest = utterance.frames.flush();
+    if (rest) utterance.queued.push(rest);
     if (utterance === this.mseActive) this.mseAppend(utterance);
     this.msePending = null;
     this.notifyPlaybackChange();
@@ -873,6 +884,11 @@ export class AudioPlayback {
     if (utterance.failed || !utterance.media) return;
     try {
       utterance.buffer = utterance.media.addSourceBuffer(utterance.mime);
+      // MP3 carries no timestamps of its own: in `sequence` mode each append
+      // is placed straight after the last, with no gap or overlap to splice.
+      // The MSE spec already starts an MPEG audio buffer in it; this says so
+      // rather than trust every engine to (#213).
+      utterance.buffer.mode = "sequence";
       utterance.buffer.addEventListener("error", () =>
         this.mseFail(utterance, new Error("MediaSource append error")),
       );
