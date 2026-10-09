@@ -130,7 +130,7 @@ for (const viewport of viewports) {
 
   test(`a visual primary keeps the larger share over a table and an image beside it / ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=composed&chrome=0');
+    await openScene(page, 'composed');
     await expect(page.locator('[data-scene="architecture"] .composed-aux [data-testid="table"]')).toBeVisible();
     await expect(page.locator('.composed-aux [data-testid="image"]')).toHaveAttribute('data-state', 'ready');
     const shares = await page.evaluate(() => {

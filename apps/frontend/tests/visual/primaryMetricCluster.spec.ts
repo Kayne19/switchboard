@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test';
+import { openScene } from './helpers';
 
 test.describe('Primary metric cluster layout and behavior (#38)', () => {
   test('renders 2 primary metrics as a 2-column grid in landscape', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto('/?scene=architecture&chrome=0');
+    await openScene(page, 'architecture');
     await page.waitForSelector('[data-scene]');
 
     await page.evaluate(() => {
@@ -51,7 +52,7 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
 
   test('recomposes 2 primary metrics vertically in portrait', async ({ page }) => {
     await page.setViewportSize({ width: 420, height: 860 });
-    await page.goto('/?scene=architecture&chrome=0');
+    await openScene(page, 'architecture');
     await page.waitForSelector('[data-scene]');
 
     await page.evaluate(() => {
@@ -87,7 +88,7 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
 
   test('renders 3 primary metrics as 3 columns in landscape and 1 column in portrait', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto('/?scene=architecture&chrome=0');
+    await openScene(page, 'architecture');
     await page.waitForSelector('[data-scene]');
 
     await page.evaluate(() => {
@@ -139,7 +140,7 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
 
   test('clicking an individual metric in the cluster activates focus layer on that metric', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto('/?scene=architecture&chrome=0');
+    await openScene(page, 'architecture');
     await page.waitForSelector('[data-scene]');
 
     await page.evaluate(() => {
@@ -180,7 +181,7 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
     test(`eight primary metrics all show in the cluster, none truncated (${geometry.name})`, async ({ page }) => {
       // Live feedback on #38: eight metrics sent as primary showed only six.
       await page.setViewportSize({ width: geometry.width, height: geometry.height });
-      await page.goto('/?scene=architecture&chrome=0');
+      await openScene(page, 'architecture');
       await page.waitForSelector('[data-scene]');
 
       await page.evaluate(() => {
@@ -217,7 +218,7 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
   ]) {
     test(`a claim past the cluster cap never spills the cluster out of the main column (${geometry.name})`, async ({ page }) => {
       await page.setViewportSize({ width: geometry.width, height: geometry.height });
-      await page.goto('/?scene=architecture&chrome=0');
+      await openScene(page, 'architecture');
       await page.waitForSelector('[data-scene]');
 
       await page.evaluate(() => {

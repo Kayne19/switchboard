@@ -1,6 +1,7 @@
 import { expect, test, type Page, type TestInfo } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
 import { transcriptEntry } from '../fixtures/serverMessages';
+import { openScene } from './helpers';
 
 interface Box {
   x: number;
@@ -146,7 +147,7 @@ test('the shared content rail keeps one semantic surface order', async ({ page }
 // that read as one more panel edge), and it sits above the note.
 test('rail progress is headed by a rule, as the rail metrics are', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?scene=architecture&chrome=0');
+  await openScene(page, 'architecture');
   await page.evaluate(() => {
     const dispatch = window.SwitchboardController?.dispatch;
     if (!dispatch) throw new Error('controller unavailable');
@@ -180,7 +181,7 @@ test('rail progress is headed by a rule, as the rail metrics are', async ({ page
 
 test('rail metrics are headed by a rule in the content rail, with no header line and no rule under the last metric', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?scene=architecture&chrome=0');
+  await openScene(page, 'architecture');
   await page.evaluate(() => {
     const dispatch = window.SwitchboardController?.dispatch;
     if (!dispatch) throw new Error('controller unavailable');

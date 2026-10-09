@@ -222,6 +222,14 @@ test.describe("call runtime", () => {
   test("the presence records a push-to-talk clip and sends it on the socket", async ({
     page,
   }) => {
+    // Playwright's Linux WebKit is built without MediaRecorder; Safari on
+    // the iPad has it, and records audio/mp4 there. In that build this
+    // spec has nothing to drive, so the recording is checked on the device
+    // (docs/ipad.md, "Before a pin bump").
+    test.skip(
+      await page.evaluate(() => typeof MediaRecorder === "undefined"),
+      "this browser build has no MediaRecorder",
+    );
     const fixtureServer = new DisplayFixtureServer({ initialGeneration: 3 });
     const { wsUrl } = await fixtureServer.start();
     try {

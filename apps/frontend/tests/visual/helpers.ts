@@ -19,10 +19,20 @@ export const FRAME_GEOMETRIES = [
   { name: 'landscape-hd', width: 1280, height: 720 },
 ] as const;
 
-/** Opens a canonical fixture scene without the page chrome, and waits for the stage. */
+/** Opens a canonical fixture scene without the page chrome, and waits for the fixture. */
 export async function openScene(page: Page, scene: string): Promise<void> {
   await page.goto(`/?scene=${scene}&chrome=0`);
   await expect(page.locator('.stage')).toBeVisible();
+  // The stage is drawn on the first commit, before the effects that install
+  // the controller and load the fixture; the scene is open once the fixture
+  // is in the controller's state. Loading one dispatches `clear` first, so
+  // the revision leaves 0 for every fixture, `idle` included. Without this
+  // wait a spec read an empty state and sent its actions from nothing: in
+  // WebKit about one openScene call in three returned before the fixture
+  // was there (#187).
+  await expect
+    .poll(() => page.evaluate(() => window.SwitchboardController?.state().revision ?? 0))
+    .toBeGreaterThan(0);
 }
 
 /** Runs actions through the page's controller, in order, as an agent's display calls arrive. */
@@ -46,7 +56,8 @@ export async function runActions(page: Page, actions: unknown[]): Promise<void> 
  * shows of it, clipped by every box that clips it on the way up; it counts
  * when it draws something (text, a border, a fill or a shadow, an image, an
  * SVG shape), not when it is only a box around other parts (an SVG's own
- * margin, a padding). A box clipped to the frame's outline (the code
+ * margin, a padding) and not when it is a definition that shapes what is
+ * drawn (a clip path's own rect, a mask, a gradient). A box clipped to the frame's outline (the code
  * frame's mask, a child of the viewport the frame is drawn in) is the
  * frame's own inside, not a part. The frame's runs are checked where they
  * are drawn: a part that lies wholly in a gap of an interrupted rail is not
@@ -125,7 +136,11 @@ export function frameCrossings(selector: string): string[] {
     const role = object.closest('.focus-layer') ? 'focus' : object.closest('.composed-aux-object') ? 'aux' : 'primary';
     const worst = new Map<string, number>();
     for (const part of [object, ...object.querySelectorAll('*')]) {
-      if (part === owner || part.closest('svg.tech-frame') || part.getClientRects().length === 0) continue;
+      // A shape inside a definition (a clip path, a mask, a gradient) is
+      // never painted: it only shapes what is. WebKit gives those shapes
+      // client rects of their own, where Chromium gives none, so the
+      // chart's plot clip read as a drawn rect over its frame's top.
+      if (part === owner || part.closest('svg.tech-frame') || part.closest('defs, clipPath, mask, pattern, marker, symbol') || part.getClientRects().length === 0) continue;
       const style = getComputedStyle(part);
       // The code frame's mask (clipped to the outline) is the frame's own inside; any other clipped part is checked.
       if (style.visibility === 'hidden' || (part.parentElement === owner && style.clipPath !== 'none') || !drawn(part)) continue;

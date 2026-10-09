@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { GEOMETRIES } from './helpers';
+import { GEOMETRIES, openScene } from './helpers';
 
 // The pixel goldens: each canonical scene as the stage draws it, at the four
 // golden geometries, against the images in apps/frontend/reference/golden.
@@ -41,7 +41,7 @@ for (const geometry of GEOMETRIES) {
     test.use({ viewport: { width: geometry.width, height: geometry.height } });
     for (const scene of scenes) {
       test(`${scene} remains visually locked`, async ({ page }) => {
-        await page.goto(`/?scene=${scene}&chrome=0`);
+        await openScene(page, scene);
         await page.waitForSelector(`[data-scene="${scene === 'email' ? 'document' : scene}"]`, { state: 'visible' });
         await page.evaluate(() => document.body.classList.add('presentation-mode'));
         await expect(page.locator('.stage')).toHaveScreenshot(`${geometry.name}-${scene}.png`, {
@@ -55,7 +55,7 @@ for (const geometry of GEOMETRIES) {
     for (const [scene, drawnAs] of assistantScenes) {
       test(`${scene} remains visually locked`, async ({ page }) => {
         await page.clock.setFixedTime(CLOCK);
-        await page.goto(`/?scene=${scene}&chrome=0`);
+        await openScene(page, scene);
         await page.waitForSelector(`[data-scene="${drawnAs}"]`, { state: 'visible' });
         await page.evaluate(() => document.body.classList.add('presentation-mode'));
         await expect(page.locator('.stage')).toHaveScreenshot(`${geometry.name}-${scene}.png`, {
@@ -70,7 +70,7 @@ for (const geometry of GEOMETRIES) {
 
 test('primary metric remains visually locked', GOLDEN, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/?scene=architecture&chrome=0');
+  await openScene(page, 'architecture');
   await page.evaluate(() => {
     const dispatch = window.SwitchboardController?.dispatch;
     if (!dispatch) throw new Error('controller unavailable');
@@ -95,7 +95,7 @@ test('primary metric remains visually locked', GOLDEN, async ({ page }) => {
 for (const geometry of GEOMETRIES) {
   test(`composed scene / ${geometry.name}`, GOLDEN, async ({ page }) => {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
-    await page.goto('/?scene=architecture&chrome=0');
+    await openScene(page, 'architecture');
     await page.waitForSelector('[data-testid="diagram"]', { state: 'visible' });
     await page.evaluate(() => {
       const dispatch = window.SwitchboardController?.dispatch;

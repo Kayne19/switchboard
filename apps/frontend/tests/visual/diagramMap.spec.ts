@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { GEOMETRIES } from './helpers';
+import { GEOMETRIES, openScene } from './helpers';
 
 // A scrolled diagram's map stands in a strip of its own and covers no part
 // of the drawing, and focus keeps the note about the diagram. jsdom has no
@@ -15,7 +15,7 @@ for (const geometry of GEOMETRIES) {
     test.use({ viewport: { width: geometry.width, height: geometry.height } });
     for (const { scene, id } of scenes) {
       test(`${scene}: the map stays off the drawing, in the slot and in focus, and focus keeps the note`, async ({ page }) => {
-        await page.goto(`/?scene=${scene}&chrome=0`);
+        await openScene(page, scene);
         await expect(page.locator('.drawing-viewport').first()).toBeVisible();
         await page.waitForTimeout(400);
         const apart = () =>

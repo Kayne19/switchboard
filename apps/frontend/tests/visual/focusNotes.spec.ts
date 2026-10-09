@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { GEOMETRIES, runActions } from './helpers';
+import { GEOMETRIES, openScene, runActions } from './helpers';
 
 // Focus keeps the notes about any object (FocusLayer `focusNotes`): beside
 // it when the box is wide, under it when it is tall. jsdom has no layout,
@@ -32,7 +32,7 @@ for (const geometry of geometries) {
     test.use({ viewport: { width: geometry.width, height: geometry.height } });
     for (const { name, scene, focus, cards, actions } of cases) {
       test(`focus keeps ${name} on the screen, its TARGET lines whole`, async ({ page }) => {
-        await page.goto(`/?scene=${scene}&chrome=0`);
+        await openScene(page, scene);
         await expect(page.locator('.stage')).toBeVisible();
         await runActions(page, actions);
         await page.evaluate((target) => window.SwitchboardController?.dispatch({ op: 'focus', id: target }), focus);

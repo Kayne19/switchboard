@@ -2,11 +2,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// CI runs the browser specs, all but the pixel goldens. jsdom lays nothing
-// out, so a spec that measures a frame, a focus ring or the rail is the only
-// thing that sees a regression there, and before the browser job none of
-// them ran in CI. The goldens stay a local gate: they were drawn on the dev
-// box, and the runner's fonts raster differently.
+// CI runs the browser specs, all but the pixel goldens, in Chromium and in
+// WebKit. jsdom lays nothing out, so a spec that measures a frame, a focus
+// ring or the rail is the only thing that sees a regression there, and
+// before the browser job none of them ran in CI. The goldens stay a local
+// gate: they were drawn on the dev box, and the runner's fonts raster
+// differently.
 
 const root = path.resolve(import.meta.dirname, '../../../..');
 const read = (file: string) => readFileSync(path.join(root, file), 'utf8');
@@ -35,18 +36,35 @@ describe('the CI browser job', () => {
     expect(scripts['test:browser']).toBe(`${scripts['test:visual']} --grep-invert @golden`);
   });
 
-  it('installs Chromium from a cache keyed by the lockfile that pins it', () => {
+  it('installs each engine from a cache keyed by the engine and the lockfile that pins it', () => {
     const browser = job('browser');
     expect(browser).toMatch(/uses: actions\/cache@v\d+/);
     expect(browser).toContain('~/.cache/ms-playwright');
-    expect(browser).toContain("hashFiles('package-lock.json')");
-    expect(browser).toContain('playwright install --with-deps chromium');
+    expect(browser).toContain("playwright-${{ matrix.browser }}-${{ runner.os }}-${{ hashFiles('package-lock.json') }}");
+    expect(browser).toContain('playwright install --with-deps ${{ matrix.browser }}');
+  });
+
+  // The iPad is a first-class target, and every iPad browser is WebKit
+  // (docs/ipad.md): the specs and the production build run in it too.
+  it('runs every leg in Chromium and in WebKit, one engine per leg', () => {
+    const browser = job('browser');
+    expect(browser).toContain('browser: [chromium, webkit]');
+    expect(browser).toContain('--project=${{ matrix.browser }}');
+    for (const config of ['apps/frontend/playwright.config.ts', 'apps/frontend/playwright.production.config.ts']) {
+      const source = read(config);
+      expect(source, config).toContain("browserName: 'chromium'");
+      expect(source, config).toContain("browserName: 'webkit'");
+    }
   });
 });
 
 describe('the pixel goldens', () => {
   const dir = path.join(root, 'apps/frontend/tests/visual');
   const specs = readdirSync(dir).filter((file) => file.endsWith('.spec.ts'));
+
+  it('are Chromium\'s alone: the WebKit project leaves them out', () => {
+    expect(read('apps/frontend/playwright.config.ts')).toContain("{ name: 'webkit', use: { browserName: 'webkit' }, grepInvert: /@golden/ }");
+  });
 
   it('are taken in visual.spec.ts alone, so the tag there is what keeps them out of CI', () => {
     const taking = specs.filter((file) => /toHaveScreenshot|toMatchSnapshot/.test(readFileSync(path.join(dir, file), 'utf8')));

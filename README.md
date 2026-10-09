@@ -354,6 +354,7 @@ container, and the post-deploy checklist.
 | `docs/architecture.md` | ownership boundaries and the rules for where new behavior goes |
 | `docs/display-tool.md` | the `display` tool: payload, operations, layout, and composition |
 | `docs/hands-free.md` | hands-free lifecycle, asset provenance, and license obligations |
+| `docs/ipad.md` | the iPad (WebKit) as a first-class target: what CI checks in WebKit, what it cannot, engine-specific code, and the device checklist before a pin bump |
 
 ## The environment contract
 

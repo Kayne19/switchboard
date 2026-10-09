@@ -29,11 +29,25 @@ export default defineConfig({
     // nobody can rerun it by hand, the trace.
     screenshot: 'only-on-failure',
     trace: process.env.CI ? 'retain-on-failure' : 'off',
-    launchOptions: executablePath ? {
-      executablePath,
-      args: ['--no-sandbox', '--disable-dev-shm-usage'],
-    } : undefined,
   },
+  // Every spec runs in Chromium and in WebKit, the iPad's engine
+  // (docs/ipad.md); `--project=chromium` or `--project=webkit` runs one.
+  // The pixel goldens are Chromium's alone: they were drawn in it on the dev
+  // box, and WebKit rasters text and strokes its own way, so WebKit's layout
+  // is held by the geometry specs instead.
+  projects: [
+    {
+      name: 'chromium',
+      use: {
+        browserName: 'chromium',
+        launchOptions: executablePath ? {
+          executablePath,
+          args: ['--no-sandbox', '--disable-dev-shm-usage'],
+        } : undefined,
+      },
+    },
+    { name: 'webkit', use: { browserName: 'webkit' }, grepInvert: /@golden/ },
+  ],
   webServer: {
     // --strictPort: Vite would move to the next port when this one is taken,
     // and the suite would wait on the stranger still holding it.

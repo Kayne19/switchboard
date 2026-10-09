@@ -67,20 +67,32 @@ commit.
   one frame depth, one set of size caps, CPU-time budgets, live paths,
   routes and settings in the docs); a new rule of that kind gets a check
   there.
-- CI's `browser` job runs the Playwright specs in Chromium: `npm run
-  test:browser` (every spec in `apps/frontend/tests/visual` but the pixel
-  goldens, which are tagged `@golden`) and `npm run test:integration` (the
-  production build). It is a matrix of five legs, so one runner does not
-  take 45 minutes: `browser (1/4)` .. `browser (4/4)` each run a quarter of
-  `test:browser` (`-- --fully-parallel --shard=i/4`, still one worker, so
-  the timing checks stay valid), and `browser (integration)` runs
-  `test:integration` once. To rerun one leg's specs locally, pass it the
-  same flags. The goldens are drawn on the dev box and the runner's
+- CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
+  `npm run test:browser` (every spec in `apps/frontend/tests/visual` but
+  the pixel goldens, which are tagged `@golden`) and `npm run
+  test:integration` (the production build), each in the Playwright
+  projects `chromium` and `webkit`. It is a matrix of ten legs, so one
+  runner does not take 45 minutes: for each engine, `browser (chromium
+  1/4)` .. `browser (chromium 4/4)` each run a quarter of `test:browser`
+  (`-- --project=chromium --fully-parallel --shard=i/4`, still one worker,
+  so the timing checks stay valid), and `browser (chromium integration)`
+  runs `test:integration -- --project=chromium` once; the `webkit` legs
+  are the same. To rerun one leg's specs locally, pass it the same flags.
+  The goldens are Chromium's alone, drawn on the dev box, and the runner's
   fonts raster differently, so they stay a local gate: run `npm run
-  test:visual` before a change that moves pixels. The suite starts its own
-  server on port 4183 (`PLAYWRIGHT_PORT` moves it) and fails rather than
-  test a server it finds there. `master` requires only `test`; a red
-  `browser` is still a failure to fix, not to merge over.
+  test:visual -- --project=chromium` before a change that moves pixels.
+  The suite starts its own server on port 4183 (`PLAYWRIGHT_PORT` moves
+  it) and fails rather than test a server it finds there. `master`
+  requires only `test`; a red `browser` is still a failure to fix, not to
+  merge over.
+- The iPad (iPadOS Safari, WebKit) is a first-class target, not a "should
+  also work" one: a change that works in desktop Chromium and breaks there
+  is broken. A browser runtime change (audio, capture, playback, gestures)
+  says in its pull request what it does on WebKit. One implementation
+  serves both engines: no user-agent checks and no WebKit-only CSS. A
+  user-agent branch that cannot be avoided names the WebKit bug it works
+  around in a comment and is listed in `docs/ipad.md`, which also holds the
+  device checklist to run before a pin bump.
 - A `static/` or `static-debug/` merge conflict is resolved by rebuilding from the merged source
   (`npm ci && npm run build`), never by picking a side (see #37).
 - `master` requires a passing CI `test` check on an up-to-date head. If

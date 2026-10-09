@@ -1,9 +1,10 @@
 import { expect, test, type Page } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
 import { statusMessage, transcriptEntry } from '../fixtures/serverMessages';
+import { openScene } from './helpers';
 
 async function openController(page: Page) {
-  await page.goto('/?scene=architecture&chrome=0');
+  await openScene(page, 'architecture');
   await expect(page.locator('.stage')).toBeVisible();
 }
 
@@ -196,7 +197,7 @@ const chartNoteCases = ['', ' on a short chart'].flatMap((chart) =>
 for (const { chart, viewport } of chartNoteCases) {
   test(`every note on a chart shows over it without covering another${chart} at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=training&chrome=0');
+    await openScene(page, 'training');
     await expect(page.locator('.chart-note')).toHaveCount(1);
     const chartBox = async () => page.locator('.chart-object[data-chart-id="loss"] .chart-primitive > svg').evaluate((svg) => {
       const box = svg.getBoundingClientRect();
@@ -352,7 +353,7 @@ for (const { chart, viewport } of chartNoteCases) {
 for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 720 }, { width: 390, height: 844 }]) {
   test(`a note on a bar chart covers no bar at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=comparison&chrome=0');
+    await openScene(page, 'comparison');
     await expect(page.locator('.chart-note')).toHaveCount(1);
     await page.waitForTimeout(400);
     const geometry = await page.evaluate(() => {
@@ -394,7 +395,7 @@ const barNoteCases = [
 for (const { viewport, two } of barNoteCases) {
   test(`a note on a bar chart lies wholly in or out of the plot, its leader joining it to its bar${two ? ', two notes' : ''} at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto('/?scene=comparison&chrome=0');
+    await openScene(page, 'comparison');
     if (two) {
       await page.evaluate(() => {
         window.SwitchboardController!.dispatch({
@@ -545,7 +546,7 @@ for (const { chart, viewport } of pointNoteCases) {
   test(`a note on a ${chart} chart runs a fading leader onto the point it names, at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     const spec = pointNoteCharts[chart];
     await page.setViewportSize(viewport);
-    await page.goto(`/?scene=${chart === 'training' ? 'training' : 'comparison'}&chrome=0`);
+    await openScene(page, chart === 'training' ? 'training' : 'comparison');
     if (spec.actions.length > 0) await page.evaluate((actions) => window.SwitchboardController!.run(actions as never), spec.actions);
     // A note the chart hands over is in the rail, or where the rail stands
     // under the chart in the band under it (chartNotePlace.spec.ts).
@@ -644,7 +645,7 @@ const portraitCharts = ['training', 'comparison'].flatMap((scene) => [{ width: 3
 for (const { scene, viewport } of portraitCharts) {
   test(`a ${scene} chart in a portrait slot fills it, its text readable, at ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
-    await page.goto(`/?scene=${scene}&chrome=0`);
+    await openScene(page, scene);
     await expect(page.locator('[data-testid="chart"]')).toBeVisible();
     await page.waitForTimeout(500);
     const chart = await page.locator('[data-testid="chart"]').first().evaluate((element) => {
@@ -666,7 +667,7 @@ for (const { scene, viewport } of portraitCharts) {
 // frame follows its box now, so the box is a square to read in.
 test('a focused chart on a portrait phone gets a square to read in, its text readable', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/?scene=comparison&chrome=0');
+  await openScene(page, 'comparison');
   await page.evaluate(() => window.SwitchboardController!.dispatch({ op: 'focus', id: 'durations' }));
   const chart = page.locator('.focus-layer [data-testid="chart"]');
   await expect(chart).toBeVisible();
@@ -690,7 +691,7 @@ test('a focused chart on a portrait phone gets a square to read in, its text rea
 // and the bar it names stays marked.
 test('a note with no clear place on its bar chart is shown in the rail, its bar marked', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto('/?scene=comparison&chrome=0');
+  await openScene(page, 'comparison');
   await page.evaluate(() => {
     const run = window.SwitchboardController?.run;
     if (!run) throw new Error('controller unavailable');
