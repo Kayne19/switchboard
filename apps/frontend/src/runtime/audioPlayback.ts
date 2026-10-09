@@ -27,12 +27,20 @@ export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
  */
 export const INTER_UTTERANCE_GAP_MS = 0;
 /**
- * How long a clip the element accepted has to produce sound. `play()` can
- * resolve on an element that never advances -- the usual WebKit outcome for a
- * MediaSource it cannot play -- and nothing noticed: the call went on
- * "speaking" in silence for the rest of its life (#189).
+ * How long a sounding clip may go without its `currentTime` moving. `play()`
+ * can resolve on an element that never advances -- the usual WebKit outcome
+ * for a MediaSource it cannot play -- and nothing noticed: the call went on
+ * "speaking" in silence for the rest of its life (#189). A clip that did
+ * advance can stop partway just as quietly (a gap the engine will not play
+ * across, an audio session that took the output away), so the watch runs for
+ * the whole clip, not only its start (#213).
  */
 export const NO_PROGRESS_MS = 3000;
+/**
+ * How close to its duration a clip that stopped advancing counts as played
+ * out: one whose `ended` never came is finished, not stalled.
+ */
+const END_SLACK_S = 0.25;
 
 interface PlaybackOwner {
   blob: Blob;
@@ -63,8 +71,13 @@ interface MseUtterance {
   started: boolean;
   /** This utterance's level, decoded from its chunks as they arrive. */
   envelope: StreamingEnvelope | null;
-  endedHandler?: EventListener;
-  errorHandler?: EventListener;
+  /**
+   * Appends that landed since the progress watch last looked: an element
+   * waiting for bytes that are still arriving is not stalled.
+   */
+  freshAppends: number;
+  /** What this utterance put on the element, taken off by `mseDetach`. */
+  handlers: Array<[string, EventListener]>;
 }
 
 export interface AudioPlaybackOptions {
@@ -72,7 +85,6 @@ export interface AudioPlaybackOptions {
   player?: HTMLAudioElement;
   /** The status shown once nothing is left to play. */
   idleText: string;
-  /** `error` undefined leaves the current error flag as it is. */
   /** Every status says whether it is an error (`CallRuntime.setStatus`). */
   onStatus: (text: string, error: boolean) => void;
   /** Called whenever what is playing, or waiting to play, changes. */
@@ -157,23 +169,52 @@ export class AudioPlayback {
   }
 
   /**
-   * Calls `onStall` if the element has not advanced by the time the watch
-   * runs out. A clip that did advance has proved itself and is not watched
-   * again: a stall after sound was heard ends in `ended` or `error`.
+   * Watches the clip that owns the element for as long as it is meant to be
+   * sounding: every `stallMs` its `currentTime` has to have moved. One that
+   * has not is stalled, whether before its first sound (WebKit leaving a
+   * MediaSource it cannot play pending, #203) or partway (#213), and
+   * `onStall` is told which. `stillArriving` lets a stream hold the watch
+   * while its bytes are still landing. Every way a clip stops sounding --
+   * `ended`, `pause`, `error`, a fallback, a reset -- clears the watch.
    */
-  private watchProgress(onStall: () => void): void {
+  private watchProgress(
+    onStall: (heard: boolean) => void,
+    stillArriving?: () => boolean,
+  ): void {
     this.clearProgressWatch();
-    const player = this.player;
     const ms = this.options.stallMs ?? NO_PROGRESS_MS;
     if (ms <= 0) return;
-    const startedAt = Number.isFinite(player.currentTime)
-      ? player.currentTime
-      : 0;
-    this.progressTimer = setTimeout(() => {
+    let heard = false;
+    let last = this.position();
+    const check = () => {
       this.progressTimer = null;
-      const now = Number.isFinite(player.currentTime) ? player.currentTime : 0;
-      if (now <= startedAt) onStall();
-    }, ms);
+      const now = this.position();
+      const arriving = stillArriving?.() ?? false;
+      if (now > last) {
+        heard = true;
+        last = now;
+      } else if (!arriving) {
+        onStall(heard);
+        return;
+      }
+      this.progressTimer = setTimeout(check, ms);
+    };
+    this.progressTimer = setTimeout(check, ms);
+  }
+
+  private position(): number {
+    const time = this.player.currentTime;
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  /** The element stands at the end of what it was given. */
+  private playedOut(): boolean {
+    const duration = this.player.duration;
+    return (
+      Number.isFinite(duration) &&
+      duration > 0 &&
+      this.position() >= duration - END_SLACK_S
+    );
   }
 
   private clearProgressWatch(): void {
@@ -181,11 +222,27 @@ export class AudioPlayback {
     this.progressTimer = null;
   }
 
-  /** The text a silent clip is reported with. */
-  private silentText(): string {
+  /** The text a clip that stopped advancing is reported with. */
+  private silentText(heard: boolean): string {
     const ms = this.options.stallMs ?? NO_PROGRESS_MS;
-    return (
-      "Audio started but produced no sound (nothing played in " + ms + "ms)."
+    return heard
+      ? "Audio stopped partway and did not resume (nothing played for " +
+          ms +
+          "ms)."
+      : "Audio started but produced no sound (nothing played in " + ms + "ms).";
+  }
+
+  /**
+   * Something outside the page stopped the element: an iPad's audio session
+   * handed to another app or to the microphone, a lock-screen control. It is
+   * an error the caller has to act on, so it is reported as one.
+   */
+  private reportPaused(finishing: boolean): void {
+    this.options.onStatus(
+      finishing
+        ? "Audio finishing — tap or click anywhere on this page to continue."
+        : "Audio paused — tap or click anywhere on this page to resume.",
+      true,
     );
   }
 
@@ -393,12 +450,7 @@ export class AudioPlayback {
       owner.awaitingEnded = owner.seeked && this.terminalSeek();
       this.playing = false;
       this.notifyPlaybackChange();
-      this.options.onStatus(
-        owner.awaitingEnded
-          ? "Audio finishing — tap or click anywhere on this page to continue."
-          : "Audio paused — tap or click anywhere on this page to resume.",
-        false,
-      );
+      this.reportPaused(owner.awaitingEnded);
     };
     const error: EventListener = () => {
       if (this.playbackOwner !== owner || owner.consumed || !player.error)
@@ -472,6 +524,8 @@ export class AudioPlayback {
       // A stream's level is its own chunks, decoded as they arrive; a
       // replay's is the whole blob (`startEnvelopeMeter`).
       envelope: this.mseEnabled ? this.newStreamEnvelope() : null,
+      freshAppends: 0,
+      handlers: [],
     };
     this.msePending = utterance;
     if (this.mseEnabled) {
@@ -589,10 +643,13 @@ export class AudioPlayback {
     );
   }
 
-  /** The element took the clip, started, and played nothing. */
-  private replayStalled(owner: PlaybackOwner): void {
+  /**
+   * The element stopped advancing: before any sound, or partway. A clip
+   * standing at its end whose `ended` never came is simply over.
+   */
+  private replayStalled(owner: PlaybackOwner, heard: boolean): void {
     if (this.playbackOwner !== owner || owner.consumed) return;
-    this.options.onStatus(this.silentText(), true);
+    if (!this.playedOut()) this.options.onStatus(this.silentText(heard), true);
     this.consumeOwner(owner);
   }
 
@@ -613,7 +670,7 @@ export class AudioPlayback {
     // Armed on the attempt, for the same reason as the stream's: a `play()`
     // that never settles is a clip that produced no sound, and the caller
     // has to be told about it either way (#203).
-    this.watchProgress(() => this.replayStalled(owner));
+    this.watchProgress((heard) => this.replayStalled(owner, heard));
     let result: Promise<void>;
     try {
       result = this.player.play();
@@ -674,10 +731,19 @@ export class AudioPlayback {
     // The watch is armed on the attempt, not on `play()` resolving: a
     // WebKit element given a MediaSource of MP3 buffers it, never reaches
     // `canplay`, and leaves `play()` pending for good -- no sound, no
-    // rejection, nothing to notice (#203). A clip that does advance is left
-    // alone; one that does not says so and the whole replay follows.
-    this.watchProgress(() =>
-      this.mseFail(utterance, new Error("no playback progress")),
+    // rejection, nothing to notice (#203). It stays on until the stream ends:
+    // one that stops partway and never resumes is the same failure, and used
+    // to leave the call "speaking" with nothing sounding (#213). Either way
+    // it says so and the whole replay follows. An append that landed since
+    // the last look holds it: the element may be waiting for those bytes.
+    utterance.freshAppends = 0;
+    this.watchProgress(
+      (heard) => this.mseStalled(utterance, heard),
+      () => {
+        const fresh = utterance.freshAppends > 0;
+        utterance.freshAppends = 0;
+        return fresh;
+      },
     );
     Promise.resolve(this.player.play()).then(
       () => undefined,
@@ -732,12 +798,41 @@ export class AudioPlayback {
       const remove = () => {
         utterance.buffer?.removeEventListener("updateend", remove);
         utterance.queued.shift();
+        utterance.freshAppends += 1;
         this.mseAppend(utterance);
       };
       utterance.buffer.addEventListener("updateend", remove, { once: true });
     } catch (error) {
       this.mseFail(utterance, error);
     }
+  }
+
+  /** The stream stopped advancing; see `watchProgress`. */
+  private mseStalled(utterance: MseUtterance, heard: boolean): void {
+    if (this.mseActive !== utterance || utterance.failed) return;
+    // Every byte went in, the source was ended, and the element stands at
+    // its end: the stream played out and `ended` never came.
+    if (utterance.media?.readyState === "ended" && this.playedOut()) {
+      this.mseFinished(utterance);
+      return;
+    }
+    this.mseFail(
+      utterance,
+      new Error(heard ? "playback stalled" : "no playback progress"),
+    );
+  }
+
+  /** The stream played to its end; the next one, if any, follows. */
+  private mseFinished(utterance: MseUtterance): void {
+    if (this.mseActive !== utterance) return;
+    this.clearProgressWatch();
+    this.mseDetach(utterance);
+    this.mseActive = null;
+    this.stopEnvelopeMeter();
+    this.playing = false;
+    if (utterance.url) URL.revokeObjectURL(utterance.url);
+    if (this.mseQueue.length) this.afterGap(() => this.mseStartNext());
+    this.notifyPlaybackChange();
   }
 
   private mseFail(utterance: MseUtterance, error: unknown): void {
@@ -802,27 +897,42 @@ export class AudioPlayback {
     this.options.onUtterance?.(utterance.sequence);
     utterance.media = new MediaSource();
     utterance.url = URL.createObjectURL(utterance.media);
-    utterance.endedHandler = () => {
-      if (this.mseActive !== utterance) return;
-      this.mseDetach(utterance);
-      this.mseActive = null;
-      this.stopEnvelopeMeter();
-      this.playing = false;
-      this.notifyPlaybackChange();
-      if (utterance.url) URL.revokeObjectURL(utterance.url);
-      if (this.mseQueue.length) this.afterGap(() => this.mseStartNext());
-      this.notifyPlaybackChange();
-    };
-    player.addEventListener("ended", utterance.endedHandler);
+    const ended: EventListener = () => this.mseFinished(utterance);
     // The element can refuse what was appended -- a SourceBuffer WebKit
     // cannot parse sets a MediaError and stops. Without this the clip stayed
     // "playing" for the rest of the call: no sound, no fallback, no message
     // (#189).
-    utterance.errorHandler = () => {
+    const error: EventListener = () => {
       if (this.mseActive !== utterance || !player.error) return;
       this.mseFail(utterance, player.error);
     };
-    player.addEventListener("error", utterance.errorHandler);
+    // Something outside the page stopped the element partway (an iPad's
+    // audio session taken for the microphone, a lock-screen control). It is
+    // paused, not playing, and a tap resumes it, as with a replay; without
+    // this the call stayed "speaking" over silence (#213). The `pause` a
+    // clip fires as it reaches its end is not this.
+    const pause: EventListener = () => {
+      if (
+        this.mseActive !== utterance ||
+        utterance.failed ||
+        !this.playing ||
+        player.ended ||
+        player.paused === false
+      )
+        return;
+      this.clearProgressWatch();
+      this.stopMeter();
+      this.playing = false;
+      this.notifyPlaybackChange();
+      this.reportPaused(false);
+    };
+    utterance.handlers = [
+      ["ended", ended],
+      ["error", error],
+      ["pause", pause],
+    ];
+    for (const [name, handler] of utterance.handlers)
+      player.addEventListener(name, handler);
     utterance.media.addEventListener(
       "sourceopen",
       () => this.mseOpen(utterance),
@@ -840,10 +950,9 @@ export class AudioPlayback {
 
   /** Takes an utterance's element handlers back off the element. */
   private mseDetach(utterance: MseUtterance): void {
-    if (utterance.endedHandler)
-      this.player.removeEventListener("ended", utterance.endedHandler);
-    if (utterance.errorHandler)
-      this.player.removeEventListener("error", utterance.errorHandler);
+    for (const [name, handler] of utterance.handlers)
+      this.player.removeEventListener(name, handler);
+    utterance.handlers = [];
   }
 
   private clearMsePlayback(): void {

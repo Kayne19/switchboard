@@ -814,6 +814,194 @@ describe("AudioPlayback streaming", () => {
     }
   });
 
+  it("falls back when a stream that was sounding stops partway (#213)", async () => {
+    // The watch used to give up on a stream once it had advanced. One that
+    // then stopped -- a gap WebKit will not play across -- left the call
+    // "speaking" over silence for the rest of the utterance, and the
+    // "voice stream active" indicator up with it.
+    vi.useFakeTimers();
+    try {
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const { player, urls, playback } = streamingPlayback(
+        undefined,
+        statuses,
+        1000,
+      );
+      playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("partway"));
+      const source = urls.get(player.src) as FakeMediaSource;
+      source.buffer.emit("updateend");
+      playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+      await Promise.resolve();
+      player.currentTime += 0.5;
+      vi.advanceTimersByTime(1000);
+      expect(statuses, "it was sounding").toEqual([]);
+      expect(playback.isPlaying).toBe(true);
+
+      vi.advanceTimersByTime(1000);
+      expect(statuses).toEqual([
+        [
+          "Streaming audio failed; using the complete replay (playback stalled).",
+          true,
+        ],
+      ]);
+      expect(playback.streamingEnabled).toBe(false);
+      const replay = urls.get(player.src);
+      expect(replay instanceof Blob, "the whole replay follows").toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops speaking when a stream stalls before its last bytes arrive", async () => {
+    vi.useFakeTimers();
+    try {
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const { player, urls, playback } = streamingPlayback(
+        undefined,
+        statuses,
+        1000,
+      );
+      playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("half"));
+      (urls.get(player.src) as FakeMediaSource).buffer.emit("updateend");
+      await Promise.resolve();
+      player.currentTime += 0.5;
+      vi.advanceTimersByTime(2000);
+      expect(statuses.map(([text]) => text)).toEqual([
+        "Streaming audio failed; using the complete replay (playback stalled).",
+      ]);
+      expect(
+        playback.isPlaying,
+        "nothing is sounding, so the page does not say it is",
+      ).toBe(false);
+
+      playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+      expect(urls.get(player.src) instanceof Blob, "the replay follows").toBe(
+        true,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for a stream whose bytes are still landing", async () => {
+    // An element that has played everything it was given waits for the
+    // next append. That is not a stall while appends keep landing.
+    vi.useFakeTimers();
+    try {
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const { player, urls, playback } = streamingPlayback(
+        undefined,
+        statuses,
+        1000,
+      );
+      playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      const source = urls.get(player.src) as FakeMediaSource;
+      playback.receiveAudioChunk(bytes("slow"));
+      await Promise.resolve();
+      for (let window = 0; window < 4; window += 1) {
+        playback.receiveAudioChunk(bytes("more"));
+        source.buffer.emit("updateend");
+        vi.advanceTimersByTime(1000);
+      }
+      expect(statuses, "still arriving").toEqual([]);
+      expect(playback.isPlaying).toBe(true);
+      source.buffer.emit("updateend");
+      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(1000);
+      expect(statuses.map(([text]) => text)).toEqual([
+        "Streaming audio failed; using the complete replay (no playback progress).",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends a stream that played out without its ended event", async () => {
+    vi.useFakeTimers();
+    try {
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const { player, urls, playback } = streamingPlayback(
+        undefined,
+        statuses,
+        1000,
+      );
+      playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("whole"));
+      const first = urls.get(player.src) as FakeMediaSource;
+      first.buffer.emit("updateend");
+      playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+      expect(first.ended).toBe(true);
+      playback.receiveAudioStart({ generation: 0, sequence: 2, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("next"));
+      playback.receiveAudioDone({ generation: 0, sequence: 2, done: true });
+      await Promise.resolve();
+      player.currentTime = player.duration;
+      vi.advanceTimersByTime(2000);
+      expect(statuses, "a stream that played out is not a failure").toEqual([]);
+      expect(playback.streamingEnabled).toBe(true);
+      const second = urls.get(player.src);
+      expect(second, "the next one plays").toBeInstanceOf(FakeMediaSource);
+      expect(second).not.toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not blame a stream that ended for the next one's start", async () => {
+    // The watch outlived `ended`. When the next utterance took the element
+    // before its first bytes arrived, `currentTime` went back to 0 and the
+    // finished stream was reported as silent, turning streaming off.
+    vi.useFakeTimers();
+    try {
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const { player, urls, playback } = streamingPlayback(
+        undefined,
+        statuses,
+        1000,
+      );
+      playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("short"));
+      (urls.get(player.src) as FakeMediaSource).buffer.emit("updateend");
+      playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+      await Promise.resolve();
+      player.currentTime = 1.4;
+      player.ended = true;
+      player.emit("ended");
+      playback.receiveAudioStart({ generation: 0, sequence: 2, mime: "audio/mpeg" });
+      player.currentTime = 0;
+      vi.advanceTimersByTime(1000);
+      expect(statuses).toEqual([]);
+      expect(playback.streamingEnabled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says a stream an outside pause stopped needs a tap, and resumes on one", async () => {
+    // An iPad hands its audio session to the microphone or another app and
+    // the element pauses. The stream used to stay "playing": no message, no
+    // way back, the indicator up over silence (#213).
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const { player, playback } = streamingPlayback(undefined, statuses);
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("interrupted"));
+    await Promise.resolve();
+    expect(playback.isPlaying).toBe(true);
+
+    player.paused = true;
+    player.emit("pause");
+    expect(playback.isPlaying, "a paused stream is not speaking").toBe(false);
+    expect(statuses).toEqual([
+      ["Audio paused — tap or click anywhere on this page to resume.", true],
+    ]);
+
+    playback.handleGesture(null);
+    expect(player.playCalls.length, "a tap plays it again").toBe(2);
+    expect(playback.isPlaying).toBe(true);
+  });
+
   it("ignores audio stamped with another generation", () => {
     const { player, urls, playback } = streamingPlayback();
     playback.resetForGeneration(4);
@@ -969,13 +1157,74 @@ describe("AudioPlayback silent playback", () => {
       playback.playNext();
       player.playPromises[0].resolve();
       await Promise.resolve();
-      player.currentTime += 0.5;
-      vi.advanceTimersByTime(2000);
+      for (let window = 0; window < 5; window += 1) {
+        player.currentTime += 0.5;
+        vi.advanceTimersByTime(1000);
+      }
       expect(statuses).toEqual([]);
       expect(playback.isPlaying).toBe(true);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reports a replay that stops partway and never resumes (#213)", async () => {
+    // A clip that advanced used to be left alone for good: if it then
+    // stopped, with no `ended` and no `error`, the call stayed "speaking"
+    // over silence.
+    vi.useFakeTimers();
+    try {
+      const player = fakePlayer();
+      stubObjectUrls();
+      const statuses: Array<[string, boolean | undefined]> = [];
+      const playback = new AudioPlayback({
+        player: player as unknown as HTMLAudioElement,
+        idleText: "idle",
+        onStatus: (text, error) => statuses.push([text, error]),
+        onChange: () => {},
+        gapMs: 0,
+        stallMs: 1000,
+      });
+      playback.audioQueue.push(new Blob(["cut off"]));
+      playback.playNext();
+      player.playPromises[0].resolve();
+      await Promise.resolve();
+      player.currentTime += 0.5;
+      vi.advanceTimersByTime(1000);
+      expect(statuses, "it was sounding").toEqual([]);
+
+      vi.advanceTimersByTime(1000);
+      expect(statuses[0]).toEqual([
+        "Audio stopped partway and did not resume (nothing played for 1000ms).",
+        true,
+      ]);
+      expect(playback.isPlaying, "and it stops speaking").toBe(false);
+      expect(playback.isDrained()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says a paused replay needs a tap, as an error the caller sees", async () => {
+    const player = fakePlayer();
+    stubObjectUrls();
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: (text, error) => statuses.push([text, error]),
+      onChange: () => {},
+      gapMs: 0,
+    });
+    playback.audioQueue.push(new Blob(["interrupted"]));
+    playback.playNext();
+    player.playPromises[0].resolve();
+    await Promise.resolve();
+    player.paused = true;
+    player.emit("pause");
+    expect(statuses).toEqual([
+      ["Audio paused — tap or click anywhere on this page to resume.", true],
+    ]);
   });
 });
 
