@@ -19,6 +19,33 @@ async fn delivery_registration_captures_live_events_for_snapshot_barrier() {
     assert!(!delivery.connected());
 }
 
+#[tokio::test]
+async fn a_connection_a_full_queue_behind_is_dropped_and_told_so() {
+    let delivery = DeliveryState::new();
+    let mut lagging = delivery.register();
+    let mut keeping_up = delivery.register();
+    for n in 0..DELIVERY_QUEUE {
+        assert!(delivery.publish(Event::Json(json!({"n": n}))));
+        assert!(keeping_up.receiver.try_recv().is_ok());
+    }
+    assert!(lagging.dropped.try_recv().is_err());
+    assert!(delivery.publish(Event::Json(json!({"n": DELIVERY_QUEUE}))));
+    assert!(keeping_up.receiver.try_recv().is_ok());
+    assert!(
+        matches!(
+            lagging.dropped.try_recv(),
+            Err(oneshot::error::TryRecvError::Closed)
+        ),
+        "the lagging connection is told it was dropped"
+    );
+    assert!(matches!(
+        keeping_up.dropped.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    delivery.retire(keeping_up.epoch);
+    assert!(!delivery.connected());
+}
+
 #[test]
 fn audio_queue_emits_reserved_sequences_in_order_and_drops_on_clear() {
     let mut queue = AudioQueue::new();

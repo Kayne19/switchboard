@@ -14,7 +14,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone, Debug)]
 pub(crate) enum Event {
@@ -43,7 +43,14 @@ pub(crate) struct DeliveryState {
     next_epoch: Arc<AtomicU64>,
     next_sequence: Arc<AtomicU64>,
     active_epoch: Arc<AtomicU64>,
-    connections: Arc<std::sync::Mutex<HashMap<u64, mpsc::Sender<DeliveryFrame>>>>,
+    connections: Arc<std::sync::Mutex<HashMap<u64, Peer>>>,
+}
+
+/// A registered connection as the table holds it. Dropping it closes the
+/// queue and resolves the connection's `dropped` signal.
+struct Peer {
+    sender: mpsc::Sender<DeliveryFrame>,
+    _dropped: oneshot::Sender<()>,
 }
 
 #[derive(Debug)]
@@ -55,6 +62,10 @@ pub(crate) enum DeliveryFrame {
 pub(crate) struct DeliveryConnection {
     pub(crate) epoch: u64,
     pub(crate) receiver: mpsc::Receiver<DeliveryFrame>,
+    /// Resolves when the table lets the connection go. `browser.rs` closes
+    /// the socket on it at once: a writer still sending what was queued
+    /// before would hold a lagging page on a stream with a hole in it.
+    pub(crate) dropped: oneshot::Receiver<()>,
 }
 
 impl DeliveryState {
@@ -71,7 +82,7 @@ impl DeliveryState {
     /// callback, so a panic cannot leave it half-updated; like every other
     /// lock in the service, a poisoned one is recovered rather than allowed to
     /// take every later delivery down with it.
-    fn connections(&self) -> std::sync::MutexGuard<'_, HashMap<u64, mpsc::Sender<DeliveryFrame>>> {
+    fn connections(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Peer>> {
         self.connections
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -81,8 +92,19 @@ impl DeliveryState {
         let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed);
         self.active_epoch.store(epoch, Ordering::Relaxed);
         let (sender, receiver) = mpsc::channel(DELIVERY_QUEUE);
-        self.connections().insert(epoch, sender);
-        DeliveryConnection { epoch, receiver }
+        let (dropped_sender, dropped) = oneshot::channel();
+        self.connections().insert(
+            epoch,
+            Peer {
+                sender,
+                _dropped: dropped_sender,
+            },
+        );
+        DeliveryConnection {
+            epoch,
+            receiver,
+            dropped,
+        }
     }
 
     pub(crate) fn retire(&self, epoch: u64) {
@@ -101,26 +123,44 @@ impl DeliveryState {
         }
     }
 
+    /// Queues `event` for every connection. A connection whose queue is full
+    /// has fallen `DELIVERY_QUEUE` frames behind and has lost this event, so
+    /// it is dropped, which closes its socket (see `DeliveryConnection`); the
+    /// page reconnects and gets a whole snapshot. One whose queue is closed
+    /// has already gone and is only removed.
     pub(crate) fn publish_sequenced(&self, event: Event) -> (bool, u64) {
         let sequence = self.next_sequence.fetch_add(1, Ordering::Relaxed);
         let mut delivered = false;
-        let mut dead = Vec::new();
+        let mut lagging = Vec::new();
+        let mut gone = Vec::new();
         let connections = self.connections();
-        for (&epoch, sender) in connections.iter() {
-            match sender.try_send(DeliveryFrame::Event {
+        for (&epoch, peer) in connections.iter() {
+            match peer.sender.try_send(DeliveryFrame::Event {
                 sequence,
                 event: event.clone(),
             }) {
                 Ok(()) => delivered = true,
-                Err(_) => dead.push(epoch),
+                Err(mpsc::error::TrySendError::Full(_)) => lagging.push(epoch),
+                Err(mpsc::error::TrySendError::Closed(_)) => gone.push(epoch),
             }
         }
         drop(connections);
-        if !dead.is_empty() {
+        if !lagging.is_empty() || !gone.is_empty() {
             let mut connections = self.connections();
-            for epoch in dead {
+            for &epoch in lagging.iter().chain(&gone) {
                 connections.remove(&epoch);
             }
+        }
+        for connection in lagging {
+            tracing::warn!(
+                connection,
+                sequence,
+                queue = DELIVERY_QUEUE,
+                "a browser connection fell a full queue behind; closing it"
+            );
+        }
+        for connection in gone {
+            tracing::debug!(connection, "removed a closed browser connection");
         }
         (delivered, sequence)
     }
@@ -130,9 +170,11 @@ impl DeliveryState {
     }
 
     pub(crate) fn send(&self, epoch: u64, message: Message) -> bool {
-        self.connections()
-            .get(&epoch)
-            .is_some_and(|sender| sender.try_send(DeliveryFrame::Message(message)).is_ok())
+        self.connections().get(&epoch).is_some_and(|peer| {
+            peer.sender
+                .try_send(DeliveryFrame::Message(message))
+                .is_ok()
+        })
     }
 
     pub(crate) fn connected(&self) -> bool {

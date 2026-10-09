@@ -631,11 +631,13 @@ async fn a_clip_is_its_header_and_the_audio_frame_after_it() {
 }
 
 #[tokio::test]
-async fn a_connection_that_falls_a_queue_behind_is_dropped_and_a_reconnect_is_whole_again() {
+async fn a_connection_that_falls_a_queue_behind_is_closed_at_once_and_a_reconnect_is_whole_again() {
     // Each connection has a bounded queue. A browser that stops draining it
-    // is retired rather than waited on, so it cannot stall the call; it
-    // loses the events past the bound and recovers them by reconnecting,
-    // which delivers a fresh snapshot.
+    // is retired rather than waited on, so it cannot stall the call. It has
+    // lost the events past the bound, so its socket is closed at once rather
+    // than left to drain what was queued before the hole (an audio stream
+    // without its end); it recovers by reconnecting, which delivers a fresh
+    // snapshot.
     let state = state();
     state
         .0
@@ -667,22 +669,27 @@ async fn a_connection_that_falls_a_queue_behind_is_dropped_and_a_reconnect_is_wh
         !state.0.delivery.connected(),
         "the lagging socket is retired"
     );
-    drop(transcript);
 
-    // It still gets its snapshot and what it had queued, then the socket
-    // closes.
-    let frames = json_until(&mut lagging, "history").await;
-    assert_eq!(types_of(&frames), ["epoch", "status", "history"]);
-    for n in 0..DELIVERY_QUEUE {
-        assert_eq!(next_json(&mut lagging).await["n"], n);
-    }
-    let end = timeout(Duration::from_secs(5), lagging.next())
-        .await
-        .expect("the retired socket closes");
+    // The socket closes while its writer is still stuck on the snapshot, and
+    // none of what was queued reaches the page.
+    let end = timeout(Duration::from_secs(5), async {
+        loop {
+            match lagging.next().await {
+                Some(Ok(Wire::Text(text))) => {
+                    let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+                    assert_ne!(frame["type"], "probe", "{frame}");
+                }
+                end => return end,
+            }
+        }
+    })
+    .await
+    .expect("the lagging socket closes at once");
     assert!(
         matches!(end, None | Some(Err(_)) | Some(Ok(Wire::Close(_)))),
         "{end:?}"
     );
+    drop(transcript);
 
     let mut browser = served.connect().await;
     let frames = json_until(&mut browser, "history").await;
