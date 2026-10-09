@@ -30,8 +30,9 @@ const said = (count: number): SpokenLine[] =>
   Array.from({ length: count }, (_, index) => ({ id: index, text: `Line ${index + 1}.` }));
 
 // jsdom lays nothing out. Here each line is `height(line)` tall (40px unless
-// a test says otherwise), the log's window is 100px, and the blank space the
-// log keeps under its newest section is one window tall (#178).
+// a test says otherwise), the log's window is 100px, and the newest section
+// of a log is at least one window tall, as the stylesheet makes it (#178,
+// #213): `.spoken-log-box .spoken-log__line--current`.
 let height: (line: Element) => number = () => 40;
 const WINDOW_PX = 100;
 
@@ -45,8 +46,11 @@ function layOut() {
     return scroller(this) === this ? WINDOW_PX : 0;
   });
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
-    const lines = linesOf(this).reduce((total, line) => total + height(line), 0);
-    return lines + (this.querySelector('.spoken-log__space') ? WINDOW_PX : 0);
+    const box = this.classList.contains('spoken-log-box');
+    return linesOf(this).reduce((total, line) => {
+      const newest = box && line.classList.contains('spoken-log__line--current');
+      return total + (newest ? Math.max(WINDOW_PX, height(line)) : height(line));
+    }, 0);
   });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     const log = scroller(this);
@@ -92,27 +96,27 @@ describe('SpokenLog', () => {
   it('rests with the newest section at the top of the box while sections arrive', () => {
     const log = render(said(3));
     render(said(4));
-    // Four 40px sections: the fourth starts at 120, and the blank space
-    // below it is what lets it rest there.
+    // Four 40px sections: the fourth starts at 120, and its being a box
+    // tall is what lets it rest there.
     expect(log.scrollTop).toBe(120);
     render(said(5));
     expect(log.scrollTop).toBe(160);
   });
 
-  it('keeps a box of blank space under the newest section, outside the log', () => {
+  // #213: the blank space under the newest section is the section's own (the
+  // stylesheet's least height for it in a `spoken-log-box`), not a box-tall
+  // spacer after it, which let the caller scroll a whole box past its end.
+  it('ends the log at its newest section: there is nothing after it to scroll to', () => {
     const log = render(said(2));
-    const space = log.querySelector('.spoken-log__space')!;
-    expect(space).not.toBeNull();
-    expect(space.getAttribute('aria-hidden')).toBe('true');
-    // It is the box's own space, not a line of the log read out to a caller.
-    expect(log.querySelector('[role="log"]')!.contains(space)).toBe(false);
     expect(log.classList.contains('spoken-log-box')).toBe(true);
+    expect(log.lastElementChild!.querySelector('[aria-current="true"]')).not.toBeNull();
+    expect(log.querySelector('[role="log"]')!.lastElementChild!.getAttribute('aria-current')).toBe('true');
+    expect(log.querySelector('[aria-hidden="true"]')).toBeNull();
   });
 
   it('keeps no blank space under a message that is not a log', () => {
     rerender(host, <SpokenLog message={{ segments: [{ text: 'An agent message.' }] }} className="log" />);
     const log = host.querySelector<HTMLElement>('[data-testid="spoken-log"]')!;
-    expect(log.querySelector('.spoken-log__space')).toBeNull();
     expect(log.classList.contains('spoken-log-box')).toBe(false);
   });
 

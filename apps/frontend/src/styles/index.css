@@ -587,10 +587,16 @@ button {
 .spoken-log .rich-text__code-block {
   font-size: 1em;
 }
-/* The blank space under the newest section, a box tall, so that section can
-   rest at the top of the box with nothing drawn below it (#178). */
-.spoken-log__space {
-  height: 100%;
+/* The newest section is at least a box tall, so it can rest at the top of
+   the box with nothing drawn below it (#178), and the log ends where its
+   words do: a blank box under it, whatever its height, let the caller
+   scroll a whole box of black past its last words (#213). The box is the
+   size container its height is read from. */
+.spoken-log-box {
+  container-type: size;
+}
+.spoken-log-box .spoken-log__line--current {
+  min-height: 100cqh;
 }
 /* A log is read from its newest section down, so the box lays its text from
    the top; a message that is not a log stays centred in it. */

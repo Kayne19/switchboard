@@ -7,9 +7,10 @@ const PIN_SLACK_PX = 8;
 /**
  * Where a pinned log rests: at the start of the section being heard, so that
  * section sits at the top of the window and the caller reads it from the
- * words they are hearing (#178). The blank space the log keeps under its
- * newest section is what lets that start reach the top; a log without it
- * rests at the bottom. The section is the element marked
+ * words they are hearing (#178). The newest section is at least a box tall
+ * (`.spoken-log-box` in the stylesheet), which is what lets that start reach
+ * the top; where it is shorter than that, as in a log the stylesheet does not
+ * size, the log rests at the bottom. The section is the element marked
  * `aria-current="true"`.
  */
 function pinTop(element: HTMLElement): number {

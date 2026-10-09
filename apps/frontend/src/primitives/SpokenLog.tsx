@@ -13,7 +13,9 @@ interface SpokenLogProps {
 /**
  * The live response's text: the recent sections the caller heard as a log,
  * the newest resting at the top of the box with blank space below it, and
- * the earlier ones above it to scroll back to (#113, #178). It is the card's
+ * the earlier ones above it to scroll back to (#113, #178). The blank space
+ * is the newest section's own: the stylesheet makes it at least a box tall
+ * (`spoken-log-box`), so the log ends where its words do (#213). It is the card's
  * own text area, not a second card. A message without lines shows its
  * segments as before, read from the top.
  */
@@ -47,9 +49,6 @@ export function SpokenLog({ message, className, innerClassName }: SpokenLogProps
       data-testid="spoken-log"
     >
       {innerClassName ? <div className={innerClassName}>{body}</div> : body}
-      {/* The blank space under the newest section, a box tall, that lets it
-          rest at the top of the box (#178). It is not log content. */}
-      {isLog ? <div className="spoken-log__space" aria-hidden="true" /> : null}
     </div>
   );
 }
