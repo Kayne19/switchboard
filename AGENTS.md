@@ -101,7 +101,9 @@ commit.
   pushed by the Copilot agent gets no CI jobs until a maintainer approves its
   workflow runs on the pull request. An unapproved run has zero jobs and can
   end as a failure that GitHub blames on the workflow file; it is not (see
-  #35). Approve it, or push the head yourself.
+  #35). Approve it, or push the head yourself. CI runs on a pull request and
+  on a push to `master`, not on a push to any other branch: open a pull
+  request (a draft will do) to get a run.
 - Rust tests live in `apps/backend/tests/`, each compiled as the `#[cfg(test)]`
   module of the source file it covers; browser, display, and operator
   extension tests live in `apps/frontend/tests/`; skill module tests live in

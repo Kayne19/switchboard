@@ -1,7 +1,13 @@
 name: CI
 
+# A pull request is tested by its pull_request run, which tests the merge
+# with master; its `test` check is the one master requires. A push to a pull
+# request's branch starts no second run of the same head: that run added no
+# signal, doubled the jobs each update queued, and gave a flaky browser leg a
+# second chance to fail. A branch pushed without a pull request gets no CI.
 on:
   push:
+    branches: [master]
   pull_request:
 
 permissions:
