@@ -215,9 +215,24 @@ for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set(["
 	scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
 }
 
+// 13. The runtime's ID namespace is one prefix, RUNTIME_ID_PREFIX
+//     (apps/frontend/src/controller/types.ts). The reducer routes an ID with
+//     it to runtime state and the validator refuses it from an agent; a
+//     second copy of the literal lets the two drift, and an agent ID then
+//     writes into the runtime's objects.
+{
+	const copies = [];
+	for (const file of files(path.join(root, "apps/frontend/src"), new Set([".ts", ".tsx"]))) {
+		lines(file).forEach((line, index) => {
+			if (/['"`]__runtime\//.test(line)) copies.push(`${rel(file)}:${index + 1}`);
+		});
+	}
+	if (copies.length !== 1) findings.push(`the '__runtime/' prefix is written ${copies.length} times (${copies.join(", ")}); import RUNTIME_ID_PREFIX from controller/types.ts`);
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, one runtime ID prefix");
