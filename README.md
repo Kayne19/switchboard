@@ -223,16 +223,28 @@ leg is live; its written reply remains in the transcript and on screen.
 
 ## Connecting without the operator
 
-`POST /connect` (`{"project": "..."}`, or `"operator"` to come back) puts the
-caller straight onto a project from the page. The operator is a router, not a
-gate: when the caller already knows where they want to be, saying it out loud
-and waiting to be understood is pure overhead. Any live leg is dropped first,
-without the turn lock, for the same reason `/hangup` does not take it.
+`POST /connect` (`{"project": "...", "generation": N}`, or `"operator"` to
+come back) puts the caller straight onto a project from the page. The operator
+is a router, not a gate: when the caller already knows where they want to be,
+saying it out loud and waiting to be understood is pure overhead. Any live leg
+is dropped first, without the turn lock, for the same reason `/hangup` does not
+take it.
+
+Every page control (`/connect`, `/model`, `/thinking`, `/hangup`) carries
+`generation`: the epoch the page held when the caller acted, not when the
+request went out. It acts only on that leg. One the call has moved on from
+-- a request queued behind a slow one while the operator transferred the
+call, a stale second tab -- is answered 409 and changes nothing; one with no
+`generation` is answered 400. A picker's answer says it was "refused" (it
+would have started something); a hangup's says it was "ignored" (it would
+have ended something), and the page shows either as a line error, so the
+caller can press again on the line they now see. The service never fills in
+the current generation for a control that left it out (#263).
 
 ## Getting unstuck
 
-`POST /hangup`, wired to the button on the page, drops the project leg and puts
-the caller back on the operator. Every other way back runs through an agent
+`POST /hangup` (`{"generation": N}`), wired to the button on the page, drops
+the project leg and puts the caller back on the operator. Every other way back runs through an agent
 deciding to let go, which is no use when the agent is the problem — a leg on a
 model that cannot hold a thread, a turn that will not settle. So this one asks
 nobody, and deliberately does not take the turn lock: a rescue that waits for
