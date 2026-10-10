@@ -239,9 +239,14 @@ async fn apply_screen_state(
     let pinned = command.pinned.unwrap_or(false);
     let has_visual = command.has_visual.unwrap_or(false);
     let stale = command.stale.unwrap_or(false);
-    let report_gen = command
-        .generation
-        .unwrap_or_else(|| state.0.coordinator.generation());
+    // A report without a generation is ignored, never taken as one on the
+    // call current when it arrives: it confirms display seqs and replaces the
+    // screen `view` reads, so a page that has not seen a transfer would act on
+    // a call it never rendered (`AGENTS.md`, the browser command rule).
+    let Some(report_gen) = command.generation else {
+        tracing::warn!("a screen_state without a generation was ignored");
+        return Ok(());
+    };
 
     let current_gen = state.0.coordinator.generation();
     let active_ep = state.0.delivery.active_epoch();
@@ -423,12 +428,14 @@ pub(crate) async fn handle_text_frame(
             mime,
             generation,
         } => {
-            let Some(header) = parse_clip_header(id, mime, generation) else {
-                pending_header.take();
-                return send_message(state, epoch, ServerMessage::error("Invalid clip id.")).await;
-            };
-            *pending_header = Some(header);
-            Ok(())
+            pending_header.take();
+            match parse_clip_header(id, mime, generation) {
+                Ok(header) => {
+                    *pending_header = Some(header);
+                    Ok(())
+                }
+                Err(refusal) => send_message(state, epoch, *refusal).await,
+            }
         }
     }
 }

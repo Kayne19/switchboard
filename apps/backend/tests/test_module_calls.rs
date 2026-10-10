@@ -35,6 +35,7 @@ async fn browser_screen_state_is_available_to_the_agent_view_tool() {
             "visual_kind": "document",
             "title": "Authentication changes",
             "stale": false,
+            "generation": state.0.coordinator.generation(),
         })
         .to_string(),
     )
@@ -83,7 +84,8 @@ async fn view_reports_requested_diagram_as_unconfirmed_until_the_browser_acks() 
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"auto","has_visual":true,
-               "visual_kind":"diagram","applied_seq":sequence})
+               "visual_kind":"diagram","applied_seq":sequence,
+               "generation":state.0.coordinator.generation()})
         .to_string(),
     )
     .await
@@ -901,7 +903,8 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"auto","has_visual":true,
-               "visual_kind":"diagram","applied_seq":sequence})
+               "visual_kind":"diagram","applied_seq":sequence,
+               "generation":state.0.coordinator.generation()})
         .to_string(),
     )
     .await
@@ -949,7 +952,8 @@ async fn display_reports_rejection_from_the_browser() {
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"auto","has_visual":false,
-               "rejected":{"seq":sequence,"reason":"unsupported node shape"}})
+               "rejected":{"seq":sequence,"reason":"unsupported node shape"},
+               "generation":state.0.coordinator.generation()})
         .to_string(),
     )
     .await

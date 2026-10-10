@@ -359,12 +359,14 @@ pub(crate) fn emit_stale_clip(state: &AppState, id: &str) {
 /// A clip header: its id, its mime type, and the turn epoch the browser held
 /// when it began recording.
 ///
-/// The epoch is optional because a browser that predates it must keep working;
-/// such a clip falls back to being stamped on arrival, which is what every
-/// client did before. A value the browser cannot have learned yet simply fails
-/// the equality check later and the clip is dropped, so a wrong number can only
-/// discard speech, never route it somewhere it does not belong.
-pub(crate) type ClipHeader = (String, String, Option<u64>);
+/// The epoch is required, as it is for a typed turn and a streaming clip:
+/// every page that sends a clip stamps it, and a clip without one could not be
+/// checked against a transfer that landed between recording and upload. It is
+/// never stamped on arrival instead (`AGENTS.md`, the browser command rule). A
+/// value the browser cannot have learned yet simply fails the equality check
+/// later and the clip is dropped, so a wrong number can only discard speech,
+/// never route it somewhere it does not belong.
+pub(crate) type ClipHeader = (String, String, u64);
 pub(crate) type StreamChunkHeader = (String, u64, u64);
 
 /// The longest clip id a page may send. One rule for every command that names
@@ -376,14 +378,27 @@ pub(crate) fn is_clip_id(id: &str) -> bool {
     !id.is_empty() && id.chars().count() <= MAX_CLIP_ID_CHARS
 }
 
+/// A clip header, or the error that refuses it: one with no usable id is
+/// refused without an id, one with an id but no generation is refused by that
+/// id. A refused header leaves none pending, so the audio frame after it
+/// arrives without a header and is answered as such, as after a refused
+/// `stt_chunk`.
 pub(crate) fn parse_clip_header(
     id: Option<String>,
     mime: Option<String>,
     generation: Option<u64>,
-) -> Option<ClipHeader> {
-    let id = id.filter(|id| is_clip_id(id))?;
+) -> Result<ClipHeader, Box<ServerMessage>> {
+    let Some(id) = id.filter(|id| is_clip_id(id)) else {
+        return Err(Box::new(ServerMessage::error("Invalid clip id.")));
+    };
+    let Some(generation) = generation else {
+        return Err(Box::new(ServerMessage::error_for(
+            id,
+            "Clip has no generation.",
+        )));
+    };
     let mime = mime.unwrap_or_default().chars().take(100).collect();
-    Some((id, mime, generation))
+    Ok((id, mime, generation))
 }
 
 /// The longest turn a caller may type, the same bound `/speak` puts on text.
@@ -391,10 +406,9 @@ pub(crate) const MAX_TYPED_TURN_CHARS: usize = 16 * 1024;
 
 /// A turn the caller typed: `(id, generation, text)`.
 ///
-/// Unlike a clip header, the generation is required. Every browser that can
-/// send a typed turn also stamps its epoch, so there is no older client to
-/// fall back for, and a turn without one could not be checked against a
-/// transfer that landed after the caller sent it.
+/// The generation is required, as it is for a clip header. Every browser that
+/// can send a typed turn also stamps its epoch, and a turn without one could
+/// not be checked against a transfer that landed after the caller sent it.
 pub(crate) fn parse_typed_turn(
     id: Option<&str>,
     generation: Option<u64>,
@@ -774,9 +788,8 @@ pub(crate) async fn handle_audio_frame(
                 _mime: mime,
                 // The browser's stamp is taken when recording starts, which is
                 // earlier than anything this side can observe and therefore
-                // closes the upload window too. Arrival time is the fallback
-                // for clients that do not send one.
-                generation: generation.unwrap_or_else(|| state.0.coordinator.generation()),
+                // closes the upload window too.
+                generation,
                 connection: tracing::Span::current(),
             })
             .await

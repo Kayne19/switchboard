@@ -170,11 +170,15 @@ The browser reports the state it actually rendered over the existing WebSocket:
   "has_visual": true,
   "visual_kind": "diff",
   "title": "Authentication changes",
-  "stale": false
+  "stale": false,
+  "generation": 3
 }
 ```
 
-The backend stores the latest report. The agent's `view` (in the
+The backend stores the latest report. A report carries the leg generation the
+page rendered under; one without it is ignored, and one from another
+generation is dropped, so a page that has not seen a transfer cannot describe
+the new leg's screen. The agent's `view` (in the
 `switchboard` skill module) has two forms:
 
 - `view(target)` requests a composition change to one of the five views.

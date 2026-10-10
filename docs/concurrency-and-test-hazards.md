@@ -67,9 +67,9 @@ arrival and look current. So the server announces the epoch — as an
 `{"type":"epoch"}` event whenever `cancel_active_operations` bumps it, and in the
 WebSocket snapshot so a reconnecting tab is not left holding a retired value —
 and the browser stamps each clip with whatever it held when *recording started*.
-`clipHeader` in `apps/frontend/src/protocol.ts` puts it on the wire; the server prefers it and
-falls back to arrival time for a client that sends none, so an older tab keeps
-working exactly as before.
+`clipHeader` in `apps/frontend/src/protocol.ts` puts it on the wire. A clip
+header without it is refused by its id (`Clip has no generation.`), never
+stamped on arrival, and the audio frame after it arrives without a header.
 
 A client cannot use this to reach a leg it should not: the epoch is only ever
 learned from the server, and any value that does not match the current one gets

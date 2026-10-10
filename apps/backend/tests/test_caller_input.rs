@@ -175,7 +175,7 @@ async fn streaming_commands_require_the_generation() {
 }
 
 #[test]
-fn clip_headers_carry_an_optional_capture_epoch() {
+fn clip_headers_carry_a_required_capture_epoch() {
     let header = |value: Value| match crate::protocol::ClientMessage::parse(&value.to_string()) {
         Ok(crate::protocol::ClientMessage::Clip {
             id,
@@ -184,38 +184,44 @@ fn clip_headers_carry_an_optional_capture_epoch() {
         }) => parse_clip_header(id, mime, generation),
         other => panic!("{value} is not a clip header: {other:?}"),
     };
+    let no_generation = Box::new(ServerMessage::error_for("a", "Clip has no generation."));
 
     assert_eq!(
         header(json!({"type":"clip", "id":"a", "mime":"audio/webm", "generation":3})),
-        Some(("a".into(), "audio/webm".into(), Some(3)))
+        Ok(("a".into(), "audio/webm".into(), 3))
     );
-    // A browser that predates the epoch still works; the clip is stamped on
-    // arrival instead, which is what every client used to do.
+    // A clip without the epoch it was recorded under is refused by its id,
+    // never stamped on arrival.
     assert_eq!(
         header(json!({"type":"clip", "id":"a", "mime":"audio/webm"})),
-        Some(("a".into(), "audio/webm".into(), None))
+        Err(no_generation.clone())
     );
-    // Anything that is not a plain count is ignored rather than trusted.
+    // Anything that is not a plain count is no generation.
     assert_eq!(
         header(json!({"type":"clip", "id":"a", "generation":-1})),
-        Some(("a".into(), String::new(), None))
+        Err(no_generation.clone())
     );
     assert_eq!(
         header(json!({"type":"clip", "id":"a", "generation":"7"})),
-        Some(("a".into(), String::new(), None))
+        Err(no_generation)
     );
 
-    assert_eq!(header(json!({"type":"clip", "id":""})), None);
+    let invalid_id = Box::new(ServerMessage::error("Invalid clip id."));
     assert_eq!(
-        header(json!({"type":"clip", "id":"x".repeat(MAX_CLIP_ID_CHARS + 1)})),
-        None,
+        header(json!({"type":"clip", "id":"", "generation":3})),
+        Err(invalid_id.clone())
+    );
+    assert_eq!(
+        header(json!({"type":"clip", "id":"x".repeat(MAX_CLIP_ID_CHARS + 1), "generation":3})),
+        Err(invalid_id),
         "an oversized id is still refused"
     );
     // One rule for every command that names a clip, counted in characters.
     assert!(is_clip_id(&"é".repeat(MAX_CLIP_ID_CHARS)));
     assert!(!is_clip_id(&"é".repeat(MAX_CLIP_ID_CHARS + 1)));
     assert!(!is_clip_id(""));
-    let long_mime = header(json!({"type":"clip", "id":"a", "mime":"m".repeat(400)}));
+    let long_mime =
+        header(json!({"type":"clip", "id":"a", "mime":"m".repeat(400), "generation":3}));
     assert_eq!(long_mime.unwrap().1.chars().count(), 100);
 }
 
@@ -538,7 +544,9 @@ async fn an_arriving_clip_is_logged_with_the_mime_the_browser_recorded() {
         connection.epoch,
         &mut header,
         &mut None,
-        &json!({"type":"clip", "id":"ipad-1", "mime":"audio/mp4"}).to_string(),
+        &json!({"type":"clip", "id":"ipad-1", "mime":"audio/mp4",
+               "generation": state.0.coordinator.generation()})
+        .to_string(),
     )
     .await
     .unwrap();
