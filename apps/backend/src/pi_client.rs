@@ -1893,13 +1893,6 @@ async fn module_reply(inner: &ProjectInner, call: &crate::hosts::ModuleCall) -> 
         return json!({"status": "refused", "reason": "not_on_call"});
     }
     match call.call.as_str() {
-        // These names remain recognized for one release so hosts that still
-        // have the old module installed get a useful result. They are not
-        // signals: stale hosts must never move the caller.
-        "transfer_to_project" | "return_to_operator" | "set_model" => {
-            tracing::info!(%label, call = %call.call, "removed project routing call refused");
-            json!({"status": "refused", "reason": "removed"})
-        }
         SPEAK_TOOL | "request_to_speak" | "display" | "view" => {
             let Some(callback) = inner.on_module.clone() else {
                 return json!({"status": "failed", "reason": "failed"});

@@ -129,8 +129,9 @@ async fn a_transfer_and_a_return_act_on_a_session_over_the_host_link() {
     assert_eq!(announced.models.len(), 2);
 
     let returned = board.handle("we are done").await;
-    // A host that still has the removed module receives a refusal. It cannot
-    // move the caller or kill the live project leg.
+    // A call outside the module's surface, such as the routing calls an old
+    // module made, is refused as unknown. It cannot move the caller or kill
+    // the live project leg.
     assert_eq!(returned.route, "alpha");
     assert!(returned.text.contains("Alpha finished."), "{returned:?}");
     assert_eq!(board.coordinator.route(), "alpha");
@@ -143,7 +144,7 @@ async fn a_transfer_and_a_return_act_on_a_session_over_the_host_link() {
             .collect::<Vec<_>>(),
         [json!("refused")]
     );
-    assert_eq!(log.module_replies()[0]["reason"], "removed");
+    assert_eq!(log.module_replies()[0]["reason"], "unknown_call");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -186,7 +187,7 @@ async fn an_agent_to_agent_transfer_ends_the_old_session_after_the_new_one_is_up
     assert_eq!(r2.route, "alpha");
     assert_eq!(r2.text, "Alpha transferring to Beta.");
     assert!(r2.to_speak.is_empty());
-    // The stale host's transfer signal is refused, so beta is never started.
+    // The unknown transfer call is refused, so beta is never started.
     assert_eq!(log.named("create_session").len(), 1);
     assert!(log.named("kill").is_empty());
     assert_eq!(
@@ -196,7 +197,7 @@ async fn an_agent_to_agent_transfer_ends_the_old_session_after_the_new_one_is_up
             .collect::<Vec<_>>(),
         [json!("refused")]
     );
-    assert_eq!(log.module_replies()[0]["reason"], "removed");
+    assert_eq!(log.module_replies()[0]["reason"], "unknown_call");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
