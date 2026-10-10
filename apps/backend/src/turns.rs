@@ -12,7 +12,7 @@ use crate::debug::DebugEvent;
 use crate::history::AGENT;
 #[cfg(test)]
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
-use crate::lifecycle::{LifecycleError, OperationIdentity};
+use crate::lifecycle::{LegIdentity, LifecycleError, OperationIdentity};
 use crate::pbx::{AgentStateNotice, Switchboard};
 use crate::project_session::ProjectTurn;
 use crate::protocol::ServerMessage;
@@ -762,83 +762,91 @@ impl TurnRun {
     }
 }
 
-/// Admit and settle host-reported turns through the one lifecycle owner:
-/// autonomous turns get an operation of their own, and a caller turn's
-/// operation closes when the host reports it settled. Written self-wake
-/// replies are transcript-only: `Reply` updates the caller's view without
-/// entering the speech worker. True when an autonomous start was admitted.
+/// A turn boundary a project session reported, as the application acts on
+/// it. `HostTurn::of` reads the report's cause and end once; the pump's
+/// turn (`session_turn.rs`) decides which boundaries are reported.
+enum HostTurn {
+    /// The host opened a turn. Only the leg on the line may.
+    Opened(TurnStart),
+    /// The host settled a caller's (`input`) turn. The operation bound to
+    /// its id closes now, not when the prompt returns, so a run the host
+    /// starts right behind it is admitted (#107, #109).
+    CallerSettled { turn_id: Option<String> },
+    /// A self-woken run the session held ended (any cause but `input`):
+    /// settled by its host, or cut short by its session's close.
+    RunEnded {
+        turn_id: Option<String>,
+        text: String,
+    },
+}
+
+/// What a turn the host opened is to the application.
+enum TurnStart {
+    /// A caller's turn: its id is bound to the caller's operation.
+    Caller { turn_id: Option<String> },
+    /// A run the session woke on its own, with its delivery authority:
+    /// admitted as an operation of its own while the leg is free.
+    SelfWoken { turn_id: String },
+    /// A self-woken run with no delivery authority: an old host's, which
+    /// stamps no turn id. Nothing is fabricated for it, so its module calls
+    /// stay refused and its written text stays off the caller's transcript.
+    WithoutAuthority { cause: String },
+    /// A run a reconnect snapshot found open (`unknown`): it stays
+    /// fail-closed.
+    Reconnected,
+    /// A cause the application does not act on.
+    Other,
+}
+
+impl HostTurn {
+    fn of(turn: &ProjectTurn) -> Self {
+        let turn_id = turn.turn_id.clone();
+        match (turn.ended, turn.cause.as_str()) {
+            (true, "input") => Self::CallerSettled { turn_id },
+            (true, _) => Self::RunEnded {
+                turn_id,
+                text: turn.text.clone(),
+            },
+            (false, cause) => Self::Opened(match (cause, turn_id) {
+                ("input", turn_id) => TurnStart::Caller { turn_id },
+                ("autonomous" | "unknown", None) => TurnStart::WithoutAuthority {
+                    cause: cause.to_owned(),
+                },
+                ("autonomous", Some(turn_id)) => TurnStart::SelfWoken { turn_id },
+                ("unknown", Some(_)) => TurnStart::Reconnected,
+                _ => TurnStart::Other,
+            }),
+        }
+    }
+}
+
+/// Admits and settles host-reported turns through the one lifecycle owner:
+/// a self-woken run gets an operation of its own, and a caller turn's
+/// operation closes when the host reports it settled. A self-woken run's
+/// written reply is transcript-only: `Reply` updates the caller's view
+/// without entering the speech worker. True when a self-woken start was
+/// admitted.
 pub(crate) async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
     // Admission, settlement, and the transcript reply share the same turn
     // gate as caller prompt admission. This prevents a queued caller from
     // entering between autonomous finish and its written reply.
     let _transition = state.0.operation_transition.lock().await;
-    if turn.ended && turn.cause == "input" {
-        // The prompt that owns this operation returns when its collector
-        // reads the same `turn_end`, but the host can start the next run
-        // first: a resume after an external abort, or a wake queued behind
-        // the turn. Closing here lets that run be admitted (#107, #109).
-        if let Some(turn_id) = turn.turn_id.as_deref() {
-            if state.0.coordinator.settle_turn(&turn.token, turn_id) {
-                tracing::info!(
-                    instance = turn.instance_id,
-                    turn_id,
-                    "the host settled the caller's turn"
-                );
-            }
+    match HostTurn::of(&turn) {
+        HostTurn::Opened(start) => open_host_turn(state, &turn, start).await,
+        HostTurn::CallerSettled { turn_id } => {
+            settle_caller_turn(state, &turn, turn_id.as_deref());
+            false
         }
-        return false;
+        HostTurn::RunEnded { turn_id, text } => {
+            end_self_woken_run(state, turn.instance_id, turn_id.as_deref(), text).await;
+            false
+        }
     }
-    if turn.ended {
-        let mut operations = state.0.turns.autonomous_operations.lock().await;
-        let Some(operation) = operations.get(&turn.instance_id).cloned() else {
-            return false;
-        };
-        // A late end from an older host turn must not settle a replacement
-        // operation on the same resident instance.
-        if operation.turn_id.as_deref() != turn.turn_id.as_deref() {
-            return false;
-        }
-        let operation = operations
-            .remove(&turn.instance_id)
-            .expect("operation was checked above");
-        drop(operations);
-        if !state.0.coordinator.finish_operation(&operation) {
-            tracing::info!(
-                instance = turn.instance_id,
-                "ignoring autonomous turn end from a stale leg"
-            );
-            return false;
-        }
-        if let Some(turn_id) = operation.turn_id.clone() {
-            state.0.debug.publish(DebugEvent::TurnEnd {
-                agent: state.0.coordinator.route(),
-                turn_id,
-                generation: operation.leg.generation,
-                utterance_id: None,
-            });
-        }
-        if !turn.text.trim().is_empty() {
-            let route = state.0.coordinator.route();
-            state.0.transcript_log.lock().await.add_with_id_and_voiced(
-                AGENT,
-                &turn.text,
-                route.clone(),
-                None,
-                false,
-            );
-            emit_message(
-                state,
-                ServerMessage::Reply {
-                    text: turn.text,
-                    route,
-                    voiced: false,
-                    sequence: None,
-                },
-            );
-        }
-        return false;
-    }
+}
 
+/// A turn the host opened on `turn`'s session, if that session is the leg
+/// on the line. True when it is a self-woken run admitted as an operation.
+async fn open_host_turn(state: &AppState, turn: &ProjectTurn, start: TurnStart) -> bool {
     let current = state.0.coordinator.current_identity();
     if current.token != turn.token {
         // The leg's call token stays out of the log: the debug page copies
@@ -849,35 +857,59 @@ pub(crate) async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> 
         );
         return false;
     }
-    if turn.cause == "input" {
-        if let Some(turn_id) = turn.turn_id.as_deref() {
-            if let Err(error) = state.0.coordinator.bind_turn(&turn.token, turn_id) {
+    match start {
+        TurnStart::Caller {
+            turn_id: Some(turn_id),
+        } => {
+            if let Err(error) = state.0.coordinator.bind_turn(&turn.token, &turn_id) {
                 tracing::info!(%error, "caller turn authority was stale");
             }
+            false
         }
-        return false;
+        TurnStart::Caller { turn_id: None } | TurnStart::Other => false,
+        TurnStart::WithoutAuthority { cause } => {
+            tracing::info!(instance = turn.instance_id, %cause, "autonomous turn has no delivery authority");
+            false
+        }
+        TurnStart::Reconnected => {
+            tracing::info!(
+                instance = turn.instance_id,
+                "unknown reconnect turn remains fail-closed"
+            );
+            false
+        }
+        TurnStart::SelfWoken { turn_id } => {
+            admit_self_woken_run(state, turn.instance_id, &current, turn_id).await
+        }
     }
-    if !matches!(turn.cause.as_str(), "autonomous" | "unknown") {
-        return false;
-    }
-    // An old host or a reconnect snapshot has no delivery authority. Do not
-    // fabricate one: its module calls remain refused and its written text is
-    // not attached to the caller's transcript.
-    let Some(turn_id) = turn.turn_id else {
-        tracing::info!(instance = turn.instance_id, cause = %turn.cause, "autonomous turn has no delivery authority");
-        return false;
+}
+
+/// The host settled the caller's turn `turn_id` (an old host names none).
+fn settle_caller_turn(state: &AppState, turn: &ProjectTurn, turn_id: Option<&str>) {
+    let Some(turn_id) = turn_id else {
+        return;
     };
-    if turn.cause == "unknown" {
+    if state.0.coordinator.settle_turn(&turn.token, turn_id) {
         tracing::info!(
             instance = turn.instance_id,
-            "unknown reconnect turn remains fail-closed"
+            turn_id,
+            "the host settled the caller's turn"
         );
-        return false;
     }
+}
+
+/// Opens an operation for a self-woken run on the leg on the line, unless
+/// a caller's operation (or a starting leg) holds it.
+async fn admit_self_woken_run(
+    state: &AppState,
+    instance_id: u64,
+    current: &LegIdentity,
+    turn_id: String,
+) -> bool {
     match state
         .0
         .coordinator
-        .begin_autonomous(&current, turn_id.clone())
+        .begin_autonomous(current, turn_id.clone())
     {
         Ok(operation) => {
             // A self-woken turn answers no caller line.
@@ -893,21 +925,78 @@ pub(crate) async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> 
                 .autonomous_operations
                 .lock()
                 .await
-                .insert(turn.instance_id, operation);
+                .insert(instance_id, operation);
             true
         }
         Err(LifecycleError::OperationActive | LifecycleError::CandidateActive) => {
             tracing::info!(
-                instance = turn.instance_id,
+                instance = instance_id,
                 "caller operation won the autonomous-turn race"
             );
             false
         }
         Err(error) => {
-            tracing::info!(instance = turn.instance_id, %error, "autonomous turn was not admitted");
+            tracing::info!(instance = instance_id, %error, "autonomous turn was not admitted");
             false
         }
     }
+}
+
+/// The end of the self-woken run `turn_id` on session `instance_id`: its
+/// operation closes, it is traced to its end, and its written words reach
+/// the caller's transcript. A late end from an older run on the same
+/// session does not settle a newer one, and one whose operation a rescue
+/// already closed ends nothing.
+async fn end_self_woken_run(
+    state: &AppState,
+    instance_id: u64,
+    turn_id: Option<&str>,
+    text: String,
+) {
+    let mut operations = state.0.turns.autonomous_operations.lock().await;
+    let Some(operation) = operations.get(&instance_id).cloned() else {
+        return;
+    };
+    if operation.turn_id.as_deref() != turn_id {
+        return;
+    }
+    operations.remove(&instance_id);
+    drop(operations);
+    if !state.0.coordinator.finish_operation(&operation) {
+        tracing::info!(
+            instance = instance_id,
+            "ignoring autonomous turn end from a stale leg"
+        );
+        return;
+    }
+    if let Some(turn_id) = operation.turn_id.clone() {
+        state.0.debug.publish(DebugEvent::TurnEnd {
+            agent: state.0.coordinator.route(),
+            turn_id,
+            generation: operation.leg.generation,
+            utterance_id: None,
+        });
+    }
+    if text.trim().is_empty() {
+        return;
+    }
+    let route = state.0.coordinator.route();
+    state.0.transcript_log.lock().await.add_with_id_and_voiced(
+        AGENT,
+        &text,
+        route.clone(),
+        None,
+        false,
+    );
+    emit_message(
+        state,
+        ServerMessage::Reply {
+            text,
+            route,
+            voiced: false,
+            sequence: None,
+        },
+    );
 }
 
 #[cfg(test)]
