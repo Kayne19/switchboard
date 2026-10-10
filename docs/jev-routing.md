@@ -85,6 +85,14 @@ A failure or timeout is held until the next configured quiet moment; the floor
 does not retry the failed gate in a loop. The floor setting is
 `SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS` in `docs/environment.md`.
 
+The gate reads the call from `RoutingView`, as caller routing does, never
+through the PBX lock. The turn worker holds that lock for a whole prompt, and a
+foreground turn is when the caller waits on a quiet line, so a gate that waited
+for it held every background update for the length of the turn (#245). The
+rewrite reaches the routing utility through that lock, so the wait for it counts
+against `REWRITE_TIMEOUT` (5 s); past it the update is spoken as the agent wrote
+it.
+
 ## Call state
 
 The state is what the switchboard knows at the moment the caller speaks.
