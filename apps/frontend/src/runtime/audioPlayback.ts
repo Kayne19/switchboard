@@ -14,15 +14,11 @@
 // a late event from a replaced clip can never advance or requeue the new one.
 
 import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
-import { errorName, mediaErrorName } from "./errors";
 import { MseSource, mseRuntimeSupported } from "./mseStream";
-import {
-  createEnvelopeDecoder,
-  decodeEnvelope,
-  EnvelopeMeter,
-  StreamingEnvelope,
-  type EnvelopeDecoder,
-} from "./speechEnvelope";
+import { PlaybackLevel } from "./playbackLevel";
+import { PlaybackStatus } from "./playbackStatus";
+import { ProgressWatch } from "./progressWatch";
+import type { EnvelopeMeter, StreamingEnvelope } from "./speechEnvelope";
 
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
 export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
@@ -197,27 +193,14 @@ export class AudioPlayback {
   private replayBytes = 0;
   /** The leg whose audio plays; audio stamped with another is ignored. */
   private generation = 0;
-  /**
-   * Set while a pause or a blocked `play()` is on screen as an error the
-   * caller has to act on. The clip sounding again takes it down
-   * (`reportResumed`): nothing else would until the next turn's status, and
-   * a stream that recovered left the red card over the conversation (#260).
-   * It belongs to the status line, not to a clip: a blocked replay goes back
-   * to the queue, and the clip a tap then starts is a new one.
-   */
-  private awaitingTap = false;
-  /**
-   * The one reader of the agent's playback level, in every engine (#194):
-   * the utterance's own bytes, decoded off to the side, read at the
-   * element's `currentTime`. The element is never routed through Web Audio,
-   * so no engine has to be asked whether it survives that (#189).
-   */
-  private envelopeDecoder: EnvelopeDecoder | null = null;
-  private envelopeDecoderAttempted = false;
+  private readonly level: PlaybackLevel;
+  private readonly status: PlaybackStatus;
 
   constructor(options: AudioPlaybackOptions) {
     this.options = options;
     this.player = options.player ?? new Audio();
+    this.level = new PlaybackLevel(this.player, options.onAudioLevel);
+    this.status = new PlaybackStatus(options.idleText, options.onStatus);
   }
 
   get isPlaying(): boolean {
@@ -254,7 +237,7 @@ export class AudioPlayback {
    */
   resetForGeneration(generation: number): void {
     this.generation = generation;
-    this.awaitingTap = false;
+    this.status.newLeg();
     this.retire();
   }
 
@@ -313,7 +296,7 @@ export class AudioPlayback {
   playNext(): void {
     this.enter({ kind: "idle" });
     if (this.audioQueue.length) this.startReplay();
-    else this.say(this.options.idleText, false);
+    else this.status.idle();
   }
 
   receiveAudioStart(
@@ -341,7 +324,7 @@ export class AudioPlayback {
       fallbackQueued: false,
       // A stream's level is its own chunks, decoded as they arrive; a
       // replay's is the whole blob (`meterReplay`).
-      envelope: streaming ? this.newStreamEnvelope() : null,
+      envelope: streaming ? this.level.streamEnvelope() : null,
     };
     if (streaming)
       utterance.stream = new MseSource(mime, {
@@ -478,7 +461,7 @@ export class AudioPlayback {
    */
   private afterClip(): void {
     if (!this.audioQueue.length && !this.streamQueue.length) {
-      this.say(this.options.idleText, false);
+      this.status.idle();
       return;
     }
     const gap = this.options.gapMs ?? INTER_UTTERANCE_GAP_MS;
@@ -607,7 +590,7 @@ export class AudioPlayback {
         clip,
         phase: { kind: "playing", watch: phase.watch },
       });
-      this.reportResumed();
+      this.status.resumed();
     } else if (phase?.kind === "paused" && phase.attempt === attempt)
       this.enter({
         kind: "replay",
@@ -633,7 +616,7 @@ export class AudioPlayback {
       return;
     this.audioQueue.unshift(clip.blob);
     this.enter({ kind: "idle" });
-    this.reportBlocked(error);
+    this.status.blocked(error);
   }
 
   private replayEnded(clip: ReplayClip): void {
@@ -651,19 +634,13 @@ export class AudioPlayback {
       clip,
       phase: { kind: "paused", attempt: attemptOf(phase), atEnd },
     });
-    this.reportPaused(atEnd);
+    this.status.paused(atEnd);
   }
 
   private replayError(clip: ReplayClip): void {
     const player = this.player;
     if (!this.replayPhase(clip) || !player.error) return;
-    // The element refused the clip. Say so: a browser that cannot decode
-    // what was sent used to drop every utterance in silence, with nothing
-    // on screen for the caller to report (#189).
-    this.say(
-      "Audio failed to play (" + mediaErrorName(player.error) + ").",
-      true,
-    );
+    this.status.refused(player.error);
     this.replayFinished(clip);
   }
 
@@ -673,7 +650,8 @@ export class AudioPlayback {
    */
   private replayStalled(clip: ReplayClip, heard: boolean): void {
     if (!this.replayPhase(clip)) return;
-    if (!this.playedOut()) this.say(this.silentText(heard), true);
+    if (!this.playedOut())
+      this.status.silent(heard, this.options.stallMs ?? NO_PROGRESS_MS);
     this.replayFinished(clip);
   }
 
@@ -691,15 +669,10 @@ export class AudioPlayback {
     const source = utterance?.stream;
     if (!utterance || !source) return;
     const player = this.player;
-    const onLevel = this.options.onAudioLevel;
     const clip: StreamClip = {
       utterance,
       source,
-      // A stream is metered against the envelope its chunks are decoded into.
-      meter:
-        onLevel && utterance.envelope
-          ? new EnvelopeMeter(player, utterance.envelope, onLevel)
-          : null,
+      meter: this.level.streamMeter(utterance.envelope),
       handlers: [],
     };
     this.enter({ kind: "stream", clip, phase: { kind: "attaching" } });
@@ -726,7 +699,7 @@ export class AudioPlayback {
       )
         return;
       this.enter({ kind: "stream", clip, phase: { kind: "paused" } });
-      this.reportPaused(false);
+      this.status.paused(false);
     };
     clip.handlers = [
       ["ended", () => this.streamFinished(clip)],
@@ -789,7 +762,7 @@ export class AudioPlayback {
     this.enter({ kind: "stream", clip, phase: { kind: "playing", watch } });
     Promise.resolve(this.player.play()).then(
       () => {
-        if (this.streamPhase(clip)?.kind === "playing") this.reportResumed();
+        if (this.streamPhase(clip)?.kind === "playing") this.status.resumed();
       },
       (error) => {
         // A rejection that arrives after this stream was replaced or failed
@@ -799,7 +772,7 @@ export class AudioPlayback {
         // the whole replay was already playing (#203).
         if (!this.streamPhase(clip)) return;
         this.enter({ kind: "stream", clip, phase: { kind: "blocked" } });
-        this.reportBlocked(error);
+        this.status.blocked(error);
       },
     );
   }
@@ -831,12 +804,7 @@ export class AudioPlayback {
   private streamFailed(utterance: Utterance, error: unknown): void {
     if (utterance.failed) return;
     utterance.failed = true;
-    this.say(
-      "Streaming audio failed; using the complete replay (" +
-        mediaErrorName(error) +
-        ").",
-      true,
-    );
+    this.status.streamFailed(error);
     this.setMode("refused", utterance);
   }
 
@@ -890,10 +858,7 @@ export class AudioPlayback {
     if (utterance.fallbackQueued) return;
     utterance.fallbackQueued = true;
     if (utterance.bytes > MAX_AUDIO_UTTERANCE) {
-      this.say(
-        "Audio exceeded the replay limit and was stopped.",
-        true,
-      );
+      this.status.replayTooLong();
       this.options.onUtterance?.(utterance.sequence);
       return;
     }
@@ -948,140 +913,18 @@ export class AudioPlayback {
     );
   }
 
-  /**
-   * The decoder the level is read through, made once. `null` on a browser
-   * with no `OfflineAudioContext`: that is a flat level, which is what a
-   * caller with no level should see.
-   */
-  private meterDecoder(): EnvelopeDecoder | null {
-    if (!this.options.onAudioLevel) return null;
-    if (!this.envelopeDecoderAttempted) {
-      this.envelopeDecoderAttempted = true;
-      this.envelopeDecoder = createEnvelopeDecoder();
-    }
-    return this.envelopeDecoder;
-  }
-
-  /** Decodes the replay aside and meters the element against its envelope. */
+  /** Meters the replay once its blob is decoded, if it still holds the element. */
   private meterReplay(clip: ReplayClip): void {
-    const onLevel = this.options.onAudioLevel;
-    const decoder = this.meterDecoder();
-    if (!onLevel || !decoder) return;
-    void clip.blob
-      .arrayBuffer()
-      .then((bytes) => decodeEnvelope(bytes, decoder))
-      .then((envelope) => {
-        const holder = this.holder;
-        if (!envelope || holder.kind !== "replay" || holder.clip !== clip)
-          return;
-        clip.meter = new EnvelopeMeter(this.player, envelope, onLevel);
-        if (sounding(holder)) clip.meter.start();
-      })
-      .catch(() => undefined);
-  }
-
-  /** The timeline a streamed utterance's chunks are decoded into. */
-  private newStreamEnvelope(): StreamingEnvelope | null {
-    const decoder = this.meterDecoder();
-    return decoder ? new StreamingEnvelope(decoder) : null;
-  }
-
-  /** The text a clip that stopped advancing is reported with. */
-  private silentText(heard: boolean): string {
-    const ms = this.options.stallMs ?? NO_PROGRESS_MS;
-    return heard
-      ? "Audio stopped partway and did not resume (nothing played for " +
-          ms +
-          "ms)."
-      : "Audio started but produced no sound (nothing played in " + ms + "ms).";
-  }
-
-  /**
-   * Something outside the page stopped the element: an iPad's audio session
-   * handed to another app or to the microphone, a lock-screen control. It is
-   * an error the caller has to act on, so it is reported as one.
-   */
-  private reportPaused(finishing: boolean): void {
-    this.say(
-      finishing
-        ? "Audio finishing — tap or click anywhere on this page to continue."
-        : "Audio paused — tap or click anywhere on this page to resume.",
-      true,
-    );
-    this.awaitingTap = true;
-  }
-
-  /** Every status playback reports goes through here. */
-  private say(text: string, error: boolean): void {
-    // Whatever is said now replaces the pause or block on screen.
-    this.awaitingTap = false;
-    this.options.onStatus(text, error);
-  }
-
-  /** Playback was blocked: the next gesture plays it (`handleGesture`). */
-  private reportBlocked(error: unknown): void {
-    this.say(
-      "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (" +
-        errorName(error) +
-        ").",
-      true,
-    );
-    this.awaitingTap = true;
-  }
-
-  /**
-   * A clip sounds again after a pause or a block was reported: the one
-   * place either path withdraws that error.
-   */
-  private reportResumed(): void {
-    if (!this.awaitingTap) return;
-    this.say("Audio resumed.", false);
+    this.level.meterReplay(clip.blob, (meter) => {
+      const holder = this.holder;
+      if (holder.kind !== "replay" || holder.clip !== clip) return;
+      clip.meter = meter;
+      if (sounding(holder)) meter.start();
+    });
   }
 
   private notifyPlaybackChange(): void {
     this.options.onChange();
-  }
-}
-
-/**
- * Watches the element's `currentTime` while a clip is meant to be sounding:
- * every `ms` it has to have moved. One that has not is stalled, whether
- * before its first sound (WebKit leaving a MediaSource it cannot play
- * pending, #203) or partway (#213), and `onStall` is told which.
- * `stillArriving` lets a stream hold the watch while its bytes are still
- * landing. `ms` 0 turns the watch off.
- */
-class ProgressWatch {
-  private timer: ReturnType<typeof setTimeout> | null = null;
-
-  constructor(
-    position: () => number,
-    ms: number,
-    onStall: (heard: boolean) => void,
-    stillArriving?: () => boolean,
-  ) {
-    if (ms <= 0) return;
-    let heard = false;
-    let last = position();
-    const check = () => {
-      this.timer = null;
-      const now = position();
-      const arriving = stillArriving?.() ?? false;
-      if (now > last) {
-        heard = true;
-        last = now;
-      } else if (!arriving) {
-        onStall(heard);
-        return;
-      }
-      this.timer = setTimeout(check, ms);
-    };
-    this.timer = setTimeout(check, ms);
-  }
-
-  cancel(): void {
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
   }
 }
 
