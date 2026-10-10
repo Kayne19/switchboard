@@ -9,11 +9,11 @@
 
 import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
 import { errorName, mediaErrorName } from "./errors";
+import { MseSource, mseRuntimeSupported } from "./mseStream";
 import {
   createEnvelopeDecoder,
   decodeEnvelope,
   EnvelopeMeter,
-  Mp3FrameAligner,
   StreamingEnvelope,
   type EnvelopeDecoder,
 } from "./speechEnvelope";
@@ -61,25 +61,14 @@ interface MseUtterance {
   sequence: number;
   mime: string;
   parts: Blob[];
-  /** Cuts the stream where frames end before it reaches the SourceBuffer. */
-  frames: Mp3FrameAligner;
-  /** Whole frames waiting for the SourceBuffer, oldest first. */
-  queued: ArrayBuffer[];
   bytes: number;
   done: boolean;
   failed: boolean;
   fallbackQueued: boolean;
-  media: MediaSource | null;
-  buffer: SourceBuffer | null;
-  url: string | null;
-  started: boolean;
+  /** Its MediaSource, when it arrived while streaming was on. */
+  source: MseSource | null;
   /** This utterance's level, decoded from its chunks as they arrive. */
   envelope: StreamingEnvelope | null;
-  /**
-   * Appends that landed since the progress watch last looked: an element
-   * waiting for bytes that are still arriving is not stalled.
-   */
-  freshAppends: number;
   /** What this utterance put on the element, taken off by `mseDetach`. */
   handlers: Array<[string, EventListener]>;
 }
@@ -550,27 +539,27 @@ export class AudioPlayback {
       this.options.onUtterance?.(sequence);
       return;
     }
+    const mime = message.mime === "audio/mpeg" ? message.mime : "audio/mpeg";
     const utterance: MseUtterance = {
       generation,
       sequence,
-      mime: message.mime === "audio/mpeg" ? message.mime : "audio/mpeg",
+      mime,
       parts: [],
-      frames: new Mp3FrameAligner(),
-      queued: [],
       bytes: 0,
       done: false,
       failed: false,
       fallbackQueued: false,
-      media: null,
-      buffer: null,
-      url: null,
-      started: false,
+      source: null,
       // A stream's level is its own chunks, decoded as they arrive; a
       // replay's is the whole blob (`startEnvelopeMeter`).
       envelope: this.mseEnabled ? this.newStreamEnvelope() : null,
-      freshAppends: 0,
       handlers: [],
     };
+    if (this.mseEnabled)
+      utterance.source = new MseSource(mime, {
+        appended: () => this.msePlay(),
+        failed: (error) => this.mseFail(utterance, error),
+      });
     this.msePending = utterance;
     if (this.mseEnabled) {
       this.mseQueue.push(utterance);
@@ -593,13 +582,7 @@ export class AudioPlayback {
     this.mseReplayBytes += data.byteLength;
     utterance.parts.push(new Blob([data], { type: utterance.mime }));
     utterance.envelope?.append(data);
-    if (this.mseEnabled && !utterance.failed) {
-      const whole = utterance.frames.take(data);
-      if (whole) {
-        utterance.queued.push(whole);
-        if (utterance === this.mseActive) this.mseAppend(utterance);
-      }
-    }
+    if (this.mseEnabled && !utterance.failed) utterance.source?.receive(data);
     this.notifyPlaybackChange();
   }
 
@@ -622,10 +605,7 @@ export class AudioPlayback {
       this.notifyPlaybackChange();
       return;
     }
-    // The stream is complete: the part-frame held back goes in last.
-    const rest = utterance.frames.flush();
-    if (rest) utterance.queued.push(rest);
-    if (utterance === this.mseActive) this.mseAppend(utterance);
+    utterance.source?.finish(utterance.done);
     this.msePending = null;
     this.notifyPlaybackChange();
   }
@@ -803,14 +783,11 @@ export class AudioPlayback {
     // to leave the call "speaking" with nothing sounding (#213). Either way
     // it says so and the whole replay follows. An append that landed since
     // the last look holds it: the element may be waiting for those bytes.
-    utterance.freshAppends = 0;
+    const source = utterance.source;
+    source?.takeFreshAppends();
     this.watchProgress(
       (heard) => this.mseStalled(utterance, heard),
-      () => {
-        const fresh = utterance.freshAppends > 0;
-        utterance.freshAppends = 0;
-        return fresh;
-      },
+      () => source?.takeFreshAppends() ?? false,
     );
     Promise.resolve(this.player.play()).then(
       () => {
@@ -833,51 +810,12 @@ export class AudioPlayback {
     );
   }
 
-  private mseFinishSource(utterance: MseUtterance): void {
-    if (
-      !utterance.done ||
-      !utterance.media ||
-      !utterance.buffer ||
-      utterance.buffer.updating ||
-      utterance.queued.length
-    )
-      return;
-    try {
-      if (utterance.media.readyState === "open") utterance.media.endOfStream();
-    } catch (error) {
-      this.mseFail(utterance, error);
-    }
-  }
-
-  private mseAppend(utterance: MseUtterance): void {
-    if (utterance.failed || !utterance.buffer || utterance.buffer.updating)
-      return;
-    if (!utterance.queued.length) {
-      this.mseFinishSource(utterance);
-      return;
-    }
-    try {
-      utterance.buffer.appendBuffer(utterance.queued[0]);
-      utterance.started = true;
-      this.msePlay();
-      const remove = () => {
-        utterance.buffer?.removeEventListener("updateend", remove);
-        utterance.queued.shift();
-        utterance.freshAppends += 1;
-        this.mseAppend(utterance);
-      };
-      utterance.buffer.addEventListener("updateend", remove, { once: true });
-    } catch (error) {
-      this.mseFail(utterance, error);
-    }
-  }
-
   /** The stream stopped advancing; see `watchProgress`. */
   private mseStalled(utterance: MseUtterance, heard: boolean): void {
     if (this.mseActive !== utterance || utterance.failed) return;
     // Every byte went in, the source was ended, and the element stands at
     // its end: the stream played out and `ended` never came.
-    if (utterance.media?.readyState === "ended" && this.playedOut()) {
+    if (utterance.source?.ended && this.playedOut()) {
       this.mseFinished(utterance);
       return;
     }
@@ -895,7 +833,7 @@ export class AudioPlayback {
     this.mseActive = null;
     this.stopEnvelopeMeter();
     this.playing = false;
-    if (utterance.url) URL.revokeObjectURL(utterance.url);
+    utterance.source?.release();
     // After the pause: the next stream, or the whole replays `mseStop` left
     // when streaming stopped. Both are asked once the pause is over, since
     // streaming can stop during it too.
@@ -947,8 +885,7 @@ export class AudioPlayback {
       player.pause();
       player.removeAttribute("src");
       player.load();
-      if (active.url) URL.revokeObjectURL(active.url);
-      active.url = null;
+      active.source?.release();
       if (active.done) {
         this.queueMseFallback(active, true);
         this.mseActive = null;
@@ -959,25 +896,6 @@ export class AudioPlayback {
     this.mseQueue = [];
     this.playReplayIfIdle();
     this.notifyPlaybackChange();
-  }
-
-  /** The source is open: it has a SourceBuffer, and what has arrived goes in. */
-  private mseOpen(utterance: MseUtterance): void {
-    if (utterance.failed || !utterance.media) return;
-    try {
-      utterance.buffer = utterance.media.addSourceBuffer(utterance.mime);
-      // MP3 carries no timestamps of its own: in `sequence` mode each append
-      // is placed straight after the last, with no gap or overlap to splice.
-      // The MSE spec already starts an MPEG audio buffer in it; this says so
-      // rather than trust every engine to (#213).
-      utterance.buffer.mode = "sequence";
-      utterance.buffer.addEventListener("error", () =>
-        this.mseFail(utterance, new Error("MediaSource append error")),
-      );
-      this.mseAppend(utterance);
-    } catch (error) {
-      this.mseFail(utterance, error);
-    }
   }
 
   private mseStartNext(): void {
@@ -994,12 +912,14 @@ export class AudioPlayback {
     )
       return;
     const utterance = this.mseQueue.shift()!;
+    // Every queued utterance arrived while streaming was on, so it has one.
+    const source = utterance.source;
+    if (!source) return;
     const player = this.player;
     this.mseActive = utterance;
     this.startStreamEnvelopeMeter(utterance);
     this.options.onUtterance?.(utterance.sequence);
-    utterance.media = new MediaSource();
-    utterance.url = URL.createObjectURL(utterance.media);
+    const url = source.attach();
     const ended: EventListener = () => this.mseFinished(utterance);
     // The element can refuse what was appended -- a SourceBuffer WebKit
     // cannot parse sets a MediaError and stops. Without this the clip stayed
@@ -1036,19 +956,10 @@ export class AudioPlayback {
     ];
     for (const [name, handler] of utterance.handlers)
       player.addEventListener(name, handler);
-    utterance.media.addEventListener(
-      "sourceopen",
-      () => this.mseOpen(utterance),
-      { once: true },
-    );
-    // Attaching the source is what opens it: a MediaSource is `closed` until
-    // an element takes its URL, and `sourceopen` fires then. Waiting for the
-    // event before attaching waits forever -- no SourceBuffer, no append, no
-    // `play()`, and nothing reported, which is a call that hears nothing at
-    // all (#203, the silence in #189). The element's `error` handler is
-    // already on, so an engine that refuses the source says so and the whole
-    // replay follows.
-    player.src = utterance.url;
+    // Attaching the source is what opens it (`MseSource.attach`). The
+    // element's `error` handler is already on, so an engine that refuses the
+    // source says so and the whole replay follows.
+    player.src = url;
     // An engine can also leave the source `closed` and set no error (WebKit
     // with a bare page, #203). Nothing appends then, so the watch `msePlay`
     // arms never starts, and the call heard nothing with nothing said
@@ -1059,7 +970,7 @@ export class AudioPlayback {
         if (this.mseActive === utterance && !utterance.failed)
           this.mseFail(utterance, new Error("MediaSource did not open"));
       },
-      () => utterance.buffer !== null,
+      () => source.opened,
     );
   }
 
@@ -1078,7 +989,7 @@ export class AudioPlayback {
       Boolean,
     ) as MseUtterance[]) {
       this.mseDetach(utterance);
-      if (utterance.url) URL.revokeObjectURL(utterance.url);
+      utterance.source?.release();
     }
     this.mseActive = null;
     this.mseQueue = [];
@@ -1092,11 +1003,4 @@ export class AudioPlayback {
     player.load();
     this.notifyPlaybackChange();
   }
-}
-
-function mseRuntimeSupported(): boolean {
-  return (
-    typeof MediaSource !== "undefined" &&
-    MediaSource.isTypeSupported("audio/mpeg")
-  );
 }
