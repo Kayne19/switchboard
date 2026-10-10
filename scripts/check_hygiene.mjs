@@ -409,6 +409,10 @@ const machines = [
 	{ file: "apps/backend/src/lifecycle.rs", writer: /\bself\.line\s*=(?!=)/, max: 1, once: [/\bself\.notify_candidate\(/] },
 	// session-turn (#439): `step` is the one writer of a project session's turn phase.
 	{ file: "apps/backend/src/session_turn.rs", writer: /\bself\.phase\s*=(?!=)/, max: 1, once: [] },
+	// leg-startup: a bring-up is a `Startup`, not a machine. It moves the call line only
+	// through the coordinator: `begin_startup` stages, `commit` adopts and ends the
+	// intro, and the rollback is written in `abandon` and in `Drop`, nowhere else.
+	{ file: "apps/backend/src/leg_transitions.rs", writer: /\.rollback_startup\(/, max: 2, once: [/\.begin_candidate\(/, /\.adopt_candidate\(/, /\.finish_intro\(/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
@@ -441,6 +445,7 @@ const owners = [
 	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 6 },
 	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 7 },
 	{ file: "apps/backend/src/floor.rs", owner: "FloorState", fields: 1 },
+	{ file: "apps/backend/src/leg_transitions.rs", owner: "Startup", fields: 1 },
 	{ file: "apps/host-agent/src/sessions.ts", owner: "Tracked", fields: 5 },
 ];
 function ownerFindings(file, text, row) {

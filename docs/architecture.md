@@ -501,6 +501,35 @@ rollback of an adopted leg announces `rolled_back` again.
 pins every phase against every event. A new way to move the call is an
 `Event` and its arms in `Line::next`, never a field beside the line.
 
+### A leg's bring-up
+
+A transfer, a background promotion, a takeover and a redial bring a
+project leg up through the call line, never beside it. Each is a fixed
+sequence with failure exits, not a machine: one `Startup` value
+(`leg_transitions.rs`) owns it from the candidate it stages until it
+commits or abandons, and the call line is what it commits or rolls back.
+
+| step | what the `Startup` holds | on failure |
+|---|---|---|
+| `Switchboard::begin_startup` | the staged candidate's identity, the project, the change (`LegChange`: a new agent or a redial) | refused before anything is staged: the caller answers |
+| `attach` | the session, now on the active-session guard, and what it displaced from the guard | `abandon` (nothing attached: the rollback alone) |
+| the first turn (a redial has none) | the same | `abandon` |
+| `commit` | consumed: the leg is the PBX's agent and the guard's, and the identity it is on the line under is returned | a failed adoption abandons |
+
+`abandon` is the one failure exit, in one order: the attached session is
+ended, a new agent is published `finished`, and the guard goes back to
+what the attach displaced while, under the guard's lock, the call line
+rolls back to the leg before it. A redial's failure then drops the leg
+(`drop_agent`). A `Startup` dropped without either (its future aborted, a
+panic) rolls its candidate back in `Drop`; the guard and the session are
+left to the rescue that aborted it. A rollback names the generation its
+startup staged at (`rollback_startup`), so one whose startup has already
+ended (committed, rescued, rolled back) does nothing.
+`every_bring_up_exit_leaves_the_line_as_the_table_says` in
+`apps/backend/tests/test_leg_transitions.rs` pins every bring-up at every
+exit. A new way to bring a leg up holds a `Startup`; a new failure exit
+calls `abandon`.
+
 ## Turn lifecycle
 
 A normal voice turn should remain traceable as:
