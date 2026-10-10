@@ -182,6 +182,8 @@ impl std::error::Error for LifecycleError {}
 
 /// What a rescue retired, for the log written once the state lock is released.
 struct Rescue {
+    /// Why the caller of the rescue retired the leg.
+    reason: String,
     /// The route of the candidate the rescue abandoned, if one was starting.
     abandoned_candidate: Option<String>,
     next: LegIdentity,
@@ -217,7 +219,6 @@ pub struct CallLifecycle {
     /// none. `/thinking` changes it.
     thinking_default: String,
     operation: Option<OperationIdentity>,
-    terminal_reason: Option<String>,
     candidate: Option<CandidateLeg>,
     startup_rollback: Option<StartupRollback>,
     /// The leg the last adoption put on the line. While it is still the leg
@@ -242,7 +243,6 @@ impl CallLifecycle {
             thinking_effective: String::new(),
             thinking_default,
             operation: None,
-            terminal_reason: None,
             candidate: None,
             startup_rollback: None,
             adopted: None,
@@ -726,7 +726,6 @@ impl Coordinator {
         if state.phase != Phase::Shutdown {
             state.phase = Phase::Quiescing;
             state.operation = None;
-            state.terminal_reason = Some(reason);
         }
         // The clear notice carries the post-rescue generation, and is sent
         // under the state lock like every candidate notice, so it reaches
@@ -741,6 +740,7 @@ impl Coordinator {
         self.refresh_locked(state);
         self.operation_changed.notify_waiters();
         Rescue {
+            reason,
             abandoned_candidate,
             next: state.leg.clone(),
         }
@@ -749,6 +749,7 @@ impl Coordinator {
     /// Logs what a rescue retired, once the state lock is released.
     fn announce_rescue(&self, rescue: &Rescue) {
         tracing::info!(
+            reason = %rescue.reason,
             generation = rescue.next.generation,
             abandoned_candidate = rescue.abandoned_candidate.as_deref(),
             "rescue retired the current leg"
@@ -1062,7 +1063,6 @@ impl Coordinator {
                 leg: identity.clone(),
                 turn_id: None,
             });
-            state.terminal_reason = None;
             state.catalog = candidate.catalog;
             state.adopted = Some(identity.clone());
             self.notify_candidate(&CandidateNotice {
@@ -1091,28 +1091,26 @@ impl Coordinator {
     }
 
     pub fn rollback_startup(&self, reason: impl Into<String>) -> bool {
-        self.linearize(|state| {
+        let rolled_back = self.linearize(|state| {
             if let Some(candidate) = state.candidate.take() {
                 state.startup_rollback = None;
-                state.terminal_reason = Some(reason.into());
                 // The turn that ran the transfer is still running.
                 state.phase = if state.operation.is_some() {
                     Phase::TurnRunning
                 } else {
                     state.resting_phase()
                 };
+                let route = candidate.route;
                 self.notify_candidate(&CandidateNotice {
-                    route: candidate.route,
+                    route: route.clone(),
                     generation: state.leg.generation,
                     ended: Some(CandidateEnd::RolledBack),
                 });
                 self.refresh_locked(state);
                 self.operation_changed.notify_waiters();
-                return true;
+                return Some(route);
             }
-            let Some(previous) = state.startup_rollback.take() else {
-                return false;
-            };
+            let previous = state.startup_rollback.take()?;
             let generation = state.leg.generation;
             let abandoned_route = std::mem::replace(&mut state.route, previous.route);
             state.project = previous.project;
@@ -1123,17 +1121,21 @@ impl Coordinator {
             state.thinking_requested = previous.thinking_requested;
             state.thinking_effective = previous.thinking_effective;
             state.operation = None;
-            state.terminal_reason = Some(reason.into());
             state.catalog = previous.catalog;
             self.notify_candidate(&CandidateNotice {
-                route: abandoned_route,
+                route: abandoned_route.clone(),
                 generation: state.leg.generation,
                 ended: Some(CandidateEnd::RolledBack),
             });
             self.refresh_locked(state);
             self.operation_changed.notify_waiters();
-            true
-        })
+            Some(abandoned_route)
+        });
+        let Some(route) = rolled_back else {
+            return false;
+        };
+        tracing::info!(%route, reason = %reason.into(), "a startup was rolled back");
+        true
     }
 
     /// Shuts the call down for good. A startup in flight ends with it, the
@@ -1168,10 +1170,6 @@ impl Coordinator {
             self.operation_changed.notify_waiters();
             true
         })
-    }
-
-    pub fn finish_shutdown(&self) {
-        self.linearize(|state| state.terminal_reason = Some("shutdown".into()));
     }
 }
 
