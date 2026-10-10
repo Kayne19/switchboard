@@ -27,10 +27,11 @@ function makeLink(service: FakeService, overrides: Partial<HostLinkOptions> = {}
 	return { link, statuses };
 }
 
+// A hang detector, not a budget: it gives up after timeoutMs worth of 5 ms
+// polls, which a loaded machine stretches rather than cuts short.
 async function until(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
-	const start = Date.now();
-	while (!predicate()) {
-		if (Date.now() - start > timeoutMs) throw new Error("condition not reached");
+	for (let polls = 0; !predicate(); polls++) {
+		if (polls * 5 > timeoutMs) throw new Error("condition not reached");
 		await new Promise((r) => setTimeout(r, 5));
 	}
 }
@@ -369,9 +370,12 @@ test("a module call that cannot go out fails at once, not at its deadline", asyn
 		socket.emit("message", { data: JSON.stringify({ type: "welcome", epoch: 1, protocol: 1, cursors: {} }) });
 		await until(() => socket.sent.some((m) => m.type === "synced"));
 		socket.readyState = 2;
-		const started = Date.now();
-		assert.deepEqual(await link.relayModuleCall("a1", "tok", "display", { action: { op: "clear" } }, 5_000), { status: "failed", reason: "failed" });
-		assert.ok(Date.now() - started < 1_000, "answered at once");
+		const reply = link.relayModuleCall("a1", "tok", "display", { action: { op: "clear" } }, 5_000);
+		// Answered before the event loop turns, so before any timer could fire:
+		// not at its deadline, however loaded the machine.
+		const first = await Promise.race([reply.then(() => "answered"), new Promise((r) => setImmediate(() => r("waiting")))]);
+		assert.equal(first, "answered", "answered at once");
+		assert.deepEqual(await reply, { status: "failed", reason: "failed" });
 		assert.equal(socket.sent.filter((m) => m.type === "module_call").length, 0);
 		assert.deepEqual(logged, ["module call display not sent: the link's socket is not open"]);
 	} finally {

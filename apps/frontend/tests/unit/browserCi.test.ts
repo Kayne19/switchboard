@@ -36,11 +36,23 @@ describe('the CI browser job', () => {
     expect(scripts['test:browser']).toBe(`${scripts['test:visual']} --grep-invert @golden`);
   });
 
-  it('installs each engine from a cache keyed by the engine and the lockfile that pins it', () => {
+  // The runner image is named, not `ubuntu-latest`: the fonts the specs were
+  // measured with and WebKit's system libraries come from its release, so a
+  // move to a new release is a pull request that runs the suite on it, not a
+  // surprise on one that did not touch the browser.
+  it('runs every job on a named Ubuntu release, not on whatever ubuntu-latest is', () => {
+    expect(workflow).not.toContain('ubuntu-latest');
+    for (const name of ['test', 'browser']) expect(job(name)).toMatch(/^ {4}runs-on: ubuntu-\d+\.\d+$/m);
+  });
+
+  it('installs each engine from a cache keyed by the engine, the image release and the lockfile that pins it', () => {
     const browser = job('browser');
     expect(browser).toMatch(/uses: actions\/cache@v\d+/);
     expect(browser).toContain('~/.cache/ms-playwright');
-    expect(browser).toContain("playwright-${{ matrix.browser }}-${{ runner.os }}-${{ hashFiles('package-lock.json') }}");
+    expect(browser).toContain('. /etc/os-release');
+    expect(browser).toContain(
+      "playwright-${{ matrix.browser }}-${{ runner.os }}-${{ steps.release.outputs.release }}-${{ hashFiles('package-lock.json') }}",
+    );
     expect(browser).toContain('playwright install --with-deps ${{ matrix.browser }}');
   });
 
@@ -55,6 +67,50 @@ describe('the CI browser job', () => {
       expect(source, config).toContain("browserName: 'chromium'");
       expect(source, config).toContain("browserName: 'webkit'");
     }
+  });
+
+  // A focused test left in a spec would make each leg run it alone and pass:
+  // the browser job would go green with the rest of its specs unrun.
+  it('fails a run on CI that finds a focused test', () => {
+    for (const config of ['apps/frontend/playwright.config.ts', 'apps/frontend/playwright.production.config.ts']) {
+      expect(read(config), config).toContain('forbidOnly: !!process.env.CI,');
+    }
+  });
+});
+
+describe('the CI triggers', () => {
+  // A pull request is tested by its pull_request run: that run tests the merge
+  // with master, and its `test` check is the one master requires. A push run
+  // of the same head adds nothing to it, doubles the jobs each update queues,
+  // and gives a flaky leg a second chance to paint the pull request red.
+  it('runs on a pull request and on a push to master, not on a push to every branch', () => {
+    expect(workflow).toMatch(/^on:\n  push:\n    branches: \[master\]\n  pull_request:\n/m);
+  });
+});
+
+// A hung test must end as a named failure, not hold a runner until GitHub's
+// six-hour default kills the job and cuts the log off (#335). Each job has
+// its own limit; inside the browser legs Playwright stops first, so it names
+// the tests that did not finish and leaves test-results/ for the trace
+// upload; the host-agent tests each have a default deadline.
+describe('the CI time limits', () => {
+  const minutes = (name: string) => Number(/^ {4}timeout-minutes: (\d+)$/m.exec(job(name))?.[1]);
+  const globalTimeout = (config: string) => /globalTimeout: process\.env\.CI \? (\d+) \* 60_000 : 0,/.exec(read(config))?.[1];
+
+  it('bounds every job', () => {
+    for (const name of ['test', 'browser']) expect(minutes(name), name).toBeGreaterThan(0);
+  });
+
+  it('stops Playwright on CI before the browser job\'s own limit', () => {
+    for (const config of ['apps/frontend/playwright.config.ts', 'apps/frontend/playwright.production.config.ts']) {
+      const limit = Number(globalTimeout(config));
+      expect(limit, config).toBeGreaterThan(0);
+      expect(limit, config).toBeLessThan(minutes('browser'));
+    }
+  });
+
+  it('gives each host-agent test a default deadline', () => {
+    expect(scripts['test:host-agent']).toMatch(/--test-timeout=\d+/);
   });
 });
 

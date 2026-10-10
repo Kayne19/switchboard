@@ -33,9 +33,20 @@ function scan(file, pattern, finding) {
 scan(path.join(root, "apps/backend/src/main.rs"), /^pub mod /, "pub mod: modules stay private (AGENTS.md)");
 
 // 2. No lint allowance in the backend: delete the item, cfg(test) it, or
-//    argue with the lint in the commit.
-for (const file of files(path.join(root, "apps/backend/src"), new Set([".rs"]))) {
-	scan(file, /#!?\[allow\(/, "lint allowance (AGENTS.md: none in the backend)");
+//    argue with the lint in the commit. The tests count: each file in
+//    apps/backend/tests is compiled as a module of the crate, and clippy
+//    lints it. `expect` silences a lint as `allow` does, `cfg_attr` can
+//    hide either, and a `[lints]` table or a `-A` rustflag allows a lint
+//    for the whole crate.
+for (const start of ["apps/backend/src", "apps/backend/tests", "build.rs"]) {
+	for (const file of files(path.join(root, start), new Set([".rs"]))) {
+		scan(file, /#!?\[\s*(?:allow|expect)\s*\(|\bcfg_attr\s*\(.*\b(?:allow|expect)\s*\(/, "lint allowance (AGENTS.md: none in the backend)");
+	}
+}
+scan(path.join(root, "Cargo.toml"), /^\s*\[(?:workspace\.)?lints\b/, "a [lints] table (AGENTS.md: no lint allowances in the backend)");
+for (const name of ["config", "config.toml"]) {
+	const file = path.join(root, ".cargo", name);
+	if (existsSync(file)) scan(file, /["'\s](?:-A|--cap-lints)/, "a lint allowed in rustflags (AGENTS.md: no lint allowances in the backend)");
 }
 
 // 3. Only Config reads the environment (build.rs stamps the commit).
@@ -209,10 +220,67 @@ for (const file of markdown()) {
 //     leastCpuMs (apps/frontend/tests/unit/cpuTime.ts), never the wall
 //     clock, which under load measures the machine: wall-clock budgets
 //     failed 17 times in 7 loaded runs
-//     (docs/concurrency-and-test-hazards.md).
-for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set([".ts", ".tsx"]))) {
-	if (path.basename(file) === "cpuTime.ts") continue;
-	scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
+//     (docs/concurrency-and-test-hazards.md). The host agent's tests too.
+for (const start of ["apps/frontend/tests/unit", "apps/host-agent/tests"]) {
+	for (const file of files(path.join(root, start), new Set([".ts", ".tsx"]))) {
+		if (path.basename(file) === "cpuTime.ts") continue;
+		scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
+	}
+}
+
+// 13. No focused test: a `.only` left in a test makes its runner skip the
+//     rest. Playwright fails a CI run that finds one (forbidOnly), but the
+//     browser job is not the check master requires, and `node --test` runs
+//     every test anyway, so a focused host-agent test hides nothing until it
+//     is run by hand. This refuses it in `npm test`, which master requires.
+for (const dir of ["apps/frontend/tests", "apps/host-agent/tests"]) {
+	for (const file of files(path.join(root, dir), new Set([".ts", ".tsx", ".mjs", ".js"]))) {
+		scan(file, /\b(?:test|it|describe)(?:\.\w+)*\.only\(/, "a focused test (.only): it makes its runner skip the rest");
+	}
+}
+
+// 14. One implementation for both engines (docs/ipad.md): no user-agent
+//     check and no CSS that asks which engine it is in. A user-agent branch
+//     that cannot be avoided is listed in docs/ipad.md, "Engine-specific
+//     code in the tree"; one in a file that table does not name is refused.
+{
+	const ipad = readFileSync(path.join(root, "docs/ipad.md"), "utf8");
+	for (const file of files(path.join(root, "apps/frontend/src"), new Set([".ts", ".tsx", ".js", ".mjs"]))) {
+		if (ipad.includes(`\`${rel(file)}\``)) continue;
+		scan(file, /\bnavigator\s*\.\s*(?:userAgent|userAgentData|vendor|platform)\b/, "a user-agent check (docs/ipad.md: detect the feature, or list the branch there)");
+	}
+	for (const file of files(path.join(root, "apps/frontend/src"), new Set([".css", ".ts", ".tsx"]))) {
+		scan(file, /@(?:supports|media)\b[^{]*-(?:webkit|apple)-/, "CSS that asks for the engine (docs/ipad.md: no WebKit-only CSS)");
+	}
+}
+
+// 15. A backend test waits on a channel, a Notify, a watch, a stream, a
+//     oneshot or a task's JoinHandle through within()
+//     (apps/backend/src/main.rs), which fails the test by name after a
+//     generous deadline. libtest has no per-test timeout, so a bare await
+//     whose wake-up is lost hangs cargo test forever with no output (#338).
+//     A handle aborted on the line before is not waited on. A fake that is
+//     meant to wait as long as its test says so on the line before:
+//     `// unbounded: <why>`.
+{
+	// `.recv()`, `.next()`, `.notified()`, `.changed()`, or a bare name (a
+	// oneshot receiver, a JoinHandle), awaited on the same line or, split by
+	// rustfmt, on the next.
+	const wait = /(?:\.(?:recv|next|notified|changed)\(\)|(?<![.\w])([a-z_]\w*))/;
+	const sameLine = new RegExp(`${wait.source}\\s*\\.await\\b`);
+	const lineEnd = new RegExp(`${wait.source}$`);
+	for (const file of files(path.join(root, "apps/backend/tests"), new Set([".rs"]))) {
+		const text = lines(file);
+		text.forEach((line, index) => {
+			const before = text[index - 1] ?? "";
+			const match = sameLine.exec(line) ?? (/^\s*\.await\b/.test(text[index + 1] ?? "") ? lineEnd.exec(line.trimEnd()) : null);
+			if (!match) return;
+			// Inside a timeout(..., async { loop { ... } }) the wait is bounded.
+			const bounded = text.slice(Math.max(0, index - 3), index + 1).some((near) => /\b(?:within|timeout)\(/.test(near));
+			const aborted = match[1] !== undefined && before.includes(`${match[1]}.abort()`);
+			if (!bounded && !aborted && !/\/\/ unbounded: \S/.test(before)) findings.push(`${rel(file)}:${index + 1}: a test await with no deadline (wrap it in within(), or mark a fake \`// unbounded: <why>\`)`);
+		});
+	}
 }
 
 if (findings.length > 0) {
@@ -220,4 +288,4 @@ if (findings.length > 0) {
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits");

@@ -64,9 +64,11 @@ commit.
   `scripts/check_hygiene.mjs`, which enforces the structural rules below that
   a grep can check (private modules, no lint allowances, one `Config`, a
   documented environment, one fake-executable writer, one skill socket path,
-  one frame depth, one set of size caps, CPU-time budgets, live paths,
-  routes and settings in the docs); a new rule of that kind gets a check
-  there.
+  one frame depth, one set of size caps, CPU-time budgets, no focused
+  `.only` test, no user-agent checks, bounded test awaits, live paths,
+  routes and settings in the docs); a new rule of that kind gets a
+  check there. Both Playwright configs also set `forbidOnly` on CI, so a
+  focused spec fails its browser leg.
 - CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
   `npm run test:browser` (every spec in `apps/frontend/tests/visual` but
   the pixel goldens, which are tagged `@golden`) and `npm run
@@ -82,9 +84,20 @@ commit.
   fonts raster differently, so they stay a local gate: run `npm run
   test:visual -- --project=chromium` before a change that moves pixels.
   The suite starts its own server on port 4183 (`PLAYWRIGHT_PORT` moves
-  it) and fails rather than test a server it finds there. `master`
+  it) and fails rather than test a server it finds there; `test:integration`
+  does the same on port 4184 (`PLAYWRIGHT_INTEGRATION_PORT` moves it). `master`
   requires only `test`; a red `browser` is still a failure to fix, not to
-  merge over.
+  merge over. Every job runs on a named Ubuntu release (`runs-on:
+  ubuntu-24.04`), as the toolchain is pinned: the specs' geometry was
+  measured with that release's fonts. Moving to the next release is its
+  own pull request, which runs the browser suite there.
+- Every CI job has a `timeout-minutes` (`test` 20, `browser` 35, about
+  twice the slowest normal run), and on CI both Playwright configs set a
+  `globalTimeout` of 30 minutes, so a hung leg names the tests that did not
+  finish before the job is cut off. Each host-agent test has a 60-second
+  default (`node --test --test-timeout`). A hang is a failure with a name,
+  not six hours of a held runner; `browserCi.test.ts` pins the numbers'
+  order.
 - The iPad (iPadOS Safari, WebKit) is a first-class target, not a "should
   also work" one: a change that works in desktop Chromium and breaks there
   is broken. A browser runtime change (audio, capture, playback, gestures)
@@ -101,7 +114,9 @@ commit.
   pushed by the Copilot agent gets no CI jobs until a maintainer approves its
   workflow runs on the pull request. An unapproved run has zero jobs and can
   end as a failure that GitHub blames on the workflow file; it is not (see
-  #35). Approve it, or push the head yourself.
+  #35). Approve it, or push the head yourself. CI runs on a pull request and
+  on a push to `master`, not on a push to any other branch: open a pull
+  request (a draft will do) to get a run.
 - Rust tests live in `apps/backend/tests/`, each compiled as the `#[cfg(test)]`
   module of the source file it covers; browser, display, and operator
   extension tests live in `apps/frontend/tests/`; skill module tests live in
@@ -117,7 +132,15 @@ commit.
   failed 17 times in 7 loaded runs (`docs/concurrency-and-test-hazards.md`,
   "A time budget measured on the wall clock"). `scripts/check_hygiene.mjs`
   refuses `performance.now`, `Date.now` and `process.hrtime` in
-  `apps/frontend/tests/unit` outside `cpuTime.ts`.
+  `apps/frontend/tests/unit` outside `cpuTime.ts`, and in
+  `apps/host-agent/tests`.
+- A backend test awaits a channel, a `Notify`, a watch, a stream, a
+  oneshot or a task's `JoinHandle` through `within`
+  (`apps/backend/src/main.rs`), which fails it by name after 10
+  seconds: libtest has no per-test timeout, and a lost wake-up behind a bare
+  await hangs `cargo test` with no output (`docs/concurrency-and-test-hazards.md`,
+  "A test await with no deadline"). `scripts/check_hygiene.mjs` refuses a
+  bare one in `apps/backend/tests`.
 - Keep the backend module layout: one concern per file in `apps/backend/src/`,
   no new module layers until something concrete needs one.
 - The backend's modules are private (`mod`, not `pub mod`, in `main.rs`), and
@@ -125,9 +148,10 @@ commit.
   rustc then stops reporting it when unused; that is how two dozen dead
   functions and a parallel lifecycle accumulated unnoticed. With private
   modules, clippy's `-D warnings` fails on dead code.
-- No `#[allow(...)]` in the backend. An unused item is deleted or made
-  `#[cfg(test)]`; an import one `cfg` block needs is written inside that
-  block; a lint that is wrong is argued with in the commit, not silenced in
+- No `#[allow(...)]` in the backend, its tests included, and no
+  `#[expect(...)]`, `cfg_attr` allowance, `[lints]` table or `-A` rustflag
+  either. An unused item is deleted or made `#[cfg(test)]`; an import one
+  `cfg` block needs is written inside that block; a lint that is wrong is argued with in the commit, not silenced in
   the code. An allowance is a place the compiler was told to stop looking,
   and the last one here hid a dead import for months.
 - Only `Config` (`apps/backend/src/main.rs`) reads the environment; modules

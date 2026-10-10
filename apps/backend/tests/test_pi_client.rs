@@ -1,4 +1,5 @@
 use super::*;
+use crate::within;
 
 #[test]
 fn builds_local_rpc_argv() {
@@ -100,7 +101,7 @@ async fn steer_writes_into_the_running_process() {
         .steer("also check docs", Some("clip-3"))
         .await
         .unwrap();
-    assert!(!prompt.await.unwrap().failed);
+    assert!(!within("prompt", prompt).await.unwrap().failed);
     // The steered words name the caller line they carry.
     assert!(debug_events(&bus).iter().any(|event| matches!(
         event,
@@ -295,8 +296,14 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
     });
     inner.mark_closed().await;
     ProjectSession { inner }.close();
-    assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("abort")
+    );
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("detach")
+    );
 }
 
 #[tokio::test]
@@ -337,8 +344,14 @@ async fn malformed_successful_takeover_is_detached() {
         Err(error) => error,
     };
     assert!(error.to_string().contains("did not name the new session"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("attach"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("attach")
+    );
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("detach")
+    );
 }
 
 #[tokio::test]
@@ -383,9 +396,18 @@ async fn takeover_reply_cannot_make_release_kill_a_desk_session() {
         .expect("valid attach reply");
     assert_eq!(session.inner.provenance, "taken_over");
     session.close();
-    assert_eq!(command_rx.recv().await.as_deref(), Some("attach"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("attach")
+    );
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("abort")
+    );
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("detach")
+    );
 }
 
 fn debug_events(bus: &crate::debug::DebugBus) -> Vec<DebugEvent> {
@@ -815,20 +837,20 @@ async fn a_turn_ends_only_on_the_settled_turn_end() {
     let event = |link: &crate::hosts::FakeLink, cursor: u64, body: Value| {
         link.send(json!({"type": "event", "session": "s1", "cursor": format!("b:{cursor}"), "event": body}));
     };
-    let create = link.recv().await.unwrap();
+    let create = within("link", link.recv()).await.unwrap();
     assert_eq!(create["name"], "create_session");
     reply(
         &link,
         &create,
         json!({"session": "s1", "thinking": "medium"}),
     );
-    let (session, _) = creating.await.unwrap().unwrap();
+    let (session, _) = within("creating", creating).await.unwrap().unwrap();
 
     let prompting = tokio::spawn({
         let session = session.clone();
         async move { session.prompt("hello").await }
     });
-    let prompt = link.recv().await.unwrap();
+    let prompt = within("link", link.recv()).await.unwrap();
     assert_eq!(prompt["args"]["message"], "BRIEF\n\nhello");
     // The tail of an earlier, aborted turn arrives before the prompt is
     // answered; it is not this turn's.
@@ -846,12 +868,12 @@ async fn a_turn_ends_only_on_the_settled_turn_end() {
     assert!(!prompting.is_finished(), "the turn ended before it settled");
     assert!(session.busy());
     event(&link, 6, json!({"kind": "turn_end"}));
-    let turn = prompting.await.unwrap().unwrap();
+    let turn = within("prompting", prompting).await.unwrap().unwrap();
     assert_eq!(turn.text, "Done.");
     assert!(!turn.failed);
     assert!(!session.busy());
     session.close();
-    let kill = link.recv().await.unwrap();
+    let kill = within("link", link.recv()).await.unwrap();
     assert_eq!(
         (kill["name"].clone(), kill["args"].clone()),
         (json!("kill"), json!({"session": "s1"}))
