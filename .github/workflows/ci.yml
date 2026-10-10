@@ -19,7 +19,12 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # A named release, not the floating latest label, for the reason rust-toolchain.toml
+    # pins the toolchain: the image moving under the repo is a failure on a
+    # pull request that did not cause it. The browser job measures geometry
+    # with this release's fonts and runs WebKit on its libraries, so moving
+    # to a new release is its own pull request that runs the suite there.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -78,7 +83,8 @@ jobs:
     # it the largest spec file is one 13-minute piece. The checks are named
     # `browser (chromium 1/4)` .. `browser (webkit integration)`.
     name: browser (${{ matrix.browser }} ${{ matrix.part }})
-    runs-on: ubuntu-latest
+    # The same named release as `test`, and for the same reason.
+    runs-on: ubuntu-24.04
     strategy:
       # A failure in one leg does not cancel the others: each reports what it
       # found.
@@ -97,17 +103,25 @@ jobs:
       - name: Install browser build dependencies
         run: npm ci
 
-      # The browser is keyed by the engine and the lockfile, which pins
-      # @playwright/test and with it each engine's build. A hit restores the
-      # browser; its system libraries are not in the cache, so they are
-      # installed either way. Every leg of one engine shares its key: the
-      # first to finish saves it.
+      # The image's release goes in the cache key, so a browser built for
+      # one release is never restored onto another.
+      - name: Name the image's release
+        id: release
+        run: |
+          . /etc/os-release
+          echo "release=$ID-$VERSION_ID" >> "$GITHUB_OUTPUT"
+
+      # The browser is keyed by the engine, the image's release and the
+      # lockfile, which pins @playwright/test and with it each engine's build.
+      # A hit restores the browser; its system libraries are not in the
+      # cache, so they are installed either way. Every leg of one engine
+      # shares its key: the first to finish saves it.
       - name: Cache Playwright's ${{ matrix.browser }}
         id: playwright-cache
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ matrix.browser }}-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          key: playwright-${{ matrix.browser }}-${{ runner.os }}-${{ steps.release.outputs.release }}-${{ hashFiles('package-lock.json') }}
 
       - name: Install ${{ matrix.browser }}
         if: steps.playwright-cache.outputs.cache-hit != 'true'
