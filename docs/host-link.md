@@ -255,6 +255,10 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   it, if another client has it open), so a refusal after that step would
   leave a stranger's session running unseen, and killing it would be wrong
   in the already-open case (#162). Reopening a live session returns it.
+  A session this host agent already tracks is returned only if it was
+  created by the switchboard (provenance `created`), carries the expected
+  name (and `project`, when given), and runs in `cwd`; otherwise the command
+  is refused.
 - **`list_sessions`** lists live top-level daemon sessions (subagents are
   left out): `{session, session_id, name, cwd, busy, provenance, project,
   model, thinking}`. `provenance` is `"created"`, `"taken_over"`, or `null`
