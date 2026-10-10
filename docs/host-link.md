@@ -342,6 +342,31 @@ The host agent sends every session event with its cursor:
 A turn is not ended by `agent_end`: the daemon repeats it within one turn.
 Only `turn_end` means settled.
 
+On the host agent, a tracked session's turn is one record,
+`Tracked.turn` in `apps/host-agent/src/sessions.ts`: idle (`null`), or open
+with its `turn_id` and `cause`. `SessionManager.#turnStep` is its only
+writer, and it sends `turn_start` and `turn_end`:
+
+| Turn | Event | Next | Sent |
+|---|---|---|---|
+| idle | an input is sent (`prompt`, `steer`, or `prompt` resent as `follow_up`) | open, `input` | `turn_start`, then `wait_for_idle` |
+| idle | `agent_start` while an input is in flight | open, `input` | `turn_start` (the input sends the `wait_for_idle`) |
+| idle | `agent_start` with no input in flight | open, `autonomous` | `turn_start`, then `wait_for_idle` |
+| idle | a resync finds the session busy | open, `unknown` (no `turn_id`) | `turn_start`, then `wait_for_idle` |
+| open | an input, or a resync | open | a new `wait_for_idle`; the earlier one no longer settles |
+| idle | `abort` | idle | `resume_queue`; no `wait_for_idle` |
+| open | `abort` | open | `resume_queue`, then a new `wait_for_idle` |
+| open | `agent_start` | open | nothing: one more run of the same turn |
+| open | the latest `wait_for_idle` resolves | idle | `turn_end` |
+| open | the latest `wait_for_idle` fails | idle | `turn_end` with `error` |
+| open | an earlier `wait_for_idle` answers | open | nothing |
+| any | `kill`, `detach`, the daemon's close, or a resync that finds it gone | untracked | `session_closed` only; it stands for the turn's end |
+
+Each `wait_for_idle` carries the input count it was sent after; an answer
+settles the turn only if no input came after it and the session is still
+the same record. The table test in `apps/host-agent/tests/sessions.test.ts`
+("turn table") holds every row.
+
 `args`, `result` and the `turn_id` on tool events are additive and optional.
 They feed the service's debug page (`docs/debug-page.md`) and nothing else; an
 older host omits them and the service shows the tool name only. A value whose

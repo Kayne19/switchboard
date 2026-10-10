@@ -11,11 +11,11 @@
 // - `resume_queue` follows every abort;
 // - a busy session gets `follow_up` (or `steer`), never `prompt`.
 
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DaemonCommandError, type DaemonEvent, type DaemonPort, type DaemonSession, type SessionConfig } from "./daemon_port.ts";
+import { Prepares } from "./prepare.ts";
 
 export type Provenance = "created" | "taken_over";
 export type CallMode = "foreground" | "background" | "active";
@@ -43,6 +43,26 @@ export class CommandError extends Error {
 	}
 }
 
+/** The turn a tracked session has open. A session with none is idle. */
+interface OpenTurn {
+	/**
+	 * Stable while this host-agent process tracks one daemon turn. Null for a
+	 * turn rebuilt from a reconnect snapshot, which has no reliable cause or
+	 * authority: the service refuses its self-wake side effects.
+	 */
+	id: string | null;
+	cause: TurnCause;
+}
+
+/** What moves a tracked session's turn (`SessionManager.#turnStep`). */
+type TurnEvent =
+	/** An input was sent, an agent_start nobody caused arrived, or a resync found the session busy. */
+	| { kind: "open"; cause: TurnCause }
+	/** The wait_for_idle sent after input `mark` answered; `failure` is its error, if it failed. */
+	| { kind: "settled"; mark: number; failure: string | null }
+	/** The session is no longer tracked. */
+	| { kind: "untracked" };
+
 interface Tracked {
 	handle: string;
 	sessionId: string;
@@ -50,14 +70,12 @@ interface Tracked {
 	project: string;
 	cwd: string;
 	provenance: Provenance;
-	turnOpen: boolean;
+	/** The open turn, or null when idle. Written only by `#turnStep`. */
+	turn: OpenTurn | null;
 	/** Inputs sent so far; a wait_for_idle settles only if none came after it. */
 	inputs: number;
 	/** Inputs in flight, so an agent_start they cause is not taken as autonomous. */
 	pending: number;
-	/** Stable while this host-agent process tracks one daemon turn. */
-	turnId: string | null;
-	turnCause: TurnCause | null;
 	call: CallState | null;
 	last: DaemonSession | null;
 	/** A kill of this host agent's own is in flight; it reports the close. */
@@ -147,8 +165,7 @@ export class SessionManager {
 	readonly #shortId: () => string;
 	readonly #tracked = new Map<string, Tracked>();
 	readonly #usedNames = new Set<string>();
-	/** The prepare commands still running, by folder and command. */
-	readonly #prepares = new Map<string, Promise<PrepareResult>>();
+	readonly #prepares = new Prepares();
 
 	constructor(options: SessionManagerOptions) {
 		this.#port = options.port;
@@ -171,7 +188,7 @@ export class SessionManager {
 	/** The tracked session whose persisted id is `sessionId` (the skill socket's key). */
 	bySessionId(sessionId: string): { handle: string; call: CallState | null; turnId: string | null; turnCause: TurnCause | null } | null {
 		for (const t of this.#tracked.values()) {
-			if (t.sessionId === sessionId) return { handle: t.handle, call: t.call, turnId: t.turnId, turnCause: t.turnCause };
+			if (t.sessionId === sessionId) return { handle: t.handle, call: t.call, turnId: t.turn?.id ?? null, turnCause: t.turn?.cause ?? null };
 		}
 		return null;
 	}
@@ -202,7 +219,9 @@ export class SessionManager {
 		// command can land between the attach and its result.
 		const letGo = (handle: string, previous: Tracked | undefined) => previous !== undefined && this.#tracked.get(handle) !== previous;
 		const gone = (handle: string) => {
-			if (this.#tracked.delete(handle)) this.#emit(handle, { kind: "session_closed", reason: "gone" });
+			const t = this.#tracked.get(handle);
+			// The state file is written once, when the resync ends.
+			if (t) this.#untrack(t, "gone", { writeState: false });
 			closed.push(handle);
 		};
 		for (const rec of recorded.values()) {
@@ -219,13 +238,13 @@ export class SessionManager {
 				continue;
 			}
 			if (letGo(rec.handle, previous)) continue;
-			const t = this.#tracked.get(rec.handle) ?? this.#untracked(rec);
+			const t = this.#tracked.get(rec.handle) ?? this.#newRecord(rec);
 			t.last = snapshot;
 			this.#tracked.set(rec.handle, t);
 			// A busy session rebuilt from a snapshot has no reliable cause. Keep
 			// its module calls fail-closed until a fresh turn opens.
-			if (snapshot.busy && !t.turnOpen) this.#openTurn(t, "unknown");
-			if (t.turnOpen) this.#settle(t);
+			if (snapshot.busy) this.#turnStep(t, { kind: "open", cause: "unknown" });
+			if (t.turn) this.#settle(t);
 			kept.push(rec.handle);
 		}
 		const failed: { session: string; error: string }[] = [];
@@ -244,7 +263,7 @@ export class SessionManager {
 					gone(rec.handle);
 					continue;
 				}
-				if (!this.#tracked.has(rec.handle)) this.#tracked.set(rec.handle, this.#untracked(rec));
+				if (!this.#tracked.has(rec.handle)) this.#tracked.set(rec.handle, this.#newRecord(rec));
 				failed.push({ session: rec.handle, error });
 			}
 		}
@@ -252,8 +271,8 @@ export class SessionManager {
 		return { live: kept, closed, failed };
 	}
 
-	/** A recorded session this process has not tracked yet, with no turn open. */
-	#untracked(rec: StateFile["sessions"][number]): Tracked {
+	/** The record of a session this process has not tracked yet: idle, off any call, no inputs sent. */
+	#newRecord(rec: StateFile["sessions"][number]): Tracked {
 		return {
 			handle: rec.handle,
 			sessionId: rec.session_id,
@@ -261,11 +280,9 @@ export class SessionManager {
 			project: rec.project,
 			cwd: rec.cwd,
 			provenance: rec.provenance,
-			turnOpen: false,
+			turn: null,
 			inputs: 0,
 			pending: 0,
-			turnId: null,
-			turnCause: null,
 			call: null,
 			last: null,
 			killing: false,
@@ -295,10 +312,10 @@ export class SessionManager {
 			project: t.project,
 			cwd: t.cwd,
 			provenance: t.provenance,
-			busy: t.turnOpen || (t.last?.busy ?? false),
-			turn_open: t.turnOpen,
-			turn_id: t.turnId,
-			cause: t.turnCause,
+			busy: t.turn !== null || (t.last?.busy ?? false),
+			turn_open: t.turn !== null,
+			turn_id: t.turn?.id ?? null,
+			cause: t.turn?.cause ?? null,
 			model: modelLabel(t.last),
 			thinking: t.last?.thinking ?? null,
 			call_mode: t.call?.mode ?? null,
@@ -307,21 +324,6 @@ export class SessionManager {
 	}
 
 	// -- commands ----------------------------------------------------------
-
-	/**
-	 * Run a prepare command, or join the same command already running in the
-	 * same folder and answer with its result. The service sends run_prepare
-	 * again when its link drops mid-prepare; a second copy would race the
-	 * first in the same tree, and the first run's report would be lost (#292).
-	 */
-	#prepare(options: { cwd: string; command: string; timeoutMs?: number }): Promise<PrepareResult> {
-		const key = JSON.stringify([options.cwd, options.command]);
-		const running = this.#prepares.get(key);
-		if (running) return running;
-		const run = runPrepare(options).finally(() => this.#prepares.delete(key));
-		this.#prepares.set(key, run);
-		return run;
-	}
 
 	/** Dispatch one host-link command. Throws CommandError or DaemonCommandError. */
 	async handle(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -355,7 +357,7 @@ export class SessionManager {
 			case "list_models":
 				return { models: await this.#port.listModels() };
 			case "run_prepare":
-				return this.#prepare({
+				return this.#prepares.run({
 					cwd: requireString(args, "cwd"),
 					command: requireString(args, "command"),
 					timeoutMs: typeof args.timeout_ms === "number" ? args.timeout_ms : undefined,
@@ -449,22 +451,15 @@ export class SessionManager {
 
 	async #adopt(session: DaemonSession, project: string, cwd: string, provenance: Provenance, attached?: DaemonSession): Promise<Record<string, unknown>> {
 		const snapshot = attached ?? (await this.#port.attach(session.handle));
-		const t: Tracked = {
+		const t = this.#newRecord({
 			handle: session.handle,
-			sessionId: session.sessionId || snapshot.sessionId,
+			session_id: session.sessionId || snapshot.sessionId,
 			name: session.name ?? snapshot.name,
 			project,
 			cwd: session.cwd || cwd,
 			provenance,
-			turnOpen: false,
-			inputs: 0,
-			pending: 0,
-			turnId: null,
-			turnCause: null,
-			call: null,
-			last: { ...session, lastText: snapshot.lastText ?? null },
-			killing: false,
-		};
+		});
+		t.last = { ...session, lastText: snapshot.lastText ?? null };
 		if (t.name) this.#usedNames.add(t.name);
 		this.#tracked.set(t.handle, t);
 		this.#writeState();
@@ -483,7 +478,7 @@ export class SessionManager {
 						session_id: s.sessionId,
 						name: s.name,
 						cwd: s.cwd,
-						busy: s.busy || (t?.turnOpen ?? false),
+						busy: s.busy || Boolean(t?.turn),
 						provenance: t?.provenance ?? null,
 						project: t?.project ?? null,
 						model: modelLabel(s),
@@ -501,7 +496,7 @@ export class SessionManager {
 
 	async prompt(handle: string, message: string): Promise<{ sent_as: string }> {
 		const t = this.#get(handle);
-		if (t.turnOpen) return this.input(handle, "follow_up", message);
+		if (t.turn) return this.input(handle, "follow_up", message);
 		try {
 			return await this.#send(t, "prompt", () => this.#port.prompt(handle, message));
 		} catch (error) {
@@ -523,7 +518,7 @@ export class SessionManager {
 		} finally {
 			t.pending--;
 		}
-		if (!t.turnOpen) this.#openTurn(t, "input");
+		this.#turnStep(t, { kind: "open", cause: "input" });
 		this.#settle(t);
 		return { sent_as: kind };
 	}
@@ -538,7 +533,7 @@ export class SessionManager {
 		} catch {
 			// ignored on purpose
 		}
-		if (t.turnOpen) this.#settle(t);
+		if (t.turn) this.#settle(t);
 		return { aborted: true };
 	}
 
@@ -567,11 +562,16 @@ export class SessionManager {
 		return { detached: true };
 	}
 
-	#untrack(t: Tracked, reason: string): void {
+	/**
+	 * Stop tracking `t`: its turn and its call end with it, and the service
+	 * hears `session_closed` with `reason`. A resync, which rewrites the state
+	 * file once at its end, passes `writeState: false`.
+	 */
+	#untrack(t: Tracked, reason: string, { writeState = true }: { writeState?: boolean } = {}): void {
 		this.#tracked.delete(t.handle);
-		t.turnOpen = false;
+		this.#turnStep(t, { kind: "untracked" });
 		t.call = null;
-		this.#writeState();
+		if (writeState) this.#writeState();
 		this.#emit(t.handle, { kind: "session_closed", reason });
 	}
 
@@ -617,36 +617,47 @@ export class SessionManager {
 
 	// -- turns and events --------------------------------------------------
 
-	#openTurn(t: Tracked, cause: TurnCause): void {
-		t.turnOpen = true;
-		// A reconnect snapshot has no reliable cause or authority. Keep its
-		// turn id absent so the service can refuse self-wake side effects.
-		t.turnId = cause === "unknown" ? null : `turn-${randomBytes(8).toString("hex")}`;
-		t.turnCause = cause;
-		this.#emit(t.handle, { kind: "turn_start", cause, ...(t.turnId ? { turn_id: t.turnId } : {}) });
+	/**
+	 * The one writer of a tracked session's turn. Opening a turn announces it
+	 * with `turn_start`; settling it sends `turn_end`. A session let go ends
+	 * its turn without one: its `session_closed` stands for it. A
+	 * wait_for_idle answer carries the input mark it was sent after, and
+	 * settles the turn only if no input came after it and the session is
+	 * still this record.
+	 */
+	#turnStep(t: Tracked, event: TurnEvent): void {
+		switch (event.kind) {
+			case "open": {
+				if (t.turn) return;
+				// A reconnect snapshot has no reliable cause or authority. Keep its
+				// turn id absent so the service can refuse self-wake side effects.
+				const id = event.cause === "unknown" ? null : `turn-${randomBytes(8).toString("hex")}`;
+				t.turn = { id, cause: event.cause };
+				this.#emit(t.handle, { kind: "turn_start", cause: event.cause, ...(id ? { turn_id: id } : {}) });
+				return;
+			}
+			case "settled": {
+				if (this.#tracked.get(t.handle) !== t || t.inputs !== event.mark || !t.turn) return;
+				const { id } = t.turn;
+				t.turn = null;
+				if (event.failure === null && t.last) t.last = { ...t.last, busy: false };
+				this.#emit(t.handle, { kind: "turn_end", ...(id ? { turn_id: id } : {}), ...(event.failure === null ? {} : { error: event.failure }) });
+				return;
+			}
+			case "untracked":
+				t.turn = null;
+				return;
+			default:
+				event satisfies never;
+		}
 	}
 
 	/** Send wait_for_idle after the latest input; settle only if it is still the latest. */
 	#settle(t: Tracked): void {
 		const mark = ++t.inputs;
 		this.#port.waitForIdle(t.handle).then(
-			() => {
-				if (this.#tracked.get(t.handle) !== t || t.inputs !== mark || !t.turnOpen) return;
-				const turnId = t.turnId;
-				t.turnOpen = false;
-				t.turnId = null;
-				t.turnCause = null;
-				if (t.last) t.last = { ...t.last, busy: false };
-				this.#emit(t.handle, { kind: "turn_end", ...(turnId ? { turn_id: turnId } : {}) });
-			},
-			(error: unknown) => {
-				if (this.#tracked.get(t.handle) !== t || t.inputs !== mark || !t.turnOpen) return;
-				const turnId = t.turnId;
-				t.turnOpen = false;
-				t.turnId = null;
-				t.turnCause = null;
-				this.#emit(t.handle, { kind: "turn_end", ...(turnId ? { turn_id: turnId } : {}), error: error instanceof Error ? error.message : String(error) });
-			},
+			() => this.#turnStep(t, { kind: "settled", mark, failure: null }),
+			(error: unknown) => this.#turnStep(t, { kind: "settled", mark, failure: error instanceof Error ? error.message : String(error) }),
 		);
 	}
 
@@ -663,10 +674,10 @@ export class SessionManager {
 				if (!t.killing) this.#untrack(t, "gone");
 				return;
 			case "agent_start":
-				if (!t.turnOpen) {
-					this.#openTurn(t, t.pending > 0 ? "input" : "autonomous");
-					if (t.pending === 0) this.#settle(t);
-				}
+				// An agent_start inside an open turn is one more run of it.
+				if (t.turn) return;
+				this.#turnStep(t, { kind: "open", cause: t.pending > 0 ? "input" : "autonomous" });
+				if (t.pending === 0) this.#settle(t);
 				return;
 			// `args`, `result` and `turn_id` are optional additions for the
 			// debug page (docs/host-link.md, "Session events").
@@ -677,7 +688,7 @@ export class SessionManager {
 					tool: event.toolName ?? null,
 					call_id: event.toolCallId ?? null,
 					...(args !== undefined ? { args } : {}),
-					...(t.turnId ? { turn_id: t.turnId } : {}),
+					...(t.turn?.id ? { turn_id: t.turn.id } : {}),
 				});
 				return;
 			}
@@ -689,7 +700,7 @@ export class SessionManager {
 					call_id: event.toolCallId ?? null,
 					error: event.isError === true,
 					...(result !== undefined ? { result } : {}),
-					...(t.turnId ? { turn_id: t.turnId } : {}),
+					...(t.turn?.id ? { turn_id: t.turn.id } : {}),
 				});
 				return;
 			}
@@ -698,7 +709,7 @@ export class SessionManager {
 				if (message.role !== "assistant") return;
 				const text = textOf(message);
 				if (text) {
-					this.#emit(handle, { kind: "text", text, ...(t.turnId ? { turn_id: t.turnId } : {}) });
+					this.#emit(handle, { kind: "text", text, ...(t.turn?.id ? { turn_id: t.turn.id } : {}) });
 					if (t.last) t.last = { ...t.last, lastText: text };
 				}
 				if (message.stopReason === "error") this.#emit(handle, { kind: "error", message: String(message.errorMessage ?? "model error") });
@@ -739,116 +750,4 @@ export class SessionManager {
 		writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
 		renameSync(tmp, this.#stateFile);
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Prepare
-// ---------------------------------------------------------------------------
-
-/** Output kept per stream; the tail is kept, the head dropped. */
-export const PREPARE_OUTPUT_LIMIT = 16 * 1024;
-export const PREPARE_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-
-export interface PrepareResult {
-	outcome: "succeeded" | "failed" | "timed_out";
-	exit_code: number | null;
-	signal: string | null;
-	stdout: string;
-	stderr: string;
-	truncated: boolean;
-	duration_ms: number;
-}
-
-class Tail {
-	#chunks: Buffer[] = [];
-	#size = 0;
-	truncated = false;
-	push(chunk: Buffer): void {
-		this.#chunks.push(chunk);
-		this.#size += chunk.length;
-		while (this.#size > PREPARE_OUTPUT_LIMIT) {
-			const extra = this.#size - PREPARE_OUTPUT_LIMIT;
-			const head = this.#chunks[0];
-			this.truncated = true;
-			if (head.length <= extra) {
-				this.#chunks.shift();
-				this.#size -= head.length;
-			} else {
-				this.#chunks[0] = head.subarray(extra);
-				this.#size -= extra;
-			}
-		}
-	}
-	text(): string {
-		return Buffer.concat(this.#chunks).toString("utf8");
-	}
-}
-
-/**
- * How long output is still read after the shell exits. A process the command
- * left running (`server &`) inherits the output pipes and can hold them open
- * for as long as it runs; waiting for them would hold the prepare until its
- * timeout. Output the shell wrote is already in the pipes, so a short wait
- * reads it. Then our ends are closed: a process left behind that writes to
- * them later gets SIGPIPE, which ends it unless it ignores the signal.
- */
-export const PREPARE_DRAIN_MS = 500;
-
-/**
- * Run a project's prepare command with `sh -c` in its folder, bounded in
- * output and time. It settles on the shell's exit, after PREPARE_DRAIN_MS
- * at most for the output pipes, not when every process holding them is gone.
- * A shell that overruns `timeoutMs` is killed with its process group.
- */
-export function runPrepare(options: { cwd: string; command: string; timeoutMs?: number }): Promise<PrepareResult> {
-	const timeoutMs = options.timeoutMs ?? PREPARE_DEFAULT_TIMEOUT_MS;
-	const started = Date.now();
-	return new Promise((resolve) => {
-		const stdout = new Tail();
-		const stderr = new Tail();
-		let timedOut = false;
-		let settled = false;
-		let exit: { code: number | null; signal: string | null } = { code: null, signal: null };
-		let drain: NodeJS.Timeout | undefined;
-		const child = spawn("sh", ["-c", options.command], { cwd: options.cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
-		child.stdout.on("data", (c: Buffer) => stdout.push(c));
-		child.stderr.on("data", (c: Buffer) => stderr.push(c));
-		const timer = setTimeout(() => {
-			timedOut = true;
-			try {
-				// Kill the whole process group, not only the shell.
-				process.kill(-(child.pid as number), "SIGKILL");
-			} catch {
-				child.kill("SIGKILL");
-			}
-		}, timeoutMs);
-		const finish = (spawnError?: Error) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			clearTimeout(drain);
-			resolve({
-				outcome: timedOut ? "timed_out" : exit.code === 0 ? "succeeded" : "failed",
-				exit_code: exit.code,
-				signal: exit.signal,
-				stdout: stdout.text(),
-				stderr: spawnError ? spawnError.message : stderr.text(),
-				truncated: stdout.truncated || stderr.truncated,
-				duration_ms: Date.now() - started,
-			});
-		};
-		child.on("error", (error) => finish(error));
-		child.on("exit", (code, signal) => {
-			exit = { code, signal };
-			clearTimeout(timer);
-			drain = setTimeout(() => {
-				// Stop reading: a process left behind keeps the pipes open.
-				child.stdout.destroy();
-				child.stderr.destroy();
-				finish();
-			}, PREPARE_DRAIN_MS);
-		});
-		// Every pipe closed after the exit: all the output is in.
-		child.on("close", () => finish());
-	});
 }
