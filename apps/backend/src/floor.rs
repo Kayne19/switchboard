@@ -74,6 +74,19 @@ pub(crate) type GateFuture = Pin<Box<dyn Future<Output = Result<bool, ()>> + Sen
 pub(crate) type RewriteFuture = Pin<Box<dyn Future<Output = Result<String, ()>> + Send>>;
 pub(crate) type ReleaseFuture = Pin<Box<dyn Future<Output = ReleaseOutcome> + Send>>;
 
+/// What the floor tells the agent projection about an agent's request to
+/// speak. The floor decides who is waiting; the projection mirrors it (#388).
+/// The hook runs under the floor's lock, so a mark and the queue change it
+/// reports cannot be reordered by another request or release.
+pub(crate) enum Waiting<'a> {
+    /// The agent asked to speak; `request` is now its newest on the floor.
+    Asked(&'a FloorRequest),
+    /// The agent's last request on the floor was spoken.
+    Spoken(&'a FloorRequest),
+}
+
+pub(crate) type WaitingHook = Arc<dyn Fn(Waiting<'_>) + Send + Sync>;
+
 /// Hooks are adapters, not owners. The callbacks must re-check lifecycle
 /// identity immediately before every side effect because promotion or host
 /// loss may race a queued release.
@@ -101,6 +114,8 @@ pub(crate) struct Floor {
     next_id: Arc<std::sync::atomic::AtomicU64>,
     /// Read-only observer; the queue never waits on it.
     debug: DebugBus,
+    /// Where the floor reports who is waiting to speak.
+    waiting: WaitingHook,
 }
 
 impl Floor {
@@ -115,6 +130,7 @@ impl Floor {
             quiet_threshold,
             next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             debug: DebugBus::off(),
+            waiting: Arc::new(|_| {}),
         }
     }
 
@@ -124,12 +140,18 @@ impl Floor {
         self
     }
 
+    /// Report who is waiting to speak to `waiting`.
+    pub(crate) fn with_waiting(mut self, waiting: WaitingHook) -> Self {
+        self.waiting = waiting;
+        self
+    }
+
     /// Queues `request`. An agent has at most one request waiting: a newer
     /// one takes the place of the one it already has behind the front, and
     /// that one's trace ends as `replaced`. The front is not replaced, as it
     /// may already be on its way to the caller. So the queue holds at most
-    /// two requests per agent, however often one asks (#252); the projection
-    /// shows only the newest request too (`AgentProjection::waiting`).
+    /// two requests per agent, however often one asks (#252). The agent is
+    /// marked waiting with its newest request (`Waiting::Asked`).
     pub(crate) async fn enqueue(&self, mut request: FloorRequest) {
         let mut state = self.state.lock().await;
         let waiting = state
@@ -146,6 +168,7 @@ impl Floor {
             message: request.message.clone(),
             floor_id: Some(request.floor_debug_id()),
         });
+        (self.waiting)(Waiting::Asked(&request));
         match waiting.and_then(|index| state.queue.get_mut(index)) {
             Some(slot) => {
                 let replaced = std::mem::replace(slot, request);
@@ -204,9 +227,7 @@ impl Floor {
                 continue;
             };
             let left = self.serve(&hooks, &request, &mut listener).await;
-            // Teardown hangs on the way out, whichever phase it left from.
-            self.trace_released(&request, left.how());
-            self.drop_front(&request).await;
+            self.leave(&request, left).await;
             listener = self.listen();
         }
     }
@@ -368,11 +389,20 @@ impl Floor {
         });
     }
 
-    async fn drop_front(&self, request: &FloorRequest) {
+    /// The front request's teardown, whichever phase it left from: its trace,
+    /// its place in the queue, and, when it was spoken and was its agent's
+    /// last request on the floor, the agent's waiting mark.
+    async fn leave(&self, request: &FloorRequest, left: Left) {
+        self.trace_released(request, left.how());
         let mut state = self.state.lock().await;
-        if state.queue.front().is_some_and(|entry| entry == request) {
+        if state.queue.front() == Some(request) {
             state.queue.pop_front();
         }
+        let still_waiting = state.queue.iter().any(|entry| entry.token == request.token);
+        if matches!(left, Left::Played(_)) && !still_waiting {
+            (self.waiting)(Waiting::Spoken(request));
+        }
+        drop(state);
         self.changed.notify_waiters();
     }
 }

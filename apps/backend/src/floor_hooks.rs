@@ -2,17 +2,20 @@
 //! `FloorHooks` calls to learn whether the page is connected and a request is
 //! still live, to ask Jev for a good moment, to have the utility rewrite an
 //! update, and to release one through the speech worker.
-use crate::app_state::{publish_agents, AppState};
+use crate::app_state::{publish_agents, AppInner, AppState};
 use crate::debug::DebugEvent;
 use crate::floor;
-use crate::floor::{FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome};
+use crate::floor::{
+    FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome, Waiting, WaitingHook,
+};
 use crate::pbx::Switchboard;
+use crate::protocol::AgentRequest;
 use crate::speech::{
     finish_audio, release_reply_voice, reserve_speech, send_speech, trace_speech,
     ContinuationScope, SpeakUnder, SpeechAdmission, SpeechFailure, WhenQueueFull,
 };
 use crate::turns::{call_summary_without_desk_sessions, jev_response_event};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 pub(crate) fn spawn_floor_worker(state: AppState) {
     let floor = state.0.floor.clone();
@@ -105,6 +108,40 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
     tokio::spawn(async move { floor.run(hooks).await });
 }
 
+/// Mirrors the floor's word on who is waiting to speak into the agent
+/// projection, for a token that is still a background resident, and sends the
+/// change to the page. The floor calls it under its lock (`Waiting`).
+pub(crate) fn waiting_hook(app: Weak<AppInner>) -> WaitingHook {
+    Arc::new(move |waiting: Waiting<'_>| {
+        let Some(app) = app.upgrade() else { return };
+        let state = AppState(app);
+        let projection = &state.0.projection;
+        let change = match waiting {
+            Waiting::Asked(request) => {
+                state
+                    .0
+                    .coordinator
+                    .with_background(&request.token, |project| {
+                        projection.waiting(
+                            project.to_owned(),
+                            AgentRequest {
+                                message: request.message.clone(),
+                                reason: request.reason.clone(),
+                            },
+                        )
+                    })
+            }
+            Waiting::Spoken(request) => state
+                .0
+                .coordinator
+                .with_background(&request.token, |project| projection.floor_released(project)),
+        };
+        if let Some(change) = change {
+            publish_agents(&state, change);
+        }
+    })
+}
+
 /// Whether `request` may still be spoken: it was queued under the current
 /// generation, and its token is still a background resident of its project.
 /// The floor asks before and after the rewrite, and the release before it
@@ -194,20 +231,11 @@ async fn release_floor(
         ),
     }
     match result {
-        Ok(()) => {
-            if let Some(change) = state
-                .0
-                .coordinator
-                .with_background(&request.token, |project| {
-                    state.0.projection.floor_released(project)
-                })
-            {
-                publish_agents(state, change);
-                ReleaseOutcome::Played
-            } else {
-                ReleaseOutcome::Drop
-            }
-        }
+        // Spoken. The floor ends the agent's waiting mark when it lets the
+        // request go (`Waiting::Spoken`); a resident that went while it was
+        // spoken is reported gone.
+        Ok(()) if state.0.coordinator.is_background(&request.token) => ReleaseOutcome::Played,
+        Ok(()) => ReleaseOutcome::Drop,
         Err(SpeechFailure::NotSpoken(_)) => {
             finish_audio(state, sequence, generation, Vec::new()).await;
             if state.0.delivery.connected() {

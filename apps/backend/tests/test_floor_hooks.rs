@@ -538,6 +538,97 @@ async fn a_request_a_rescue_made_stale_is_dropped_before_the_rewrite() {
     );
 }
 
+/// An agent that asks to speak again while its first request is on its way
+/// out stays waiting once the first is spoken: the floor still holds the
+/// newer request, and the page and Jev see what the floor holds (#388).
+#[tokio::test]
+async fn an_agent_whose_newer_request_still_waits_stays_waiting_after_its_first_is_spoken() {
+    let gate_open = std::sync::Arc::new(tokio::sync::Notify::new());
+    let gates = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let jev = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder({
+        let gate_open = gate_open.clone();
+        let gates = gates.clone();
+        move |_request| {
+            let gate_open = gate_open.clone();
+            let first = gates.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+            async move {
+                if !first {
+                    // unbounded: the second request's gate waits until the test opens it.
+                    gate_open.notified().await;
+                }
+                Ok(serde_json::from_value(json!({"model": "jev-test", "answers": {
+                    "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
+                }}))
+                .expect("fixture response"))
+            }
+        }
+    });
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_PI_BINARY", "/bin/sh"),
+        ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
+    ]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("test catalog"),
+    );
+    let state = AppState::new(
+        Switchboard::new_with_jev(&config, registry, std::sync::Arc::new(prewarm), jev),
+        TranscriptLog::new(10),
+        Speaker::test_success(100, Duration::from_millis(25_000)),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    crate::speech::start_speech_worker_for_test(&state);
+    let (_connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "alpha-token");
+    for message in ["first update", "second update"] {
+        let accepted = request_to_speak(
+            state.clone(),
+            "alpha-token",
+            json!({"message": message, "reason": "finished"}),
+        )
+        .await;
+        assert_eq!(accepted.status(), StatusCode::OK);
+    }
+    spawn_floor_worker(state.clone());
+
+    let first = until_debug(&state, |event| {
+        matches!(event, crate::debug::DebugEvent::FloorReleased { floor_id: Some(id), .. } if id == "floor-1")
+    })
+    .await;
+    assert!(matches!(
+        first,
+        crate::debug::DebugEvent::FloorReleased { ref how, .. } if how == "gate_yes"
+    ));
+    let alpha = state
+        .0
+        .projection
+        .snapshot()
+        .into_iter()
+        .find(|agent| agent.project == "alpha")
+        .expect("alpha is on the page");
+    assert_eq!(alpha.state, "waiting");
+    assert_eq!(
+        alpha
+            .pending_request
+            .map(|request| request.message)
+            .as_deref(),
+        Some("second update")
+    );
+    gate_open.notify_one();
+}
+
 #[tokio::test]
 async fn stale_floor_request_is_dropped_before_audio_reservation() {
     let state = state();
