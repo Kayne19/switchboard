@@ -90,6 +90,113 @@ async fn queue_order_and_one_speaker_at_a_time() {
 }
 
 #[tokio::test]
+async fn an_agent_keeps_one_request_waiting_however_often_it_asks() {
+    let floor = Floor::new(Duration::ZERO);
+    let bus = crate::debug::DebugBus::new();
+    let floor = floor.with_debug(bus.clone());
+    // No page: nothing is released while the agent asks again and again.
+    for n in 1..=1_000 {
+        floor.enqueue(request(n)).await;
+    }
+    // The front, which may already be on its way out, and the newest.
+    assert_eq!(floor.queue_len().await, 2);
+    let replaced = debug_events(&bus)
+        .into_iter()
+        .filter(|event| matches!(event, DebugEvent::FloorReleased { how, .. } if how == "replaced"))
+        .count();
+    assert_eq!(replaced, 998);
+
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let (released, mut results) = mpsc::unbounded_channel();
+    floor.set_page_connected(true).await;
+    let worker = tokio::spawn({
+        let floor = floor.clone();
+        let h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
+        async move { floor.run(h).await }
+    });
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1000:update 1000"
+    );
+    worker.abort();
+}
+
+#[tokio::test]
+async fn a_floor_event_between_the_check_and_the_wait_is_not_lost() {
+    let floor = Floor::new(Duration::ZERO);
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let (released, mut results) = mpsc::unbounded_channel();
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
+    // The page's second check reads it gone, and it comes back before the
+    // worker waits: the wake-up lands in the gap after the state is read.
+    let checks = Arc::new(AtomicUsize::new(0));
+    let racing = floor.clone();
+    h.connected = Arc::new(move || {
+        if checks.fetch_add(1, Ordering::SeqCst) == 1 {
+            racing.changed.notify_waiters();
+            return false;
+        }
+        true
+    });
+    let worker = tokio::spawn({
+        let floor = floor.clone();
+        async move { floor.run(h).await }
+    });
+    let released = tokio::time::timeout(Duration::from_secs(2), results.recv())
+        .await
+        .expect("the worker woke for the event it was about to wait for");
+    assert_eq!(released.unwrap(), "update 1:update 1");
+    worker.abort();
+}
+
+#[tokio::test]
+async fn a_release_that_could_not_get_audio_tries_again_unprompted() {
+    let floor = Floor::new(Duration::ZERO);
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    let gates = Arc::new(AtomicUsize::new(0));
+    let mut h = hooks(connected, live, gates.clone(), mpsc::unbounded_channel().0);
+    // The first release finds every audio slot taken; nothing tells the
+    // floor when one frees up.
+    let (attempts, mut attempted) = mpsc::unbounded_channel();
+    let tries = Arc::new(AtomicUsize::new(0));
+    h.release = Arc::new(move |_, _| {
+        let attempts = attempts.clone();
+        let first = tries.fetch_add(1, Ordering::SeqCst) == 0;
+        Box::pin(async move {
+            attempts.send(()).unwrap();
+            if first {
+                ReleaseOutcome::Retry
+            } else {
+                ReleaseOutcome::Played
+            }
+        }) as ReleaseFuture
+    });
+    let worker = tokio::spawn({
+        let floor = floor.clone();
+        async move { floor.run(h).await }
+    });
+    within("attempted", attempted.recv()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), attempted.recv())
+        .await
+        .expect("the release is tried again without a floor event");
+    // The timer tries the release again, not the gate: nothing changed for
+    // Jev to judge, and a timer must not keep asking it.
+    assert_eq!(gates.load(Ordering::SeqCst), 1);
+    worker.abort();
+}
+
+#[tokio::test]
 async fn releases_record_no_overlapping_speakers() {
     let floor = Floor::new(Duration::ZERO);
     let connected = Arc::new(AtomicBool::new(true));
