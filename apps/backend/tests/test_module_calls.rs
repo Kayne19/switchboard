@@ -977,10 +977,11 @@ async fn display_reports_a_rejection_that_a_later_report_followed() {
     let DeliveryFrame::Event { sequence, .. } = connection.receiver.recv().await.unwrap() else {
         panic!("expected a display event")
     };
+    let generation = state.0.coordinator.generation();
     for report in [
-        json!({"type":"screen_state","view":"auto","has_visual":false,
+        json!({"type":"screen_state","view":"auto","has_visual":false,"generation":generation,
                "rejected":{"seq":sequence,"reason":"unknown field in chart data: zeta"}}),
-        json!({"type":"screen_state","view":"auto","has_visual":true,
+        json!({"type":"screen_state","view":"auto","has_visual":true,"generation":generation,
                "visual_kind":"metric","applied_seq":sequence + 1}),
     ] {
         handle_text_frame(&state, epoch, &mut None, &mut None, &report.to_string())
