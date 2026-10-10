@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
 import type { MessageData } from '../controller/types';
+import { useModalFocus } from '../hooks/useModalFocus';
 import { usePinnedScroll } from '../hooks/usePinnedScroll';
 import { RichText } from '../primitives/RichText';
 
@@ -15,21 +16,30 @@ interface TranscriptDrawerProps {
    * out. Absent when no call runtime is connected to this page.
    */
   onSend?: (text: string) => boolean;
-  /** The focus layer is open over the history: it is inert behind it (FocusLayer `useModalFocus`). */
+  /** The focus layer is open over the history: it is inert behind it (`useModalFocus`). */
   behindFocus?: boolean;
 }
 
 // The conversation history, opened over whichever scene is showing: from the
 // conversation scene's transcript toggle or from an explanation card beside
 // content. It belongs to the stage rather than to one scene so that opening it
-// never swaps the scene underneath.
+// never swaps the scene underneath. It covers the scene, and is a modal
+// dialog that acts as one (`useModalFocus`, #268): the scene is inert behind
+// it (SceneRenderer), focus moves in as it opens -- to the field, so a
+// caller who will not speak can type at once, or to RETURN while the line
+// is down and the field cannot take it -- and goes back to what opened it.
 export function TranscriptDrawer({ open, lines, onClose, onSend, behindFocus = false }: TranscriptDrawerProps) {
+  const live = Boolean(onSend);
+  const returnButton = useRef<HTMLButtonElement>(null);
+  const input = useRef<HTMLInputElement>(null);
+  useModalFocus(open, '.transcript', live ? input : returnButton);
   return (
     <AnimatePresence>
       {open ? (
         <motion.div
           className="transcript"
           role="dialog"
+          aria-modal="true"
           aria-label="Conversation history"
           inert={behindFocus}
           initial={{ opacity: 0 }}
@@ -39,10 +49,10 @@ export function TranscriptDrawer({ open, lines, onClose, onSend, behindFocus = f
         >
           <div className="transcript__header tech micro">
             <span>CONVERSATION / HISTORY</span>
-            <button className="transcript__return" type="button" onClick={onClose}>RETURN / ESC</button>
+            <button ref={returnButton} className="transcript__return" type="button" onClick={onClose}>RETURN / ESC</button>
           </div>
           <TranscriptBody lines={lines} />
-          <TranscriptComposer onSend={onSend} />
+          <TranscriptComposer onSend={onSend} inputRef={input} />
         </motion.div>
       ) : null}
     </AnimatePresence>
@@ -98,25 +108,28 @@ function useRowKeys(): (line: TranscriptLine) => number {
 // The draft stays in the field until the runtime has put it on the socket, so
 // a turn typed while the line is down is not lost; the transcript shows it
 // once the server echoes it back.
-function TranscriptComposer({ onSend }: { onSend?: (text: string) => boolean }) {
+function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => boolean; inputRef: RefObject<HTMLInputElement | null> }) {
   const [draft, setDraft] = useState('');
   const [notSent, setNotSent] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   // Opening the history is how a caller who will not speak reaches the line,
-  // so the field takes focus as the drawer mounts and they can type at once.
-  // It runs in the commit of the opening click, still inside that gesture,
-  // which is when a touch keyboard is allowed to come up. A field disabled
-  // for a line with no runtime cannot take focus and is left alone. It keys
-  // on the field turning live, not on `onSend` itself: the runtime registers
-  // a fresh `sendText` on every connection or recording change, and each of
-  // those must not pull focus back from wherever the caller has moved it.
+  // so the field takes focus as the drawer opens (`useModalFocus`, in the
+  // drawer) and they can type at once. A field disabled for a line with no
+  // runtime cannot take focus: RETURN takes it then. The field takes focus
+  // here when it turns live while the history is open, in the commit that
+  // makes it live. It keys on the field turning live, not on `onSend`
+  // itself: the runtime registers a fresh `sendText` on every connection or
+  // recording change, and each of those must not pull focus back from
+  // wherever the caller has moved it. Not as it mounts: the drawer has read
+  // what held focus before it, to give focus back to, and focused the field.
   const live = Boolean(onSend);
+  const wasLive = useRef(live);
   useLayoutEffect(() => {
-    if (live) {
+    if (live && !wasLive.current) {
       inputRef.current?.focus({ preventScroll: true });
     }
-  }, [live]);
+    wasLive.current = live;
+  }, [live, inputRef]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
