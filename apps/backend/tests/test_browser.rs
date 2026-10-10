@@ -630,6 +630,35 @@ async fn a_clip_is_its_header_and_the_audio_frame_after_it() {
     ));
 }
 
+/// A clip header is a browser command that acts: it queues a turn. Without the
+/// generation the page recorded it under it is refused by id, never stamped
+/// with the generation current when it arrives (`AGENTS.md`, the browser
+/// command rule), and the audio after it arrives without a header.
+#[tokio::test]
+async fn a_clip_header_without_a_generation_is_refused_and_its_audio_is_not_taken() {
+    let state = state();
+    let served = Served::start(&state).await;
+    let mut browser = served.connect().await;
+    json_until(&mut browser, "history").await;
+
+    send_json_frame(
+        &mut browser,
+        json!({"type":"clip", "id":"c1", "mime":"audio/webm"}),
+    )
+    .await;
+    browser.send(Wire::binary(vec![4, 5, 6])).await.unwrap();
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"error", "id":"c1", "message":"Clip has no generation."})
+    );
+    assert_eq!(
+        next_json(&mut browser).await,
+        json!({"type":"error", "message":"Audio arrived without a clip header."})
+    );
+    assert_still_answering(&mut browser, "after-clip-without-generation").await;
+    assert!(state.0.clips.accepted_is_empty().await);
+}
+
 #[tokio::test]
 async fn a_connection_that_falls_a_queue_behind_is_closed_at_once_and_a_reconnect_is_whole_again() {
     // Each connection has a bounded queue. A browser that stops draining it

@@ -423,12 +423,14 @@ pub(crate) async fn handle_text_frame(
             mime,
             generation,
         } => {
-            let Some(header) = parse_clip_header(id, mime, generation) else {
-                pending_header.take();
-                return send_message(state, epoch, ServerMessage::error("Invalid clip id.")).await;
-            };
-            *pending_header = Some(header);
-            Ok(())
+            pending_header.take();
+            match parse_clip_header(id, mime, generation) {
+                Ok(header) => {
+                    *pending_header = Some(header);
+                    Ok(())
+                }
+                Err(refusal) => send_message(state, epoch, *refusal).await,
+            }
         }
     }
 }
