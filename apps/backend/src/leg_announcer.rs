@@ -128,8 +128,6 @@ impl LegAnnouncer {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         gate.projection.clear();
         gate.screen_state["stale"] = json!(true);
-        gate.report_epoch = None;
-        gate.report_generation = None;
         self.display_confirm.send_modify(|confirm| {
             confirm.generation = leg.generation;
             confirm.watermark = None;

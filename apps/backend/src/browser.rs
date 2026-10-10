@@ -259,8 +259,6 @@ async fn apply_screen_state(
         "generation": current_gen,
     });
     gate.screen_state = report;
-    gate.report_epoch = Some(epoch);
-    gate.report_generation = Some(current_gen);
     drop(gate);
 
     let applied_seq = command.applied_seq;
