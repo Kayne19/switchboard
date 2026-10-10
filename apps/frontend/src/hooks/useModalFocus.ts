@@ -159,12 +159,7 @@ class ModalFocus {
         return phase.kind === 'open' ? phase : this.enter(event.target);
       case 'retarget':
         if (phase.kind !== 'open' || event.target === phase.target) return phase;
-        // A control the caller can use took the place of one that is
-        // still there (the history's field as the line comes up): focus
-        // moves to it, in the commit that makes it one.
-        if (phase.target === null || canHoldFocus(phase.target)) {
-          event.target?.focus({ preventScroll: true });
-        }
+        if (this.followsTarget(phase.target)) event.target?.focus({ preventScroll: true });
         return { kind: 'open', opener: phase.opener, target: event.target };
       case 'close':
         if (phase.kind !== 'open') return phase;
@@ -194,6 +189,23 @@ class ModalFocus {
     const keyed = Boolean(opener?.matches(':focus-visible') && !opener.matches('input, textarea'));
     target?.focus({ preventScroll: true, focusVisible: keyed } as FocusOptions);
     return { kind: 'open', opener, target };
+  }
+
+  /**
+   * Whether focus moves to a new target that takes the place of
+   * `previous`, in the commit that makes it one:
+   * - a control the caller can use took the place of one that is still
+   *   there (the history's field as the line comes up): always;
+   * - the previous target can no longer hold focus (the field turned
+   *   disabled as the line went down): when focus was on it, or the
+   *   browser has already moved it to the body. Before, focus stayed on
+   *   the body, outside the dialog (#397).
+   * Focus on any other control in the dialog stays there.
+   */
+  private followsTarget(previous: HTMLElement | null): boolean {
+    if (previous === null || canHoldFocus(previous)) return true;
+    const active = document.activeElement;
+    return active === previous || active === null || active === document.body;
   }
 
   /**

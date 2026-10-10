@@ -136,6 +136,22 @@ describe('modal focus: open', () => {
     expect(document.activeElement).toBe(returnButton());
   });
 
+  // The field turns disabled under the caller's focus. jsdom leaves focus
+  // on the disabled field; a browser moves it to the body (#397).
+  it('the line drops while focus is on the field: focus moves to RETURN', () => {
+    const host = openFromOpener(send);
+    expect(document.activeElement).toBe(field());
+    rerender(host, page(true, undefined));
+    expect(document.activeElement).toBe(returnButton());
+  });
+
+  it('the line drops after the browser moved focus to the body: focus moves to RETURN', () => {
+    const host = openFromOpener(send);
+    field()!.blur();
+    rerender(host, page(true, undefined));
+    expect(document.activeElement).toBe(returnButton());
+  });
+
   it('the line drops while focus is on another control in the dialog: focus stays there', () => {
     const host = openFromOpener(send);
     link().focus();
