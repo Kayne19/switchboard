@@ -426,7 +426,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, and the rescue each control starts with | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
 | `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection |
 | `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |
-| `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker, host-reported turns | speech synthesis, PBX policy |
+| `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker and a caller turn's one end (`TurnRun`), host-reported turns | speech synthesis, PBX policy |
 | `speech.rs` | the one ordered speech worker, its continuity, audio slots, and reply voice | the TTS provider's wire format, the audio queue itself, floor policy |
 | `leg_announcer.rs` | announcing a new leg to the browser, once per leg: the speech reset, the `epoch`, the held-scene replay | which leg is current (the coordinator's), the stage's reset (`DisplayGateState::begin_leg`) |
 | `floor.rs` | ordered background request queue, Jev good-moment holds, stateless rewrites, announce-first release | lifecycle membership, agent-state projection, route authority, TTS provider wire format |
@@ -477,6 +477,26 @@ capture
   -> ordered audio events
   -> browser playback
 ```
+
+Each caller turn has one owner from the queue to its end, in `turns.rs`.
+A transcript from any source (a clip, a streamed clip, a typed turn) reaches
+routing through `route_final_transcript` (`caller_input.rs`). From then on:
+
+| phase | owner | how it ends |
+|---|---|---|
+| routing | `dispatch_routed_transcript` | steered into the running turn, queued, or refused as stale |
+| queued | the turn worker (`process_turns`), counted in `TurnState` | refused as stale |
+| awaiting admission | `admit_turn`, behind any running operation | admitted with an operation, or refused as stale |
+| admitted to settled | `TurnRun`: the operation, the leg, the speech group; `TurnRun::drive` registers and awaits the task | `TurnRun::finish` with one `TurnOutcome`: `NotRegistered`, `Cancelled`, `Failed` or `Replied` |
+
+Every stale exit, in any phase before the turn's task runs, goes through
+`refuse_stale`: the routing trace ends as `dropped_stale` and the page gets
+an ID-bearing `stale_epoch`. `TurnRun::finish` is the only end of an
+admitted turn. It releases the operation (`drive` has already taken the
+task out of the registry), traces the end, reports the outcome (a reply is
+delivered only while its generation is current), and only then drops the
+speech group and frees the worker. A new
+way for a turn to end is a `TurnOutcome` variant, not another end path.
 
 A streaming worker's partial results are logged and go no further: they are
 not shown, persisted, routed, steered, or spoken. The page has no place for a

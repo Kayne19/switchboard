@@ -9,7 +9,6 @@ use crate::pi_client::{LegSession, PiSession};
 use crate::protocol::ServerMessage;
 use crate::turns::process_turns;
 use serde_json::{json, Value};
-use std::sync::atomic::Ordering;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
@@ -255,7 +254,7 @@ async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
     let stale = next_event_of(&mut events, "error").await;
     assert_eq!(stale["code"], "stale_epoch");
-    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+    assert_eq!(state.0.turns.queued_for_test(), 0);
     let mut turns = state.0.turns.take_receiver().await;
     assert!(matches!(
         turns.try_recv(),
@@ -285,7 +284,7 @@ async fn speech_queued_while_a_leg_starts_is_dropped_with_notice_once_the_leg_is
     let old = state.0.coordinator.generation();
     // The operator turn that asked for the transfer stays in flight until the
     // incoming leg's intro turn ends, and that leg is busy with the intro.
-    state.0.turn_in_flight.store(true, Ordering::Release);
+    state.0.turns.set_in_flight_for_test(true);
     begin_alpha_candidate(&state, "alpha-leg");
     let (intro_leg, intro) = leg_busy_with_its_intro(&state).await;
 
@@ -308,7 +307,7 @@ async fn speech_queued_while_a_leg_starts_is_dropped_with_notice_once_the_leg_is
 
     // The intro turn ends and the turn worker reaches the queued clip: it
     // carries the old generation, so it is dropped, and the browser is told.
-    state.0.turn_in_flight.store(false, Ordering::Release);
+    state.0.turns.set_in_flight_for_test(false);
     let turn_worker = tokio::spawn(process_turns(state.clone()));
     let frames = frames_until(&mut connection, "error").await;
     assert_eq!(
@@ -317,7 +316,7 @@ async fn speech_queued_while_a_leg_starts_is_dropped_with_notice_once_the_leg_is
     );
     assert_eq!(frames[1]["generation"], old + 1);
     assert_dropped_with_notice(&frames[3], "while-connecting");
-    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert!(!state.0.turns.in_flight_for_test());
     assert!(state.0.active_operations.lock().await.is_empty());
 
     clip_worker.abort();
@@ -473,7 +472,7 @@ async fn a_clip_resent_after_its_verdict_was_missed_is_answered_with_it() {
     );
     assert_eq!(frames[0], verdict);
     // Answered from memory: the clip is not transcribed or queued twice.
-    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 1);
+    assert_eq!(state.0.turns.queued_for_test(), 1);
     assert_eq!(state.0.transcript_log.lock().await.entries().len(), 1);
 
     clip_worker.abort();
@@ -609,7 +608,7 @@ async fn upload_clip(
 
 /// Asserts the clip never became a turn: nothing waits in the turn queue.
 async fn assert_never_queued(state: &AppState) {
-    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+    assert_eq!(state.0.turns.queued_for_test(), 0);
     let mut turns = state.0.turns.take_receiver().await;
     assert!(matches!(
         turns.try_recv(),
