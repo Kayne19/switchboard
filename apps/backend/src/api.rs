@@ -1,5 +1,5 @@
 //! The HTTP surface: the primary listener's router, `/healthz`, the debug
-//! listener's router, and the debug listener's origin check.
+//! listener's router, and the origin check both listeners apply.
 use crate::app_state::AppState;
 use crate::browser::ws;
 use crate::module_calls::host_link;
@@ -12,7 +12,7 @@ use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 #[cfg(test)]
 use axum::http::{Method, Request};
-use axum::middleware::Next;
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -37,11 +37,12 @@ impl AppState {
             .route("/ws", get(ws))
             .route("/host", get(host_link))
             .with_state(self);
-        if let Some(service) = static_dir {
+        let router = if let Some(service) = static_dir {
             router.fallback_service(service)
         } else {
             router
-        }
+        };
+        router.layer(middleware::from_fn(refuse_cross_origin))
     }
 
     /// The optional read-only listener. It has no call controls and serves
@@ -63,10 +64,13 @@ async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
-/// Refuses a request that a page on another site sent: a browser applies no
-/// CORS to a WebSocket, so any page it opens could otherwise read the debug
-/// stream. A request from the page itself, or from a client that is not a
-/// browser (no `Origin`), passes.
+/// Refuses a request that a page on another site sent. A browser applies no
+/// CORS to a WebSocket, and it sends a `POST` with no body cross-site without
+/// a preflight, so without this check any page the caller opens could read
+/// the call, speak to the agent on the line as the caller, or hang up (#223).
+/// A browser names the sending page in `Origin` on both; a request from the
+/// page itself, or from a client that is not a browser (no `Origin`: curl, a
+/// host agent), passes.
 pub(crate) async fn refuse_cross_origin(request: axum::extract::Request, next: Next) -> Response {
     if !same_origin(request.headers()) {
         return StatusCode::FORBIDDEN.into_response();

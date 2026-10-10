@@ -1,5 +1,5 @@
 use super::*;
-use crate::app_state::{state, state_with_stream};
+use crate::app_state::{scratch_root, state, state_with_agents, state_with_stream};
 use crate::pbx::OPERATOR;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
@@ -244,6 +244,112 @@ async fn the_debug_listener_serves_only_the_embedded_page() {
         let (status, _) = get_body(state.debug_router(), path).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
     }
+}
+
+/// The status the primary listener answers a `/ws` upgrade from `origin`
+/// with. It goes over a real socket: a oneshot request cannot upgrade.
+async fn call_socket_upgrade_status(origin: Option<&str>) -> u16 {
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = state().router(None);
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let mut request = format!("ws://{address}/ws").into_client_request().unwrap();
+    if let Some(origin) = origin {
+        let origin = origin.replace("{address}", &address.to_string());
+        request
+            .headers_mut()
+            .insert("Origin", origin.parse().unwrap());
+    }
+    let status = match tokio_tungstenite::connect_async(request).await {
+        Ok((_, response)) => response.status().as_u16(),
+        Err(Error::Http(response)) => response.status().as_u16(),
+        Err(error) => panic!("upgrade failed: {error}"),
+    };
+    server.abort();
+    status
+}
+
+#[tokio::test]
+async fn the_call_socket_accepts_only_its_own_origin() {
+    // #223: a browser applies no CORS to a WebSocket, and this one reads the
+    // transcript and speaks to the agent on the line as the caller. A page
+    // on any other site must not be able to open it.
+    assert_eq!(call_socket_upgrade_status(None).await, 101);
+    assert_eq!(
+        call_socket_upgrade_status(Some("http://{address}")).await,
+        101
+    );
+    assert_eq!(
+        call_socket_upgrade_status(Some("HTTP://{address}")).await,
+        101
+    );
+    for foreign in [
+        "http://evil.example",
+        "http://evil.example:8765",
+        "https://{address}.evil.example",
+        "null",
+        "file://",
+    ] {
+        assert_eq!(
+            call_socket_upgrade_status(Some(foreign)).await,
+            403,
+            "{foreign}"
+        );
+    }
+}
+
+/// `POST /hangup` as a page at `origin` sends it to `host`: no body and no
+/// `Content-Type`, which a cross-site `fetch(.., {mode: "no-cors"})` can
+/// send without a preflight.
+async fn hangup_from(state: &AppState, origin: &str, host: &str) -> StatusCode {
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri("/hangup")
+        .header("origin", origin)
+        .header("host", host)
+        .body(Body::empty())
+        .unwrap();
+    state
+        .clone()
+        .router(None)
+        .oneshot(request)
+        .await
+        .unwrap()
+        .status()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_cross_site_hangup_is_refused_and_leaves_the_leg_on_the_line() {
+    let root = scratch_root("api-cross-site-hangup");
+    let state = state_with_agents(&root);
+    let (_connection, _, _) = state.register_connection().await;
+    state.0.switchboard.lock().await.handle("hello").await;
+    let operator = state
+        .0
+        .active_session
+        .lock()
+        .await
+        .clone()
+        .expect("the operator is live");
+
+    let code = hangup_from(&state, "http://evil.example", "switchboard.home.arpa").await;
+    assert_eq!(code, StatusCode::FORBIDDEN);
+    assert!(operator.alive().await);
+    assert!(state.0.active_session.lock().await.is_some());
+
+    // The page itself, as caddy hands it on: the browser's Host, unchanged.
+    let code = hangup_from(
+        &state,
+        "https://switchboard.home.arpa",
+        "switchboard.home.arpa",
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert!(!operator.alive().await);
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

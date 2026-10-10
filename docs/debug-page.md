@@ -27,7 +27,8 @@ logs. There is no authentication and no disk history. The event and log rings
 are bounded and memory-only.
 
 Browsers do not apply CORS to a WebSocket, so the listener checks the origin
-itself (`api::refuse_cross_origin`): a request with an `Origin` header is
+itself, with the same check as the primary listener (`api::refuse_cross_origin`;
+see the README, "Who can reach the call"): a request with an `Origin` header is
 served only when that origin's host and port equal the request's `Host` (a
 default port may be left out on either side). Any other page a browser on the
 network opens gets a 403. A request with no `Origin` (curl, a probe script) is
