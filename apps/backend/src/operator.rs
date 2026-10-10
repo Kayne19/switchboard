@@ -82,7 +82,13 @@ impl Switchboard {
             .await?;
             session.observe(self.debug.clone());
             self.operator = Some(session);
-            self.set_active_session(self.operator_leg()).await;
+            // The guard names the leg on the line. The operator also answers
+            // some lines while a project stays on it (status, an unresolved
+            // split), and starting it for one of those must not take the
+            // guard off that project: steering and every rescue act on it.
+            if self.coordinator.route() == OPERATOR {
+                self.set_active_session(self.operator_leg()).await;
+            }
         }
         self.operator
             .as_ref()
@@ -264,7 +270,7 @@ impl Switchboard {
         if let Some(s) = self.operator.take() {
             s.close().await;
         }
-        self.set_active_session(None).await;
+        self.release_operator_guard().await;
         tracing::error!(%error, "operator unavailable after a failed turn");
         self.routing_unavailable()
     }

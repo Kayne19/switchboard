@@ -354,6 +354,15 @@ impl Switchboard {
         *self.active_session.lock().await = session;
     }
 
+    /// Empties the guard only if the operator holds it: a project on the
+    /// line keeps the guard while the operator answers for it.
+    pub(crate) async fn release_operator_guard(&self) {
+        let mut guard = self.active_session.lock().await;
+        if matches!(*guard, Some(LegSession::Operator(_))) {
+            *guard = None;
+        }
+    }
+
     pub(crate) fn operator_leg(&self) -> Option<LegSession> {
         self.operator.clone().map(LegSession::Operator)
     }
