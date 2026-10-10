@@ -248,6 +248,11 @@ impl DisplayProjection {
         primaries
     }
 
+    /// Whether the stage shows nothing: no object and no anchored speech.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.order.is_empty() && self.speech.is_none()
+    }
+
     pub(crate) fn clear(&mut self) {
         self.objects.clear();
         self.order.clear();

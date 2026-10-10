@@ -739,9 +739,10 @@ visible object, the current focus, and any pending `say` — via
 action. `screen_state.has_visual` / `visual_kind` reflect what the browser
 has actually confirmed, so an agent can verify its own display via `view`.
 
-A background agent's displays are held in a `DisplayProjection` of their own
-(`AgentProjection::hold_display`), which starts empty, as the stage does when
-the caller brings the agent forward. Each held action is applied to it with
+A background agent's displays are held in a `HeldScene` of their own
+(`AgentProjection::hold_display`): a `DisplayProjection`, which starts empty,
+as the stage does when the caller brings the agent forward, and the count of
+actions applied to it, which orders its primary claims as `seq` does live. Each held action is applied to it with
 the same `refusal()` check as a live one, so a show past the stage caps is
 refused when it is sent. On the promotion, `LegAnnouncer::begin_scene`
 clears the stage and replays the held projection's `snapshot_actions()` into

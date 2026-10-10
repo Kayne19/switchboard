@@ -58,7 +58,16 @@ pub(crate) struct AgentProjection {
     // applies a waiting/display mutation, so the check and write cannot be
     // separated by promotion.
     pub(crate) states: Arc<StdMutex<Vec<AgentState>>>,
-    pub(crate) displays: Arc<StdMutex<HashMap<String, DisplayProjection>>>,
+    pub(crate) displays: Arc<StdMutex<HashMap<String, HeldScene>>>,
+}
+
+/// A background agent's held displays: the stage it gets when the caller
+/// brings it forward, and the count of actions applied to it, which orders
+/// its primary claims as the live stage's `seq` does.
+#[derive(Clone, Default)]
+pub(crate) struct HeldScene {
+    stage: DisplayProjection,
+    applied: u64,
 }
 
 impl AgentProjection {
@@ -141,11 +150,11 @@ impl AgentProjection {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let held = displays.entry(project).or_default();
-        if let Some(refusal) = held.refusal(action) {
+        if let Some(refusal) = held.stage.refusal(action) {
             return Err(refusal);
         }
-        let sequence = held.watermark + 1;
-        held.apply(action, sequence);
+        held.applied += 1;
+        held.stage.apply(action, held.applied);
         Ok(())
     }
 
@@ -155,7 +164,7 @@ impl AgentProjection {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(project)
-            .is_some_and(|held| !held.order.is_empty() || held.speech.is_some())
+            .is_some_and(|held| !held.stage.is_empty())
     }
 
     pub(crate) fn take_display(&self, project: &str) -> Option<DisplayProjection> {
@@ -163,6 +172,7 @@ impl AgentProjection {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(project)
+            .map(|held| held.stage)
     }
 
     pub(crate) fn snapshot(&self) -> Vec<AgentState> {
