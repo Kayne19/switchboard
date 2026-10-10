@@ -442,3 +442,375 @@ async fn a_turn_ends_only_on_the_settled_turn_end() {
         (json!("kill"), json!({"session": "s1"}))
     );
 }
+
+/// How a project session came to the service, as the end-of-life table
+/// below names it.
+#[derive(Clone, Copy, Debug)]
+enum Came {
+    Created,
+    TakenOver,
+}
+
+/// Where a session is in its end of life when a row's event arrives.
+#[derive(Clone, Copy, Debug)]
+enum EndPhase {
+    /// In use.
+    Open,
+    /// A command to it failed.
+    Unusable,
+    /// The host reported it closed.
+    EndedOnHost,
+    /// Its owner closed it and its release went out.
+    Released,
+}
+
+/// What happens to a session in a row of the end-of-life table.
+#[derive(Clone, Copy, Debug)]
+enum EndEvent {
+    /// A command to it fails on the host.
+    CommandFails,
+    /// The host reports it closed (`session_closed`).
+    HostEnds,
+    /// Its owner closes it.
+    OwnerCloses,
+    /// Its last handle is dropped.
+    LastHandleDrops,
+}
+
+/// One row of the end-of-life table: from `phase`, on `event`, the handle
+/// is `alive` (unknown once dropped), the application has been told the
+/// session closed `reports` times, the event sent `sent` to the host, and
+/// a close (and drop) afterwards sends `then_close`.
+struct EndRow {
+    came: Came,
+    phase: EndPhase,
+    event: EndEvent,
+    alive: Option<bool>,
+    reports: usize,
+    sent: &'static [&'static str],
+    then_close: &'static [&'static str],
+}
+
+const KILL: &[&str] = &["kill"];
+const DETACH: &[&str] = &["abort", "detach"];
+const NONE: &[&str] = &[];
+
+/// A row of the end-of-life table, in the table's column order.
+fn row(
+    came: Came,
+    phase: EndPhase,
+    event: EndEvent,
+    alive: Option<bool>,
+    reports: usize,
+    sent: &'static [&'static str],
+    then_close: &'static [&'static str],
+) -> EndRow {
+    EndRow {
+        came,
+        phase,
+        event,
+        alive,
+        reports,
+        sent,
+        then_close,
+    }
+}
+
+/// A project session's end of life (`docs/architecture.md`, "A project
+/// session's end"), every phase against every event, for a session the
+/// service created and one it took over from a desk. Columns: how it came,
+/// the phase, the event; then alive, closed reports, sent by the event,
+/// sent by a close afterwards.
+fn end_table() -> Vec<EndRow> {
+    use Came::*;
+    use EndEvent::*;
+    use EndPhase::*;
+    let gone = None;
+    vec![
+        // Created: a release is a kill, owed until the host says the session is gone.
+        row(Created, Open, CommandFails, Some(false), 1, NONE, KILL),
+        row(Created, Open, HostEnds, Some(false), 1, NONE, NONE),
+        row(Created, Open, OwnerCloses, Some(false), 0, KILL, NONE),
+        row(Created, Open, LastHandleDrops, gone, 0, KILL, NONE),
+        row(Created, Unusable, CommandFails, Some(false), 1, NONE, KILL),
+        row(Created, Unusable, HostEnds, Some(false), 1, NONE, NONE),
+        row(Created, Unusable, OwnerCloses, Some(false), 1, KILL, NONE),
+        row(Created, Unusable, LastHandleDrops, gone, 1, KILL, NONE),
+        row(
+            Created,
+            EndedOnHost,
+            CommandFails,
+            Some(false),
+            1,
+            NONE,
+            NONE,
+        ),
+        row(Created, EndedOnHost, HostEnds, Some(false), 1, NONE, NONE),
+        row(
+            Created,
+            EndedOnHost,
+            OwnerCloses,
+            Some(false),
+            1,
+            NONE,
+            NONE,
+        ),
+        row(Created, EndedOnHost, LastHandleDrops, gone, 1, NONE, NONE),
+        row(Created, Released, CommandFails, Some(false), 0, NONE, NONE),
+        row(Created, Released, HostEnds, Some(false), 0, NONE, NONE),
+        row(Created, Released, OwnerCloses, Some(false), 0, NONE, NONE),
+        row(Created, Released, LastHandleDrops, gone, 0, NONE, NONE),
+        // Taken over: a release is an abort then a detach, owed until it went out.
+        row(TakenOver, Open, CommandFails, Some(false), 1, NONE, DETACH),
+        row(TakenOver, Open, HostEnds, Some(false), 1, NONE, DETACH),
+        row(TakenOver, Open, OwnerCloses, Some(false), 0, DETACH, NONE),
+        row(TakenOver, Open, LastHandleDrops, gone, 0, DETACH, NONE),
+        row(
+            TakenOver,
+            Unusable,
+            CommandFails,
+            Some(false),
+            1,
+            NONE,
+            DETACH,
+        ),
+        row(TakenOver, Unusable, HostEnds, Some(false), 1, NONE, DETACH),
+        row(
+            TakenOver,
+            Unusable,
+            OwnerCloses,
+            Some(false),
+            1,
+            DETACH,
+            NONE,
+        ),
+        row(TakenOver, Unusable, LastHandleDrops, gone, 1, DETACH, NONE),
+        row(
+            TakenOver,
+            EndedOnHost,
+            CommandFails,
+            Some(false),
+            1,
+            NONE,
+            DETACH,
+        ),
+        row(
+            TakenOver,
+            EndedOnHost,
+            HostEnds,
+            Some(false),
+            1,
+            NONE,
+            DETACH,
+        ),
+        row(
+            TakenOver,
+            EndedOnHost,
+            OwnerCloses,
+            Some(false),
+            1,
+            DETACH,
+            NONE,
+        ),
+        row(
+            TakenOver,
+            EndedOnHost,
+            LastHandleDrops,
+            gone,
+            1,
+            DETACH,
+            NONE,
+        ),
+        row(
+            TakenOver,
+            Released,
+            CommandFails,
+            Some(false),
+            0,
+            NONE,
+            NONE,
+        ),
+        row(TakenOver, Released, HostEnds, Some(false), 0, NONE, NONE),
+        row(TakenOver, Released, OwnerCloses, Some(false), 0, NONE, NONE),
+        row(TakenOver, Released, LastHandleDrops, gone, 0, NONE, NONE),
+    ]
+}
+
+/// A session for one row of the end-of-life table, on a fake host whose
+/// `set_mode` always fails, with the release commands it is sent and the
+/// application's session-closed reports counted.
+struct EndRig {
+    hosts: crate::hosts::Hosts,
+    handle: &'static str,
+    session: Option<ProjectSession>,
+    commands: tokio::sync::mpsc::UnboundedReceiver<String>,
+    reports: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl EndRig {
+    async fn new(came: Came) -> Self {
+        let hosts = debug_hosts();
+        let (command_tx, commands) = tokio::sync::mpsc::unbounded_channel();
+        let mut fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+        fake.on_command = Some(Box::new(move |name, _| {
+            let _ = command_tx.send(name.to_owned());
+            (name == "set_mode").then(|| {
+                Some(Err((
+                    "daemon_error".to_owned(),
+                    "refused for the test".to_owned(),
+                )))
+            })
+        }));
+        let _log = fake.serve(hosts.connect_fake("scriptorium"));
+        let reports = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&reports);
+        let on_closed: SessionClosedCallback = Arc::new(move |_, _, _| {
+            counted.fetch_add(1, Ordering::AcqRel);
+            Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send>>
+        });
+        let launch = ProjectLaunch {
+            on_closed: Some(on_closed),
+            ..debug_launch(&crate::debug::DebugBus::new(), None)
+        };
+        let (session, handle) = match came {
+            Came::Created => (ProjectSession::create(&hosts, launch).await, "s1"),
+            Came::TakenOver => (
+                ProjectSession::attach(&hosts, launch, "desk-alpha").await,
+                "desk-alpha",
+            ),
+        };
+        let (session, _) = session.expect("the session opens");
+        Self {
+            hosts,
+            handle,
+            session: Some(session),
+            commands,
+            reports,
+        }
+    }
+
+    fn session(&self) -> &ProjectSession {
+        self.session.as_ref().expect("the handle is still held")
+    }
+
+    fn reports(&self) -> usize {
+        self.reports.load(Ordering::Acquire)
+    }
+
+    /// The release commands (`kill`, `abort`, `detach`) sent since the last
+    /// look: at least `expected` of them, then everything the host was sent
+    /// before a marker command queued after them.
+    async fn released(&mut self, expected: usize) -> Vec<String> {
+        let mut sent = Vec::new();
+        while sent.len() < expected {
+            let name = within("a release command", self.commands.recv())
+                .await
+                .expect("the fake host is running");
+            if matches!(name.as_str(), "kill" | "abort" | "detach") {
+                sent.push(name);
+            }
+        }
+        // A release is queued from a task spawned when it starts; the marker
+        // is queued from one spawned after it, so it reaches the host last.
+        let hosts = self.hosts.clone();
+        let marker = tokio::spawn(async move {
+            hosts
+                .command("scriptorium", "marker", json!({}), Duration::from_secs(5))
+                .await
+        });
+        within("the marker", marker)
+            .await
+            .expect("the marker task")
+            .expect("the marker is answered");
+        loop {
+            let name = within("the marker command", self.commands.recv())
+                .await
+                .expect("the fake host is running");
+            match name.as_str() {
+                "marker" => return sent,
+                "kill" | "abort" | "detach" => sent.push(name),
+                _ => {}
+            }
+        }
+    }
+
+    /// Waits until the session's frame pump has stopped: it holds a weak
+    /// reference to the session for as long as it runs.
+    async fn pump_stopped(&self) {
+        let inner = Arc::clone(&self.session().inner);
+        within("the pump to stop", async move {
+            while Arc::weak_count(&inner) > 0 {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+    }
+
+    async fn apply(&mut self, event: EndEvent) {
+        match event {
+            EndEvent::CommandFails => {
+                let failed = self.session().set_mode("background").await;
+                assert!(failed.is_err(), "set_mode fails on this host");
+            }
+            EndEvent::HostEnds => {
+                self.hosts.send_fake(
+                    "scriptorium",
+                    json!({"type": "event", "session": self.handle, "cursor": "boot:900", "event": {"kind": "session_closed", "reason": "killed"}}),
+                );
+                // The host stops delivering the session's frames on its
+                // `session_closed` (if it still did), so the pump has read it
+                // once it has stopped.
+                self.pump_stopped().await;
+            }
+            EndEvent::OwnerCloses => self.session().close(),
+            EndEvent::LastHandleDrops => drop(self.session.take()),
+        }
+    }
+
+    async fn reach(&mut self, phase: EndPhase, came: Came) {
+        match phase {
+            EndPhase::Open => {}
+            EndPhase::Unusable => self.apply(EndEvent::CommandFails).await,
+            EndPhase::EndedOnHost => self.apply(EndEvent::HostEnds).await,
+            EndPhase::Released => {
+                self.apply(EndEvent::OwnerCloses).await;
+                let expected = match came {
+                    Came::Created => KILL,
+                    Came::TakenOver => DETACH,
+                };
+                assert_eq!(self.released(expected.len()).await, expected);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_project_session_ends_by_its_table() {
+    for row in end_table() {
+        let what = format!("{:?} {:?} on {:?}", row.came, row.phase, row.event);
+        let mut rig = EndRig::new(row.came).await;
+        rig.reach(row.phase, row.came).await;
+        rig.apply(row.event).await;
+        assert_eq!(
+            rig.session.as_ref().map(ProjectSession::alive),
+            row.alive,
+            "{what}: alive"
+        );
+        assert_eq!(rig.reports(), row.reports, "{what}: closed reports");
+        assert_eq!(rig.released(row.sent.len()).await, row.sent, "{what}: sent");
+        if rig.session.is_some() {
+            rig.apply(EndEvent::OwnerCloses).await;
+            rig.apply(EndEvent::LastHandleDrops).await;
+        }
+        assert_eq!(
+            rig.released(row.then_close.len()).await,
+            row.then_close,
+            "{what}: sent by a close afterwards"
+        );
+        assert_eq!(
+            rig.reports(),
+            row.reports,
+            "{what}: closed reports at the end"
+        );
+    }
+}
