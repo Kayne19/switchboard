@@ -11,6 +11,7 @@ use crate::display::{DisplayGateState, DisplayProjection};
 use crate::floor::Floor;
 use crate::floor_hooks::{spawn_floor_worker, waiting_hook};
 use crate::history::TranscriptLog;
+use crate::host_turns::{handle_project_turn, HostTurns};
 use crate::hosts::Hosts;
 #[cfg(test)]
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
@@ -32,7 +33,7 @@ use crate::registry::Registry;
 #[cfg(test)]
 use crate::speech::start_speech_worker_for_test;
 use crate::speech::{ensure_speech_worker, SpeechContinuity, SpeechGroup, SpeechQueue};
-use crate::turns::{handle_project_turn, process_turns, TurnState};
+use crate::turns::{process_turns, TurnState};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::future::Future;
@@ -198,9 +199,12 @@ pub struct AppInner {
     /// The call the debug page groups events under, while a page is on it.
     debug_call: std::sync::Mutex<Option<String>>,
     next_debug_call: AtomicU64,
-    /// Queued caller turns, their routing decisions, the caller turn in
-    /// flight, and the autonomous ones: the state only `turns.rs` reads.
+    /// Queued caller turns, their routing decisions and the caller turn in
+    /// flight: the state only `turns.rs` reads.
     pub(crate) turns: TurnState,
+    /// The self-woken run admitted as an operation: the state only
+    /// `host_turns.rs` reads.
+    pub(crate) host_turns: HostTurns,
     pub(crate) delivery: DeliveryState,
     pub transcript_log: Mutex<TranscriptLog>,
     pub speaker: Speaker,
@@ -472,6 +476,7 @@ impl AppState {
                 speech,
                 clips,
                 turns,
+                host_turns: HostTurns::new(),
                 display_gate,
                 active_session,
                 projection,
