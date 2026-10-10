@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 
 interface FocusableSurfaceProps {
   children: ReactNode;
@@ -29,14 +29,15 @@ interface FocusableSurfaceProps {
 // would be a tap the page never heard. Enter or Space in a scroll it holds
 // opens the object as a tap would, unless the scroll took the key.
 export function FocusableSurface({ children, onActivate, ariaLabel, className }: FocusableSurfaceProps) {
-  const expand = useRef<HTMLButtonElement>(null);
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return;
     onActivate();
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    // The button's own keys are a button's: they click it.
-    if (event.target === expand.current) return;
+    // A key on a button is the button's: Enter and Space click it, the
+    // surface's own button among them, and a key held here would cancel
+    // that click.
+    if (event.target instanceof HTMLButtonElement) return;
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
@@ -45,7 +46,7 @@ export function FocusableSurface({ children, onActivate, ariaLabel, className }:
 
   return (
     <div className={`focusable-content${className ? ` ${className}` : ''}`} onClick={handleClick} onKeyDown={handleKeyDown}>
-      <button ref={expand} className="focusable-content__expand" type="button" tabIndex={0} aria-label={ariaLabel} />
+      <button className="focusable-content__expand" type="button" tabIndex={0} aria-label={ariaLabel} />
       {children}
     </div>
   );
