@@ -422,13 +422,13 @@ removes the real coupling; do not create interfaces for ceremony.
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
 | `api.rs` | the primary router, `/healthz`, the debug listener's router, and the origin check both listeners apply | anything a handler does |
 | `app_state.rs` | `AppState`/`AppInner` and their construction (the callbacks installed into the PBX and coordinator), the workers, shutdown, the event fan-out, the operation registry, the resident-agent projection | provider wire formats, PBX policy |
-| `browser.rs` | the `/ws` connection and its size bound: registration, snapshot, the frame multiplexer, screen state, frame writes | what a command does once parsed |
+| `browser.rs` | the `/ws` connection and its size bound: registration, snapshot, the frame multiplexer, which screen reports count, frame writes | what a command does once parsed, the screen report's shape (`display.rs`) |
 | `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, and the rescue each control starts with | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
 | `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection |
 | `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |
 | `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker, host-reported turns | speech synthesis, PBX policy |
 | `speech.rs` | the one ordered speech worker, its continuity, audio slots, and reply voice | the TTS provider's wire format, the audio queue itself, floor policy |
-| `leg_announcer.rs` | announcing a new leg to the browser and its once-per-leg scene reset | which leg is current (the coordinator's) |
+| `leg_announcer.rs` | announcing a new leg to the browser, once per leg: the speech reset, the `epoch`, the held-scene replay | which leg is current (the coordinator's), the stage's reset (`DisplayGateState::begin_leg`) |
 | `floor.rs` | ordered background request queue, Jev good-moment holds, stateless rewrites, announce-first release | lifecycle membership, agent-state projection, route authority, TTS provider wire format |
 | `floor_hooks.rs` | the application side of `floor.rs`'s `FloorHooks`: whether the page is connected and a request still live, the Jev good-moment gate, the utility rewrite under its timeout, and the release through the speech worker | the floor's queue and order (`floor.rs`'s), the speech worker (`speech.rs`'s) |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the status | async work or I/O |
@@ -446,7 +446,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `pi_client.rs` | the operator's and the utility's Pi process/RPC transport, process-tree cleanup, `LegSession` (the leg on the line, operator or project, as the controls see it) | project sessions, route authority or deployment registry |
 | `project_session.rs` | a project session over the host link: its commands, the caller turn it collects, the frame pump, self-woken turn reports, module-call answers, and its release on the host | the host link itself (`hosts.rs`), which leg is on the line, route authority |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
-| `display.rs` | the stage projection (`DisplayProjection`), the display gate state, and the display-precedence rule for `view` and the snapshot | generation checks, HTTP/WebSocket handling |
+| `display.rs` | the stage projection (`DisplayProjection`); the display gate (`DisplayGateState`: the stage of the leg on the line, the page's `ScreenReport` and its confirmations, whose methods are their only writers); the display-precedence rule for `view` and the snapshot | generation checks, HTTP/WebSocket handling |
 | `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |
 | `models.rs` | catalog parsing and spoken model/thinking resolution | where catalogs come from |
 | `registry.rs` | the project registry and spoken-name resolution | agent reasoning |

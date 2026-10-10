@@ -771,8 +771,18 @@ the page applies or declines a frame) carries two more fields:
   the one actually transmitted, so an intervening, rejection-less report
   can't silently swallow it.
 
-**The backend's watermark.** `AppInner.display_confirm` is a
-`tokio::sync::watch<ConfirmState>`:
+**The backend's gate.** `AppInner.display_gate` holds a `DisplayGateState`
+(`apps/backend/src/display.rs`), the one owner of the caller's stage. Its
+fields are private and its methods are their only writers; callers hold the
+gate's lock around each call.
+
+| Field | What it is |
+|---|---|
+| `projection` | the stage (`DisplayProjection`): objects, order, focus, speech |
+| `watermark` | the delivery `seq` of the newest display applied to the stage |
+| `screen` | the caller's screen as the page last reported it (`ScreenReport`), or stale |
+| `scene_leg` | the leg (`SceneLeg`: route and generation) the stage was last reset for |
+| `confirmations` | a `tokio::sync::watch<ConfirmState>`: what the page confirmed and rejected in the current generation |
 
 ```rust
 pub struct ConfirmState {
@@ -782,33 +792,59 @@ pub struct ConfirmState {
 }
 ```
 
-Every `screen_state` report folds its `applied_seq` into this watch
-(`ConfirmState::fold_report`) as a running per-generation maximum, and adds its `rejected`, if it carries one,
-to `rejections`. Only the active connection's
-report counts, and only for the current generation; any other is ignored and
-not acknowledged (`apply_screen_state` in `apps/backend/src/browser.rs`). Two
-tabs are two connections, and the newest one is active. When the active tab
-closes, the newest tab still open takes over (`DeliveryState::retire`), and the
-screen the agent's `view` reads is stale until that tab sends its next report. The page sends each rejection once, and a `watch` keeps only
-its latest value, so a rejection is never cleared by a later report without
-one: it stays in the map, and a waiter checks the map for its own `seq`
-before it checks the watermark. The map keeps the newest
-`MAX_KEPT_REJECTIONS` (16) by `seq`; a display call waits at most
-`DISPLAY_CONFIRM_DEADLINE_MS`, so only the newest few can still have a
-waiter. Moving to a new leg resets the watch (`ConfirmState::begin_generation`)
-— `generation` moves to the new value, `watermark` goes back to `None`,
-`rejections` clears — the same reset the projection itself gets (`objects` /
-`order` / `focus_id` / `speech` cleared) — so a confirmation left over from
+Each event that changes the gate is one method, and each changes these
+fields together:
+
+| Event | Method | Caller | Changes |
+|---|---|---|---|
+| an agent's display | `publish` | `display()` (`module_calls.rs`); the held-scene replay in `LegAnnouncer::begin_scene` | sends the action, applies it to `projection` at its `seq`, `watermark` = that `seq` |
+| a new leg (once per `SceneLeg`) | `begin_leg` | `LegAnnouncer::begin_scene` | `projection` cleared, `screen` stale, `confirmations` start the leg's generation, `scene_leg` = the leg; nothing when the stage already belongs to it |
+| a page connects; the active page retires | `mark_stale` | `register_connection`, `retire_connection` (`browser.rs`) | `screen` stale |
+| the active page reports, in the current generation | `report` | `apply_screen_state` (`browser.rs`) | `screen` replaced; the report folded into `confirmations` |
+
+The `watermark` is the delivery's sequence, not the leg's: a new leg leaves
+it. A rescue moves the generation without a new leg, so it does not reset
+the gate; the page's first report at the new generation starts that
+generation's confirmations (`ConfirmState::fold_report`).
+
+Every `screen_state` report folds its `applied_seq` into the confirmations as
+a running per-generation maximum, and adds its `rejected`, if it carries
+one, to `rejections`. Only the active connection's report counts, and only
+for the current generation; any other is ignored and not acknowledged
+(`apply_screen_state` in `apps/backend/src/browser.rs`). A report whose
+`view` is not one the page has is answered with an error. Two tabs are two
+connections, and the newest one is active. When the active tab closes, the
+newest tab still open takes over (`DeliveryState::retire`), and the screen
+the agent's `view` reads is stale until that tab sends its next report. The
+page sends each rejection once, and a `watch` keeps only its latest value,
+so a rejection is never cleared by a later report without one: it stays in
+the map, and a waiter checks the map for its own `seq` before it checks the
+watermark. The map keeps the newest `MAX_KEPT_REJECTIONS` (16) by `seq`; a
+display call waits at most `DISPLAY_CONFIRM_DEADLINE_MS`, so only the newest
+few can still have a waiter. A new leg resets the confirmations with the
+stage itself (`begin_leg`): `generation` moves to the new value, `watermark`
+goes back to `None`, `rejections` clears, and the projection's `objects` /
+`order` / `focus_id` / `speech` are cleared. A confirmation left over from
 the leg that just transferred away can never satisfy a wait started by the
 leg that replaced it.
 
-That reset happens once per leg, keyed by route and generation
-(`DisplayGateState::scene_leg`). A transfer is announced twice — by candidate
-promotion when the incoming agent first shows life, and by the route callback
-when the PBX settles after the intro turn — and only the first announcement
-resets the scene and sends the `epoch`. The second restates the status and
-leaves the new agent's first drawing, and its confirmation, alone. See
-`LegAnnouncer` in `apps/backend/src/leg_announcer.rs`.
+The screen report is a typed struct, built once from the page's command
+(`ScreenReport::from_page`: the title cut to 200 characters, a content type
+the stage does not know read as none). `view` reads its view; Jev's routing
+summary and the floor gate are given `ScreenReport::to_value()`, whose fields
+and names are theirs to read: `view`, `pinned`, `has_visual`, `visual_kind`
+(`null` when none), `object_ids`, `title`, `stale`, `generation`.
+
+The reset happens once per leg, keyed by route and generation
+(`scene_leg`). A transfer is announced twice — by candidate promotion when
+the incoming agent first shows life, and by the route callback when the PBX
+settles after the intro turn — and only the first announcement resets the
+stage and sends the `epoch`. The second restates the status and leaves the
+new agent's first drawing, and its confirmation, alone. See `LegAnnouncer`
+in `apps/backend/src/leg_announcer.rs`. The test
+`the_gate_moves_through_its_phases_one_event_at_a_time`
+(`apps/backend/tests/test_display.rs`) walks the gate through each row
+above.
 
 **The display call's result.** A display reaches the service as a module
 call (the path is under "Explicitly Refused Patterns" below). After
