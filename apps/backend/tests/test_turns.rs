@@ -655,6 +655,81 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A self-woken turn whose session closes on its host (the host agent
+/// restarted, its link dropped, or someone closed it at the desk) never
+/// reports its `turn_end`. The caller's next line must not wait behind it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caller_turn_runs_after_an_autonomous_turn_whose_session_closed() {
+    let root = scratch_root("autonomous-session-closed");
+    let (state, _host) = state_with_agents_and_jev(
+        &root,
+        FakeHostAgent::new(Box::new(|_, _| {
+            vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+        })),
+    );
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-closed"}),
+    );
+    until_autonomous(&state, instance_id).await;
+
+    alpha_host_event(
+        &state,
+        json!({"kind":"session_closed","reason":"host_link_closed"}),
+    );
+    timeout(Duration::from_secs(5), async {
+        while state.0.coordinator.route() != OPERATOR {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the closed session was retired");
+
+    let mut events = state.0.events.subscribe();
+    let generation = state.0.coordinator.generation();
+    state
+        .0
+        .turns
+        .routed_decisions
+        .lock()
+        .await
+        .insert("after-close".into(), Decision::fallback("test").into());
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .sender
+        .send(("after-close".into(), "are you there?".into(), generation))
+        .await
+        .unwrap();
+    let thinking = timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(Event::Json(value)) = events.recv().await {
+                if value["type"] == "thinking" {
+                    return value;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the caller turn waited behind a turn whose session had closed");
+    assert_eq!(thinking["type"], "thinking");
+    assert!(!state
+        .0
+        .turns
+        .autonomous_operations
+        .lock()
+        .await
+        .contains_key(&instance_id));
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn autonomous_turn_loses_to_caller_operation_and_its_side_effects_are_refused() {
