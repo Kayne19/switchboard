@@ -5,6 +5,7 @@
 //! the application, and answers module calls. The local pi process is in
 //! `pi_client.rs`.
 use crate::debug::{DebugBus, DebugEvent};
+use crate::hosts::Subscription;
 use crate::pi_client::{
     panic_message, spoken_error, tool_error_text, Activity, ActivityCallback, PiSessionError, Turn,
     SPEAK_TOOL, STREAM_LIMIT,
@@ -134,17 +135,22 @@ impl Provenance {
 
 /// Where a project session is in its end of life. `ProjectInner::end` is
 /// its only writer, and `Lifecycle::after` its table (`docs/architecture.md`,
-/// "A project session's end").
+/// "A project session's end"). The phases that still read the session's
+/// frames hold its subscription, so leaving them, or dropping the last
+/// handle, ends it.
 enum Lifecycle {
-    /// In use: commands go out.
-    Open,
+    /// In use: commands go out and the pump reads its frames. The
+    /// subscription is held for its drop.
+    Open { _subscription: Subscription },
     /// A command to it failed. The handle is not used again, but the
     /// session may still run on its host, so its release is still owed
-    /// (#291).
-    Unusable,
+    /// (#291), and its frames are still read so a turn already running can
+    /// settle.
+    Unusable { _subscription: Subscription },
     /// The host reported it closed (`session_closed`, the service's own
-    /// `host_link_closed` included). Nothing is left to kill; a session
-    /// taken over from a desk is still owed its abort and detach.
+    /// `host_link_closed` included), and its frames are no longer read.
+    /// Nothing is left to kill; a session taken over from a desk is still
+    /// owed its abort and detach.
     EndedOnHost,
     /// Its release went out: a kill, or an abort and a detach. Final.
     Released,
@@ -178,15 +184,18 @@ impl Lifecycle {
     /// was, with `Entry::Nothing`.
     fn after(self, event: LifecycleEvent, provenance: Provenance) -> (Self, Entry) {
         use LifecycleEvent::{Closed, CommandFailed, HostEnded};
+        // A subscription not carried into the next phase drops here.
         match (self, event) {
-            (Self::Open, CommandFailed) => (Self::Unusable, Entry::ReportClosed),
-            (Self::Open, HostEnded) => (Self::EndedOnHost, Entry::ReportClosed),
-            (Self::Open | Self::Unusable, Closed) => (Self::Released, Entry::Release),
-            (Self::Unusable, HostEnded) => (Self::EndedOnHost, Entry::Nothing),
+            (Self::Open { _subscription }, CommandFailed) => {
+                (Self::Unusable { _subscription }, Entry::ReportClosed)
+            }
+            (Self::Open { .. }, HostEnded) => (Self::EndedOnHost, Entry::ReportClosed),
+            (Self::Open { .. } | Self::Unusable { .. }, Closed) => (Self::Released, Entry::Release),
+            (Self::Unusable { .. }, HostEnded) => (Self::EndedOnHost, Entry::Nothing),
             (Self::EndedOnHost, Closed) if provenance == Provenance::TakenOver => {
                 (Self::Released, Entry::Release)
             }
-            (phase @ (Self::Unusable | Self::EndedOnHost | Self::Released), _) => {
+            (phase @ (Self::Unusable { .. } | Self::EndedOnHost | Self::Released), _) => {
                 (phase, Entry::Nothing)
             }
         }
@@ -355,13 +364,15 @@ impl ProjectInner {
                 .lifecycle
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner),
-            Lifecycle::Open
+            Lifecycle::Open { .. }
         )
     }
 
     /// Moves the session's end of life on `event`: the only writer of
     /// `lifecycle`. Entering `Released` queues the release here; true when
-    /// the application is to be told the session closed (`lose`).
+    /// the application is to be told the session closed (`lose`). A
+    /// subscription the phase left drops under the lock, and takes the hosts
+    /// lock to end; nothing takes this lock under that one.
     fn end(&self, event: LifecycleEvent) -> bool {
         let entry = {
             let mut lifecycle = self
@@ -395,7 +406,6 @@ impl ProjectInner {
     /// session taken over from a desk is never killed: abort its active
     /// turn first, then detach it so the desk can keep owning it.
     fn release_in_background(&self) {
-        self.hosts.unsubscribe(&self.host, &self.session);
         let host = self.host.clone();
         let session = self.session.clone();
         let label = self.label.clone();
@@ -700,7 +710,7 @@ impl ProjectSession {
                 "the host agent did not name the new session".into(),
             ));
         };
-        let frames = hosts.subscribe(&launch.host, &session);
+        let (subscription, frames) = hosts.subscribe(&launch.host, &session);
         let inner = Arc::new(ProjectInner {
             hosts: hosts.clone(),
             host: launch.host,
@@ -727,7 +737,9 @@ impl ProjectSession {
             debug: launch.debug,
             turn_lock: Mutex::new(()),
             busy: AtomicBool::new(false),
-            lifecycle: StdMutex::new(Lifecycle::Open),
+            lifecycle: StdMutex::new(Lifecycle::Open {
+                _subscription: subscription,
+            }),
             brief: launch.brief,
             brief_due: AtomicBool::new(true),
             turn: StdMutex::new(None),

@@ -657,7 +657,7 @@ async fn hosts_route_session_frames_and_refuse_module_calls_nobody_waits_for() {
         json!({"type":"module_reply","id":"m1","status":"refused","reason":"not_on_call"})
     );
 
-    let mut frames = hosts.subscribe("scriptorium", "a1");
+    let (_subscription, mut frames) = hosts.subscribe("scriptorium", "a1");
     send(
         &mut agent,
         json!({"type":"event","session":"a1","cursor":"b:1","event":{"kind":"text","text":"hello"}}),
@@ -754,7 +754,7 @@ async fn hosts_refuse_a_module_call_they_cannot_read_at_once() {
         .until_host("scriptorium", |host| host["connected"] == true)
         .await;
     // Session a1 is listened to, so a readable call would reach it.
-    let mut frames = hosts.subscribe("scriptorium", "a1");
+    let (_subscription, mut frames) = hosts.subscribe("scriptorium", "a1");
     for (n, (value, cause)) in unreadable_values().into_iter().enumerate() {
         let id = format!("m{n}");
         send_raw(
@@ -789,7 +789,9 @@ async fn hosts_refuse_a_module_call_whose_session_stopped_listening() {
     served
         .until_host("scriptorium", |host| host["connected"] == true)
         .await;
-    drop(hosts.subscribe("scriptorium", "a1"));
+    // The subscription is held; only its listener has gone.
+    let (_subscription, frames) = hosts.subscribe("scriptorium", "a1");
+    drop(frames);
     send(
         &mut agent,
         json!({"type":"module_call","id":"m1","session":"a1","token":"t","call":"speak","args":{"text":"hi"}}),
@@ -856,7 +858,7 @@ async fn hosts_log_an_unreadable_frame_they_cannot_answer_and_go_on() {
     use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
     let hosts = Hosts::new(tokens(), slow());
     let mut link = hosts.connect_fake("scriptorium");
-    let mut frames = hosts.subscribe("scriptorium", "a1");
+    let (_subscription, mut frames) = hosts.subscribe("scriptorium", "a1");
     let bus = crate::debug::DebugBus::new();
     let subscriber = tracing_subscriber::registry()
         .with(EnvFilter::new("switchboard=info"))
@@ -1012,5 +1014,32 @@ async fn hosts_report_link_up_and_down_but_not_a_fenced_close() {
     assert_eq!(
         debug_events(&bus),
         vec![link(true), link(true), link(false)]
+    );
+}
+
+/// Dropping a subscription ends its own delivery and no other: a later
+/// subscription to the same session, which replaced it, keeps its frames.
+/// The host agent hands a reopened session back under the handle it already
+/// had, so an old handle can let go after a new one took its place.
+#[tokio::test]
+async fn dropping_a_replaced_subscription_leaves_its_successor_subscribed() {
+    let hosts = Hosts::new(tokens(), slow());
+    let link = hosts.connect_fake("scriptorium");
+    let (older, _older_frames) = hosts.subscribe("scriptorium", "a1");
+    let (newer, mut frames) = hosts.subscribe("scriptorium", "a1");
+    drop(older);
+    link.send(json!({"type":"event","session":"a1","cursor":"b:1","event":{"kind":"text","text":"still here"}}));
+    let Ok(SessionFrame::Event { event, .. }) = frames.try_recv() else {
+        panic!("the newer subscription lost its frames");
+    };
+    assert_eq!(event["text"], "still here");
+
+    drop(newer);
+    link.send(
+        json!({"type":"event","session":"a1","cursor":"b:2","event":{"kind":"text","text":"gone"}}),
+    );
+    assert!(
+        frames.try_recv().is_err(),
+        "a dropped subscription still gets frames"
     );
 }

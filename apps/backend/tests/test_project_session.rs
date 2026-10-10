@@ -17,6 +17,7 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         None
     }));
     let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let (subscription, _frames) = hosts.subscribe("scriptorium", "s1");
     let inner = Arc::new(ProjectInner {
         hosts: hosts.clone(),
         host: "scriptorium".into(),
@@ -34,7 +35,9 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         debug: None,
         turn_lock: Mutex::new(()),
         busy: AtomicBool::new(true),
-        lifecycle: StdMutex::new(Lifecycle::Open),
+        lifecycle: StdMutex::new(Lifecycle::Open {
+            _subscription: subscription,
+        }),
         brief: String::new(),
         brief_due: AtomicBool::new(false),
         turn: StdMutex::new(None),
@@ -811,4 +814,56 @@ async fn a_project_session_ends_by_its_table() {
             "{what}: closed reports at the end"
         );
     }
+}
+
+/// A session its host link took down reads no more of its frames. The host
+/// agent keeps tracking the session through a link drop, so once the host
+/// links again its frames, a replay say, still name it; a module call
+/// carrying the token the closed handle had must be refused by the host
+/// link, not answered by that handle.
+#[tokio::test]
+async fn a_session_whose_host_link_closed_reads_no_more_frames() {
+    let hosts = debug_hosts();
+    let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+    let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&calls);
+    let on_module: ModuleCallback = Arc::new(move |_| {
+        counted.fetch_add(1, Ordering::AcqRel);
+        Box::pin(async { json!({"status": "delivered"}) })
+            as Pin<Box<dyn Future<Output = Value> + Send>>
+    });
+    let launch = debug_launch(&crate::debug::DebugBus::new(), Some(on_module));
+    let (session, _) = ProjectSession::create(&hosts, launch)
+        .await
+        .expect("the session opens");
+    session
+        .join_call("call-token", "", 1000)
+        .await
+        .expect("the session joins the call");
+
+    hosts.disconnect_fake("scriptorium");
+    within("the session to close", async {
+        while session.alive() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+    let mut link = hosts.connect_fake("scriptorium");
+    link.send(json!({
+        "type": "module_call", "id": "m1", "session": "s1", "token": "call-token",
+        "call": "speak", "args": {"text": "still here"},
+    }));
+    let reply = within("the module reply", link.recv())
+        .await
+        .expect("the link is up");
+
+    assert_eq!(reply["type"], "module_reply", "{reply}");
+    assert_eq!(reply["status"], "refused", "{reply}");
+    assert_eq!(reply["reason"], "not_on_call", "{reply}");
+    assert_eq!(
+        calls.load(Ordering::Acquire),
+        0,
+        "the closed handle answered"
+    );
 }
