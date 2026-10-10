@@ -282,7 +282,7 @@ async fn agent_callbacks_do_not_wait_for_the_turn_lock() {
     let turn = tokio::spawn(async move {
         hold_turn_lock(&turn_state, Some(locked_tx)).await;
     });
-    locked_rx.await.unwrap();
+    within("locked_rx", locked_rx).await.unwrap();
 
     let (code, spoken) = timeout(
         Duration::from_secs(1),

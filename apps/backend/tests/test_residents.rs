@@ -2,6 +2,7 @@ use super::*;
 use crate::hosts::{FakeHostAgent, Step};
 use crate::pbx::{board_on, board_with, project, says, serve, transcript, two_model_catalog, HOST};
 use crate::pi_client::ProjectLaunch;
+use crate::within;
 use serde_json::json;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::time::Duration;
@@ -103,7 +104,9 @@ async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() 
         .await
         .expect("the resident launch itself succeeds");
     assert_background_registry_consistent(&board);
-    finished_rx.await.expect("failed prompt publishes finished");
+    within("finished_rx", finished_rx)
+        .await
+        .expect("failed prompt publishes finished");
 
     assert!(!board.background_agents.contains_key("alpha"));
     assert!(!board.coordinator.project_is_background("alpha"));
@@ -231,7 +234,9 @@ async fn host_loss_evicts_a_background_resident_without_a_later_action() {
         .expect("resident launch");
     assert_background_registry_consistent(&board);
     board.hosts().disconnect_fake(HOST);
-    finished_rx.await.expect("host loss publishes finished");
+    within("finished_rx", finished_rx)
+        .await
+        .expect("host loss publishes finished");
 
     assert!(!board.background_agents.contains_key("alpha"));
     assert!(!board.coordinator.project_is_background("alpha"));
@@ -333,11 +338,15 @@ async fn stopped_background_prompt_does_not_publish_idle_after_close() {
         .start_background_part("beta", "long beta work")
         .await
         .unwrap();
-    started_rx.await.expect("the background turn started");
+    within("started_rx", started_rx)
+        .await
+        .expect("the background turn started");
     while state_rx.try_recv().is_ok() {}
     board.stop_project("beta").await;
 
-    finished_rx.await.expect("stop published finished");
+    within("finished_rx", finished_rx)
+        .await
+        .expect("stop published finished");
     let mut late_idle = false;
     while let Ok((project, state)) = state_rx.try_recv() {
         late_idle |= project == "beta" && state == "idle";
@@ -406,7 +415,9 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
         let alpha = alpha.clone();
         async move { alpha.prompt("long work").await }
     });
-    started_rx.await.expect("the long turn started");
+    within("started_rx", started_rx)
+        .await
+        .expect("the long turn started");
     let states = Arc::new(StdMutex::new(Vec::new()));
     let states_for_callback = Arc::clone(&states);
     board.set_agent_state_callback(Some(Arc::new(move |notice| {

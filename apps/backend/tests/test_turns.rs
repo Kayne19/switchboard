@@ -351,7 +351,7 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
         .expect("a slow host query does not hold the PBX lock");
     drop(guard);
     host.disconnect_fake("scriptorium");
-    let _ = routing
+    let _ = within("routing", routing)
         .await
         .expect("routing completed after the host link closed");
     state.0.switchboard.lock().await.shutdown().await;

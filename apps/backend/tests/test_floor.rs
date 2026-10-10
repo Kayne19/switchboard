@@ -117,6 +117,7 @@ async fn releases_record_no_overlapping_speakers() {
             events.send(format!("start:{}", request.message)).unwrap();
             if request.message == "update 1" {
                 if let Some(signal) = allow_signal.lock().await.take() {
+                    // unbounded: the fake speaker holds the floor until the test releases it.
                     let _ = signal.await;
                 }
             }
@@ -239,6 +240,7 @@ async fn gate_timeout_is_treated_as_a_hold_then_quiet_releases() {
         let gate_signal = gate_signal.clone();
         Box::pin(async move {
             if let Some(signal) = gate_signal.lock().await.take() {
+                // unbounded: the fake gate holds its answer until the test releases it.
                 let _ = signal.await;
             }
             Err(())

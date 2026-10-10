@@ -311,7 +311,7 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
         .steer("go on", None)
         .await
         .unwrap();
-    let reply = turn.await.unwrap();
+    let reply = within("turn", turn).await.unwrap();
 
     assert_eq!(reply.route, "alpha");
     assert_eq!(reply.text, "Alpha here.");
@@ -1389,7 +1389,7 @@ async fn host_loss_closes_a_taken_over_session_without_killing_the_desk_process(
         .unwrap();
     session.join_call("desk-call", "Jev", 1_000).await.unwrap();
     board.hosts().disconnect_fake(HOST);
-    closed_rx
+    within("closed_rx", closed_rx)
         .await
         .expect("host loss closes the taken-over session");
     assert!(!session.alive());

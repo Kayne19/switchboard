@@ -118,8 +118,9 @@ commit.
   "A time budget measured on the wall clock"). `scripts/check_hygiene.mjs`
   refuses `performance.now`, `Date.now` and `process.hrtime` in
   `apps/frontend/tests/unit` outside `cpuTime.ts`.
-- A backend test awaits a channel, a `Notify`, a watch or a stream through
-  `within` (`apps/backend/src/main.rs`), which fails it by name after 10
+- A backend test awaits a channel, a `Notify`, a watch, a stream, a
+  oneshot or a task's `JoinHandle` through `within`
+  (`apps/backend/src/main.rs`), which fails it by name after 10
   seconds: libtest has no per-test timeout, and a lost wake-up behind a bare
   await hangs `cargo test` with no output (`docs/concurrency-and-test-hazards.md`,
   "A test await with no deadline"). `scripts/check_hygiene.mjs` refuses a

@@ -219,9 +219,9 @@ impl Config {
     }
 }
 
-/// How long a test waits on a channel, a `Notify`, a watch or a stream
-/// before it fails. A hang detector, not a timing assertion: generous, so a
-/// loaded machine does not trip it.
+/// How long a test waits on a channel, a `Notify`, a watch, a stream, a
+/// oneshot or a spawned task before it fails. A hang detector, not a timing
+/// assertion: generous, so a loaded machine does not trip it.
 #[cfg(test)]
 const TEST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 

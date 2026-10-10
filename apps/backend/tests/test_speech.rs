@@ -13,6 +13,7 @@ use crate::module_calls::{agent_call_json, request_to_speak};
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::{Switchboard, OPERATOR};
 use crate::registry::{Project, Registry};
+use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
@@ -305,8 +306,8 @@ async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
     assert!(pending.pending_sequence.is_some());
     gate.release();
     gate.release();
-    assert!(first.await.unwrap().is_err());
-    assert!(second.await.unwrap().is_ok());
+    assert!(within("first", first).await.unwrap().is_err());
+    assert!(within("second", second).await.unwrap().is_ok());
     let settled = state.0.continuity_snapshot();
     assert_eq!(settled.last_text.as_deref(), Some("same line"));
     assert!(settled.pending_text.is_none());
@@ -484,7 +485,7 @@ async fn a_reply_superseded_after_its_utterance_was_reserved_leaves_no_slot_open
     state.0.coordinator.begin_rescue("test rescue");
     drop(gate);
 
-    assert!(!delivery.await.unwrap());
+    assert!(!within("delivery", delivery).await.unwrap());
     assert!(
         state.0.audio.lock().await.slots.is_empty(),
         "a reserved slot left open holds back every later utterance"

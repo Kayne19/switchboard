@@ -460,11 +460,18 @@ caller's line and `what`. Ten seconds is a hang detector, not a timing
 assertion; a test that checks how soon something happens uses its own
 `tokio::time::timeout` with the number it means.
 
+The same goes for a task the test spawned and a oneshot it was handed: a
+rescue that fails to abort a wedged turn leaves `turn.await` waiting as long
+as a lost wake-up leaves `rx.recv().await`.
+
 The rule: in `apps/backend/tests`, `.recv()`, `.next()`, `.notified()` and
-`.changed()` are not awaited bare. `scripts/check_hygiene.mjs` refuses one
-unless `within(` or `timeout(` opens on that line or within the three before
-it. A fake that is meant to wait as long as its test (a responder holding a
-gate the test opens) says so on the line before, `// unbounded: <why>`.
+`.changed()`, and a bare name (a oneshot receiver, a `JoinHandle`), are not
+awaited bare. `scripts/check_hygiene.mjs` refuses one unless `within(` or
+`timeout(` opens on that line or within the three before it, or the line
+before aborts that same handle (`worker.abort();` then `worker.await`
+returns at once). A fake that is meant to wait as long as its test (a
+responder holding a gate the test opens) says so on the line before,
+`// unbounded: <why>`.
 
 ## A test that takes the first screen-state report
 

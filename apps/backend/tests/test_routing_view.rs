@@ -1,6 +1,7 @@
 use super::*;
 use crate::hosts::FakeHostAgent;
 use crate::pbx::{board_with, project, says, HOST};
+use crate::within;
 use serde_json::json;
 use std::sync::Arc;
 use tokio::time::Duration;
@@ -39,7 +40,9 @@ async fn desk_session_hosts_are_listed_concurrently() {
         .await
         .expect("the second host was queried while the first was pending");
     hosts.disconnect_fake(HOST);
-    let sessions = query.await.expect("desk listing completes after host loss");
+    let sessions = within("query", query)
+        .await
+        .expect("desk listing completes after host loss");
     assert!(sessions.is_empty());
 }
 

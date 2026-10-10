@@ -101,7 +101,7 @@ async fn steer_writes_into_the_running_process() {
         .steer("also check docs", Some("clip-3"))
         .await
         .unwrap();
-    assert!(!prompt.await.unwrap().failed);
+    assert!(!within("prompt", prompt).await.unwrap().failed);
     // The steered words name the caller line they carry.
     assert!(debug_events(&bus).iter().any(|event| matches!(
         event,
@@ -844,7 +844,7 @@ async fn a_turn_ends_only_on_the_settled_turn_end() {
         &create,
         json!({"session": "s1", "thinking": "medium"}),
     );
-    let (session, _) = creating.await.unwrap().unwrap();
+    let (session, _) = within("creating", creating).await.unwrap().unwrap();
 
     let prompting = tokio::spawn({
         let session = session.clone();
@@ -868,7 +868,7 @@ async fn a_turn_ends_only_on_the_settled_turn_end() {
     assert!(!prompting.is_finished(), "the turn ended before it settled");
     assert!(session.busy());
     event(&link, 6, json!({"kind": "turn_end"}));
-    let turn = prompting.await.unwrap().unwrap();
+    let turn = within("prompting", prompting).await.unwrap().unwrap();
     assert_eq!(turn.text, "Done.");
     assert!(!turn.failed);
     assert!(!session.busy());
