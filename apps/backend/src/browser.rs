@@ -273,19 +273,10 @@ async fn apply_screen_state(
             .unwrap_or_else(|| "the caller's screen could not render it".to_string());
         (rejection.seq, reason)
     });
-    state.0.display_confirm.send_modify(|c| {
-        if c.generation != current_gen {
-            c.begin_generation(current_gen);
-        }
-        if let Some(seq) = applied_seq {
-            if c.watermark.is_none_or(|w| seq > w) {
-                c.watermark = Some(seq);
-            }
-        }
-        if let Some((seq, reason)) = rejected {
-            c.reject(seq, reason);
-        }
-    });
+    state
+        .0
+        .display_confirm
+        .send_modify(|c| c.fold_report(current_gen, applied_seq, rejected));
 
     send_message(state, epoch, ServerMessage::ScreenStateAck).await
 }

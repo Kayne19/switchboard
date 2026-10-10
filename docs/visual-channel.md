@@ -773,8 +773,8 @@ pub struct ConfirmState {
 }
 ```
 
-Every `screen_state` report folds its `applied_seq` into this watch as a
-running per-generation maximum, and adds its `rejected`, if it carries one,
+Every `screen_state` report folds its `applied_seq` into this watch
+(`ConfirmState::fold_report`) as a running per-generation maximum, and adds its `rejected`, if it carries one,
 to `rejections`. The page sends each rejection once, and a `watch` keeps only
 its latest value, so a rejection is never cleared by a later report without
 one: it stays in the map, and a waiter checks the map for its own `seq`

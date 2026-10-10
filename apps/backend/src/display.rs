@@ -377,7 +377,7 @@ pub(crate) struct DisplayGateState {
 /// waits at most `DISPLAY_CONFIRM_DEADLINE_MS`, so only the newest few can
 /// still have a waiter; the bound keeps a page that rejects everything from
 /// growing the map.
-pub(crate) const MAX_KEPT_REJECTIONS: usize = 16;
+const MAX_KEPT_REJECTIONS: usize = 16;
 
 #[derive(Clone, Default)]
 pub(crate) struct ConfirmState {
@@ -393,9 +393,32 @@ pub(crate) struct ConfirmState {
 }
 
 impl ConfirmState {
+    /// Folds in one `screen_state` report the page made in `generation`: a
+    /// report from another generation starts that one first, `applied_seq`
+    /// raises the watermark, and a rejection is kept. A report without a
+    /// rejection clears none.
+    pub(crate) fn fold_report(
+        &mut self,
+        generation: u64,
+        applied_seq: Option<u64>,
+        rejected: Option<(u64, String)>,
+    ) {
+        if self.generation != generation {
+            self.begin_generation(generation);
+        }
+        if let Some(seq) = applied_seq {
+            if self.watermark.is_none_or(|w| seq > w) {
+                self.watermark = Some(seq);
+            }
+        }
+        if let Some((seq, reason)) = rejected {
+            self.reject(seq, reason);
+        }
+    }
+
     /// Records the page's rejection of `seq`, dropping the oldest past the
     /// bound.
-    pub(crate) fn reject(&mut self, seq: u64, reason: String) {
+    fn reject(&mut self, seq: u64, reason: String) {
         self.rejections.insert(seq, reason);
         while self.rejections.len() > MAX_KEPT_REJECTIONS {
             self.rejections.pop_first();
