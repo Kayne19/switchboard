@@ -34,15 +34,12 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         on_closed: None,
         debug: None,
         turn_lock: Mutex::new(()),
-        busy: AtomicBool::new(true),
+        turn: StdMutex::new(TurnState::new()),
         lifecycle: StdMutex::new(Lifecycle::Open {
             _subscription: subscription,
         }),
         brief: String::new(),
         brief_due: AtomicBool::new(false),
-        turn: StdMutex::new(None),
-        autonomous_turn: StdMutex::new(None),
-        ignored_autonomous: StdMutex::new(None),
     });
     inner.lose(LifecycleEvent::CommandFailed).await;
     ProjectSession { inner }.close();
