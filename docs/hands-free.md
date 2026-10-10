@@ -114,6 +114,16 @@ ms follow-up lease after the server barrier and playback queue have both
 settled, with a 400 ms drain debounce. The lease admits one no-wake utterance; a
 later utterance needs a wake word again.
 
+A turn that brings no successful reply opens no lease, so it re-arms the wake
+word instead (`HandsFreeController.endAwaitedTurn`): the server's `error` for
+the clip hands-free sent (Whisper heard nothing, the usual false trigger), a
+`final_response_audio_closed` with `success: false`, or `routing_unavailable`.
+So does an utterance the page could not send (`onClip` returns false: the
+snapshot is not ready, the epoch moved, or the outbox is full) and a capture
+that kept nothing. Without that exit, hands-free waited in `awaiting_response`,
+where no frame reaches the wake detector, and MODE said HANDS-FREE while
+nothing could wake it (#258).
+
 The server emits one `final_response_audio_closed` event per completed input
 turn, after a response-scoped queue marker has passed all earlier audio slots.
 Its `response_id`, generation, and production success are not used as heartbeat
