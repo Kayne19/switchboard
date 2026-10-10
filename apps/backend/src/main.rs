@@ -89,9 +89,6 @@ pub struct Config {
     pub environment: HashMap<String, String>,
 }
 
-/// The defaults of `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER` and `_UPPER`.
-const CURRENT_AGENT_BAND: (f64, f64) = (0.3, 0.7);
-
 impl Config {
     pub fn speech_deadline(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.speech_deadline_ms)
@@ -132,7 +129,8 @@ impl Config {
             "SWITCHBOARD_OPERATOR_PROMPT",
             &config_dir.join("operator.system.md").to_string_lossy(),
         ));
-        let config = Self {
+        let (jev_for_current_agent_lower, jev_for_current_agent_upper) = current_agent_band(values);
+        Self {
             env_file,
             projects_file,
             host_tokens_file,
@@ -167,16 +165,8 @@ impl Config {
                 "https://api.typesafe.ai/v1/systemone",
             ),
             jev_timeout_ms: ms_value(values, "SWITCHBOARD_JEV_TIMEOUT_MS", 2_000),
-            jev_for_current_agent_lower: fraction_value(
-                values,
-                "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER",
-                CURRENT_AGENT_BAND.0,
-            ),
-            jev_for_current_agent_upper: fraction_value(
-                values,
-                "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER",
-                CURRENT_AGENT_BAND.1,
-            ),
+            jev_for_current_agent_lower,
+            jev_for_current_agent_upper,
             jev_action_threshold: fraction_value(values, "SWITCHBOARD_JEV_ACTION_THRESHOLD", 0.6),
             jev_summary_token_budget: usize_value(
                 values,
@@ -200,33 +190,7 @@ impl Config {
                 speed: f32_value(values, "ELEVENLABS_SPEED", 1.0),
             },
             environment: values.clone(),
-        };
-        config.with_current_agent_band_ordered()
-    }
-
-    /// A band whose lower bound exceeds its upper one is logged and replaced
-    /// by both defaults: either bound may be the one that is wrong (setting
-    /// only one can cross the other's default), so neither is kept.
-    fn with_current_agent_band_ordered(mut self) -> Self {
-        let (lower, upper) = (
-            self.jev_for_current_agent_lower,
-            self.jev_for_current_agent_upper,
-        );
-        if lower > upper {
-            let (default_lower, default_upper) = CURRENT_AGENT_BAND;
-            tracing::warn!(
-                lower,
-                upper,
-                default_lower,
-                default_upper,
-                "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER exceeds UPPER; using the default band"
-            );
-            (
-                self.jev_for_current_agent_lower,
-                self.jev_for_current_agent_upper,
-            ) = CURRENT_AGENT_BAND;
         }
-        self
     }
 }
 
@@ -288,6 +252,27 @@ fn ms_value(values: &HashMap<String, String>, name: &str, default: u64) -> u64 {
         tracing::warn!(setting = name, value = raw, %default, "setting is not a whole number of milliseconds from 1 to {MAX_MS}; using the default");
         default
     })
+}
+/// `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER` and `_UPPER`, each a fraction.
+/// A band whose lower bound exceeds its upper one is logged and replaced by
+/// both defaults: either bound may be the one that is wrong (setting only one
+/// can cross the other's default), so neither is kept.
+fn current_agent_band(values: &HashMap<String, String>) -> (f64, f64) {
+    const DEFAULT: (f64, f64) = (0.3, 0.7);
+    let lower = fraction_value(values, "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER", DEFAULT.0);
+    let upper = fraction_value(values, "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER", DEFAULT.1);
+    if lower <= upper {
+        return (lower, upper);
+    }
+    let (default_lower, default_upper) = DEFAULT;
+    tracing::warn!(
+        lower,
+        upper,
+        default_lower,
+        default_upper,
+        "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER exceeds UPPER; using the default band"
+    );
+    DEFAULT
 }
 fn fraction_value(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
     let Some(raw) = setting(values, name) else {
