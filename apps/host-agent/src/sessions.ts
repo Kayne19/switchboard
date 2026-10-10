@@ -741,7 +741,21 @@ class Tail {
 	}
 }
 
-/** Run a project's prepare command with `sh -c` in its folder, bounded in output and time. */
+/**
+ * How long output is still read after the shell exits. A process the command
+ * left running (`server &`) inherits the output pipes and can hold them open
+ * for as long as it runs; waiting for them would hold the prepare until its
+ * timeout. Output the shell wrote is already in the pipes, so a short wait
+ * reads it; whatever comes later is not collected.
+ */
+export const PREPARE_DRAIN_MS = 500;
+
+/**
+ * Run a project's prepare command with `sh -c` in its folder, bounded in
+ * output and time. It settles on the shell's exit, after PREPARE_DRAIN_MS
+ * at most for the output pipes, not when every process holding them is gone.
+ * A shell that overruns `timeoutMs` is killed with its process group.
+ */
 export function runPrepare(options: { cwd: string; command: string; timeoutMs?: number }): Promise<PrepareResult> {
 	const timeoutMs = options.timeoutMs ?? PREPARE_DEFAULT_TIMEOUT_MS;
 	const started = Date.now();
@@ -749,6 +763,9 @@ export function runPrepare(options: { cwd: string; command: string; timeoutMs?: 
 		const stdout = new Tail();
 		const stderr = new Tail();
 		let timedOut = false;
+		let settled = false;
+		let exit: { code: number | null; signal: string | null } = { code: null, signal: null };
+		let drain: NodeJS.Timeout | undefined;
 		const child = spawn("sh", ["-c", options.command], { cwd: options.cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 		child.stdout.on("data", (c: Buffer) => stdout.push(c));
 		child.stderr.on("data", (c: Buffer) => stderr.push(c));
@@ -761,19 +778,33 @@ export function runPrepare(options: { cwd: string; command: string; timeoutMs?: 
 				child.kill("SIGKILL");
 			}
 		}, timeoutMs);
-		const finish = (code: number | null, signal: string | null, spawnError?: Error) => {
+		const finish = (spawnError?: Error) => {
+			if (settled) return;
+			settled = true;
 			clearTimeout(timer);
+			clearTimeout(drain);
 			resolve({
-				outcome: timedOut ? "timed_out" : code === 0 ? "succeeded" : "failed",
-				exit_code: code,
-				signal,
+				outcome: timedOut ? "timed_out" : exit.code === 0 ? "succeeded" : "failed",
+				exit_code: exit.code,
+				signal: exit.signal,
 				stdout: stdout.text(),
 				stderr: spawnError ? spawnError.message : stderr.text(),
 				truncated: stdout.truncated || stderr.truncated,
 				duration_ms: Date.now() - started,
 			});
 		};
-		child.on("error", (error) => finish(null, null, error));
-		child.on("close", (code, signal) => finish(code, signal));
+		child.on("error", (error) => finish(error));
+		child.on("exit", (code, signal) => {
+			exit = { code, signal };
+			clearTimeout(timer);
+			drain = setTimeout(() => {
+				// Stop reading: a process left behind keeps the pipes open.
+				child.stdout.destroy();
+				child.stderr.destroy();
+				finish();
+			}, PREPARE_DRAIN_MS);
+		});
+		// Every pipe closed after the exit: all the output is in.
+		child.on("close", () => finish());
 	});
 }

@@ -287,7 +287,11 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   daemon reads).
 - **`run_prepare`** runs `sh -c <command>` in `cwd`. Output is bounded: the
   last 16 KiB of each stream is kept. The default timeout is 10 minutes; on
-  timeout the process group is killed.
+  timeout the process group is killed. It answers when the shell exits, with
+  the shell's status: output is read for 500 ms more at most
+  (`PREPARE_DRAIN_MS`), then no longer. A process the command left running
+  (`server &`) keeps running, and what it writes after that is not
+  collected; give it its own output (`server >server.log 2>&1 &`).
 
   ```json
   { "outcome": "timed_out", "exit_code": null, "signal": "SIGKILL", "stdout": "...", "stderr": "", "truncated": false, "duration_ms": 600004 }
