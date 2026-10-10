@@ -663,14 +663,15 @@ async fn prompting_and_the_agent_exits_fails_the_turn_and_is_gone() {
 }
 
 #[tokio::test]
-async fn prompting_and_the_agent_closes_its_output_but_runs_on_fails_the_turn() {
+async fn prompting_and_the_agent_closes_its_output_but_runs_on_fails_the_turn_and_is_gone() {
     let session = fake_agent("read line; exec 1>&-; sleep 30", Duration::from_secs(5)).await;
     let turn = within("the prompt", session.prompt("one")).await.unwrap();
     assert!(turn.failed, "{turn:?}");
-    // Today the process is left running with no output: it still looks
-    // idle, and the next prompt goes to it and fails the same way.
-    assert_eq!(seen(&session).await, Seen::Idle);
-    session.close().await;
+    // A process with no output left must not look idle: the next prompt
+    // would go to it and fail the same way, and its owner would never
+    // start a fresh one.
+    assert_eq!(seen(&session).await, Seen::Gone);
+    refused_with(session.prompt("two").await, "agent process is not running");
 }
 
 #[tokio::test]
@@ -733,7 +734,7 @@ fn the_process_phase_table() {
             Event::Sent { turn },
             Event::Cancelled { turn },
         ]);
-        for how in [TurnEnd::Settled, TurnEnd::StreamEnded, TurnEnd::Failed] {
+        for how in [TurnEnd::Settled, TurnEnd::Failed] {
             events.push(Event::Ended { turn, how });
         }
     }
@@ -786,15 +787,6 @@ fn the_process_phase_table() {
             Event::Ended {
                 turn: 1,
                 how: TurnEnd::Settled,
-            },
-            State::Idle,
-            None,
-        ),
-        (
-            State::Prompting { turn: 1 },
-            Event::Ended {
-                turn: 1,
-                how: TurnEnd::StreamEnded,
             },
             State::Idle,
             None,

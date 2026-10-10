@@ -162,12 +162,11 @@ enum ProcessEvent {
 enum TurnEnd {
     /// It read `agent_settled`.
     Settled,
-    /// The output ended, or could not be read, before `agent_settled`. The
-    /// process is left as it is: if it has exited, `alive` says so.
-    StreamEnded,
-    /// The turn broke the process: silent past its deadline, a line too
-    /// big to read, or too much text. The process is closed before the
-    /// caller hears why.
+    /// The turn broke off before `agent_settled`: its output ended or
+    /// could not be read, it went silent past its deadline, it sent a line
+    /// too big to read or too much text. Whatever is left of the turn is
+    /// not this prompt's to read and the process may still run, so it is
+    /// closed before the caller hears why.
     Failed,
 }
 
@@ -199,7 +198,7 @@ fn step(state: ProcessState, event: ProcessEvent) -> (ProcessState, Option<Teard
         }
         (State::Prompting { turn }, Event::Ended { turn: ended, how }) if ended == turn => {
             match how {
-                TurnEnd::Settled | TurnEnd::StreamEnded => (State::Idle, None),
+                TurnEnd::Settled => (State::Idle, None),
                 TurnEnd::Failed => (State::Closed, Some(Teardown::Release)),
             }
         }
@@ -681,7 +680,7 @@ impl PiSession {
                         failed: true,
                         error,
                     };
-                    return (TurnEnd::StreamEnded, Ok(turn));
+                    return (TurnEnd::Failed, Ok(turn));
                 }
                 Ok(Ok(LimitedLine::TooLong)) => {
                     tracing::error!(%label, limit = STREAM_LIMIT, "oversized RPC event; dropping the leg");
@@ -696,7 +695,7 @@ impl PiSession {
                 Ok(Err(error)) => {
                     tracing::error!(%label, %error, "could not read agent output");
                     let error = PiSessionError(format!("could not read agent output: {error}"));
-                    return (TurnEnd::StreamEnded, Err(error));
+                    return (TurnEnd::Failed, Err(error));
                 }
                 Err(_) => {
                     // The most common wedged-agent symptom in production, and
