@@ -217,6 +217,44 @@ for (const scene of auxScenes) {
   }
 }
 
+// Timers in an aux cell are drawn in one layout from the first frame they
+// are painted in. The field asked for nothing until an observer measured
+// its rows, then grew, and its new height reached the layout on React's own
+// schedule: a frame or more showed the rows of a list in a field a grid's
+// height, then the grid. On a loaded WebKit that took up to half a second,
+// and the check above caught it after its 900 ms wait now and then (#333).
+// Each state is read once its frame is drawn, after the observers that frame
+// runs (they run after its animation-frame callbacks).
+test('timers in an aux cell are drawn in one layout from their first frame / ultrawide', async ({ page }) => {
+  await page.setViewportSize({ width: 2560, height: 1080 });
+  await openScene(page, 'code');
+  const [source] = await page.evaluate(visualsOf);
+  await openScene(page, 'timer');
+  const [timers] = await page.evaluate(visualsOf);
+  await openScene(page, 'plan');
+  const visuals = await page.evaluate(visualsOf);
+  const drawn = page.evaluate(() => new Promise<string[]>((resolve) => {
+    const layouts = new Set<string>();
+    let first: number | null = null;
+    const look = () => {
+      const layout = document.querySelector('.composed-aux [data-testid="timer"]')?.getAttribute('data-layout');
+      if (layout) {
+        first ??= performance.now();
+        layouts.add(layout);
+      }
+      if (first === null || performance.now() - first < 1200) requestAnimationFrame(() => setTimeout(look, 0));
+      else resolve([...layouts]);
+    };
+    requestAnimationFrame(() => setTimeout(look, 0));
+  }));
+  await runActions(page, [
+    { op: 'clear' },
+    { ...source, id: 'aux-source', role: 'primary' },
+    ...[...visuals, { ...timers, id: 'aux-timers' }].map((visual) => ({ ...visual, role: 'secondary' })),
+  ]);
+  expect(await drawn).toEqual(['grid-3x2']);
+});
+
 // An aux row with more cells than room scrolls inside itself; at rest the
 // cell its edge cuts reads as the next one coming, under the rim every
 // scroller draws (a fade, the cut line, a count of the cells wholly past
