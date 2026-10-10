@@ -215,9 +215,19 @@ for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set(["
 	scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
 }
 
+// 13. The page lays out from the stage's own box (docs/ipad.md). With
+//     `viewport-fit=cover` Safari lays the page under the notch and the
+//     home indicator, and only `env(safe-area-inset-*)` keeps it out; the
+//     page had the one with none of the other (#275).
+{
+	const shell = readFileSync(path.join(root, "apps/frontend/index.html"), "utf8");
+	const styles = readFileSync(path.join(root, "apps/frontend/src/styles/index.css"), "utf8");
+	if (/viewport-fit\s*=\s*cover/.test(shell) && !styles.includes("env(safe-area-inset-")) findings.push("apps/frontend/index.html: viewport-fit=cover with no env(safe-area-inset-*) in index.css: the page draws under the notch");
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no page under the notch");

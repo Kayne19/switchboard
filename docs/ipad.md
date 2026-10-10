@@ -38,6 +38,13 @@ a third of the width). The layout reads only the stage's own geometry
 (`apps/frontend/ARCHITECTURE.md`, "Layout"), so these are sizes to test at,
 never breakpoints.
 
+The page does not ask to be drawn under the display's cut-outs: its viewport
+tag has no `viewport-fit=cover`. Safari then lays it out inside the safe
+area, clear of an iPhone's notch on its side and a Face ID iPad's home
+indicator, and the stage's box is still all the layout reads. A change that
+wants the page full-bleed pads it by `env(safe-area-inset-*)` in the same
+change; `scripts/check_hygiene.mjs` refuses the one without the other.
+
 ## Rules
 
 - One implementation for both engines. No user-agent checks, no WebKit-only
