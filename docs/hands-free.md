@@ -21,8 +21,12 @@ the registered voice runtime and switches it by calling `toggleHandsFree()`;
 while listening it names the wake word (`MODE / HANDS-FREE · HEY JARVIS`).
 The page holds no listening state of its own, and the refusals below stay the
 runtime's: a switch while the line is down, during startup, or with
-push-to-talk active is refused there and reported in `handsFreeStatus`. The
-demo page registers no runtime, so the control is disabled there.
+push-to-talk active is refused there and reported in `handsFreeStatus`.
+"During startup" is only while the detectors load and the controller is made.
+The controller's own start is outside it: the controller is enabled from the
+first moment of that start, so a tap during it turns hands-free off, and a
+start that never finishes cannot hold MODE for the life of the page (#261).
+The demo page registers no runtime, so the control is disabled there.
 
 ## Real wake-word detector
 
@@ -119,6 +123,13 @@ turn, after a response-scoped queue marker has passed all earlier audio slots.
 Its `response_id`, generation, and production success are not used as heartbeat
 or reconnect state. Individual `speak`, `spoken`, `audio_start`, and `audio_done`
 events never open or extend the lease.
+
+A start waits at most `AUDIO_RESUME_DEADLINE_MS` (3 s) for a suspended 16-kHz
+context to run. WebKit can leave `resume()` pending while the audio session is
+interrupted (#183). A context that is still not running at the deadline fails
+the start with an `error` that the page shows. A start keeps the context,
+microphone and nodes it makes to itself until its last wait is over. A start
+that a newer one overtook releases only those, never the newer start's graph.
 
 Capture is discarded on permission failure, hidden/pagehide, disconnect,
 hangup, route/epoch change, or push-to-talk interruption. Secure contexts with
