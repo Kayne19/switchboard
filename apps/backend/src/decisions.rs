@@ -43,14 +43,27 @@ impl Drop for UtteranceScope {
 #[derive(Default)]
 pub(crate) struct DecisionState {
     trace_utterance: Arc<StdMutex<Option<String>>>,
-    pending_stop: Option<String>,
+    pending_stop: Option<PendingStop>,
+}
+
+/// A stop the caller was asked to confirm, and the generation it was asked
+/// at. Only the next decision in that generation can confirm it: a hangup,
+/// a page control or any other rescue retires the generation, and with it
+/// the question the caller never answered.
+struct PendingStop {
+    target: String,
+    generation: u64,
 }
 
 impl DecisionState {
-    /// Puts a project in the "stop me?" state a test wants to answer.
+    /// Puts a project in the "stop me?" state a test wants to answer, asked
+    /// at `generation`.
     #[cfg(test)]
-    pub(crate) fn set_pending_stop_for_test(&mut self, project: &str) {
-        self.pending_stop = Some(project.to_owned());
+    pub(crate) fn set_pending_stop_for_test(&mut self, project: &str, generation: u64) {
+        self.pending_stop = Some(PendingStop {
+            target: project.to_owned(),
+            generation,
+        });
     }
 }
 
@@ -149,16 +162,22 @@ impl Switchboard {
         // is deliberately confirmation-only here; the next utterance must
         // confirm before a resident session is closed.
         let mut note = String::new();
-        if let Some(target) = self.decisions.pending_stop.take() {
-            if is_confirmation(text) {
+        if let Some(PendingStop { target, generation }) = self.decisions.pending_stop.take() {
+            if generation != self.coordinator.generation() {
+                note = format!(
+                    "the pending stop of {target} was asked before a rescue, so it was dropped; "
+                );
+            } else if is_confirmation(text) {
                 self.trace_branch(
                     "stop_confirmed",
                     format!("the caller confirmed stopping {target}"),
                 );
                 self.trace_routed(OPERATOR, text, "continue", "pbx");
                 return self.stop_project(&target).await;
+            } else {
+                note =
+                    format!("the pending stop of {target} was not confirmed, so it was dropped; ");
             }
-            note = format!("the pending stop of {target} was not confirmed, so it was dropped; ");
         }
         if matches!(decision.action, crate::router::Action::Stop) {
             let target = decision.target.clone().or_else(|| {
@@ -179,7 +198,10 @@ impl Switchboard {
                 ),
             );
             self.trace_routed(OPERATOR, text, "continue", "pbx");
-            self.decisions.pending_stop = Some(target.clone());
+            self.decisions.pending_stop = Some(PendingStop {
+                target: target.clone(),
+                generation: self.coordinator.generation(),
+            });
             return self.reply(
                 [format!(
                     "Do you want me to stop {target}? Say yes to confirm."

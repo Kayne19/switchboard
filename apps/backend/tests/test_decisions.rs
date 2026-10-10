@@ -1188,6 +1188,37 @@ fn a_confirmation_is_a_leading_yes_in_any_punctuation() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_stop_asked_before_a_hangup_is_not_confirmed_after_it() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let ask = board
+        .handle_decision(
+            "stop alpha",
+            &decision(crate::router::Action::Stop, Some("alpha"), None),
+        )
+        .await;
+    assert!(ask.text.contains("Say yes to confirm"));
+    // The caller hangs up from the page instead of answering: `/hangup`
+    // rescues, then drops the leg.
+    board.coordinator.begin_rescue("operation interrupted");
+    assert_eq!(board.force_hangup().await.as_deref(), Some("alpha"));
+    let back = board
+        .transfer_ctx(&transcript("back to alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(back.route, "alpha");
+
+    let reply = board
+        .handle_decision(
+            "yes",
+            &decision(crate::router::Action::Continue, None, None),
+        )
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    assert!(board.agent.is_some(), "the stale stop closed alpha");
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn the_operator_gets_the_call_state_once_per_utterance() {
     let root = scratch_dir("operator-call-state");
     let seen = root.join("operator-input");
