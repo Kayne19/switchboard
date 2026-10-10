@@ -416,7 +416,7 @@ test("a frame the host agent cannot use is logged with the reason", async () => 
 });
 
 // serde_json refuses a lone surrogate, and the service lost the whole frame
-// that carried one: an event, or a command's reply (list_saved_sessions
+// that carried one: an event, or a command's reply (a saved-session listing
 // failed on every try for a first message cut inside an emoji).
 test("every frame goes out with a lone surrogate written as U+FFFD", async () => {
 	const service = await FakeService.start();
@@ -439,7 +439,7 @@ test("every frame goes out with a lone surrogate written as U+FFFD", async () =>
 		link.publish("a1", { kind: "tool_end", tool: "read", result: { ["k\ud83d"]: "v\ud83d", nested: [{ ["\ude00"]: 1 }] } } as unknown as Parameters<typeof link.publish>[1]);
 		const tool = await l.next((m) => m.type === "event" && (m.event as Message).kind === "tool_end");
 		assert.deepEqual((tool.event as { result: unknown }).result, { ["k\ufffd"]: "v\ufffd", nested: [{ ["\ufffd"]: 1 }] });
-		const reply = await command(l, 1, "c1", "list_saved_sessions", { cwd: "/srv/homelab" });
+		const reply = await command(l, 1, "c1", "list_sessions", {});
 		assert.deepEqual(reply.result, { sessions: [{ first_message: "fix the parser \ufffd" }] });
 		assert.ok(raw.every((frame) => !/\\ud[89a-f]/i.test(frame)), "no surrogate escape on the wire");
 	} finally {

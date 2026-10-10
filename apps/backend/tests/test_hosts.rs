@@ -815,8 +815,8 @@ async fn hosts_fail_a_command_whose_reply_they_cannot_read_at_once() {
                 hosts
                     .command(
                         "scriptorium",
-                        "list_saved_sessions",
-                        json!({"cwd": "/srv/homelab"}),
+                        "list_sessions",
+                        json!({}),
                         Duration::from_secs(60),
                     )
                     .await

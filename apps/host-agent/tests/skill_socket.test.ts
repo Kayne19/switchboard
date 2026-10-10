@@ -101,7 +101,7 @@ test("hello: not on call, then settings once the service puts the session on a c
 		assert.deepEqual(await ask({ op: "hello", session_id: "unknown-session", depth: 0 }), { on_call: false });
 		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
 		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: true, token: "call-token-1", persona: "Jev", speech_deadline_ms: 25000 });
-		await manager.handle("leave_call", { session: handle });
+		await manager.handle("detach", { session: handle });
 		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: false });
 	});
 });
