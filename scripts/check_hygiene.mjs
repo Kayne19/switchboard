@@ -215,21 +215,33 @@ for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set(["
 	scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
 }
 
-// 13. A backend test waits on a channel, a Notify, a watch or a stream
-//     through within() (apps/backend/src/main.rs), which fails the test by
-//     name after a generous deadline. libtest has no per-test timeout, so a
-//     bare await whose wake-up is lost hangs cargo test forever with no
-//     output (#338). A fake that is meant to wait as long as its test says
-//     so on the line before: `// unbounded: <why>`.
-for (const file of files(path.join(root, "apps/backend/tests"), new Set([".rs"]))) {
-	const text = lines(file);
-	text.forEach((line, index) => {
-		const wait = /\.(?:recv|next|notified|changed)\(\)/;
-		const bare = new RegExp(`${wait.source}\\.await`).test(line) || (new RegExp(`${wait.source}$`).test(line.trimEnd()) && /^\s*\.await\b/.test(text[index + 1] ?? ""));
-		// Inside a timeout(..., async { loop { ... } }) the wait is bounded.
-		const bounded = text.slice(Math.max(0, index - 3), index + 1).some((near) => /\b(?:within|timeout)\(/.test(near));
-		if (bare && !bounded && !/\/\/ unbounded: \S/.test(text[index - 1] ?? "")) findings.push(`${rel(file)}:${index + 1}: a test await with no deadline (wrap it in within(), or mark a fake \`// unbounded: <why>\`)`);
-	});
+// 13. A backend test waits on a channel, a Notify, a watch, a stream, a
+//     oneshot or a task's JoinHandle through within()
+//     (apps/backend/src/main.rs), which fails the test by name after a
+//     generous deadline. libtest has no per-test timeout, so a bare await
+//     whose wake-up is lost hangs cargo test forever with no output (#338).
+//     A handle aborted on the line before is not waited on. A fake that is
+//     meant to wait as long as its test says so on the line before:
+//     `// unbounded: <why>`.
+{
+	// `.recv()`, `.next()`, `.notified()`, `.changed()`, or a bare name (a
+	// oneshot receiver, a JoinHandle), awaited on the same line or, split by
+	// rustfmt, on the next.
+	const wait = /(?:\.(?:recv|next|notified|changed)\(\)|(?<![.\w])([a-z_]\w*))/;
+	const sameLine = new RegExp(`${wait.source}\\s*\\.await\\b`);
+	const lineEnd = new RegExp(`${wait.source}$`);
+	for (const file of files(path.join(root, "apps/backend/tests"), new Set([".rs"]))) {
+		const text = lines(file);
+		text.forEach((line, index) => {
+			const before = text[index - 1] ?? "";
+			const match = sameLine.exec(line) ?? (/^\s*\.await\b/.test(text[index + 1] ?? "") ? lineEnd.exec(line.trimEnd()) : null);
+			if (!match) return;
+			// Inside a timeout(..., async { loop { ... } }) the wait is bounded.
+			const bounded = text.slice(Math.max(0, index - 3), index + 1).some((near) => /\b(?:within|timeout)\(/.test(near));
+			const aborted = match[1] !== undefined && before.includes(`${match[1]}.abort()`);
+			if (!bounded && !aborted && !/\/\/ unbounded: \S/.test(before)) findings.push(`${rel(file)}:${index + 1}: a test await with no deadline (wrap it in within(), or mark a fake \`// unbounded: <why>\`)`);
+		});
+	}
 }
 
 if (findings.length > 0) {
