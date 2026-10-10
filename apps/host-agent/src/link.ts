@@ -81,7 +81,7 @@ const OPEN = 1;
  * value or a key, as U+FFFD. JSON.stringify would write it as a `\uXXXX` escape, which the
  * service's serde_json refuses, and the whole frame would be lost: an
  * event, a snapshot, or a command's reply (a saved session's first message
- * cut inside an emoji failed `list_saved_sessions` on every try). The skill
+ * cut inside an emoji failed a saved-session listing on every try). The skill
  * module refuses a lone surrogate before it sends one, so a relayed call is
  * not changed in practice. (`isWellFormed` and `toWellFormed` are ES2024,
  * in Node since 20; the type library here is ES2023.)

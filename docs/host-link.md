@@ -221,15 +221,12 @@ model does not have). `call_mode` is `null` when the session is not on a call.
 | `open_session` | `session_id`, `cwd`, `project?` | `info` |
 | `attach` | `session`, `project`, `cwd` | `info` |
 | `list_sessions` | — | `{sessions: [...]}` |
-| `list_saved_sessions` | `cwd`, `project?` | `{sessions: [...]}` |
 | `prompt` | `session`, `message` | `{sent_as: "prompt" \| "follow_up"}` |
 | `steer` | `session`, `message` | `{sent_as: "steer"}` |
-| `follow_up` | `session`, `message` | `{sent_as: "follow_up"}` |
 | `abort` | `session` | `{aborted: true}` |
 | `kill` | `session` | `{killed: true}` |
 | `detach` | `session` | `{detached: true}` |
 | `join_call` | `session`, `token`, `persona`, `speech_deadline_ms`, `mode?` | `{on_call: true, mode}` |
-| `leave_call` | `session` | `{on_call: false}` |
 | `set_mode` | `session`, `mode` | `{mode}` |
 | `set_model` | `session`, `provider`, `model` | `{model, thinking}` |
 | `set_thinking` | `session`, `level` | `{model, thinking}` |
@@ -259,9 +256,6 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   left out): `{session, session_id, name, cwd, busy, provenance, project,
   model, thinking}`. `provenance` is `"created"`, `"taken_over"`, or `null`
   for a session the service has nothing to do with.
-- **`list_saved_sessions`** lists saved sessions in `cwd`, filtered to names
-  starting `sb-<project>-` when `project` is given: `{session_id, path, name,
-  cwd, modified, message_count, first_message}`.
 - **`prompt`** on a session with an open turn is sent as `follow_up`, and a
   prompt the daemon refuses as busy is resent as `follow_up`; the daemon
   refuses plain prompts on a busy session.
@@ -276,8 +270,8 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   a call".
 - **`join_call`** puts a tracked session on a call: the skill module's hello
   then returns the token, persona and speech deadline given here. `mode`
-  defaults to `foreground`. `leave_call` takes it off; `detach` and `kill` do
-  too. The service sends a new token for every call.
+  defaults to `foreground`. `detach` and `kill` take it off. The service
+  sends a new token for every call.
 - **`set_mode`** changes the mode of a session on a call: `foreground`,
   `background` or `active`. See "Delivery" below.
 - **`set_model`** and **`set_thinking`** read the state back and return the

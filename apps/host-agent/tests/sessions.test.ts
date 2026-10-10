@@ -154,11 +154,6 @@ test("resume: open_session reopens a saved sb- session; a desk session is refuse
 	const { daemon, manager } = setup();
 	daemon.saved.set("old1", { handle: "", sessionId: "old1", name: "sb-homelab-1234abcd", cwd: "/srv/homelab", busy: false, model: null, thinking: "low", depth: 0 });
 	daemon.saved.set("desk", { handle: "", sessionId: "desk", name: "my-notes", cwd: "/srv/homelab", busy: false, model: null, thinking: "low", depth: 0 });
-	const saved = (await manager.handle("list_saved_sessions", { cwd: "/srv/homelab", project: "homelab" })) as { sessions: Message[] };
-	assert.deepEqual(
-		saved.sessions.map((s) => s.session_id),
-		["old1"],
-	);
 	await assert.rejects(manager.handle("open_session", { session_id: "old1", project: "homelab" }), (e: Error & { code?: string }) => e.code === "bad_request");
 	const info = (await manager.handle("open_session", { session_id: "old1", cwd: "/srv/homelab", project: "homelab" })) as Message;
 	assert.equal(info.session_id, "old1");
@@ -344,6 +339,20 @@ test("a daemon that reports one command unsupported fails that command cleanly; 
 test("catalog: list_models returns the daemon host's models", async () => {
 	const { manager } = setup();
 	assert.deepEqual(await manager.handle("list_models", {}), { models: [{ provider: "anthropic", id: "claude-x", name: "Claude X", reasoning: true }] });
+});
+
+test("commands the service never sends are unknown: leave_call, follow_up, list_saved_sessions", async () => {
+	// The service puts a session off a call with detach or kill, queues input
+	// with prompt or steer, and reopens a session by id (#294).
+	const { manager } = setup();
+	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	for (const [name, args] of [
+		["leave_call", { session: s }],
+		["follow_up", { session: s, message: "more" }],
+		["list_saved_sessions", { cwd: "/srv/homelab" }],
+	] as const) {
+		await assert.rejects(manager.handle(name, args), (e: Error & { code?: string }) => e.code === "unknown_command", name);
+	}
 });
 
 test("prepare: output, failure, bounded output and timeout reports", async () => {

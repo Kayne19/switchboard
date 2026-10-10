@@ -270,14 +270,10 @@ export class SessionManager {
 				return this.attach(requireString(args, "session"), requireString(args, "project"), requireString(args, "cwd"));
 			case "list_sessions":
 				return this.listSessions();
-			case "list_saved_sessions":
-				return this.listSavedSessions(requireString(args, "cwd"), optionalString(args, "project"));
 			case "prompt":
 				return this.prompt(requireString(args, "session"), requireString(args, "message"));
 			case "steer":
 				return this.input(requireString(args, "session"), "steer", requireString(args, "message"));
-			case "follow_up":
-				return this.input(requireString(args, "session"), "follow_up", requireString(args, "message"));
 			case "abort":
 				return this.abort(requireString(args, "session"));
 			case "kill":
@@ -286,8 +282,6 @@ export class SessionManager {
 				return this.detach(requireString(args, "session"));
 			case "join_call":
 				return this.joinCall(requireString(args, "session"), args);
-			case "leave_call":
-				return this.leaveCall(requireString(args, "session"));
 			case "set_mode":
 				return this.setMode(requireString(args, "session"), requireString(args, "mode"));
 			case "set_model":
@@ -427,24 +421,6 @@ export class SessionManager {
 		};
 	}
 
-	async listSavedSessions(cwd: string, project: string | undefined): Promise<{ sessions: Record<string, unknown>[] }> {
-		const prefix = project ? `${SESSION_NAME_PREFIX}${project}-` : null;
-		const saved = await this.#port.listSaved(cwd);
-		return {
-			sessions: saved
-				.filter((s) => prefix === null || (s.name ?? "").startsWith(prefix))
-				.map((s) => ({
-					session_id: s.sessionId,
-					path: s.path,
-					name: s.name,
-					cwd: s.cwd,
-					modified: s.modified,
-					message_count: s.messageCount,
-					first_message: s.firstMessage,
-				})),
-		};
-	}
-
 	#get(handle: string): Tracked {
 		const t = this.#tracked.get(handle);
 		if (!t) throw new CommandError("not_found", `session ${handle} is not tracked by this host agent`);
@@ -535,11 +511,6 @@ export class SessionManager {
 		if (typeof deadline !== "number" || !(deadline > 0)) throw new CommandError("bad_request", "speech_deadline_ms must be a positive number");
 		t.call = { token: requireString(args, "token"), persona: optionalString(args, "persona") ?? "", speechDeadlineMs: deadline, mode };
 		return { on_call: true, mode };
-	}
-
-	leaveCall(handle: string): { on_call: false } {
-		this.#get(handle).call = null;
-		return { on_call: false };
 	}
 
 	setMode(handle: string, mode: string): { mode: CallMode } {
