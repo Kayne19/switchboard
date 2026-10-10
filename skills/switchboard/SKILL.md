@@ -49,7 +49,8 @@ as numpy arrays, are sent as lists.
   `problem`. `message` is the real content, said the way you would say it: the
   result, the question with its options, or what went wrong and what you need.
   Not a teaser. The service fits it into the conversation and plays it at a
-  good moment.
+  good moment. A newer request replaces one of yours that is still waiting,
+  so send the whole update each time.
 - `display(action)` or `display(**action)`: one display action per call. See
   "Display".
 - `view(target=None)`: with no target, report what is on the caller's screen.

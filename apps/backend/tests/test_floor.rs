@@ -90,6 +90,43 @@ async fn queue_order_and_one_speaker_at_a_time() {
 }
 
 #[tokio::test]
+async fn an_agent_keeps_one_request_waiting_however_often_it_asks() {
+    let floor = Floor::new(Duration::ZERO);
+    let bus = crate::debug::DebugBus::new();
+    let floor = floor.with_debug(bus.clone());
+    // No page: nothing is released while the agent asks again and again.
+    for n in 1..=1_000 {
+        floor.enqueue(request(n)).await;
+    }
+    // The front, which may already be on its way out, and the newest.
+    assert_eq!(floor.queue_len().await, 2);
+    let replaced = debug_events(&bus)
+        .into_iter()
+        .filter(|event| matches!(event, DebugEvent::FloorReleased { how, .. } if how == "replaced"))
+        .count();
+    assert_eq!(replaced, 998);
+
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let (released, mut results) = mpsc::unbounded_channel();
+    floor.set_page_connected(true).await;
+    let worker = tokio::spawn({
+        let floor = floor.clone();
+        let h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
+        async move { floor.run(h).await }
+    });
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1000:update 1000"
+    );
+    worker.abort();
+}
+
+#[tokio::test]
 async fn releases_record_no_overlapping_speakers() {
     let floor = Floor::new(Duration::ZERO);
     let connected = Arc::new(AtomicBool::new(true));

@@ -202,7 +202,7 @@ Rust `DebugEvent` in `apps/backend/src/debug.rs` is the source of truth. The
 - `floor_held`: `agent`, `message`, optional `floor_id`
 - `floor_gate`: `agent`, `answer` (`yes`, `no`, or `failed`), `latency_ms`, optional `floor_id`
 - `floor_rewrite`: `agent`, `original`, `rewritten`, `latency_ms`, optional `floor_id`; the utility's floor rewrite. `rewritten` equals `original` when the rewrite failed or timed out.
-- `floor_released`: `agent`, `how` (`gate_yes`, `quiet_after_hold`, or `dropped_agent_gone`), optional `floor_id`
+- `floor_released`: `agent`, `how` (`gate_yes`, `quiet_after_hold`, `dropped_agent_gone`, or `replaced`: a newer request from the same agent took its place in the queue), optional `floor_id`
 - `agents_state`: `agents` (the existing `AgentsState` projection)
 - `host_link`: `host`, `connected`; a fenced link closing while its newer link is up is not reported
 - `call_boundary`: `phase` (`started` or `ended`), `call_id` (opaque, minted by the service), optional `reason` for `ended` (`page_closed`, `hangup`, or `shutdown`). A call starts when a caller page connects to no open call. A hangup ends it and, while the page stays connected, starts the next one.

@@ -127,7 +127,20 @@ impl Floor {
         self
     }
 
+    /// Queues `request`. An agent has at most one request waiting: a newer
+    /// one takes the place of the one it already has behind the front, and
+    /// that one's trace ends as `replaced`. The front is not replaced, as it
+    /// may already be on its way to the caller. So the queue holds at most
+    /// two requests per agent, however often one asks (#252); the projection
+    /// shows only the newest request too (`AgentProjection::waiting`).
     pub(crate) async fn enqueue(&self, mut request: FloorRequest) {
+        let mut state = self.state.lock().await;
+        let waiting = state
+            .queue
+            .iter()
+            .skip(1)
+            .position(|entry| entry.request.token == request.token)
+            .map(|index| index + 1);
         request.floor_id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -136,10 +149,18 @@ impl Floor {
             message: request.message.clone(),
             floor_id: Some(request.floor_debug_id()),
         });
-        self.state.lock().await.queue.push_back(QueuedRequest {
+        let entry = QueuedRequest {
             request,
             held_after: None,
-        });
+        };
+        match waiting.and_then(|index| state.queue.get_mut(index)) {
+            Some(slot) => {
+                let replaced = std::mem::replace(slot, entry);
+                self.trace_released(&replaced.request, "replaced");
+            }
+            None => state.queue.push_back(entry),
+        }
+        drop(state);
         self.changed.notify_waiters();
     }
 
