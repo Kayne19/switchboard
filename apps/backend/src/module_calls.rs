@@ -439,25 +439,32 @@ async fn display(
         }
     }
 
-    if state
-        .0
-        .coordinator
-        .with_background(token, |project| {
-            state
-                .0
-                .projection
-                .hold_display(project.to_owned(), normalized_action.clone())
-        })
-        .is_some()
-    {
-        return Json(json!({
-            "delivered": false,
-            "accepted": true,
-            "held": true,
-            "reason": "caller_away",
-            "detail": "the display is held, not on screen yet; it will appear when the caller brings this agent forward. Say it is ready, not that it is on screen"
-        }))
-        .into_response();
+    let held = state.0.coordinator.with_background(token, |project| {
+        state
+            .0
+            .projection
+            .hold_display(project.to_owned(), &normalized_action)
+    });
+    match held {
+        Some(Err(detail)) => {
+            tracing::info!(%detail, "refused: the held stage is full");
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"delivered":false, "detail":detail})),
+            )
+                .into_response();
+        }
+        Some(Ok(())) => {
+            return Json(json!({
+                "delivered": false,
+                "accepted": true,
+                "held": true,
+                "reason": "caller_away",
+                "detail": "the display is held, not on screen yet; it will appear when the caller brings this agent forward. Say it is ready, not that it is on screen"
+            }))
+            .into_response();
+        }
+        None => {}
     }
     let authority = match admit_module_call(
         &state,

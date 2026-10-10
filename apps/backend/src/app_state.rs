@@ -58,7 +58,16 @@ pub(crate) struct AgentProjection {
     // applies a waiting/display mutation, so the check and write cannot be
     // separated by promotion.
     pub(crate) states: Arc<StdMutex<Vec<AgentState>>>,
-    pub(crate) displays: Arc<StdMutex<HashMap<String, Value>>>,
+    pub(crate) displays: Arc<StdMutex<HashMap<String, HeldScene>>>,
+}
+
+/// A background agent's held displays: the stage it gets when the caller
+/// brings it forward, and the count of actions applied to it, which orders
+/// its primary claims as the live stage's `seq` does.
+#[derive(Clone, Default)]
+pub(crate) struct HeldScene {
+    stage: DisplayProjection,
+    applied: u64,
 }
 
 impl AgentProjection {
@@ -130,25 +139,40 @@ impl AgentProjection {
         agents.clone()
     }
 
-    pub(crate) fn hold_display(&self, project: String, action: Value) {
-        self.displays
+    /// Applies a background agent's display to the scene held for it: the
+    /// stage the caller sees when they bring the agent forward, which starts
+    /// empty. A show that stage could not take is refused now, for the reason
+    /// the live stage would give, so nothing the agent was told is held is
+    /// dropped later.
+    pub(crate) fn hold_display(&self, project: String, action: &Value) -> Result<(), String> {
+        let mut displays = self
+            .displays
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(project, action);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let held = displays.entry(project).or_default();
+        if let Some(refusal) = held.stage.refusal(action) {
+            return Err(refusal);
+        }
+        held.applied += 1;
+        held.stage.apply(action, held.applied);
+        Ok(())
     }
 
+    /// Whether the scene held for `project` has anything to show.
     pub(crate) fn has_held_display(&self, project: &str) -> bool {
         self.displays
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains_key(project)
+            .get(project)
+            .is_some_and(|held| !held.stage.is_empty())
     }
 
-    pub(crate) fn take_display(&self, project: &str) -> Option<Value> {
+    pub(crate) fn take_display(&self, project: &str) -> Option<DisplayProjection> {
         self.displays
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(project)
+            .map(|held| held.stage)
     }
 
     pub(crate) fn snapshot(&self) -> Vec<AgentState> {
