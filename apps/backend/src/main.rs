@@ -89,6 +89,9 @@ pub struct Config {
     pub environment: HashMap<String, String>,
 }
 
+/// The defaults of `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER` and `_UPPER`.
+const CURRENT_AGENT_BAND: (f64, f64) = (0.3, 0.7);
+
 impl Config {
     pub fn speech_deadline(&self) -> std::time::Duration {
         std::time::Duration::from_millis(self.speech_deadline_ms)
@@ -163,16 +166,16 @@ impl Config {
                 "SWITCHBOARD_JEV_URL",
                 "https://api.typesafe.ai/v1/systemone",
             ),
-            jev_timeout_ms: bounded_ms(values, "SWITCHBOARD_JEV_TIMEOUT_MS", 2_000),
+            jev_timeout_ms: ms_value(values, "SWITCHBOARD_JEV_TIMEOUT_MS", 2_000),
             jev_for_current_agent_lower: fraction_value(
                 values,
                 "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER",
-                0.3,
+                CURRENT_AGENT_BAND.0,
             ),
             jev_for_current_agent_upper: fraction_value(
                 values,
                 "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER",
-                0.7,
+                CURRENT_AGENT_BAND.1,
             ),
             jev_action_threshold: fraction_value(values, "SWITCHBOARD_JEV_ACTION_THRESHOLD", 0.6),
             jev_summary_token_budget: usize_value(
@@ -182,7 +185,7 @@ impl Config {
                 false,
             )
             .min(32_000),
-            floor_quiet_threshold_ms: bounded_ms(
+            floor_quiet_threshold_ms: ms_value(
                 values,
                 "SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS",
                 10_000,
@@ -198,11 +201,32 @@ impl Config {
             },
             environment: values.clone(),
         };
-        assert!(
-            config.jev_for_current_agent_lower <= config.jev_for_current_agent_upper,
-            "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER must not exceed UPPER"
+        config.with_current_agent_band_ordered()
+    }
+
+    /// A band whose lower bound exceeds its upper one is logged and replaced
+    /// by both defaults: either bound may be the one that is wrong (setting
+    /// only one can cross the other's default), so neither is kept.
+    fn with_current_agent_band_ordered(mut self) -> Self {
+        let (lower, upper) = (
+            self.jev_for_current_agent_lower,
+            self.jev_for_current_agent_upper,
         );
-        config
+        if lower > upper {
+            let (default_lower, default_upper) = CURRENT_AGENT_BAND;
+            tracing::warn!(
+                lower,
+                upper,
+                default_lower,
+                default_upper,
+                "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER exceeds UPPER; using the default band"
+            );
+            (
+                self.jev_for_current_agent_lower,
+                self.jev_for_current_agent_upper,
+            ) = CURRENT_AGENT_BAND;
+        }
+        self
     }
 }
 
@@ -235,19 +259,35 @@ fn get(values: &HashMap<String, String>, name: &str, default: &str) -> String {
 fn optional(values: &HashMap<String, String>, name: &str) -> Option<String> {
     setting(values, name).map(str::to_owned)
 }
-/// A deadline the extensions also enforce, so a value the service would
-/// silently replace with its default would leave the two sides disagreeing.
-/// A malformed one stops startup instead.
+/// The longest duration a millisecond setting accepts.
+const MAX_MS: u64 = 120_000;
+
+/// A whole number of milliseconds from 1 to `MAX_MS`, or `None`.
+fn parse_ms(raw: &str) -> Option<u64> {
+    raw.parse::<u64>()
+        .ok()
+        .filter(|value| (1..=MAX_MS).contains(value))
+}
+/// A deadline the host agent also enforces (only
+/// `SWITCHBOARD_SPEECH_DEADLINE_MS`): a value the service silently replaced
+/// with its default would leave the two sides disagreeing, so a malformed one
+/// stops startup instead.
 fn bounded_ms(values: &HashMap<String, String>, name: &str, default: u64) -> u64 {
-    const MAX_MS: u64 = 120_000;
-    match setting(values, name) {
-        None => default,
-        Some(raw) => raw
-            .parse::<u64>()
-            .ok()
-            .filter(|value| (1..=MAX_MS).contains(value))
-            .unwrap_or_else(|| panic!("{name} must be a positive integer from 1 to {MAX_MS} ms")),
-    }
+    setting(values, name).map_or(default, |raw| {
+        parse_ms(raw)
+            .unwrap_or_else(|| panic!("{name} must be a positive integer from 1 to {MAX_MS} ms"))
+    })
+}
+/// A duration only this service uses: a value that is not a whole number of
+/// milliseconds from 1 to `MAX_MS` is logged and replaced by the default.
+fn ms_value(values: &HashMap<String, String>, name: &str, default: u64) -> u64 {
+    let Some(raw) = setting(values, name) else {
+        return default;
+    };
+    parse_ms(raw).unwrap_or_else(|| {
+        tracing::warn!(setting = name, value = raw, %default, "setting is not a whole number of milliseconds from 1 to {MAX_MS}; using the default");
+        default
+    })
 }
 fn fraction_value(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
     let Some(raw) = setting(values, name) else {
