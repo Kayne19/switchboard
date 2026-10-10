@@ -142,21 +142,29 @@ impl LegAnnouncer {
         });
         gate.scene_leg = Some(leg.clone());
         if leg.route != crate::pbx::OPERATOR {
-            if let Some(action) = self.projection.take_display(&leg.route) {
-                let event = Event::Json(
-                    ServerMessage::Display {
-                        action: action.clone(),
-                        seq: None,
-                    }
-                    .to_value(),
-                );
-                let (delivered, sequence) = self.delivery.publish_sequenced(event.clone());
-                let _ = self.events.send(event);
-                gate.projection.apply(&action, sequence);
-                gate.watermark = sequence;
-                *self.last_display.lock().await =
-                    Some(ServerMessage::Display { action, seq: None }.to_value());
-                tracing::info!(route = %leg.route, delivered, "released the final background display on foreground");
+            // The scene the agent built while in the background is replayed
+            // into the cleared stage as the actions a reconnecting page is
+            // sent (`snapshot_actions`), each one sequenced like a live show.
+            if let Some(held) = self.projection.take_display(&leg.route) {
+                let actions = held.snapshot_actions();
+                let mut delivered = false;
+                for action in actions.iter().cloned() {
+                    let event = Event::Json(
+                        ServerMessage::Display {
+                            action: action.clone(),
+                            seq: None,
+                        }
+                        .to_value(),
+                    );
+                    let sequence;
+                    (delivered, sequence) = self.delivery.publish_sequenced(event.clone());
+                    let _ = self.events.send(event);
+                    gate.projection.apply(&action, sequence);
+                    gate.watermark = sequence;
+                    *self.last_display.lock().await =
+                        Some(ServerMessage::Display { action, seq: None }.to_value());
+                }
+                tracing::info!(route = %leg.route, actions = actions.len(), delivered, "released the background scene on foreground");
             }
         }
     }

@@ -875,7 +875,11 @@ done
     state
         .0
         .projection
-        .hold_display("grapes".into(), json!({"op":"show","id":"doc"}));
+        .hold_display(
+            "grapes".into(),
+            &json!({"op":"show","id":"doc","type":"note","data":{"segments":[{"text":"ready"}]}}),
+        )
+        .unwrap();
     spawn_workers(state.clone());
     state.0.floor.force_quiet_for_test().await;
     let accepted = request_to_speak(

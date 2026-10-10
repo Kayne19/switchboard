@@ -439,17 +439,21 @@ async fn display(
         }
     }
 
-    if state
-        .0
-        .coordinator
-        .with_background(token, |project| {
-            state
-                .0
-                .projection
-                .hold_display(project.to_owned(), normalized_action.clone())
-        })
-        .is_some()
-    {
+    let held = state.0.coordinator.with_background(token, |project| {
+        state
+            .0
+            .projection
+            .hold_display(project.to_owned(), &normalized_action)
+    });
+    if let Some(Err(detail)) = held {
+        tracing::info!(%detail, "refused: the held stage is full");
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({"delivered":false, "detail":detail})),
+        )
+            .into_response();
+    }
+    if held.is_some() {
         return Json(json!({
             "delivered": false,
             "accepted": true,

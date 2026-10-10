@@ -58,7 +58,7 @@ pub(crate) struct AgentProjection {
     // applies a waiting/display mutation, so the check and write cannot be
     // separated by promotion.
     pub(crate) states: Arc<StdMutex<Vec<AgentState>>>,
-    pub(crate) displays: Arc<StdMutex<HashMap<String, Value>>>,
+    pub(crate) displays: Arc<StdMutex<HashMap<String, DisplayProjection>>>,
 }
 
 impl AgentProjection {
@@ -130,21 +130,35 @@ impl AgentProjection {
         agents.clone()
     }
 
-    pub(crate) fn hold_display(&self, project: String, action: Value) {
-        self.displays
+    /// Applies a background agent's display to the scene held for it: the
+    /// stage the caller sees when they bring the agent forward, which starts
+    /// empty. A show that stage could not take is refused now, for the reason
+    /// the live stage would give, so nothing the agent was told is held is
+    /// dropped later.
+    pub(crate) fn hold_display(&self, project: String, action: &Value) -> Result<(), String> {
+        let mut displays = self
+            .displays
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(project, action);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let held = displays.entry(project).or_default();
+        if let Some(refusal) = held.refusal(action) {
+            return Err(refusal);
+        }
+        let sequence = held.watermark + 1;
+        held.apply(action, sequence);
+        Ok(())
     }
 
+    /// Whether the scene held for `project` has anything to show.
     pub(crate) fn has_held_display(&self, project: &str) -> bool {
         self.displays
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains_key(project)
+            .get(project)
+            .is_some_and(|held| !held.order.is_empty() || held.speech.is_some())
     }
 
-    pub(crate) fn take_display(&self, project: &str) -> Option<Value> {
+    pub(crate) fn take_display(&self, project: &str) -> Option<DisplayProjection> {
         self.displays
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
