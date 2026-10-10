@@ -774,7 +774,12 @@ pub struct ConfirmState {
 ```
 
 Every `screen_state` report folds its `applied_seq` / `rejected` into this
-watch as a running per-generation maximum. Moving to a new leg resets it —
+watch as a running per-generation maximum. Only the active connection's
+report counts, and only for the current generation; any other is ignored and
+not acknowledged (`apply_screen_state` in `apps/backend/src/browser.rs`). Two
+tabs are two connections, and the newest one is active. When the active tab
+closes, the newest tab still open takes over (`DeliveryState::retire`), and the
+screen the agent's `view` reads is stale until that tab sends its next report. Moving to a new leg resets it —
 `generation` moves to the new value, `watermark` goes back to `None`,
 `rejection` clears — the same reset the projection itself gets (`objects` /
 `order` / `focus_id` / `speech` cleared) — so a confirmation left over from
