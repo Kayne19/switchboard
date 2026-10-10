@@ -658,6 +658,37 @@ async fn floor_good_moment_gate_does_not_wait_for_the_pbx_lock() {
         .expect("the floor gate asks Jev while a foreground turn runs");
 }
 
+#[tokio::test]
+async fn floor_rewrite_waits_for_the_pbx_lock_only_within_its_timeout() {
+    let (client, _, _) = fake_jev_client();
+    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
+    let _turn = state.0.switchboard.lock().await;
+    spawn_floor_worker(state.clone());
+
+    // The utility is behind the lock the turn holds; the rewrite gives up at
+    // its timeout and the update goes on as the agent wrote it.
+    let rewrite = timeout(
+        crate::floor::REWRITE_TIMEOUT + Duration::from_secs(3),
+        async {
+            loop {
+                if let Some(event) = debug_events(&state)
+                    .into_iter()
+                    .find(|event| matches!(event, crate::debug::DebugEvent::FloorRewrite { .. }))
+                {
+                    return event;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        },
+    )
+    .await
+    .expect("the floor rewrite gives up within its timeout while a foreground turn runs");
+    assert!(matches!(
+        rewrite,
+        crate::debug::DebugEvent::FloorRewrite { ref rewritten, .. } if rewritten == "alpha finished"
+    ));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn floor_pbx_api_flow_gates_rewrites_announces_and_plays_in_order() {

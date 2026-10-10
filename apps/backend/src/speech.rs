@@ -439,12 +439,15 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
         rewrite: Arc::new(move |input: FloorRewriteInput| {
             let state = rewrite_state.clone();
             Box::pin(async move {
-                let session = {
-                    let mut board = state.0.switchboard.lock().await;
-                    board.floor_rewrite_session().await.map_err(|_| ())?
-                };
                 let project = input.project.clone();
+                // The utility is reached through the PBX lock, which a
+                // foreground turn holds for its whole prompt, so the wait for
+                // it is inside the timeout too.
                 let operation = async {
+                    let session = {
+                        let mut board = state.0.switchboard.lock().await;
+                        board.floor_rewrite_session().await.map_err(|_| ())?
+                    };
                     Switchboard::rewrite_floor_with_session(&session, &input)
                         .await
                         .map_err(|error| {
