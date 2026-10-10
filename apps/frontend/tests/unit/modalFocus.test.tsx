@@ -239,4 +239,29 @@ describe('modal focus: giving focus back', () => {
     frame();
     expect(document.activeElement).toBe(field());
   });
+
+  // Teardown on leaving the phase: opening again ends the tries. Before the
+  // machine they ran on, harmless only because the opener was inert behind
+  // the dialog; jsdom has no inert, so here the opener can take focus.
+  it('open again while giving focus back: the tries end', async () => {
+    const host = openFromOpener(send);
+    opener().disabled = true;
+    rerender(host, page(false, send));
+    await afterCommit();
+    expect(pending()).toBe(1);
+    rerender(host, page(true, send));
+    expect(pending()).toBe(0);
+    opener().disabled = false;
+    frame();
+    expect(document.activeElement).toBe(field());
+  });
+
+  it('open again before the first try: the try is dropped', async () => {
+    const host = openFromOpener(send);
+    rerender(host, page(false, send));
+    rerender(host, page(true, send));
+    await afterCommit();
+    expect(document.activeElement).toBe(field());
+    expect(pending()).toBe(0);
+  });
 });
