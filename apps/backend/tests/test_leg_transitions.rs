@@ -59,6 +59,19 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         .contains("Couldn't tell which project \"shared\" meant: proj-a, proj-b."));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refused_transfer_keeps_the_caller_on_the_leg_they_are_on() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("here"))).await;
+    let reply = board
+        .transfer_ctx(&transcript("go to gamma"), "gamma", "", "")
+        .await;
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert!(board.agent.is_some(), "the refusal dropped alpha");
+    board.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_takeover_of_an_unknown_project_names_the_ones_there_are() {
     let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);

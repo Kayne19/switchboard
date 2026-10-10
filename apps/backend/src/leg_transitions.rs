@@ -77,16 +77,11 @@ impl Switchboard {
     ) -> Reply {
         let project = match self.registry.resolve_detailed(spoken) {
             crate::registry::ResolveResult::Exact(project) => project.clone(),
+            // A refused transfer leaves the caller on the leg they are on.
             crate::registry::ResolveResult::Ambiguous(candidates) => {
                 let candidates_text = candidates.join(", ");
-                let from = (self.coordinator.route() != OPERATOR).then(|| self.route_label());
-                if from.is_some() {
-                    self.drop_agent().await;
-                }
                 self.operator_note = Some(format!(
-                    "Couldn't tell which project {spoken:?} meant: {candidates_text}.{}",
-                    from.map(|name| format!(" The caller was on {name}."))
-                        .unwrap_or_default()
+                    "Couldn't tell which project {spoken:?} meant: {candidates_text}."
                 ));
                 return self.reply_transfer_error(
                     format!(
@@ -102,14 +97,8 @@ impl Switchboard {
                 } else {
                     known.join(", ")
                 };
-                let from = (self.coordinator.route() != OPERATOR).then(|| self.route_label());
-                if from.is_some() {
-                    self.drop_agent().await;
-                }
                 self.operator_note = Some(format!(
-                    "No project matches {spoken:?}. Registered: {known_text}.{}",
-                    from.map(|name| format!(" The caller was on {name}."))
-                        .unwrap_or_default()
+                    "No project matches {spoken:?}. Registered: {known_text}."
                 ));
                 return self.reply_transfer_error(
                     self.unknown_project_line(spoken),
