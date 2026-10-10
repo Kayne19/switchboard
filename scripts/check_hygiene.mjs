@@ -381,7 +381,7 @@ const phaseField = (code) => {
 	);
 };
 
-// 17. A lifecycle that has become a machine has one writer
+// 19. A lifecycle that has become a machine has one writer
 //     (AGENTS.md; doctrine 2a): its state is assigned on one line of its
 //     file, inside the transition function, and each teardown primitive
 //     named in `once` occurs on one line, the phase exit. A row whose
@@ -402,12 +402,12 @@ function machineFindings(file, text, machine) {
 	return out;
 }
 
-// 18. The lifecycle owners that are not machines yet do not grow
+// 20. The lifecycle owners that are not machines yet do not grow
 //     phase fields (AGENTS.md; doctrine 2a). `fields` is the count on
 //     master when the check landed, and the check wants it exactly: one
 //     more is the flag rule 2a says to extract the machine before adding,
 //     and one fewer lowers the number here, so it cannot creep back. When
-//     an owner becomes a machine, its row moves to check 17.
+//     an owner becomes a machine, its row moves to check 19.
 const owners = [
 	{ file: "apps/frontend/src/hands_free.ts", owner: "HandsFreeController", fields: 13 },
 	{ file: "apps/frontend/src/hands_free.ts", owner: "Capture", fields: 4 },
@@ -426,7 +426,7 @@ function ownerFindings(file, text, row) {
 	if (!body) return [`${file}: could not read ${row.owner} (the check needs updating)`];
 	const lines = body.filter((member) => phaseField(member.code)).map((member) => member.line);
 	if (lines.length > row.fields) return [`${file}: ${row.owner} has ${lines.length} phase fields (lines ${lines.join(", ")}), the table allows ${row.fields}: extract the machine first (doctrine 2a)`];
-	if (lines.length < row.fields) return [`${file}: ${row.owner} has ${lines.length} phase fields, fewer than the table's ${row.fields}: lower the number in check 18`];
+	if (lines.length < row.fields) return [`${file}: ${row.owner} has ${lines.length} phase fields, fewer than the table's ${row.fields}: lower the number in check 20`];
 	return [];
 }
 
@@ -442,9 +442,9 @@ function selfTest(check, run, violation, clean) {
 	const machine = { writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/] };
 	const run = (text) => machineFindings("sample.ts", text, machine);
 	const transition = "class M {\n\tprivate phase: Phase = idle;\n\tdispatch(event) {\n\t\tconst next = step(this.phase, event);\n\t\tif (this.phase === next) return;\n\t\tthis.phase = next;\n\t}\n";
-	selfTest(17, run, `${transition}\tstop() { this.phase = idle; stream.getTracks(); }\n}`, `${transition}\texit() { stream.getTracks(); }\n}`);
-	selfTest(17, run, `${transition}\texit() { stream.getTracks(); }\n\tstop() { stream.getTracks(); }\n}`, `${transition}\texit() { stream.getTracks(); }\n}`);
-	selfTest(17, run, "class M {\n\tprivate state = idle;\n}", `${transition}\texit() { stream.getTracks(); }\n}`);
+	selfTest(19, run, `${transition}\tstop() { this.phase = idle; stream.getTracks(); }\n}`, `${transition}\texit() { stream.getTracks(); }\n}`);
+	selfTest(19, run, `${transition}\texit() { stream.getTracks(); }\n\tstop() { stream.getTracks(); }\n}`, `${transition}\texit() { stream.getTracks(); }\n}`);
+	selfTest(19, run, "class M {\n\tprivate state = idle;\n}", `${transition}\texit() { stream.getTracks(); }\n}`);
 }
 {
 	const run = (text) => [...ownerFindings("sample.ts", text, { owner: "Owner", fields: 2 }), ...ownerFindings("sample.rs", text, { owner: "Inner", fields: 2 })];
@@ -472,13 +472,13 @@ function selfTest(check, run, violation, clean) {
 		"    pub(crate) child: Mutex<Option<Child>>,",
 		"}",
 	].join("\n");
-	selfTest(18, run, clean.replace("\tprivate count = 0;", "\tprivate starting = false;"), clean);
-	selfTest(18, run, clean.replace("    label: String,", "    task: Option<JoinHandle<()>>,"), clean);
-	selfTest(18, run, clean.replace("\tprivate count = 0;", "\tprivate barrier: {\n\t\tid: string;\n\t} | null = null;"), clean);
-	selfTest(18, run, clean.replace("\tprivate count = 0;", "\tprivate pending: string | undefined;"), clean);
-	selfTest(18, run, clean.replace("\tprivate count = 0;", "\tprivate attempt = 0;"), clean);
-	selfTest(18, run, clean.replace("\tprivate runtimeToken = 0;", ""), clean);
-	selfTest(18, run, clean.replace("export class Owner {", "export class Renamed {"), clean);
+	selfTest(20, run, clean.replace("\tprivate count = 0;", "\tprivate starting = false;"), clean);
+	selfTest(20, run, clean.replace("    label: String,", "    task: Option<JoinHandle<()>>,"), clean);
+	selfTest(20, run, clean.replace("\tprivate count = 0;", "\tprivate barrier: {\n\t\tid: string;\n\t} | null = null;"), clean);
+	selfTest(20, run, clean.replace("\tprivate count = 0;", "\tprivate pending: string | undefined;"), clean);
+	selfTest(20, run, clean.replace("\tprivate count = 0;", "\tprivate attempt = 0;"), clean);
+	selfTest(20, run, clean.replace("\tprivate runtimeToken = 0;", ""), clean);
+	selfTest(20, run, clean.replace("export class Owner {", "export class Renamed {"), clean);
 }
 for (const machine of machines) findings.push(...machineFindings(machine.file, lines(path.join(root, machine.file)), machine));
 for (const row of owners) findings.push(...ownerFindings(row.file, lines(path.join(root, row.file)), row));
