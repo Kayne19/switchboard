@@ -520,6 +520,9 @@ export function DrawingViewport({
           ref={scrollRef}
           className="drawing-viewport__scroll"
           tabIndex={scrolling ? 0 : undefined}
+          // A tab stop while it scrolls, named as a list's scroll is (ListViewport): the drawing's region.
+          role={scrolling ? 'region' : undefined}
+          aria-label={scrolling ? ariaLabel : undefined}
           onScroll={scrolling ? onScroll : undefined}
           onKeyDown={scrolling ? scrollKeys : undefined}
         >
