@@ -250,9 +250,9 @@ async fn a_thinking_change_keeps_the_session_and_takes_the_level_the_host_report
     board.shutdown().await;
 }
 
-/// A project agent cannot change its own model: the call is refused as
-/// removed, whatever the swap setting, and the live leg is untouched. Only
-/// the page's pickers redial.
+/// A project agent cannot change its own model: the call is refused,
+/// whatever the swap setting, and the live leg is untouched. Only the page's
+/// pickers redial.
 #[tokio::test]
 async fn the_agents_own_set_model_is_refused_and_changes_nothing() {
     for swaps in ["0", "1"] {
