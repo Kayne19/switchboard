@@ -337,6 +337,7 @@ container, and the post-deploy checklist.
 | `apps/backend/src/floor_hooks.rs` | the floor's hooks into the call: the page, Jev's good moment, the utility rewrite, the release through the speech worker |
 | `apps/backend/src/leg_announcer.rs` | announcing a new leg to the browser |
 | `apps/backend/src/lifecycle.rs` | the coordinator: call identity, the current route and leg, phases, candidate legs, status |
+| `apps/backend/src/call_line.rs` | the call line: its phases and its one transition function, with no I/O |
 | `apps/backend/src/pbx.rs` | the switchboard: its state, construction and callbacks, and the types its files share |
 | `apps/backend/src/decisions.rs` | what the switchboard does with a routed line: continue, transfer, split, take over, stop, or the operator |
 | `apps/backend/src/leg_transitions.rs` | transfers, promotions, takeovers, returns, hangups and stops, all committed one way |
