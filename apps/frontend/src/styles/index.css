@@ -5220,6 +5220,21 @@ button {
   color: inherit;
   cursor: pointer;
 }
+/* RETURN is the way out of focus and of the history, and on a touch screen,
+   with no Esc key, the only one but a tap on the focus layer's thin margin.
+   Its words are a micro line, 12-15px tall: it takes a tap 44px tall round
+   them, and 12px past each end, drawn nowhere, so the words and the ring
+   stay where they were (#276). */
+.focus-layer__return,
+.transcript__return {
+  position: relative;
+}
+.focus-layer__return::before,
+.transcript__return::before {
+  content: "";
+  position: absolute;
+  inset: calc(50% - 22px) -12px;
+}
 /* A primitive fills the focus panel as it fills any box; timers, a
    forecast, a figure and a calendar keep a margin inside it (a to-do
    list's and an inbox's are with their rules). */
