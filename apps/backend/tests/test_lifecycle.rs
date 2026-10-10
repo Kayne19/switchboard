@@ -1093,6 +1093,41 @@ fn a_turn_waiting_on_the_line_is_woken_when_a_startup_or_the_call_ends() {
     assert!(woken(&call, &|call| assert!(call.begin_shutdown())));
 }
 
+/// The phase a call comes to rest in follows from the leg on the line and
+/// the turn open on it. Two exits set it by hand and got it wrong:
+///
+/// - A transfer that failed before adoption left the caller's turn that ran
+///   it open but put the call at rest, so on the operator that turn refused
+///   a steer (`WrongPhase`) that it took on a project.
+/// - An intro that finished after the caller was returned to the operator
+///   put the call in `Active` on the operator, where a self-woken turn could
+///   open an operation on the operator's leg.
+#[test]
+fn the_phase_at_rest_follows_from_the_line_and_its_turn() {
+    let call = coordinator();
+    let caller = call.begin_prompt(&call.current_identity()).unwrap();
+    call.begin_candidate(alpha_candidate()).unwrap();
+    assert!(call.rollback_startup("startup failed"));
+    assert_eq!(phase(&call), "turn running");
+    assert_eq!(
+        call.attach_steer(&call.current_identity()),
+        Ok(caller.clone())
+    );
+    assert!(call.finish_operation(&caller));
+    assert_eq!(phase(&call), "operator");
+
+    let call = coordinator();
+    call.begin_candidate(alpha_candidate()).unwrap();
+    call.adopt_candidate("cand").unwrap();
+    call.return_to_operator();
+    assert!(call.finish_intro());
+    assert_eq!(phase(&call), "operator");
+    assert_eq!(
+        call.begin_autonomous(&call.current_identity(), "turn-1"),
+        Err(LifecycleError::WrongPhase)
+    );
+}
+
 // The call line, phase by event. Each phase is reached the way a call reaches
 // it, from a fresh coordinator, and is then given one event. A row reads:
 //
@@ -1565,7 +1600,7 @@ starting in a turn | thinking from the line => true | starting operator operator
 starting in a turn | thinking from the candidate => false | starting operator operator@0 turn startup thinking: []
 starting in a turn | adopt_candidate => cand@1 | turn running alpha cand@1 new turn startup adopted:alpha thinking:medium [alpha@1 Adopted]
 starting in a turn | finish_intro => false | starting operator operator@0 turn startup thinking: []
-starting in a turn | rollback_startup => true | operator operator operator@0 turn thinking: [alpha@0 RolledBack]
+starting in a turn | rollback_startup => true | turn running operator operator@0 turn thinking: [alpha@0 RolledBack]
 starting in a turn | begin_shutdown => true | shutdown operator operator-shutdown-2@2 - thinking: [alpha@2 Rescued]
 starting in a turn | accept_side_effect => CandidateSideEffect | starting operator operator@0 turn startup thinking: []
 starting in a turn | activity from the line => Publish | starting operator operator@0 turn startup thinking: []

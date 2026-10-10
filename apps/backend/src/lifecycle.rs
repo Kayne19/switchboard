@@ -1082,7 +1082,7 @@ impl Coordinator {
                 return false;
             }
             state.operation = None;
-            state.phase = Phase::Active;
+            state.phase = state.resting_phase();
             state.startup_rollback = None;
             self.refresh_locked(state);
             self.operation_changed.notify_waiters();
@@ -1095,7 +1095,12 @@ impl Coordinator {
             if let Some(candidate) = state.candidate.take() {
                 state.startup_rollback = None;
                 state.terminal_reason = Some(reason.into());
-                state.phase = state.resting_phase();
+                // The turn that ran the transfer is still running.
+                state.phase = if state.operation.is_some() {
+                    Phase::TurnRunning
+                } else {
+                    state.resting_phase()
+                };
                 self.notify_candidate(&CandidateNotice {
                     route: candidate.route,
                     generation: state.leg.generation,
