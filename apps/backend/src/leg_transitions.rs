@@ -785,7 +785,7 @@ pub(crate) enum LegChange {
 
 /// A prompt that could not be sent, as the failed turn the leg transitions
 /// check for: no text, no signals, and the error as its detail.
-pub(crate) fn failed_turn(error: PiSessionError) -> Turn {
+fn failed_turn(error: PiSessionError) -> Turn {
     Turn {
         text: String::new(),
         signals: vec![],

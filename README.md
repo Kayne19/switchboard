@@ -155,11 +155,10 @@ the page's pickers (`POST /model`, `POST /thinking`). Asking for it out loud
 reaches the operator, which points them to the picker. `redial.rs` decides and
 makes the change.
 
-The conversation survives the change. A change that keeps the context is made
-on the live session: `set_model` and `set_thinking` over the host link, and
-the session keeps its history. Keeping is the default; `keep_context: false`
-ends the session and creates a new one, and the agent is told the history was
-cleared on purpose so it does not try to recall it.
+The conversation survives the change. The change is made on the live
+session: `set_model` and `set_thinking` over the host link, and the session
+keeps its history. There is no fresh-context change; a project agent's own
+`set_model` call is refused.
 
 What the caller says goes through speech-to-text and then through a model's
 guess, so `models.rs` refuses rather than guesses. A bare name is resolved

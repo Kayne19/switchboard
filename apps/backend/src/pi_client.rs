@@ -1496,9 +1496,8 @@ impl ProjectSession {
     /// Sends `message` and collects the turn until the host link says it has
     /// settled. The voice brief goes first when it is due: on the first
     /// prompt, and on the first after a compaction. `source` says for the
-    /// debug page what the message is (`caller`, `intro`, `foreground`,
-    /// `model_change`), and `utterance_id` names the caller line it carries,
-    /// if any.
+    /// debug page what the message is (`caller`, `intro`, `foreground`), and
+    /// `utterance_id` names the caller line it carries, if any.
     pub async fn prompt_as(
         &self,
         message: &str,
