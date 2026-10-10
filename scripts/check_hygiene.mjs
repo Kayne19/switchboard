@@ -337,14 +337,21 @@ function members(text, name) {
 	let depth = 0;
 	let parens = 0;
 	let opened = false;
+	// A field whose type is an object literal spans lines
+	// (`private barrier: {` .. `} | null = null;`): its lines are one member.
+	let spanning = undefined;
 	for (let index = start; index < text.length; index++) {
 		const code = text[index]
 			.replace(/^\s*(?:\/\/|\/?\*).*$/, "")
 			.replace(/\/\/.*$/, "")
 			.replace(/"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '""');
+		if (spanning) spanning.code += ` ${code.trim()}`;
 		// A parameter of a method or constructor is not a member; a
 		// constructor's parameter property (`private x: T`) is.
-		if (opened && depth === 1 && (parens === 0 || /^\s*(?:private|protected|public)\b/.test(code))) result.push({ line: index + 1, code });
+		else if (opened && depth === 1 && (parens === 0 || /^\s*(?:private|protected|public)\b/.test(code))) {
+			result.push({ line: index + 1, code });
+			if (/^[^(]*?[\w#]\??!?\s*:[^(]*\{\s*$/.test(code)) spanning = result[result.length - 1];
+		}
 		for (const char of code) {
 			if (char === "{") {
 				depth++;
@@ -353,6 +360,7 @@ function members(text, name) {
 			else if (char === "(") parens++;
 			else if (char === ")") parens--;
 		}
+		if (spanning && depth <= 1) spanning = undefined;
 		if (opened && depth === 0) return result;
 	}
 	return undefined;
@@ -360,16 +368,16 @@ function members(text, name) {
 
 // A member that says which phase some work is in: a mutable field (not
 // `readonly`; every field of a Rust struct) that is a flag, a nullable or
-// optional slot, an atomic, a timer or task handle, or a token, generation
-// or epoch counter.
+// optional slot, an atomic, a timer or task handle, or a token, generation,
+// epoch or attempt counter.
 const phaseField = (code) => {
 	const field = code.match(/^\s*(?:(?:private|protected|public|static|declare|override|pub(?:\([^)]*\))?)\s+)*(#?[A-Za-z_]\w*)(\??)!?\s*([:=].*)$/);
 	if (!field || /^\s*(?:(?:private|protected|public|static|declare|override)\s+)*readonly\b/.test(code)) return false;
 	const [, name, optional, rest] = field;
 	return (
 		optional === "?" ||
-		/(?:token|generation|epoch)/i.test(name) ||
-		/\bbool(?:ean)?\b|\|\s*null\b|\bnull\s*\||^=\s*(?:true|false|null)\b|\bOption<|\bAtomic\w+|\b\w*Timer\b|\bTimeout\b|setTimeout|setInterval|\bJoinHandle\b|\bAbortHandle\b|\bAbortController\b/.test(rest)
+		/(?:token|generation|epoch|attempt)/i.test(name) ||
+		/\bbool(?:ean)?\b|\|\s*(?:null|undefined)\b|\b(?:null|undefined)\s*\||^=\s*(?:true|false|null|undefined)\b|\bOption<|\bAtomic\w+|\b\w*Timer\b|\bTimeout\b|setTimeout|setInterval|\bJoinHandle\b|\bAbortHandle\b|\bAbortController\b/.test(rest)
 	);
 };
 
@@ -404,9 +412,9 @@ const owners = [
 	{ file: "apps/frontend/src/hands_free.ts", owner: "HandsFreeController", fields: 13 },
 	{ file: "apps/frontend/src/hands_free.ts", owner: "Capture", fields: 4 },
 	{ file: "apps/frontend/src/runtime/pushToTalk.ts", owner: "PushToTalk", fields: 4 },
-	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 20 },
+	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 21 },
 	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 15 },
-	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 4 },
+	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 5 },
 	{ file: "apps/backend/src/lifecycle.rs", owner: "CallLifecycle", fields: 8 },
 	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 7 },
 	{ file: "apps/backend/src/pi_client.rs", owner: "ProjectInner", fields: 14 },
@@ -466,6 +474,9 @@ function selfTest(check, run, violation, clean) {
 	].join("\n");
 	selfTest(18, run, clean.replace("\tprivate count = 0;", "\tprivate starting = false;"), clean);
 	selfTest(18, run, clean.replace("    label: String,", "    task: Option<JoinHandle<()>>,"), clean);
+	selfTest(18, run, clean.replace("\tprivate count = 0;", "\tprivate barrier: {\n\t\tid: string;\n\t} | null = null;"), clean);
+	selfTest(18, run, clean.replace("\tprivate count = 0;", "\tprivate pending: string | undefined;"), clean);
+	selfTest(18, run, clean.replace("\tprivate count = 0;", "\tprivate attempt = 0;"), clean);
 	selfTest(18, run, clean.replace("\tprivate runtimeToken = 0;", ""), clean);
 	selfTest(18, run, clean.replace("export class Owner {", "export class Renamed {"), clean);
 }
