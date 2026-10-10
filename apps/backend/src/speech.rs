@@ -451,44 +451,212 @@ fn continuity_for_request(
         })
 }
 
+/// One utterance's identity in the audio order and the continuity record:
+/// what the drain needs to stream it and the completion needs to close it.
+#[derive(Clone)]
+struct Utterance {
+    text: String,
+    generation: u64,
+    sequence: u64,
+    /// The active model snapshot captured when the request was admitted.
+    model: String,
+    /// The continuity epoch the request was admitted under.
+    epoch: u64,
+}
+
+impl Utterance {
+    /// Takes back what an utterance that will not be spoken still holds: its
+    /// pending continuity text, if it marked any, and its audio slot. Both
+    /// are no-ops once done, so the drain can give its slot back the moment
+    /// it ends and the completion can still call it for every unspoken end.
+    async fn abandon(&self, state: &AppState) {
+        state.0.clear_pending_continuity_if_matching(
+            self.generation,
+            &self.model,
+            self.epoch,
+            Some(self.sequence),
+            &self.text,
+        );
+        finish_audio(state, self.sequence, self.generation, Vec::new()).await;
+    }
+}
+
+/// Why the worker stopped a request on purpose. Only a rescue stops one, and
+/// a rescue retires the generation first, so a stopped request always
+/// belongs to a retired generation.
+#[derive(Clone, Copy, Debug)]
+enum Stopped {
+    /// The rescue aborted its admission or its drain.
+    Cancelled,
+    /// Its generation was retired before it was admitted or while it drained.
+    Superseded,
+}
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cancelled => "speech was cancelled",
+            Self::Superseded => "speech generation was superseded",
+        })
+    }
+}
+
+/// How a speech request ended. Every exit of the worker yields exactly one,
+/// and `PendingSpeech::complete` is the only place one is acted on.
+#[derive(Debug)]
+enum SpeechOutcome {
+    /// The whole body drained and a browser took its audio.
+    Spoken { bytes: usize },
+    /// The whole body drained, but no browser took its audio.
+    NotDelivered { bytes: usize },
+    /// A rescue stopped it.
+    Stopped(Stopped),
+    /// The provider or the speech task failed.
+    Failed(crate::audio::AudioError),
+}
+
+/// The outcome of a speech task that did not return: a rescue aborted it,
+/// or it panicked.
+fn joined(error: tokio::task::JoinError) -> SpeechOutcome {
+    if error.is_cancelled() {
+        SpeechOutcome::Stopped(Stopped::Cancelled)
+    } else {
+        SpeechOutcome::Failed(crate::audio::AudioError::Tts(format!(
+            "speech worker failed: {error}"
+        )))
+    }
+}
+
+/// A speech request the worker has taken off the queue. It is built once,
+/// and `complete` consumes it, so a request is answered exactly once.
+struct PendingSpeech {
+    utterance: Utterance,
+    /// `SpeechRequest`'s route, `log_spoken` and `result`.
+    route: String,
+    log_spoken: bool,
+    result: oneshot::Sender<Result<(), String>>,
+    started: std::time::Instant,
+}
+
+impl PendingSpeech {
+    /// Ends the request: an unspoken one gives back what it holds before its
+    /// requester is answered, a spoken one is logged, and only a provider
+    /// failure at the current generation reaches the page. Speech a rescue
+    /// stopped went as meant, so the caller is not shown it as an error.
+    async fn complete(self, state: &AppState, outcome: SpeechOutcome) {
+        let Self {
+            utterance,
+            route,
+            log_spoken,
+            result,
+            started,
+        } = self;
+        let chars = utterance.text.chars().count();
+        match outcome {
+            SpeechOutcome::Spoken { bytes } => {
+                tracing::info!(chars, bytes, elapsed = ?started.elapsed(), "synthesized a speech line");
+                if log_spoken {
+                    if let Some(entry) = state.0.transcript_log.lock().await.add_voiced(
+                        AGENT,
+                        &utterance.text,
+                        route,
+                    ) {
+                        // Emitted once its audio is out: the line names the
+                        // utterance, and the page shows it when it plays.
+                        emit_message(
+                            state,
+                            ServerMessage::Spoken {
+                                entry,
+                                sequence: Some(utterance.sequence),
+                            },
+                        );
+                    }
+                }
+                let _ = result.send(Ok(()));
+            }
+            SpeechOutcome::NotDelivered { bytes } => {
+                tracing::info!(chars, bytes, elapsed = ?started.elapsed(), "synthesized a speech line");
+                let _ = result.send(Err(
+                    "no browser connected or the writer rejected audio".into()
+                ));
+            }
+            SpeechOutcome::Stopped(stopped) => {
+                utterance.abandon(state).await;
+                let _ = result.send(Err(stopped.to_string()));
+                tracing::info!(error = %stopped, chars, "speech for a retired generation was not spoken");
+            }
+            SpeechOutcome::Failed(error) => {
+                utterance.abandon(state).await;
+                let detail = error.to_string();
+                let _ = result.send(Err(detail.clone()));
+                // A failure that lands after a rescue retired the generation
+                // has no page to tell: that page has moved on.
+                if utterance.generation != state.0.coordinator.generation() {
+                    tracing::info!(%error, chars, "speech for a retired generation was not spoken");
+                    return;
+                }
+                tracing::error!(%error, chars, "speech synthesis failed");
+                emit_message(state, ServerMessage::error(detail));
+            }
+        }
+    }
+}
+
+/// Opens the provider stream for an utterance as a registered operation, so
+/// a rescue can abort it.
+async fn admit_speech(
+    state: &AppState,
+    utterance: &Utterance,
+    deadline: std::time::Instant,
+    continuity: TtsContinuity,
+    span: tracing::Span,
+) -> Result<crate::audio::TtsChunkStream, SpeechOutcome> {
+    let admission_state = state.clone();
+    let text = utterance.text.clone();
+    let admission = async move {
+        admission_state
+            .0
+            .speaker
+            .stream_until_with_continuity(&text, deadline, continuity)
+            .await
+    };
+    let Some((task, task_id)) =
+        spawn_registered_operation(state, utterance.generation, admission.instrument(span)).await
+    else {
+        return Err(SpeechOutcome::Stopped(Stopped::Superseded));
+    };
+    let admitted = match task.await {
+        Ok(stream) => stream.map_err(SpeechOutcome::Failed),
+        Err(error) => Err(joined(error)),
+    };
+    clear_active_operation(state, task_id).await;
+    admitted
+}
+
+/// Streams an admitted utterance's body into its audio slot. A body drained
+/// to its end closes the slot and commits continuity. Any other end gives the
+/// slot back before it returns: the slots behind it emit only once it is
+/// closed, so a later drain that finished first would find its own audio
+/// held back and report it undelivered.
 async fn drain_speech_stream(
     state: AppState,
     mut stream: crate::audio::TtsChunkStream,
-    text: String,
-    sequence: u64,
-    generation: u64,
-    model: String,
-    epoch: u64,
-) -> Result<(usize, bool), crate::audio::AudioError> {
+    utterance: Utterance,
+) -> SpeechOutcome {
+    let (generation, sequence) = (utterance.generation, utterance.sequence);
     let request_id = stream.metadata().request_id.clone();
     let mut delivered = start_audio(&state, sequence, generation).await;
     let mut bytes = 0usize;
     while let Some(chunk) = stream.next().await {
         if generation != state.0.coordinator.generation() {
-            state.0.clear_pending_continuity_if_matching(
-                generation,
-                &model,
-                epoch,
-                Some(sequence),
-                &text,
-            );
-            finish_audio(&state, sequence, generation, Vec::new()).await;
-            return Err(crate::audio::AudioError::Tts(
-                "speech generation was superseded".into(),
-            ));
+            utterance.abandon(&state).await;
+            return SpeechOutcome::Stopped(Stopped::Superseded);
         }
         let chunk = match chunk {
             Ok(chunk) => chunk,
             Err(error) => {
-                state.0.clear_pending_continuity_if_matching(
-                    generation,
-                    &model,
-                    epoch,
-                    Some(sequence),
-                    &text,
-                );
-                finish_audio(&state, sequence, generation, Vec::new()).await;
-                return Err(error);
+                utterance.abandon(&state).await;
+                return SpeechOutcome::Failed(error);
             }
         };
         bytes = bytes.saturating_add(chunk.len());
@@ -499,71 +667,18 @@ async fn drain_speech_stream(
     delivered |= finish_audio(&state, sequence, generation, Vec::new()).await;
     // A request id is useful only after the complete body has been consumed.
     // The epoch/model/generation checks reject a late drain after a reset.
-    state
-        .0
-        .commit_continuity_ordered(generation, &model, epoch, sequence, request_id, text);
-    Ok((bytes, delivered))
-}
-
-async fn complete_speech_request(
-    state: &AppState,
-    text: String,
-    generation: u64,
-    result: oneshot::Sender<Result<(), String>>,
-    synthesized: Result<(usize, bool), crate::audio::AudioError>,
-    started: std::time::Instant,
-    // The utterance's sequence, and the route it is logged under, when the
-    // line is written to the spoken transcript; None when it is not.
-    spoken_as: Option<(u64, String)>,
-) {
-    match synthesized {
-        Ok((bytes, delivered)) => {
-            tracing::info!(
-                chars = text.chars().count(),
-                bytes,
-                elapsed = ?started.elapsed(),
-                "synthesized a speech line"
-            );
-            if delivered {
-                if let Some((sequence, route)) = spoken_as {
-                    if let Some(entry) = state
-                        .0
-                        .transcript_log
-                        .lock()
-                        .await
-                        .add_voiced(AGENT, &text, route)
-                    {
-                        // Emitted once its audio is out: the line names the
-                        // utterance, and the page shows it when it plays.
-                        emit_message(
-                            state,
-                            ServerMessage::Spoken {
-                                entry,
-                                sequence: Some(sequence),
-                            },
-                        );
-                    }
-                }
-                let _ = result.send(Ok(()));
-            } else {
-                let _ = result.send(Err(
-                    "no browser connected or the writer rejected audio".into()
-                ));
-            }
-        }
-        Err(error) => {
-            let detail = error.to_string();
-            let _ = result.send(Err(detail.clone()));
-            // A rescue retires the generation before it stops that
-            // generation's speech, so speech it cancelled or superseded went
-            // as meant: the caller is not shown it as an error.
-            if generation != state.0.coordinator.generation() {
-                tracing::info!(%error, chars = text.chars().count(), "speech for a retired generation was not spoken");
-                return;
-            }
-            tracing::error!(%error, chars = text.chars().count(), "speech synthesis failed");
-            emit_message(state, ServerMessage::error(detail));
-        }
+    state.0.commit_continuity_ordered(
+        generation,
+        &utterance.model,
+        utterance.epoch,
+        sequence,
+        request_id,
+        utterance.text,
+    );
+    if delivered {
+        SpeechOutcome::Spoken { bytes }
+    } else {
+        SpeechOutcome::NotDelivered { bytes }
     }
 }
 
@@ -618,130 +733,59 @@ async fn process_speech(state: AppState) {
             state.0.clear_continuity_for(generation, &model);
         }
         let (continuity, epoch) = continuity_for_request(&state, scope, generation, &model);
-        let admission_state = state.clone();
-        let admission_text = text.clone();
-        let admission = async move {
-            admission_state
-                .0
-                .speaker
-                .stream_until_with_continuity(&admission_text, deadline, continuity)
-                .await
+        let pending = PendingSpeech {
+            utterance: Utterance {
+                text,
+                generation,
+                sequence,
+                model,
+                epoch,
+            },
+            route,
+            log_spoken,
+            result,
+            started,
         };
-        let stream = match spawn_registered_operation(
+        let stream = match admit_speech(
             &state,
-            generation,
-            admission.instrument(span.clone()),
+            &pending.utterance,
+            deadline,
+            continuity,
+            span.clone(),
         )
         .await
         {
-            Some((task, task_id)) => {
-                let stream = match task.await {
-                    Ok(stream) => stream,
-                    Err(error) if error.is_cancelled() => {
-                        Err(crate::audio::AudioError::Tts("speech was cancelled".into()))
-                    }
-                    Err(error) => Err(crate::audio::AudioError::Tts(format!(
-                        "speech worker failed: {error}"
-                    ))),
-                };
-                clear_active_operation(&state, task_id).await;
-                stream
-            }
-            None => Err(crate::audio::AudioError::Tts(
-                "speech generation was superseded".into(),
-            )),
-        };
-        let stream = match stream {
             Ok(stream) => stream,
-            Err(error) => {
-                finish_audio(&state, sequence, generation, Vec::new()).await;
-                complete_speech_request(
-                    &state,
-                    text,
-                    generation,
-                    result,
-                    Err(error),
-                    started,
-                    log_spoken.then_some((sequence, route)),
-                )
-                .await;
+            Err(outcome) => {
+                pending.complete(&state, outcome).await;
                 continue;
             }
         };
         // The text is visible as a fallback while the provider body drains.
         // Do this before handing the stream to the task so a concurrent next
         // request cannot accidentally reuse an undrained request id.
-        state
-            .0
-            .mark_continuity_pending_ordered(generation, &model, sequence, text.clone());
-        let operation_state = state.clone();
-        let operation_text = text.clone();
-        let operation_model = model.clone();
-        let operation = async move {
-            drain_speech_stream(
-                operation_state,
-                stream,
-                operation_text,
-                sequence,
-                generation,
-                operation_model,
-                epoch,
-            )
-            .await
-        };
+        state.0.mark_continuity_pending_ordered(
+            generation,
+            &pending.utterance.model,
+            sequence,
+            pending.utterance.text.clone(),
+        );
+        let drain = drain_speech_stream(state.clone(), stream, pending.utterance.clone());
         let Some((task, task_id)) =
-            spawn_registered_operation(&state, generation, operation.instrument(span)).await
+            spawn_registered_operation(&state, generation, drain.instrument(span)).await
         else {
-            finish_audio(&state, sequence, generation, Vec::new()).await;
-            complete_speech_request(
-                &state,
-                text,
-                generation,
-                result,
-                Err(crate::audio::AudioError::Tts(
-                    "speech generation was superseded".into(),
-                )),
-                started,
-                log_spoken.then_some((sequence, route)),
-            )
-            .await;
+            pending
+                .complete(&state, SpeechOutcome::Stopped(Stopped::Superseded))
+                .await;
             continue;
         };
         // The worker is intentionally free to admit the next request while
         // this ordered drain task is still consuming the provider body.
         let completion_state = state.clone();
-        let completion_text = text.clone();
-        let completion_model = model.clone();
         tokio::spawn(async move {
-            let synthesized = match task.await {
-                Ok(result) => result,
-                Err(error) if error.is_cancelled() => {
-                    Err(crate::audio::AudioError::Tts("speech was cancelled".into()))
-                }
-                Err(error) => Err(crate::audio::AudioError::Tts(format!(
-                    "speech worker failed: {error}"
-                ))),
-            };
+            let outcome = task.await.unwrap_or_else(joined);
             clear_active_operation(&completion_state, task_id).await;
-            if synthesized.is_err() {
-                completion_state.0.clear_pending_continuity_if_matching(
-                    generation,
-                    &completion_model,
-                    epoch,
-                    Some(sequence),
-                    &completion_text,
-                );
-            }
-            complete_speech_request(
-                &completion_state,
-                text,
-                generation,
-                result,
-                synthesized,
-                started,
-                log_spoken.then_some((sequence, route)),
-            )
-            .await;
+            pending.complete(&completion_state, outcome).await;
         });
     }
     tracing::warn!("the speech worker stopped; agent-spoken lines will not be voiced");
