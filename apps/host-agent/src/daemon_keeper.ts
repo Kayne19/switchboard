@@ -32,7 +32,11 @@ type KeeperPhase =
 	| { kind: "disconnected" }
 	/** Connected; the whole resync is owed (it has not run on this connection, or it threw). */
 	| { kind: "resyncing" }
-	/** Connected; the last resync left these sessions, which the daemon still lists, unattached. */
+	/**
+	 * Connected; the last pass left these sessions, which the daemon still
+	 * lists, unattached. Only they are tried again: the rest are attached
+	 * and were snapshotted when they attached.
+	 */
 	| { kind: "retrying"; unattached: string[] }
 	/** Connected, and every session the daemon lists is attached. Nothing is owed until the daemon closes. */
 	| { kind: "attached" };
@@ -44,7 +48,7 @@ type KeeperPhase =
 type KeeperEvent =
 	| { kind: "closed" }
 	| { kind: "connected"; at: KeeperPhase }
-	/** A resync ended; `unattached` are the sessions it could not attach. A resync that threw sends nothing. */
+	/** A resync or reattach ended; `unattached` are the sessions it could not attach. One that threw sends nothing. */
 	| { kind: "passed"; at: KeeperPhase; unattached: string[] };
 
 /** The keeper's transitions. Returns `phase` itself for an event that changes nothing. */
@@ -65,7 +69,7 @@ function nextPhase(phase: KeeperPhase, event: KeeperEvent): KeeperPhase {
 export interface DaemonKeeperOptions {
 	port: DaemonPort;
 	manager: SessionManager;
-	/** Called for each session a pass reattached, so the service gets a fresh snapshot. */
+	/** Called for each session a pass newly attached, so the service gets a fresh snapshot. */
 	onLive: (handle: string) => Promise<void>;
 	/** First retry delay; doubles up to 30 s. */
 	backoffInitialMs?: number;
@@ -73,13 +77,15 @@ export interface DaemonKeeperOptions {
 }
 
 /**
- * Keeps the daemon connected and every recorded session attached. A pass
- * connects (if the connection was lost) and runs `SessionManager.resync()`.
- * A pass that throws, or that leaves a session the daemon still lists
- * unattached, is retried with the connect backoff: one bad session must not
- * leave the others silent until the host agent restarts (#232). One loop runs
- * at a time, while the phase is not `attached`; a daemon close during it
- * makes it go round again instead of starting a second one beside it.
+ * Keeps the daemon connected and every recorded session attached. On a new
+ * connection a pass runs the whole `SessionManager.resync()`. A pass that
+ * throws is retried whole; one that leaves a session the daemon still lists
+ * unattached is followed by passes that `reattach` only those sessions
+ * (#361). Both wait the connect backoff: one bad session must not leave the
+ * others silent until the host agent restarts (#232), nor have them
+ * reattached and snapshotted again every 30 s. One loop runs at a time,
+ * while the phase is not `attached`; a daemon close during it makes it go
+ * round again instead of starting a second one beside it.
  */
 export class DaemonKeeper {
 	/** What the daemon said at the last connect. */
@@ -140,7 +146,7 @@ export class DaemonKeeper {
 				}
 				case "resyncing":
 				case "retrying": {
-					const unattached = await this.#resync();
+					const unattached = await this.#pass(at);
 					afterFirstPass?.();
 					afterFirstPass = undefined;
 					if (unattached !== null) this.#step({ kind: "passed", at, unattached });
@@ -160,12 +166,13 @@ export class DaemonKeeper {
 	}
 
 	/**
-	 * Resync and snapshot what attached. Returns the sessions the daemon
-	 * still lists that would not attach, or null when the resync threw.
+	 * Resync, or reattach what would not attach, and snapshot what attached.
+	 * Returns the sessions the daemon still lists that would not attach, or
+	 * null when the pass threw.
 	 */
-	async #resync(): Promise<string[] | null> {
+	async #pass(at: Extract<KeeperPhase, { kind: "resyncing" | "retrying" }>): Promise<string[] | null> {
 		try {
-			const { live, failed } = await this.#o.manager.resync();
+			const { live, failed } = at.kind === "retrying" ? await this.#o.manager.reattach(at.unattached) : await this.#o.manager.resync();
 			for (const handle of live) await this.#o.onLive(handle);
 			for (const f of failed) this.#o.log(`could not reattach session ${f.session}: ${f.error}`);
 			return failed.map((f) => f.session);

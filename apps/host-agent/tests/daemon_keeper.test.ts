@@ -8,7 +8,7 @@ import { DaemonCommandError } from "../src/daemon_port.ts";
 import { SessionManager } from "../src/sessions.ts";
 import { FakeDaemon, flush } from "./fake_daemon.ts";
 
-test("keeper: after a daemon drop, a session that will not attach is retried, and the rest are snapshotted at once", async () => {
+test("keeper: after a daemon drop, a session that will not attach is retried alone, and the rest are snapshotted once", async () => {
 	const daemon = new FakeDaemon();
 	const stateFile = path.join(mkdtempSync(path.join(os.tmpdir(), "sb-keep-")), "sessions.json");
 	const manager = new SessionManager({ port: daemon, stateFile, emit: () => {} });
@@ -31,7 +31,9 @@ test("keeper: after a daemon drop, a session that will not attach is retried, an
 	snapshots.length = 0;
 	const attach = daemon.attach.bind(daemon);
 	let refusals = 2;
+	const attempts: string[] = [];
 	daemon.attach = async (handle: string) => {
+		attempts.push(handle);
 		if (handle === a && refusals > 0) {
 			refusals--;
 			throw new DaemonCommandError("attach", "timed out after 60000ms");
@@ -47,6 +49,8 @@ test("keeper: after a daemon drop, a session that will not attach is retried, an
 	await reattached;
 	assert.equal(snapshots[0], b, "the session that attached is snapshotted on the first pass");
 	assert.equal(refusals, 0, "the refused session was tried again until it attached");
+	assert.deepEqual(snapshots, [b, a], "a retry attaches and snapshots only the session that would not attach");
+	assert.deepEqual(attempts, [a, b, a, a], "each retry tries only the refused session");
 	assert.equal(daemon.ops().filter((op) => op === "connect").length, 2, "one reconnect: a retry does not dial again while connected");
 	assert.ok(snapshots.includes(a));
 });
@@ -335,8 +339,9 @@ const keeperRows: {
 			await retryingA1(r);
 			await r.advance(10);
 		},
-		ops: [...WHOLE, "list"],
-		snapshots: ["a2"],
+		// Only a1 is tried again; a2 stays attached and is not snapshotted again.
+		ops: ["list", "attach a1", "list"],
+		snapshots: [],
 		logs: ["could not reattach session a1: attach: timed out after 60000ms", "retrying the daemon resync in 20 ms"],
 		then: { retryInMs: 20 },
 	},
@@ -348,8 +353,8 @@ const keeperRows: {
 			r.refuse.clear();
 			await r.advance(10);
 		},
-		ops: WHOLE,
-		snapshots: ["a1", "a2"],
+		ops: ["list", "attach a1"],
+		snapshots: ["a1"],
 		logs: [],
 		then: "attached",
 	},
@@ -366,8 +371,8 @@ const keeperRows: {
 			);
 			assert.deepEqual(r.manager.handles(), ["a2"]);
 		},
-		ops: ["list", "attach a2"],
-		snapshots: ["a2"],
+		ops: ["list"],
+		snapshots: [],
 		logs: [],
 		then: "attached",
 	},
@@ -380,8 +385,9 @@ const keeperRows: {
 			assert.deepEqual(r.ops(), ["detach"]);
 			await r.advance(10);
 		},
-		ops: ["list", "attach a2"],
-		snapshots: ["a2"],
+		// Nothing is left to retry, so the retry asks the daemon nothing.
+		ops: [],
+		snapshots: [],
 		logs: [],
 		then: "attached",
 	},
