@@ -589,13 +589,29 @@ answer: the caller heard the rewrite of an older update, or a line was routed
 by a decision made for other words (#243). The session also stayed `busy`, so
 an idle operator looked like a running turn to steer into.
 
-`prompt_for` holds a `Prompting` guard from the write until the turn settles.
-Dropped before that, it clears `busy`, marks the process abandoned, and closes
-it. `alive()` is false at once, so `ensure_operator` and `ensure_utility` start
-a fresh process for the next prompt. Both get the call state with every prompt,
-so a restart loses only the process's own memory of its earlier prompts.
-Draining the old turn before the next prompt would also work, but it keeps a
-process of unknown state alive.
+`prompt_for` holds a `PromptInFlight` guard from the write until the turn ends.
+Dropped before that, it is the `Cancelled` event: the process's state
+(`ProcessState` in `apps/backend/src/pi_client.rs`) moves to `Abandoned`,
+which is not busy and not alive, and its close runs in the background, since
+a drop cannot await. `alive()` is false at once, so `ensure_operator` and
+`ensure_utility` start a fresh process for the next prompt. Both get the call
+state with every prompt, so a restart loses only the process's own memory of
+its earlier prompts. Draining the old turn before the next prompt would also
+work, but it keeps a process of unknown state alive.
+
+A turn that breaks off any other way before `agent_settled` (its output ends
+or cannot be read, it is silent past its deadline, it sends a line too big to
+read or too much text) is the `Failed` end, and the process is closed before
+the failure returns, for the same reason: what is left of that turn is not
+the next prompt's to read. An agent that closed its output and kept running
+was once left idle, and every later prompt went to it and failed.
+
+The state has one writer, `PiSession::transition`, and one table, `step`.
+Every prompt event carries the prompt's number, so a late one (the guard of a
+prompt whose process its owner closed mid-turn) leaves the state alone. A new
+flag on this process (a second "busy", a "closing") is a new row or phase in
+`step`, not a field beside it.
+
 
 ## Prepare reports are final
 
