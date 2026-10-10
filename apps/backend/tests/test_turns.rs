@@ -20,7 +20,6 @@ use crate::router::Decision;
 use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
-use std::sync::atomic::Ordering;
 use tokio::time::{timeout, Duration};
 
 #[tokio::test]
@@ -29,21 +28,19 @@ async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
     let mut events = state.0.events.subscribe();
     let old_generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker_state = state.clone();
     let worker = tokio::spawn(async move { process_turns(worker_state).await });
     state
         .0
         .turns
-        .sender
-        .send(("old-clip".into(), "stale words".into(), old_generation))
+        .enqueue_for_test(("old-clip".into(), "stale words".into(), old_generation))
         .await
         .unwrap();
     for _ in 0..10 {
         tokio::task::yield_now().await;
     }
 
-    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert!(!state.0.turns.in_flight_for_test());
     assert!(state.0.active_operations.lock().await.is_empty());
     let stale = events
         .try_recv()
@@ -92,13 +89,11 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
         .insert("stale".into(), Decision::fallback("test").into());
     let old_generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
     state
         .0
         .turns
-        .sender
-        .send(("stale".into(), "old words".into(), old_generation))
+        .enqueue_for_test(("stale".into(), "old words".into(), old_generation))
         .await
         .expect("queued turn");
 
@@ -170,7 +165,7 @@ async fn steer_rechecks_generation_under_the_active_session_guard() {
 
     let stale = next_event_of(&mut events, "error").await;
     assert_eq!(stale["id"], "steer-stale");
-    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+    assert_eq!(state.0.turns.queued_for_test(), 0);
 
     prompt.abort();
     let _ = prompt.await;
@@ -227,7 +222,7 @@ async fn an_utterance_steers_a_turn_that_holds_the_pbx_lock() {
     let queued = next_event_of(&mut events, "queued").await;
     assert_eq!(queued["id"], "steer-busy");
     assert_eq!(queued["steered"], true);
-    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+    assert_eq!(state.0.turns.queued_for_test(), 0);
 
     drop(board);
     prompt.abort();
@@ -242,12 +237,10 @@ async fn a_turn_dropped_by_a_rescue_before_it_is_registered_is_dropped_with_noti
     // Hold the registry a turn joins when it is spawned, so a rescue can land
     // after the turn passed its stamp check and before it is registered.
     let registry = state.0.active_operations.lock().await;
-    state.0.queued_turns.store(1, Ordering::Release);
     state
         .0
         .turns
-        .sender
-        .send((
+        .enqueue_for_test((
             "just-dispatched".into(),
             "and check the logs".into(),
             state.0.coordinator.generation(),
@@ -266,7 +259,7 @@ async fn a_turn_dropped_by_a_rescue_before_it_is_registered_is_dropped_with_noti
     let frames = frames_until(&mut connection, "error").await;
     assert_eq!(types_of(&frames), ["error"]);
     assert_dropped_with_notice(&frames[0], "just-dispatched");
-    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert!(!state.0.turns.in_flight_for_test());
     turn_worker.abort();
 }
 
@@ -293,13 +286,11 @@ async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
         "down".into(),
         crate::router::Decision::fallback("Jev unavailable: test").into(),
     );
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
     state
         .0
         .turns
-        .sender
-        .send(("down".into(), "hello".into(), generation))
+        .enqueue_for_test(("down".into(), "hello".into(), generation))
         .await
         .unwrap();
 
@@ -438,13 +429,11 @@ async fn takeover_desk_listing_does_not_hold_the_pbx_lock() {
         .into(),
     );
     let generation = state.0.coordinator.generation();
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
     state
         .0
         .turns
-        .sender
-        .send(("takeover-lock".into(), "take over alpha".into(), generation))
+        .enqueue_for_test(("takeover-lock".into(), "take over alpha".into(), generation))
         .await
         .unwrap();
 
@@ -495,7 +484,7 @@ async fn a_caller_message_steers_an_autonomous_project_turn() {
         queued["steered"], true,
         "the message was queued, not steered"
     );
-    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+    assert_eq!(state.0.turns.queued_for_test(), 0);
     assert_eq!(
         host.named("steer")
             .iter()
@@ -609,12 +598,12 @@ async fn a_self_woken_start_before_the_caller_turn_settles_stays_the_callers() {
         .coordinator
         .accept_side_effect(&token, Some("turn-2"), Some("input"))
         .is_ok());
-    assert!(state.0.turn_in_flight.load(Ordering::Acquire));
+    assert!(state.0.turns.in_flight_for_test());
 
     // The caller's turn still ends as its own.
     alpha_host_event(&state, json!({"kind":"turn_end","turn_id":"turn-2"}));
     timeout(Duration::from_secs(1), async {
-        while state.0.turn_in_flight.load(Ordering::Acquire) {
+        while state.0.turns.in_flight_for_test() {
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
     })
@@ -636,7 +625,7 @@ async fn a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles() {
 
     // The caller's turn is over on both sides; only the woken one runs.
     timeout(Duration::from_secs(1), async {
-        while state.0.turn_in_flight.load(Ordering::Acquire) {
+        while state.0.turns.in_flight_for_test() {
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
     })
@@ -697,19 +686,17 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
         }
         .into(),
     );
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
     state
         .0
         .turns
-        .sender
-        .send(("caller-waits".into(), "continue alpha".into(), generation))
+        .enqueue_for_test(("caller-waits".into(), "continue alpha".into(), generation))
         .await
         .unwrap();
     for _ in 0..20 {
         tokio::task::yield_now().await;
     }
-    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert!(!state.0.turns.in_flight_for_test());
     assert!(state
         .0
         .turns
@@ -782,13 +769,11 @@ async fn a_caller_turn_runs_after_an_autonomous_turn_whose_session_closed() {
         .lock()
         .await
         .insert("after-close".into(), Decision::fallback("test").into());
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
     state
         .0
         .turns
-        .sender
-        .send(("after-close".into(), "are you there?".into(), generation))
+        .enqueue_for_test(("after-close".into(), "are you there?".into(), generation))
         .await
         .unwrap();
     let thinking = timeout(Duration::from_secs(5), async {
@@ -1020,13 +1005,11 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
         }
         .into(),
     );
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
     state
         .0
         .turns
-        .sender
-        .send((id.into(), "continue alpha".into(), generation))
+        .enqueue_for_test((id.into(), "continue alpha".into(), generation))
         .await
         .unwrap();
 
@@ -1107,13 +1090,11 @@ async fn process_turns_settles_foreground_idle_once() {
         }
         .into(),
     );
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
     state
         .0
         .turns
-        .sender
-        .send((id.into(), "continue alpha".into(), generation))
+        .enqueue_for_test((id.into(), "continue alpha".into(), generation))
         .await
         .unwrap();
     timeout(Duration::from_secs(1), gate.wait_started())
@@ -1127,7 +1108,7 @@ async fn process_turns_settles_foreground_idle_once() {
             .any(|agent| agent["project"] == "alpha" && agent["state"] == "busy")
     }));
     timeout(Duration::from_secs(1), async {
-        while state.0.turn_in_flight.load(Ordering::Acquire) {
+        while state.0.turns.in_flight_for_test() {
             tokio::task::yield_now().await;
         }
     })
@@ -1581,7 +1562,6 @@ done"#
                 .lock()
                 .await
                 .insert(id.into(), Decision::fallback("test").into());
-            state.0.queued_turns.fetch_add(1, Ordering::AcqRel);
             state
                 .0
                 .turns
@@ -1684,7 +1664,7 @@ async fn until_turn_ended(
     let (branch, traced_as_turn) = within("the turn ends", async {
         loop {
             if let Some(ended) = ended(state) {
-                if !state.0.turn_in_flight.load(Ordering::Acquire) {
+                if !state.0.turns.in_flight_for_test() {
                     return ended;
                 }
             }
@@ -1716,8 +1696,8 @@ async fn until_turn_ended(
 /// nothing queued, no registered task, no speech group, no decision held
 /// for the clip, and the turn's operation closed, so a new prompt begins.
 async fn assert_turn_at_rest(state: &AppState, id: &str) {
-    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
-    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+    assert!(!state.0.turns.in_flight_for_test());
+    assert_eq!(state.0.turns.queued_for_test(), 0);
     assert!(state.0.active_operations.lock().await.is_empty());
     assert!(state.0.active_speech_group().is_none());
     assert!(!state.0.turns.routed_decisions.lock().await.contains_key(id));

@@ -22,7 +22,7 @@ use crate::routing_view::RoutingView;
 use crate::speech::{deliver_turn_if_current, SpeechGroup};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::Id as TaskId;
 #[cfg(test)]
@@ -364,7 +364,7 @@ pub(crate) async fn dispatch_routed_transcript(
             "queued Jev routing decision"
         );
     }
-    let waiting = state.0.queued_turns.fetch_add(1, Ordering::AcqRel) + 1;
+    let waiting = state.0.turns.queued.fetch_add(1, Ordering::AcqRel) + 1;
     if state
         .0
         .turns
@@ -373,7 +373,7 @@ pub(crate) async fn dispatch_routed_transcript(
         .await
         .is_ok()
     {
-        if waiting > 1 || state.0.turn_in_flight.load(Ordering::Acquire) {
+        if waiting > 1 || state.0.turns.in_flight.load(Ordering::Acquire) {
             emit_message(
                 state,
                 ServerMessage::Queued {
@@ -384,7 +384,7 @@ pub(crate) async fn dispatch_routed_transcript(
             );
         }
     } else {
-        state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
+        state.0.turns.queued.fetch_sub(1, Ordering::AcqRel);
         state.0.turns.routed_decisions.lock().await.remove(id);
         emit_clip_verdict(
             state,
@@ -396,8 +396,9 @@ pub(crate) async fn dispatch_routed_transcript(
 
 /// Queued caller turns and the state only this module reads: the turn
 /// channel and the receiver the turn worker takes once, what routing reads
-/// about the call, the decisions made for turns still in the queue, and the
-/// autonomous turns in flight. `AppInner` holds one so the fields are the
+/// about the call, the decisions made for turns still in the queue, the
+/// autonomous turns in flight, how many caller turns wait, and whether one
+/// is open. `AppInner` holds one so the fields are the
 /// turns module's own.
 pub(crate) struct TurnState {
     sender: mpsc::Sender<(String, String, u64)>,
@@ -414,6 +415,13 @@ pub(crate) struct TurnState {
     /// Autonomous host turns admitted by the lifecycle, keyed by resident
     /// instance so a stale turn_end cannot finish a newer operation.
     autonomous_operations: Mutex<HashMap<u64, OperationIdentity>>,
+    /// Caller turns sent to the worker and not yet taken: the `waiting`
+    /// count the page is shown.
+    queued: AtomicU64,
+    /// True while a `TurnRun` is open: `TurnRun::begin` sets it and
+    /// `TurnRun::finish` clears it. A turn routed meanwhile is told it
+    /// waits.
+    in_flight: AtomicBool,
 }
 
 impl TurnState {
@@ -425,6 +433,8 @@ impl TurnState {
             routing,
             routed_decisions: Mutex::new(HashMap::new()),
             autonomous_operations: Mutex::new(HashMap::new()),
+            queued: AtomicU64::new(0),
+            in_flight: AtomicBool::new(false),
         }
     }
 
@@ -439,13 +449,34 @@ impl TurnState {
             .expect("the turn receiver is taken once")
     }
 
-    /// Queues a raw turn, as a test does in place of a transcribed clip.
+    /// Queues a raw turn, as a test does in place of a transcribed clip, and
+    /// counts it as waiting, as `dispatch_routed_transcript` does.
     #[cfg(test)]
     pub(crate) async fn enqueue_for_test(
         &self,
         turn: (String, String, u64),
     ) -> Result<(), mpsc::error::SendError<(String, String, u64)>> {
+        self.queued.fetch_add(1, Ordering::AcqRel);
         self.sender.send(turn).await
+    }
+
+    /// How many caller turns wait for the worker.
+    #[cfg(test)]
+    pub(crate) fn queued_for_test(&self) -> u64 {
+        self.queued.load(Ordering::Acquire)
+    }
+
+    /// Whether a caller turn is open.
+    #[cfg(test)]
+    pub(crate) fn in_flight_for_test(&self) -> bool {
+        self.in_flight.load(Ordering::Acquire)
+    }
+
+    /// Stands in for a turn that is open (or no longer is) for a test that
+    /// runs no worker.
+    #[cfg(test)]
+    pub(crate) fn set_in_flight_for_test(&self, in_flight: bool) {
+        self.in_flight.store(in_flight, Ordering::Release);
     }
 }
 
@@ -459,7 +490,7 @@ pub(crate) async fn process_turns(state: AppState) {
         .take()
         .expect("turn worker started once");
     while let Some((id, transcript, generation)) = receiver.recv().await {
-        state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
+        state.0.turns.queued.fetch_sub(1, Ordering::AcqRel);
         // A leg started from the page (a connection or a redial) is held under
         // the PBX lock until it is adopted or rolled back. Wait for that
         // outcome: the stamp check below means nothing until it is known which
@@ -486,7 +517,6 @@ pub(crate) async fn process_turns(state: AppState) {
         let takeover = prepare_takeover_lookup(&state, &decision).await;
         let started = std::time::Instant::now();
         let Some(operation) = admit_turn(&state, &id, generation).await else {
-            state.0.turn_in_flight.store(false, Ordering::Release);
             continue;
         };
         let mut run = TurnRun::begin(&state, id, generation, operation, started);
@@ -610,10 +640,10 @@ impl TurnRun {
         started: std::time::Instant,
     ) -> Self {
         let group = state.0.new_speech_group();
-        state.0.turn_in_flight.store(true, Ordering::Release);
+        state.0.turns.in_flight.store(true, Ordering::Release);
         state.0.set_active_speech_group(group);
         let route = state.0.coordinator.route();
-        let waiting = state.0.queued_turns.load(Ordering::Acquire);
+        let waiting = state.0.turns.queued.load(Ordering::Acquire);
         tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
         state.0.debug.publish(DebugEvent::TurnStart {
             agent: route.clone(),
@@ -698,7 +728,7 @@ impl TurnRun {
             }
         }
         state.0.clear_active_speech_group(self.group);
-        state.0.turn_in_flight.store(false, Ordering::Release);
+        state.0.turns.in_flight.store(false, Ordering::Release);
     }
 
     fn trace_end(&self, state: &AppState) {
@@ -932,13 +962,11 @@ pub(crate) async fn alpha_caller_turn_in_flight(
     let (state, log) = state_with_agents_and_jev(root, host);
     let (token, instance_id) = foreground_alpha_turn(&state).await;
     let generation = state.0.coordinator.generation();
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
     state
         .0
         .turns
-        .sender
-        .send(("caller-held".into(), "run the tests".into(), generation))
+        .enqueue_for_test(("caller-held".into(), "run the tests".into(), generation))
         .await
         .unwrap();
     timeout(Duration::from_secs(5), async {

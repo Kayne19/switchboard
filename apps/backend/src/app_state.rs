@@ -36,7 +36,7 @@ use crate::turns::{handle_project_turn, process_turns, TurnState};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 #[cfg(test)]
 use tokio::sync::oneshot;
@@ -198,8 +198,8 @@ pub struct AppInner {
     /// The call the debug page groups events under, while a page is on it.
     debug_call: std::sync::Mutex<Option<String>>,
     next_debug_call: AtomicU64,
-    /// Queued caller turns, their routing decisions, and the autonomous
-    /// turns in flight: the state only `turns.rs` reads.
+    /// Queued caller turns, their routing decisions, the caller turn in
+    /// flight, and the autonomous ones: the state only `turns.rs` reads.
     pub(crate) turns: TurnState,
     pub(crate) delivery: DeliveryState,
     pub transcript_log: Mutex<TranscriptLog>,
@@ -237,8 +237,6 @@ pub struct AppInner {
     pub(crate) leg_announcer: LegAnnouncer,
     pub(crate) operation_transition: Mutex<()>,
     pub(crate) active_operations: Mutex<HashMap<TaskId, AbortHandle>>,
-    pub queued_turns: AtomicU64,
-    pub turn_in_flight: AtomicBool,
     pub(crate) shutdown: watch::Sender<bool>,
     pub(crate) audio: Mutex<AudioQueue>,
     pub(crate) speech_deadline: std::time::Duration,
@@ -496,8 +494,6 @@ impl AppState {
                 leg_announcer,
                 operation_transition: Mutex::new(()),
                 active_operations: Mutex::new(HashMap::new()),
-                queued_turns: AtomicU64::new(0),
-                turn_in_flight: AtomicBool::new(false),
                 shutdown,
                 audio: Mutex::new(AudioQueue::new()),
                 speech_deadline,
