@@ -91,6 +91,15 @@ interface Capture {
 	lease: boolean;
 }
 
+/** Stops what a start made and never installed. */
+function releaseUnused(
+	context: AudioContext | null,
+	stream: MediaStream | null,
+): void {
+	stream?.getTracks().forEach((track) => track.stop());
+	if (context) void context.close().catch(() => undefined);
+}
+
 export class HandsFreeController {
 	private readonly options: HandsFreeControllerOptions;
 	private readonly getUserMedia: NonNullable<
@@ -221,47 +230,58 @@ export class HandsFreeController {
 			"Starting local microphone listening. Ambient audio stays on this device.",
 		);
 		const token = ++this.runtimeToken;
+		// What this start makes stays in locals until its last wait is over.
+		// A start that a newer one overtook (push-to-talk paused and resumed
+		// it, the page was hidden and shown) then releases only what it made,
+		// never the newer start's graph (#261).
+		let context: AudioContext | null = null;
+		let stream: MediaStream | null = null;
+		let installed = false;
 		try {
 			// Two models, one wait: either one failing is the same start
 			// failure, reported by the catch below.
 			await Promise.all([this.detector.load?.(), this.endpointer.load?.()]);
 			if (!this.enabled || token !== this.runtimeToken) return false;
-			this.context = this.createAudioContext();
-			if (typeof this.context.audioWorklet?.addModule !== "function")
+			context = this.createAudioContext();
+			if (typeof context.audioWorklet?.addModule !== "function")
 				throw new Error("audio worklet is unavailable");
-			this.stream = await this.getUserMedia({ audio: true });
+			stream = await this.getUserMedia({ audio: true });
 			if (
 				!this.enabled ||
 				token !== this.runtimeToken ||
 				!this.isForeground()
 			) {
-				this.releaseStream();
+				releaseUnused(context, stream);
 				return false;
 			}
-			if (this.context.state === "suspended") await this.context.resume();
-			await this.context.audioWorklet.addModule(
+			if (context.state === "suspended") await context.resume();
+			await context.audioWorklet.addModule(
 				this.options.workletUrl || "/vad-worklet.js",
 			);
 			if (!this.enabled || token !== this.runtimeToken) {
-				this.releaseRuntime();
+				releaseUnused(context, stream);
 				return false;
 			}
-			this.source = this.context.createMediaStreamSource(this.stream);
-			this.worklet = this.createWorkletNode(this.context);
+			this.context = context;
+			this.stream = stream;
+			installed = true;
+			this.source = context.createMediaStreamSource(stream);
+			this.worklet = this.createWorkletNode(context);
 			const worklet = this.worklet;
 			worklet.port.onmessage = (event: MessageEvent) => {
 				if (token !== this.runtimeToken || worklet !== this.worklet) return;
 				this.onWorkletMessage(event.data);
 			};
 			this.source.connect(worklet);
-			this.sink = this.context.createGain();
+			this.sink = context.createGain();
 			this.sink.gain.value = 0;
 			worklet.connect(this.sink);
-			this.sink.connect(this.context.destination);
+			this.sink.connect(context.destination);
 			this.resetListening();
 			this.publish("armed", `Listening locally for “${WAKE_PHRASE}”.`);
 			return true;
 		} catch (error) {
+			if (!installed) releaseUnused(context, stream);
 			if (!this.enabled || token !== this.runtimeToken) return false;
 			this.enabled = false;
 			this.releaseRuntime();
