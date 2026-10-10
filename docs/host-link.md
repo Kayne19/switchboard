@@ -295,6 +295,12 @@ model does not have). `call_mode` is `null` when the session is not on a call.
 
   `outcome` is `succeeded`, `failed` or `timed_out`.
 
+  A `run_prepare` for the same `cwd` and `command` as one still running
+  starts nothing: it waits for that run and answers with its result (its
+  `timeout_ms` is the first run's). The service sends a prepare again when
+  the link it was sent on drops, and the host agent keeps running the first;
+  two copies in one folder would race each other.
+
 - **`attach`** adopts one live top-level desk session in the exact registered
   `cwd`, without creating or reopening it. It records provenance
   `taken_over`, subscribes to its events, and persists that provenance. The

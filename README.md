@@ -38,7 +38,9 @@ Everything a project leg needs from its host is set up ahead of any call by
   agent's `run_prepare`, as soon as its host links. Its output, exit status, or
   timeout becomes a timestamped report the incoming agent is shown; a failure
   is reported, not retried, and does not block the project. A prepare cut off
-  by a lost link runs again on the next link.
+  by a lost link is sent again on the next link; if the first run is still
+  going on the host, the host agent answers with that run's result rather
+  than start a second.
 
 Prewarm runs this as each host links, not before the listener opens: the host
 agents dial in to the listener. Nothing is copied to a host. The `switchboard`
