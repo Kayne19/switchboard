@@ -234,8 +234,8 @@ leg.
   `routing_request` or `floor_rewrite` (the utility's two jobs), `brief` (a
   project session's voice brief, sent in front of the first prompt and the
   first after a compaction, shown as an input of its own), `intro` (the first
-  prompt of a transfer), `foreground` (a background agent brought back), or
-  `model_change`. `utterance_id` is set when the input carries a routed
+  prompt of a transfer), or `foreground` (a background agent brought back).
+  `utterance_id` is set when the input carries a routed
   caller line, a steer included.
 - `agent_text` with `final: false` is a piece of the reply: a streamed chunk
   from the operator or utility (gathered to about 256 bytes or 250 ms), or one

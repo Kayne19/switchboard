@@ -2,7 +2,7 @@ use super::*;
 use crate::hosts::{FakeHostAgent, Step};
 use crate::pbx::{
     board_on, board_with, on_alpha, project, prompts, put_on, says, serve, transcript,
-    two_model_catalog, until_named, HOST,
+    two_model_catalog, HOST,
 };
 use serde_json::json;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -183,67 +183,19 @@ fn record_agent_states(board: &mut Switchboard) -> Arc<StdMutex<Vec<String>>> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn a_fresh_model_change_whose_prompt_fails_announces_finished_once() {
-    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
-    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("On it.")));
-    // Only the switched session's first prompt fails; the transfer's intro
-    // before it goes through.
-    fake.on_command = Some(Box::new(|name, args| {
-        (name == "prompt"
-            && args["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("This session now runs on")))
-        .then(|| Some(Err(("transport".into(), "host prompt failed".into()))))
-    }));
-    let _log = fake.serve(board.hosts().connect_fake(HOST));
-    let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
-        .await;
-    assert_eq!(reply.route, "alpha", "{reply:?}");
-    let notices = record_agent_states(&mut board);
-
-    // A fresh-context change ends the old session before the new one is
-    // prompted. When the new one fails, the old leg is gone too, and the
-    // page must hear so exactly once; before, it heard nothing and kept a
-    // state for a leg that no longer existed.
-    let decided = board
-        .planner
-        .plan("anthropic/next", "", "do the thing", false)
-        .await;
-    let reply = redialed(&mut board, decided).await;
-
-    assert!(reply.error.is_some(), "{reply:?}");
-    let notices = notices.lock().unwrap().clone();
-    assert_eq!(
-        notices
-            .iter()
-            .filter(|notice| *notice == "alpha:finished")
-            .count(),
-        1,
-        "{notices:?}"
-    );
-    assert_eq!(board.coordinator.route(), OPERATOR);
-    assert!(!board.coordinator.is_candidate());
-    assert!(board.agent.is_none());
-    board.shutdown().await;
-}
-
-#[cfg(unix)]
-#[tokio::test]
 async fn a_kept_model_change_whose_adoption_fails_announces_finished_once() {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let coordinator = board.coordinator();
-    let _log = serve(
-        &board,
-        Box::new(move |_, message| {
-            if message.contains("This session now runs on") {
-                // A competing lifecycle owner moves the candidate before the
-                // PBX adopts it, as the promotion test does.
-                coordinator.set_candidate_token_for_test("not-the-swap-token");
-            }
-            says("On it.")
-        }),
-    );
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("On it.")));
+    fake.on_command = Some(Box::new(move |name, _| {
+        if name == "set_model" {
+            // A competing lifecycle owner moves the candidate before the
+            // PBX adopts it, as the promotion test does.
+            coordinator.set_candidate_token_for_test("not-the-swap-token");
+        }
+        None
+    }));
+    let _log = fake.serve(board.hosts().connect_fake(HOST));
     let reply = board
         .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
         .await;
@@ -253,10 +205,7 @@ async fn a_kept_model_change_whose_adoption_fails_announces_finished_once() {
     // The kept session is still the switchboard's agent when adoption fails,
     // so dropping it announces `finished`; the arm must not announce it a
     // second time itself.
-    let decided = board
-        .planner
-        .plan("anthropic/next", "", "do the thing", true)
-        .await;
+    let decided = board.planner.model_change("anthropic/next").await;
     let reply = redialed(&mut board, decided).await;
 
     assert!(reply.error.is_some(), "{reply:?}");
@@ -301,45 +250,11 @@ async fn a_thinking_change_keeps_the_session_and_takes_the_level_the_host_report
     board.shutdown().await;
 }
 
+/// A project agent cannot change its own model: the call is refused as
+/// removed, whatever the swap setting, and the live leg is untouched. Only
+/// the page's pickers redial.
 #[tokio::test]
-async fn a_fresh_start_ends_the_session_and_makes_a_new_one() {
-    let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("Fresh here."))).await;
-    let old = board.agent.clone().unwrap();
-
-    let decided = board
-        .planner
-        .plan("anthropic/next", "", "look at the parser", false)
-        .await;
-    let reply = redialed(&mut board, decided).await;
-
-    assert_eq!(reply.error, None, "{reply:?}");
-    assert_eq!(reply.text, "Fresh here.");
-    assert!(!old.alive());
-    let new = board.agent.clone().unwrap();
-    assert!(!new.same_session(&old));
-    assert_eq!(log.named("create_session").len(), 2);
-    assert!(log.named("set_model").is_empty());
-    // The old session ends before the new one is made: one per project.
-    until_named(&log, "kill").await;
-    let names = log.names();
-    let killed = names.iter().position(|name| name == "kill").unwrap();
-    let created = names
-        .iter()
-        .rposition(|name| name == "create_session")
-        .unwrap();
-    assert!(killed < created, "{names:?}");
-    assert_eq!(log.named("kill"), [json!({"session": "s1"})]);
-    assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
-    // The request goes on as the new session's first prompt, brief first.
-    let prompts = prompts(&log);
-    assert_eq!(prompts.len(), 2);
-    assert!(prompts[1].starts_with("[SWITCHBOARD VOICE BRIEF]"));
-    assert!(prompts[1].contains("Their request: look at the parser."));
-    board.shutdown().await;
-}
-
-#[tokio::test]
-async fn the_agents_own_set_model_is_decided_by_the_pickers_checks() {
+async fn the_agents_own_set_model_is_refused_and_changes_nothing() {
     for swaps in ["0", "1"] {
         let (mut board, log) = on_alpha(
             &[("SWITCHBOARD_MODEL_SWAPS", swaps)],
@@ -368,7 +283,6 @@ async fn the_agents_own_set_model_is_decided_by_the_pickers_checks() {
             .as_ref()
             .is_some_and(|agent| agent.same_session(&live)));
         assert!(live.alive());
-        let _ = swaps;
         assert_eq!(reply.text, "Switching.");
         assert!(log.named("set_model").is_empty());
         assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
@@ -445,7 +359,7 @@ async fn a_redial_that_cannot_reach_the_host_refuses_and_keeps_the_live_leg() {
     let leg = board.coordinator.project_leg().unwrap();
 
     board.hosts().disconnect_fake(HOST);
-    let Redial::Answered(reply) = board.planner.plan("anthropic/next", "", "", true).await else {
+    let Redial::Answered(reply) = board.planner.model_change("anthropic/next").await else {
         panic!("a host that is not connected is refused before anything is touched");
     };
 

@@ -1,9 +1,9 @@
 //! Model and thinking changes on the project leg. `RedialPlanner` decides one
 //! without the PBX lock, from the coordinator's leg and prewarm's launch plan,
 //! so a refused page swap never rescues the live leg; `Switchboard::redial`
-//! runs a plan only while the leg it was made for is still on the line, either
-//! on the live session (`switch_live`) or on a fresh one.
-use crate::leg_transitions::{failed_turn, LegChange};
+//! runs a plan only while the leg it was made for is still on the line, on
+//! the live session (`switch_live`).
+use crate::leg_transitions::LegChange;
 use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, ProjectLeg};
 use crate::models::{normalize_thinking, parse_spec, pin_thinking, ModelCatalog};
 use crate::pbx::{uuid_like, Switchboard, OPERATOR};
@@ -30,8 +30,6 @@ pub struct RedialPlan {
     spec: String,
     /// How the new model is said aloud.
     spoken: String,
-    keep_context: bool,
-    intent: String,
     launch: LaunchPlan,
 }
 
@@ -39,12 +37,6 @@ impl RedialPlan {
     /// The leg this redial replaces.
     pub fn leg(&self) -> &ProjectLeg {
         &self.leg
-    }
-
-    /// True when the change is made on the live session, which the rescue
-    /// that makes way for it must therefore not end.
-    pub fn keeps_session(&self) -> bool {
-        self.keep_context
     }
 
     /// The same redial, for its leg as the rescue that makes way for it left
@@ -57,9 +49,8 @@ impl RedialPlan {
 /// Decides model and thinking changes on the project leg without the PBX
 /// lock. Everything it reads is the coordinator's leg, a launch plan from
 /// prewarm, or a deployment setting, so a page control can refuse a redial
-/// without waiting for the turn in flight or cancelling it. The switchboard
-/// uses it for the agent's own `set_model`, and the application shares it
-/// for the pickers: one set of checks for both.
+/// without waiting for the turn in flight or cancelling it. Its callers are
+/// the page's pickers (`/model`, `/thinking`).
 #[derive(Clone)]
 pub struct RedialPlanner {
     coordinator: Coordinator,
@@ -112,7 +103,7 @@ impl RedialPlanner {
                 Some("Model changes are only available on a project leg.".into()),
             );
         }
-        self.plan(model, "", "", true).await
+        self.plan(model, "").await
     }
 
     /// `/thinking`: the level the next project call is asked for, and on a
@@ -130,22 +121,17 @@ impl RedialPlanner {
                         None,
                     );
                 }
-                self.plan("", &value, "", true).await
+                self.plan("", &value).await
             }
             Ok(_) => self.answer(["Name a thinking level and I'll set it."], None),
             Err(e) => self.answer([e.to_string()], Some(e.to_string())),
         }
     }
 
-    /// Decides a redial of the project leg on the line. Every refusal is made
-    /// here, before anything is torn down, and leaves the live leg running.
-    pub async fn plan(
-        &self,
-        model: &str,
-        thinking: &str,
-        intent: &str,
-        keep_context: bool,
-    ) -> Redial {
+    /// Decides a redial of the project leg on the line, which keeps its
+    /// conversation. Every refusal is made here, before anything is torn down,
+    /// and leaves the live leg running.
+    async fn plan(&self, model: &str, thinking: &str) -> Redial {
         // Read in one piece: the leg the plan replaces, its model, and its
         // session all belong to the same leg.
         let on_the_line = self.coordinator.project_leg().and_then(|leg| {
@@ -209,7 +195,7 @@ impl RedialPlanner {
             }
         };
         let spec = choice.spec();
-        if keep_context && spec == leg.model {
+        if spec == leg.model {
             return self.answer([format!("Already on {}.", choice.spoken())], None);
         }
         Redial::Planned(Box::new(RedialPlan {
@@ -217,8 +203,6 @@ impl RedialPlanner {
             project,
             spec,
             spoken: choice.spoken(),
-            keep_context,
-            intent: intent.to_owned(),
             launch,
         }))
     }
@@ -275,38 +259,28 @@ impl Switchboard {
         Ok(self.swap(plan).await)
     }
 
-    /// Changes the leg on the line to what `plan` describes. A change that
-    /// keeps the conversation is made on the live session (`set_model`,
-    /// `set_thinking`); a fresh start ends the session and creates a new one.
-    /// Either way the leg is staged and adopted like any new leg, under a new
-    /// call token.
+    /// Changes the leg on the line to what `plan` describes, on the live
+    /// session (`set_model`, `set_thinking`), which keeps its history. The leg
+    /// is staged and adopted like any new leg, under a new call token.
     async fn swap(&mut self, plan: RedialPlan) -> Reply {
         let RedialPlan {
             leg,
             project,
             spec,
             spoken,
-            keep_context,
-            intent,
             launch,
         } = plan;
         tracing::info!(
             project = %project.id,
             from = %leg.model,
             to = %spec,
-            context = if keep_context { "kept" } else { "cleared" },
             "changing the model of the live leg"
         );
         let leg_token = uuid_like();
-        let session_id = if keep_context {
-            leg.persistent_session_id.clone()
-        } else {
-            uuid_like()
-        };
         let candidate = CandidateLeg::new(
             project.id.clone(),
             project.id.clone(),
-            session_id,
+            leg.persistent_session_id.clone(),
             leg_token.clone(),
             spec.clone(),
             thinking_in_spec(&spec),
@@ -320,26 +294,12 @@ impl Switchboard {
             );
         }
 
-        let switched = if keep_context {
-            self.switch_live(&leg.model, &spec, &leg_token).await
-        } else {
-            // At most one live session per project: the old one ends first.
-            if let Some(previous) = self.agent.take() {
-                previous.close();
-            }
-            self.set_active_session(None).await;
-            self.start_agent(&project, &spec, &leg_token, &launch).await
-        };
-        let session = match switched {
+        let session = match self.switch_live(&leg.model, &spec, &leg_token).await {
             Ok(session) => session,
             Err(error) => {
                 tracing::error!(project = %project.id, %spec, %error, "could not change the leg's model");
-                self.abandon_swap(
-                    &project.id,
-                    keep_context,
-                    format!("model change failed: {error}"),
-                )
-                .await;
+                self.abandon_swap(format!("model change failed: {error}"))
+                    .await;
                 self.operator_note = Some(format!(
                     "Couldn't move {} to {spec}: {}.",
                     project.id,
@@ -351,91 +311,23 @@ impl Switchboard {
         self.set_active_session(Some(LegSession::Project(session.clone())))
             .await;
 
-        // A fresh session knows nothing, and a kept one may have been asked
-        // for more than the change: either way the caller's request goes on
-        // as a turn. With nothing to pass on, no turn is started; the voice
-        // brief of a fresh session rides on the caller's next line.
-        let turn = if intent.trim().is_empty() {
-            None
-        } else {
-            let prompt = format!(
-                "[switchboard] This session now runs on {spec}.{} The caller made the change, so do not announce it. Their request: {}.",
-                if keep_context {
-                    ""
-                } else {
-                    " The earlier conversation was cleared on purpose."
-                },
-                intent.trim().trim_end_matches('.')
-            );
-            let turn = session
-                .prompt_as(&prompt, "model_change", None)
-                .await
-                .unwrap_or_else(failed_turn);
-            if turn.failed && turn.text.is_empty() {
-                let detail = if turn.error.is_empty() {
-                    "the agent never answered".to_owned()
-                } else {
-                    turn.error.clone()
-                };
-                tracing::error!(project = %project.id, %spec, %detail, "the switched leg never answered");
-                session.close();
-                self.abandon_swap(
-                    &project.id,
-                    keep_context,
-                    format!("prompt failed: {detail}"),
-                )
-                .await;
-                self.operator_note = Some(format!(
-                    "Couldn't move {} to {spec}: {}.",
-                    project.id,
-                    detail.trim_end_matches('.')
-                ));
-                return self.couldnt_bring_up_on(&project.id, &spoken, detail);
-            }
-            Some(turn)
-        };
-
         if let Err(error) = self
             .commit_leg(&project.id, &leg_token, &session, LegChange::Redial)
             .await
         {
             session.close();
-            self.abandon_swap(
-                &project.id,
-                keep_context,
-                format!("adoption failed: {error}"),
-            )
-            .await;
+            self.abandon_swap(format!("adoption failed: {error}")).await;
             return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
         }
-        match turn {
-            Some(turn) => self.reply_with_turn(turn),
-            None => {
-                let mut reply = self.reply(
-                    [if keep_context {
-                        format!("Now on {spoken}.")
-                    } else {
-                        format!("Now on {spoken}, starting fresh.")
-                    }],
-                    None,
-                );
-                reply.delivery_generation = Some(self.coordinator.generation());
-                reply
-            }
-        }
+        let mut reply = self.reply([format!("Now on {spoken}.")], None);
+        reply.delivery_generation = Some(self.coordinator.generation());
+        reply
     }
 
-    /// Ends a model change that failed, with exactly one `finished` for the
-    /// leg that is gone. `drop_agent` announces it for the session it holds,
-    /// which a kept-context change still has; a fresh-context change took the
-    /// old session out when it started, so that one is announced here. Before
-    /// this, a fresh change announced nothing and the page kept a state for a
-    /// leg that no longer existed, and a kept change's adoption failure
-    /// announced twice.
-    async fn abandon_swap(&mut self, project: &str, keep_context: bool, rollback: String) {
-        if !keep_context {
-            self.announce_agent_state(project, "finished").await;
-        }
+    /// Ends a model change that failed. The live session is still the
+    /// switchboard's agent, so `drop_agent` announces its `finished`, exactly
+    /// once.
+    async fn abandon_swap(&mut self, rollback: String) {
         self.rollback_startup(rollback);
         self.drop_agent().await;
     }

@@ -67,13 +67,8 @@ pub(crate) async fn cancel_active_operations(state: &AppState) -> Option<String>
 /// leg as the rescue left it.
 async fn cancel_active_operations_for(state: &AppState, plan: RedialPlan) -> Option<RedialPlan> {
     let rescued = state.0.coordinator.begin_rescue_of(plan.leg(), "redial")?;
-    release_rescued_work(
-        state,
-        rescued.identity.generation,
-        plan.keeps_session(),
-        "redial",
-    )
-    .await;
+    // A redial keeps the session, so the rescue only stops its turn.
+    release_rescued_work(state, rescued.identity.generation, true, "redial").await;
     Some(plan.rescued(rescued))
 }
 /// What a rescue does once the coordinator has retired the leg: drop queued
