@@ -367,8 +367,11 @@ export class AudioPlayback {
     if (target === this.player || this.gapTimer !== null) return;
     const owner = this.playbackOwner;
     if (!owner) {
-      if (this.mseActive && !this.playing) this.msePlay();
-      else if (this.audioQueue.length) this.playNext();
+      // A stream that still holds the element keeps it: the replays behind
+      // it wait for its end, whether or not it is sounding.
+      if (this.mseActive) {
+        if (!this.playing) this.msePlay();
+      } else if (this.audioQueue.length) this.playNext();
       return;
     }
     if (this.playing || owner.awaitingEnded || owner.pendingAttempt !== null)
@@ -669,12 +672,14 @@ export class AudioPlayback {
     if (this.playbackOwner !== owner || owner.consumed) return;
     owner.consumed = true;
     this.cleanupOwner(owner);
-    if (this.audioQueue.length === 0) {
+    if (this.audioQueue.length === 0 && this.mseQueue.length === 0) {
       this.playNext();
       return;
     }
     this.afterGap(() => {
-      if (!this.playing && !this.playbackOwner) this.playNext();
+      if (this.playing || this.playbackOwner) return;
+      if (this.audioQueue.length) this.playNext();
+      else this.mseStartNext();
     });
   }
 
@@ -762,7 +767,11 @@ export class AudioPlayback {
     );
   }
 
-  private queueMseFallback(utterance: MseUtterance): void {
+  /**
+   * Queues `utterance` as a whole replay. `first` is for the stream that
+   * holds the element: whatever waits in the replay queue then came after it.
+   */
+  private queueMseFallback(utterance: MseUtterance, first = false): void {
     if (utterance.fallbackQueued) return;
     utterance.fallbackQueued = true;
     if (utterance.bytes > MAX_AUDIO_UTTERANCE) {
@@ -775,7 +784,8 @@ export class AudioPlayback {
     }
     const replay = new Blob(utterance.parts, { type: utterance.mime });
     this.replaySequences.set(replay, utterance.sequence);
-    this.audioQueue.push(replay);
+    if (first) this.audioQueue.unshift(replay);
+    else this.audioQueue.push(replay);
     this.notifyPlaybackChange();
   }
 
@@ -891,8 +901,8 @@ export class AudioPlayback {
     // streaming can stop during it too.
     if (this.mseQueue.length || this.audioQueue.length)
       this.afterGap(() => {
-        this.mseStartNext();
         this.playReplayIfIdle();
+        this.mseStartNext();
       });
     // The last one ended: the idle line, as a replay's end gives it
     // (`playNext`), so no error a stream reported outlives it (#260).
@@ -940,7 +950,7 @@ export class AudioPlayback {
       if (active.url) URL.revokeObjectURL(active.url);
       active.url = null;
       if (active.done) {
-        this.queueMseFallback(active);
+        this.queueMseFallback(active, true);
         this.mseActive = null;
       }
     }
@@ -971,9 +981,14 @@ export class AudioPlayback {
   }
 
   private mseStartNext(): void {
+    // A stream waits for the element like any clip: while a replay holds it,
+    // and while older replays wait for it (the replay queue only ever holds
+    // utterances older than every stream still queued).
     if (
       !this.mseEnabled ||
       this.mseActive ||
+      this.playbackOwner ||
+      this.audioQueue.length ||
       !this.mseQueue.length ||
       this.gapTimer !== null
     )

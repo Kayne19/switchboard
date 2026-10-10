@@ -2268,7 +2268,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "2.5 s, no progress":
         "empty; silent; drained; unmetered; plays +1; reached [2]; said [!Audio started but produced no sound (nothing played in 1000ms). | !Audio started but produced no sound (nothing played in 1000ms). | idle]",
       "3 arrives":
-        "stream u3; sounding; busy; metered; plays +0; reached [3]; said []",
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming on":
         "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming off":
@@ -2440,15 +2440,15 @@ describe("AudioPlayback holder: phase x event", () => {
       "pause":
         "stream u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
       "error":
-        "replay u2; sounding; busy; metered; plays +1; reached [2]; said [!Streaming audio failed; using the complete replay (MEDIA_ERR_DECODE).]",
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (MEDIA_ERR_DECODE).]",
       "play resolves":
         "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "play rejects":
         "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "gesture":
-        "replay u2; sounding; busy; metered; plays +1; reached [2]; said []",
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "2.5 s, no progress":
-        "replay u2; sounding; busy; metered; plays +1; reached [2]; said [!Streaming audio failed; using the complete replay (no playback progress).]",
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (no playback progress).]",
       "3 arrives":
         "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming on":
@@ -2467,6 +2467,44 @@ describe("AudioPlayback holder: phase x event", () => {
       it(`${phase}: ${event}`, async () => {
         expect(await rowOutcome(phase, event)).toBe(outcome);
       });
+
+  it("plays a stream that came after the replays once they end, in order", async () => {
+    // A stream used to take the element from the replay holding it and
+    // never call play(); the replay's handlers then acted on the stream.
+    const at = await phases["replay playing, streaming back on (2 queued)"]();
+    try {
+      at.arrive(3);
+      await at.settle();
+      expect(await element(at)).toBe("replay u1");
+      events.ended(at);
+      at.settlePlay("resolve");
+      await at.settle();
+      expect(await element(at)).toBe("replay u2");
+      events.ended(at);
+      at.settlePlay("resolve");
+      await at.settle();
+      expect(await element(at)).toBe("stream u3");
+      expect(at.reached).toEqual([1, 2, 3]);
+      expect(at.playback.isPlaying).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replays a stream that fails while playing out before what came after it", async () => {
+    const at = await phases["stream playing out, streaming off (2 as a replay)"]();
+    try {
+      events.error(at);
+      await at.settle();
+      expect(await element(at)).toBe("replay u1");
+      events.ended(at);
+      at.settlePlay("resolve");
+      await at.settle();
+      expect(await element(at)).toBe("replay u2");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("covers every phase and every event", () => {
     expect(Object.keys(table)).toEqual(Object.keys(phases));
