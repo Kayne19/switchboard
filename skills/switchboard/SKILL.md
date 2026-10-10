@@ -107,7 +107,8 @@ Types and their `data` shapes (each type takes only its own shape):
   `return` or `async`; `active: true` lights the one happening now)
 - document: `{subject, paragraphs: [str]}` (each paragraph reads Markdown:
   headings, bold, italic, inline code, lists, fenced code; no HTML)
-- code: `{source: {text}}`
+- code: `{source: {text, language?, highlight?}}` (`language` picks the
+  comment marker; `highlight: [line number]` marks lines, counted from 1)
 - table: `{columns: [{label}], rows: [[cell]]}` (1 to 12 columns, up to 200
   rows, each row one cell per column; a cell is a string, a number or
   `{text, semantic?, bold?}`; `highlight: [row index]` marks rows; the page
