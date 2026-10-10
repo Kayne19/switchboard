@@ -66,7 +66,8 @@ commit.
   documented environment, one fake-executable writer, one skill socket path,
   one frame depth, one set of size caps, CPU-time budgets, no focused
   `.only` test, no user-agent checks, bounded test awaits, no page under
-  the notch, one runtime ID prefix, stage-relative sizes, live paths,
+  the notch, one runtime ID prefix, stage-relative sizes, one writer per lifecycle
+  machine, no new phase fields on a lifecycle owner, live paths,
   routes and settings in the docs); a new rule of that kind gets a check
   there. Both Playwright configs also set `forbidOnly` on CI, so a focused
   spec fails its browser leg.
@@ -175,6 +176,14 @@ commit.
 - One implementation per lifecycle. A fallback is an adapter or an explicit
   refusal, not a second copy of the path kept for "when the real one is
   absent" (see rule 9 in `docs/architecture.md`).
+- A lifecycle is one state type with one transition function. A change that
+  adds a flag, a nullable slot, a timer or a token to a lifecycle owner, or a
+  third copy of its end, extracts the machine first, in its own PR
+  (`docs/architecture.md` rule 9; `codebase-hardening` doctrine 2a). The
+  October 2026 audit traced 32 lifecycle bugs to a field left set in the
+  wrong phase or an end missed on one exit, and each fix had added a flag.
+  `scripts/check_hygiene.mjs` holds each machine to one writer and holds
+  the owners that are not machines yet to the phase fields they have.
 - Tests never touch the network, ElevenLabs, a whisper model, or the real `pi`
   or `ssh`. Fake executables go through `write_executable_script`; PBX tests
   drive transfers through `Prewarm::settled`, which exercises the production

@@ -324,9 +324,190 @@ for (const dir of ["apps/frontend/tests", "apps/host-agent/tests"]) {
 	});
 }
 
+// The two lifecycle checks below are written as functions of a file's text,
+// so each runs on a sample it must refuse and one it must pass (see
+// selfTest) before it runs on the tree (#357 gives every check one).
+// A declaration's members: the lines one brace inside `class Name`,
+// `struct Name` or `interface Name`, comments and string contents removed.
+// Undefined when the declaration is not there or does not close.
+function members(text, name) {
+	const start = text.findIndex((line) => new RegExp(`^\\s*(?:export\\s+)?(?:pub(?:\\([^)]*\\))?\\s+)?(?:class|struct|interface)\\s+${name}\\b`).test(line));
+	if (start < 0) return undefined;
+	const result = [];
+	let depth = 0;
+	let parens = 0;
+	let opened = false;
+	// A field whose type is an object literal spans lines
+	// (`private barrier: {` .. `} | null = null;`): its lines are one member.
+	let spanning = undefined;
+	for (let index = start; index < text.length; index++) {
+		const code = text[index]
+			.replace(/^\s*(?:\/\/|\/?\*).*$/, "")
+			.replace(/\/\/.*$/, "")
+			.replace(/"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '""');
+		if (spanning) spanning.code += ` ${code.trim()}`;
+		// A parameter of a method or constructor is not a member; a
+		// constructor's parameter property (`private x: T`) is.
+		else if (opened && depth === 1 && (parens === 0 || /^\s*(?:private|protected|public)\b/.test(code))) {
+			result.push({ line: index + 1, code });
+			if (/^[^(]*?[\w#]\??!?\s*:[^(]*\{\s*$/.test(code)) spanning = result[result.length - 1];
+		}
+		for (const char of code) {
+			if (char === "{") {
+				depth++;
+				opened = true;
+			} else if (char === "}") depth--;
+			else if (char === "(") parens++;
+			else if (char === ")") parens--;
+		}
+		if (spanning && depth <= 1) spanning = undefined;
+		if (opened && depth === 0) return result;
+	}
+	return undefined;
+}
+
+// A member that says which phase some work is in: a mutable field (not
+// `readonly`; every field of a Rust struct) that is a flag, a nullable or
+// optional slot, an atomic, a timer or task handle, or a token, generation,
+// epoch or attempt counter.
+const phaseField = (code) => {
+	const field = code.match(/^\s*(?:(?:private|protected|public|static|declare|override|pub(?:\([^)]*\))?)\s+)*(#?[A-Za-z_]\w*)(\??)!?\s*([:=].*)$/);
+	if (!field || /^\s*(?:(?:private|protected|public|static|declare|override)\s+)*readonly\b/.test(code)) return false;
+	const [, name, optional, rest] = field;
+	return (
+		optional === "?" ||
+		/(?:token|generation|epoch|attempt)/i.test(name) ||
+		/\bbool(?:ean)?\b|\|\s*(?:null|undefined)\b|\b(?:null|undefined)\s*\||^=\s*(?:true|false|null|undefined)\b|\bOption<|\bAtomic\w+|\b\w*Timer\b|\bTimeout\b|setTimeout|setInterval|\bJoinHandle\b|\bAbortHandle\b|\bAbortController\b/.test(rest)
+	);
+};
+
+// 19. A lifecycle that has become a machine has one writer
+//     (AGENTS.md; doctrine 2a): its state is assigned on one line of its
+//     file, inside the transition function, and each teardown primitive
+//     named in `once` occurs on one line, the phase exit. A row whose
+//     pattern matches nothing fails too, so a rename cannot retire it.
+//     Each machine's pull request adds its row.
+const machines = [
+	// debug-feed (#416): `transition` writes the phase; `leave` closes the socket and clears the timer.
+	{ file: "apps/frontend/src/debug/connection.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.close\(\)/, /clearTimeout\(/] },
+	// mic-ptt (#434): `transition` writes the phase; `stopTracks` is the one place tracks stop.
+	{ file: "apps/frontend/src/runtime/pushToTalk.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/] },
+	// playback (#435): `enter` is the one writer of who holds the element.
+	{ file: "apps/frontend/src/runtime/audioPlayback.ts", writer: /\bthis\.holder\s*=(?!=)/, max: 1, once: [] },
+	// pi-process (#419): `transition` writes the process state. `release` runs on entry
+	// to Closed and from a close that finds it Closed, so it is not a `once`.
+	{ file: "apps/backend/src/pi_client.rs", writer: /\*state\s*=\s*to\b/, max: 1, once: [] },
+	// session-end (#423): `end` is the one writer of a project session's end of life.
+	{ file: "apps/backend/src/project_session.rs", writer: /\*lifecycle\s*=(?!=)/, max: 1, once: [] },
+	// floor-front (#421): `serve` takes the phase `step` gives; `leave` is the one teardown.
+	{ file: "apps/backend/src/floor.rs", writer: /\bphase\s*=\s*next\b/, max: 1, once: [/\bself\.leave\(/] },
+	// host-session (#404): the turn record is written only in `#turnStep`, on its three arms.
+	{ file: "apps/host-agent/src/sessions.ts", writer: /\bt\.turn\s*=(?!=)/, max: 3, once: [] },
+	// daemon-resync (#418): `#step` is the one writer of the keeper's phase.
+	{ file: "apps/host-agent/src/daemon_keeper.ts", writer: /\bthis\.#phase\s*=(?!=)/, max: 1, once: [] },
+	// call-line (#437): `CallLifecycle::step` writes the line; `step_locked` sends every candidate notice.
+	{ file: "apps/backend/src/lifecycle.rs", writer: /\bself\.line\s*=(?!=)/, max: 1, once: [/\bself\.notify_candidate\(/] },
+	// session-turn (#439): `step` is the one writer of a project session's turn phase.
+	{ file: "apps/backend/src/session_turn.rs", writer: /\bself\.phase\s*=(?!=)/, max: 1, once: [] },
+];
+function machineFindings(file, text, machine) {
+	const out = [];
+	const where = (pattern) => text.flatMap((line, index) => (pattern.test(line) ? [index + 1] : []));
+	const writers = where(machine.writer);
+	if (writers.length !== machine.max) out.push(`${file}: state written on ${writers.length} line(s) (${writers.join(", ")}), want ${machine.max}: one transition function (doctrine 2a)`);
+	for (const pattern of machine.once) {
+		const hits = where(pattern);
+		if (hits.length !== 1) out.push(`${file}: ${pattern} on ${hits.length} line(s) (${hits.join(", ")}), want 1: teardown hangs on the phase exit (doctrine 2a)`);
+	}
+	return out;
+}
+
+// 20. The lifecycle owners that are not machines yet do not grow
+//     phase fields (AGENTS.md; doctrine 2a). `fields` is the count on
+//     master when the check landed, and the check wants it exactly: one
+//     more is the flag rule 2a says to extract the machine before adding,
+//     and one fewer lowers the number here, so it cannot creep back. When
+//     an owner becomes a machine, it takes a row in check 19 and keeps its
+//     row here at what is left beside the machine, 0 included: a flag
+//     added next to a machine is the same mistake.
+const owners = [
+	{ file: "apps/frontend/src/hands_free.ts", owner: "HandsFreeController", fields: 13 },
+	{ file: "apps/frontend/src/hands_free.ts", owner: "Capture", fields: 3 },
+	{ file: "apps/frontend/src/runtime/pushToTalk.ts", owner: "PushToTalk", fields: 0 },
+	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 22 },
+	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 2 },
+	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 0 },
+	{ file: "apps/backend/src/lifecycle.rs", owner: "CallLifecycle", fields: 1 },
+	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 6 },
+	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 7 },
+	{ file: "apps/backend/src/floor.rs", owner: "FloorState", fields: 1 },
+	{ file: "apps/host-agent/src/sessions.ts", owner: "Tracked", fields: 5 },
+];
+function ownerFindings(file, text, row) {
+	const body = members(text, row.owner);
+	if (!body) return [`${file}: could not read ${row.owner} (the check needs updating)`];
+	const lines = body.filter((member) => phaseField(member.code)).map((member) => member.line);
+	if (lines.length > row.fields) return [`${file}: ${row.owner} has ${lines.length} phase fields (lines ${lines.join(", ")}), the table allows ${row.fields}: extract the machine first (doctrine 2a)`];
+	if (lines.length < row.fields) return [`${file}: ${row.owner} has ${lines.length} phase fields, fewer than the table's ${row.fields}: lower the number in check 20`];
+	return [];
+}
+
+// Each check runs on a sample it must refuse and one it must pass. A check
+// that finds nothing in its own violation, or something in the clean
+// sample, fails the gate: an edit to its pattern has made it pass all.
+function selfTest(check, run, violation, clean) {
+	if (run(violation.split("\n")).length === 0) findings.push(`self-test: check ${check} finds nothing in its violation sample`);
+	const wrong = run(clean.split("\n"));
+	if (wrong.length > 0) findings.push(`self-test: check ${check} refuses its clean sample: ${wrong[0]}`);
+}
+{
+	const machine = { writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/] };
+	const run = (text) => machineFindings("sample.ts", text, machine);
+	const transition = "class M {\n\tprivate phase: Phase = idle;\n\tdispatch(event) {\n\t\tconst next = step(this.phase, event);\n\t\tif (this.phase === next) return;\n\t\tthis.phase = next;\n\t}\n";
+	selfTest(19, run, `${transition}\tstop() { this.phase = idle; stream.getTracks(); }\n}`, `${transition}\texit() { stream.getTracks(); }\n}`);
+	selfTest(19, run, `${transition}\texit() { stream.getTracks(); }\n\tstop() { stream.getTracks(); }\n}`, `${transition}\texit() { stream.getTracks(); }\n}`);
+	selfTest(19, run, "class M {\n\tprivate state = idle;\n}", `${transition}\texit() { stream.getTracks(); }\n}`);
+}
+{
+	const run = (text) => [...ownerFindings("sample.ts", text, { owner: "Owner", fields: 2 }), ...ownerFindings("sample.rs", text, { owner: "Inner", fields: 2 })];
+	const clean = [
+		"export class Owner {",
+		"\tprivate readonly options: Options;",
+		"\tprivate readonly done: boolean;",
+		"\tprivate stream: MediaStream | null = null; // a slot",
+		"\tprivate count = 0;",
+		"\tprivate runtimeToken = 0;",
+		"\tconstructor(",
+		"\t\tprivate readonly url: string,",
+		"\t\tschedule?: Schedule,",
+		"\t\tfinished: boolean,",
+		"\t) {}",
+		"\tstart(): void {",
+		"\t\tconst starting: boolean = true;",
+		"\t\tthis.handlers = { stopped: false, label: \"}\" };",
+		"\t}",
+		"}",
+		"pub(crate) struct Inner {",
+		"    label: String,",
+		"    /// busy: bool, in a comment",
+		"    busy: AtomicBool,",
+		"    pub(crate) child: Mutex<Option<Child>>,",
+		"}",
+	].join("\n");
+	selfTest(20, run, clean.replace("\tprivate count = 0;", "\tprivate starting = false;"), clean);
+	selfTest(20, run, clean.replace("    label: String,", "    task: Option<JoinHandle<()>>,"), clean);
+	selfTest(20, run, clean.replace("\tprivate count = 0;", "\tprivate barrier: {\n\t\tid: string;\n\t} | null = null;"), clean);
+	selfTest(20, run, clean.replace("\tprivate count = 0;", "\tprivate pending: string | undefined;"), clean);
+	selfTest(20, run, clean.replace("\tprivate count = 0;", "\tprivate attempt = 0;"), clean);
+	selfTest(20, run, clean.replace("\tprivate runtimeToken = 0;", ""), clean);
+	selfTest(20, run, clean.replace("export class Owner {", "export class Renamed {"), clean);
+}
+for (const machine of machines) findings.push(...machineFindings(machine.file, lines(path.join(root, machine.file)), machine));
+for (const row of owners) findings.push(...ownerFindings(row.file, lines(path.join(root, row.file)), row));
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags");
