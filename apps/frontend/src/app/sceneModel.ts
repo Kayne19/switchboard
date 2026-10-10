@@ -152,10 +152,6 @@ export function anchoredNote(notes: Array<SceneObject<NoteData>>, targetId: stri
   return notes.find((note) => note.data.anchor?.target === targetId);
 }
 
-export function primaryObject(state: ControllerState): SceneObject | null {
-  return buildCompositionModel(state).primary;
-}
-
 /** The content types that need a slot of their own to be read. The others
  * (metrics, notes, progress) are small enough for the rail or a compact
  * place in a scene. */
@@ -180,19 +176,24 @@ export function besideVisuals(comp: CompositionModel): SceneObject[] {
 /** The composition a scene is drawn as: one per visual type that can be the primary, named for its type but for the two the page drew first (a chart's training run, a diagram's architecture), and the three that are not a visual's. */
 export type SceneKind = 'idle' | 'conversation' | 'composed' | 'training' | 'architecture' | Exclude<VisualType, 'chart' | 'diagram'>;
 
-export function sceneKind(state: ControllerState): SceneKind {
-  if (state.workspace.effectiveView === 'comms') {
+/**
+ * The scene a composition is drawn as, in the view the workspace is in
+ * (`state.workspace.effectiveView`). It reads the composition the page
+ * built for this render (`SceneRenderer`), never the state: the scene and
+ * its kind cannot disagree on the primary.
+ */
+export function sceneKind(comp: CompositionModel, view: string): SceneKind {
+  if (view === 'comms') {
     return 'conversation';
   }
-  const comp = buildCompositionModel(state);
   if (comp.isGenericComposed) {
     return 'composed';
   }
   const primary = comp.primary;
   if (!primary) {
     if (comp.runtimeConversation) return 'conversation';
-    const legacyMsg = state.order.map((id) => state.objects[id]).find((o) => o?.type === 'message');
-    if (legacyMsg) return 'conversation';
+    // With no agent object on stage, the objects shown are the runtime's.
+    if (comp.runtimeObjects.some((object) => object.type === 'message')) return 'conversation';
     return 'idle';
   }
   if (primary.type === 'message') return 'conversation';

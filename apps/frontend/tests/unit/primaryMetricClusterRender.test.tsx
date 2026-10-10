@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ControllerAction, ControllerState, MetricData, SceneObject } from '../../src/controller/types';
 import { controllerReducer, createInitialState } from '../../src/controller/reducer';
 import { MetricsPrimitive } from '../../src/primitives/MetricsPrimitive';
+import { buildCompositionModel } from '../../src/app/sceneModel';
 import { SceneShell } from '../../src/components/Scenes';
 import { ControllerProvider } from '../../src/controller/context';
 import { mount, stubResizeObserver } from './sceneHarness';
@@ -100,6 +101,7 @@ describe('primary metric cluster rendering', () => {
       <ControllerProvider>
         <SceneShell
           kind="composed"
+          composition={buildCompositionModel(state)}
           state={state}
           onToggleListening={() => {}}
           onFocus={() => {}}
@@ -135,7 +137,7 @@ describe('primary metric cluster rendering', () => {
 
     const host = mount(
       <ControllerProvider>
-        <SceneShell kind="composed" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} />
+        <SceneShell kind="composed" composition={buildCompositionModel(state)} state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} />
       </ControllerProvider>,
     );
 

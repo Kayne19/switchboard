@@ -12,7 +12,7 @@ import type {
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID, RUNTIME_LINE_ERROR_ID } from '../controller/types';
 import { noteTarget, railNoteTarget } from '../app/noteItems';
-import { anchoredNote, besideVisuals, buildCompositionModel, cast, nameFields, objectsOfType, primaryObject, VISUAL_TYPES, type SceneKind } from '../app/sceneModel';
+import { anchoredNote, besideVisuals, cast, nameFields, objectsOfType, VISUAL_TYPES, type CompositionModel, type SceneKind } from '../app/sceneModel';
 import { useLayoutMotion } from '../hooks/useLayoutMotion';
 import { watchElement } from '../hooks/watchElement';
 import { AnnotationCard, type NoteTarget } from '../primitives/AnnotationCard';
@@ -49,6 +49,8 @@ function frameText(data: unknown, field: 'subtitle' | 'context'): string | undef
 export interface SceneProps {
   /** The composition to draw; the shell keeps one page for every kind. */
   kind: SceneKind;
+  /** The composition of `state`, built once for this render (`SceneRenderer`): every scene reads its primary and the visuals beside it from here, so no scene can pick a primary of its own. */
+  composition: CompositionModel;
   state: ControllerState;
   onToggleListening: () => void;
   onFocus: (id: string | null) => void;
@@ -420,7 +422,7 @@ interface SceneContent {
 // `band` is the note the shell has moved from the rail to a band under the
 // charts, where the rail stands under them (SceneShell).
 function trainingContent(
-  { state, onFocus, onOpenHistory }: SceneProps,
+  { state, composition, onFocus, onOpenHistory }: SceneProps,
   railNote: ChartRailNote | null,
   onRailNote: (chartId: string, key: string, away: boolean) => void,
   band: ChartRailNote | null,
@@ -428,7 +430,6 @@ function trainingContent(
   const [firstProgress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
   // The primary is the composition's, the one the screen state and view()
   // name: an ambient chart shown first is not it (sceneKind made it a chart).
-  const composition = buildCompositionModel(state);
   if (composition.primary?.type !== 'chart') return null;
   const primary = cast.chart(composition.primary);
   // The row is in the composition's order too: the primary leads, then its
@@ -558,8 +559,8 @@ function trainingContent(
 // timer or forecast fills the main slot, its note in the rail -- unless the
 // diagram places the note as its own callout -- and every other visual in
 // the aux row under it.
-function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
-  const primary = primaryObject(state);
+function objectContent({ state, composition, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
+  const primary = composition.primary;
   const frame = primary ? sceneFrame(primary) : null;
   if (!primary || !frame) return null;
   const noteObjects = objectsOfType<NoteData>(state, 'note');
@@ -572,7 +573,7 @@ function objectContent({ state, onFocus }: SceneProps, onCalloutChange: (placed:
     ...words,
     // What the shell places around the main slot: the aux row under it
     // (every visual beside the primary) and the rail beside it.
-    aux: besideVisuals(buildCompositionModel(state)),
+    aux: besideVisuals(composition),
     metrics: objectsOfType<MetricData>(state, 'metric'),
     note,
     noteObject,
@@ -822,8 +823,7 @@ function useRailUnder(active: boolean, mainRef: RefObject<HTMLDivElement | null>
 
 // Any mix of objects: the primary, or a cluster of primary metrics, over an
 // aux row of everything the rail does not carry.
-function composedContent({ state, onFocus }: SceneProps): SceneContent | null {
-  const comp = buildCompositionModel(state);
+function composedContent({ state, composition: comp, onFocus }: SceneProps): SceneContent | null {
   const primary = comp.primary;
   if (!primary) return null;
 
@@ -916,9 +916,8 @@ const FALLBACK_MESSAGE: MessageData = {
 // elsewhere; it must not replace the conversation's latest committed
 // response. Before the first response the line carries no text, and this
 // page alone says it is open.
-function ConversationAnswer({ state }: { state: ControllerState }) {
-  const comp = buildCompositionModel(state);
-  const object = comp.runtimeConversation ?? (comp.primary?.type === 'message' ? comp.primary : null);
+function ConversationAnswer({ composition }: { composition: CompositionModel }) {
+  const object = composition.runtimeConversation ?? (composition.primary?.type === 'message' ? composition.primary : null);
   const message = object ? cast.message(object).data : FALLBACK_MESSAGE;
   const segments = message.segments.length > 0 ? message.segments : FALLBACK_MESSAGE.segments;
   return (
@@ -961,7 +960,7 @@ function sceneContent(
  * primary object; a content kind with nothing to show draws the idle page.
  */
 export function SceneShell(props: SceneProps) {
-  const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, behindModal = false } = props;
+  const { kind, composition, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, behindModal = false } = props;
   const isPresent = useIsPresent();
   // A diagram can place its note as a callout beside the node it names; the
   // rail then leaves it out. A chart hands the rail the one note it leaves
@@ -1069,7 +1068,7 @@ export function SceneShell(props: SceneProps) {
         <>
           <ConversationCorners />
           <div className="conversation-presence-band">{presence}</div>
-          <ConversationAnswer state={state} />
+          <ConversationAnswer composition={composition} />
           <TranscriptToggle onOpen={() => setTranscriptOpen(true)} />
           <ToolActivity activity={state.activity} placement="conversation" />
         </>
