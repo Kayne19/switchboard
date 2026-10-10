@@ -175,7 +175,10 @@ the caller was not that specific.
 If the catalog cannot be read at all, a provider-qualified spec is passed
 through (it is unambiguous by construction) and a bare name is refused. A
 thinking suffix such as `provider/model:high` is normalized and retained during
-that fallback and on a context-preserving redial. When discovery succeeds, the
+that fallback and on a context-preserving redial. The suffix is the text after
+the last `:`, and only when it is a thinking level, as pi itself reads
+`provider/id:level`; otherwise the colon is part of the model id
+(`openrouter/qwen/qwen3-coder:free`, `ollama/qwen3:32b:high`). When discovery succeeds, the
 picker contains only the provider-qualified entries from that host's catalog;
 the current entry is retained even if a refreshed catalog no longer lists it.
 
