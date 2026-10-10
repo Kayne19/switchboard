@@ -1,6 +1,8 @@
 use super::*;
 use crate::hosts::Step;
-use crate::pbx::{board_on, board_with, project, serve, transcript, two_model_catalog};
+use crate::pbx::{
+    board_on, board_with, on_alpha, project, says, serve, transcript, two_model_catalog,
+};
 use serde_json::json;
 use std::sync::{Arc, Mutex as StdMutex};
 
@@ -63,5 +65,63 @@ async fn a_delivered_speak_keeps_the_written_turn_reply_silent() {
         log.named("join_call")[0]["token"].as_str().unwrap()
     );
     assert_eq!(log.module_replies()[0]["status"], "delivered");
+    board.shutdown().await;
+}
+
+/// A rescue that lands while a continuing turn runs: the reply belongs to
+/// the generation the turn was admitted at, which the rescue retired.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_continuing_turn_is_not_stamped_with_a_rescue_that_landed_during_it() {
+    // Set once the caller is on alpha, so the intro runs undisturbed.
+    let coordinator = Arc::new(StdMutex::new(None::<crate::lifecycle::Coordinator>));
+    let rescuer = Arc::clone(&coordinator);
+    let (mut board, _log) = on_alpha(
+        &[],
+        Box::new(move |_, _| {
+            if let Some(coordinator) = rescuer.lock().unwrap().as_ref() {
+                coordinator.begin_rescue("test");
+            }
+            says("answer")
+        }),
+    )
+    .await;
+    *coordinator.lock().unwrap() = Some(board.coordinator.clone());
+    let admitted = board.coordinator.generation();
+    let reply = board.handle("hi").await;
+    assert_eq!(reply.text, "answer");
+    assert_eq!(
+        reply.delivery_generation.unwrap_or(admitted),
+        admitted,
+        "the reply took the rescue's generation"
+    );
+    board.shutdown().await;
+}
+
+/// A rescue that lands while a transfer's intro runs: the intro's reply
+/// belongs to the leg the transfer staged, never to the line the rescue
+/// left behind.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_transfer_reply_is_not_stamped_with_a_rescue_that_landed_during_its_intro() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let coordinator = board.coordinator.clone();
+    let _log = serve(
+        &board,
+        Box::new(move |_, _| {
+            coordinator.begin_rescue("test");
+            says("Alpha here.")
+        }),
+    );
+    let admitted = board.coordinator.generation();
+    let reply = board
+        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .await;
+    let rescued = board.coordinator.generation();
+    assert_ne!(
+        reply.delivery_generation.unwrap_or(admitted),
+        rescued,
+        "the intro's reply passes the rescue's generation check"
+    );
     board.shutdown().await;
 }

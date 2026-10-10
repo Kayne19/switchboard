@@ -681,10 +681,18 @@ impl Coordinator {
     /// the work that would have committed or rolled it back, so nothing is
     /// left for a late rollback to restore.
     fn rescue_locked(&self, state: &mut CallLifecycle, reason: String) -> Rescue {
-        let abandoned_candidate = state.candidate.take().map(|candidate| candidate.route);
+        let abandoned = state.candidate.take();
+        // The rescue retires the candidate's generation too, so work stamped
+        // with the abandoned candidate's generation is stale after it.
+        let retired = abandoned
+            .as_ref()
+            .map_or(state.leg.generation, |candidate| {
+                candidate.identity.generation.max(state.leg.generation)
+            });
+        let abandoned_candidate = abandoned.map(|candidate| candidate.route);
         state.startup_rollback = None;
-        let next_token = format!("{}-rescue-{}", state.leg.token, state.leg.generation + 1);
-        state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
+        let next_token = format!("{}-rescue-{}", state.leg.token, retired + 1);
+        state.leg = LegIdentity::new(next_token, retired + 1);
         if state.phase != Phase::Shutdown {
             state.phase = Phase::Quiescing;
             state.operation = None;
@@ -766,7 +774,13 @@ impl Coordinator {
         });
     }
 
-    pub fn begin_candidate(&self, mut candidate: CandidateLeg) -> Result<(), LifecycleError> {
+    /// Stages `candidate` and returns the identity it is staged under, the
+    /// one an adoption puts on the line: its first turn is delivered at that
+    /// generation.
+    pub fn begin_candidate(
+        &self,
+        mut candidate: CandidateLeg,
+    ) -> Result<LegIdentity, LifecycleError> {
         self.linearize(|state| {
             if state.phase == Phase::Shutdown {
                 return Err(LifecycleError::Shutdown);
@@ -790,6 +804,7 @@ impl Coordinator {
             });
             state.phase = Phase::Starting;
             let route = candidate.route.clone();
+            let identity = candidate.identity.clone();
             state.candidate = Some(candidate);
             self.notify_candidate(&CandidateNotice {
                 route,
@@ -797,7 +812,7 @@ impl Coordinator {
                 ended: None,
             });
             self.operation_changed.notify_waiters();
-            Ok(())
+            Ok(identity)
         })
     }
 

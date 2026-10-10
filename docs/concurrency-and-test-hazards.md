@@ -24,6 +24,16 @@ re-check it at their short linearization points: turn dispatch,
 `synthesize_reply_if_current`. `operation_transition` still protects the
 async resource handoff; it is not a second lifecycle authority.
 
+A turn's reply carries the generation of the leg it ran on, never the one
+current when the reply is built: a rescue bumps the generation before it
+aborts the work, so a turn that returns in between would otherwise pass the
+check. A continuing turn's reply is delivered at the generation its operation
+was admitted at; the first turn of a transfer, promotion, takeover or redial,
+at the generation its candidate was staged under (`begin_candidate` returns
+it). A rescue that abandons a candidate retires the candidate's generation as
+well as the line's, so nothing stamped with the abandoned leg's generation
+passes after it.
+
 Two properties are load-bearing and easy to break by accident:
 
 - **The epoch is stamped when a clip is accepted, not when its transcript comes
@@ -89,7 +99,7 @@ lose speech, never misroute it.
 
 Only an adoption carries the marked clips along. A hangup while the leg is
 connecting rescues the call, and a rescue sends the browser the same two
-signals an adoption does: a clear notice and an epoch one higher. Taken for
+signals an adoption does: a clear notice and a higher epoch. Taken for
 an adoption, it re-stamped the caller's words to alpha and they ran as a turn
 on the operator (#70). So `candidate_cleared` names the candidate's `route`
 and says how it ended (`reason`: `adopted`, `rolled_back`, or `rescued`), and

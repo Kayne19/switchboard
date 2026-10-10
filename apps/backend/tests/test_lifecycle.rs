@@ -55,9 +55,11 @@ fn candidate_notices_track_startup_adopt_rollback_and_rescue() {
                 generation: 0,
                 ended: None,
             },
+            // The rescue retires the candidate's generation (1) as well
+            // as the line's (0).
             CandidateNotice {
                 route: "alpha".into(),
-                generation: 1,
+                generation: 2,
                 ended: Some(CandidateEnd::Rescued),
             },
         ]
@@ -514,11 +516,12 @@ fn the_adoption_is_on_the_line_until_the_leg_is_replaced() {
     call.return_to_operator();
     assert_eq!(call.generation_and_adoption(), (1, None));
 
-    // A candidate rescued while it starts was never adopted.
+    // A candidate rescued while it starts was never adopted, and the rescue
+    // retires its generation (1) too.
     let call = coordinator();
     call.begin_candidate(alpha_candidate()).unwrap();
     call.begin_rescue("hangup");
-    assert_eq!(call.generation_and_adoption(), (1, None));
+    assert_eq!(call.generation_and_adoption(), (2, None));
 }
 
 // Issue #77: a return to the operator kept the project leg's identity, so a
