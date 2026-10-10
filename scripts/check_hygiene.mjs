@@ -386,9 +386,25 @@ const phaseField = (code) => {
 //     file, inside the transition function, and each teardown primitive
 //     named in `once` occurs on one line, the phase exit. A row whose
 //     pattern matches nothing fails too, so a rename cannot retire it.
-//     Each machine's pull request adds its row; none has landed yet.
+//     Each machine's pull request adds its row.
 const machines = [
-	// { file: "apps/frontend/src/hands_free.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/] },
+	// debug-feed (#416): `transition` writes the phase; `leave` closes the socket and clears the timer.
+	{ file: "apps/frontend/src/debug/connection.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.close\(\)/, /clearTimeout\(/] },
+	// mic-ptt (#434): `transition` writes the phase; `stopTracks` is the one place tracks stop.
+	{ file: "apps/frontend/src/runtime/pushToTalk.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/] },
+	// playback (#435): `enter` is the one writer of who holds the element.
+	{ file: "apps/frontend/src/runtime/audioPlayback.ts", writer: /\bthis\.holder\s*=(?!=)/, max: 1, once: [] },
+	// pi-process (#419): `transition` writes the process state. `release` runs on entry
+	// to Closed and from a close that finds it Closed, so it is not a `once`.
+	{ file: "apps/backend/src/pi_client.rs", writer: /\*state\s*=\s*to\b/, max: 1, once: [] },
+	// session-end (#423): `end` is the one writer of a project session's end of life.
+	{ file: "apps/backend/src/project_session.rs", writer: /\*lifecycle\s*=(?!=)/, max: 1, once: [] },
+	// floor-front (#421): `serve` takes the phase `step` gives; `leave` is the one teardown.
+	{ file: "apps/backend/src/floor.rs", writer: /\bphase\s*=\s*next\b/, max: 1, once: [/\bself\.leave\(/] },
+	// host-session (#404): the turn record is written only in `#turnStep`, on its three arms.
+	{ file: "apps/host-agent/src/sessions.ts", writer: /\bt\.turn\s*=(?!=)/, max: 3, once: [] },
+	// daemon-resync (#418): `#step` is the one writer of the keeper's phase.
+	{ file: "apps/host-agent/src/daemon_keeper.ts", writer: /\bthis\.#phase\s*=(?!=)/, max: 1, once: [] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
@@ -407,19 +423,21 @@ function machineFindings(file, text, machine) {
 //     master when the check landed, and the check wants it exactly: one
 //     more is the flag rule 2a says to extract the machine before adding,
 //     and one fewer lowers the number here, so it cannot creep back. When
-//     an owner becomes a machine, its row moves to check 19.
+//     an owner becomes a machine, it takes a row in check 19 and keeps its
+//     row here at what is left beside the machine, 0 included: a flag
+//     added next to a machine is the same mistake.
 const owners = [
 	{ file: "apps/frontend/src/hands_free.ts", owner: "HandsFreeController", fields: 13 },
-	{ file: "apps/frontend/src/hands_free.ts", owner: "Capture", fields: 4 },
-	{ file: "apps/frontend/src/runtime/pushToTalk.ts", owner: "PushToTalk", fields: 4 },
-	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 21 },
-	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 15 },
-	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 5 },
+	{ file: "apps/frontend/src/hands_free.ts", owner: "Capture", fields: 3 },
+	{ file: "apps/frontend/src/runtime/pushToTalk.ts", owner: "PushToTalk", fields: 0 },
+	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 22 },
+	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 2 },
+	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 0 },
 	{ file: "apps/backend/src/lifecycle.rs", owner: "CallLifecycle", fields: 8 },
-	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 7 },
-	{ file: "apps/backend/src/pi_client.rs", owner: "ProjectInner", fields: 14 },
+	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 6 },
+	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 11 },
 	{ file: "apps/backend/src/floor.rs", owner: "FloorState", fields: 1 },
-	{ file: "apps/host-agent/src/sessions.ts", owner: "Tracked", fields: 7 },
+	{ file: "apps/host-agent/src/sessions.ts", owner: "Tracked", fields: 5 },
 ];
 function ownerFindings(file, text, row) {
 	const body = members(text, row.owner);
