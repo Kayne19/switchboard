@@ -208,6 +208,21 @@ button {
   text-align: inherit;
   cursor: zoom-in;
 }
+/* The surface's own button (FocusableSurface): a tab stop with a name and
+   nothing drawn of it but the page's ring, over the surface. It stands out
+   of the surface's flow, over all of it, so focus brings the whole surface
+   and its ring into view as it did the surface itself; it takes no tap, so
+   a tap, and a screen reader's touch, reach what the surface holds. */
+.focusable-content__expand {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
 /* The page's focus ring (DESIGN_SYSTEM.md, "Focus ring"): every control the
    keyboard reaches draws one orange line, never the browser's own ring, and
    no box clips it. A control draws it a little off itself. */
@@ -260,13 +275,13 @@ button {
    own, a source's, would cover its outline); a calendar's paged days over
    their rims and the hours' own; a list's or a drawing's scroll over its
    rims and its pinned head, on the port or view it scrolls in. */
-.focusable-content:focus-visible,
+.focusable-content__expand:focus-visible,
 .calendar-pages:focus-visible,
 .list-viewport__scroll:focus-visible,
 .drawing-viewport__scroll:focus-visible {
   outline: none;
 }
-.focusable-content:focus-visible::after,
+.focusable-content:has(> .focusable-content__expand:focus-visible)::after,
 .calendar-pages:focus-visible::after,
 .list-viewport__port:has(> .list-viewport__scroll:focus-visible)::after,
 .drawing-viewport__view:has(> .drawing-viewport__scroll:focus-visible)::after {
@@ -4310,10 +4325,11 @@ button {
   display: grid;
   grid-template-rows: max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px));
 }
-.calendar-object > .focusable-content > *,
-.tasks-object > .focusable-content > *,
-.inbox-object > .focusable-content > *,
-.image-object > .focusable-content > * {
+/* What the surface holds, not its own button, which stands over all of it. */
+.calendar-object > .focusable-content > :not(.focusable-content__expand),
+.tasks-object > .focusable-content > :not(.focusable-content__expand),
+.inbox-object > .focusable-content > :not(.focusable-content__expand),
+.image-object > .focusable-content > :not(.focusable-content__expand) {
   grid-row: 2;
   min-height: 0;
 }
@@ -5656,7 +5672,7 @@ button {
     grid-template-rows: minmax(0, 1fr) max(8px, var(--panel-inset));
     padding: 14px 8px 0;
   }
-  .chart-object > .focusable-content > * {
+  .chart-object > .focusable-content > :not(.focusable-content__expand) {
     grid-row: 1;
     min-height: 0;
   }

@@ -35,7 +35,7 @@ for (const geometry of FRAME_GEOMETRIES) {
 
     test('focus moves into the layer, Tab stays in it, and closing gives focus back to the surface that opened it', async ({ page }) => {
       await openScene(page, 'results');
-      const surface = page.locator('.content-main .focusable-content[role="button"]').first();
+      const surface = page.locator('.content-main .focusable-content__expand').first();
       await surface.focus();
       await page.keyboard.press('Enter');
       await expect(page.locator('.focus-layer')).toBeVisible();
@@ -63,7 +63,7 @@ for (const geometry of FRAME_GEOMETRIES) {
 
     test('focus the agent opens while a surface holds focus gives it back to that surface', async ({ page }) => {
       await openScene(page, 'results');
-      const surface = page.locator('.content-main .focusable-content[role="button"]').first();
+      const surface = page.locator('.content-main .focusable-content__expand').first();
       await surface.focus();
       // The agent's update, not a key or a click: React runs its passive
       // effects after the browser has blurred the now inert surface.
@@ -94,7 +94,7 @@ test.describe('normal motion', () => {
   test('closing gives focus back to the surface that opened it', async ({ page }) => {
     await openScene(page, 'results');
     await page.waitForTimeout(600);
-    const surface = page.locator('.content-main .focusable-content[role="button"]').first();
+    const surface = page.locator('.content-main .focusable-content__expand').first();
     await surface.focus();
     await page.keyboard.press('Enter');
     await expect(page.locator('.focus-layer__return')).toBeFocused();
@@ -107,7 +107,7 @@ test.describe('normal motion', () => {
   test('closing while the layer still grows gives focus back once the slot shows again', async ({ page }) => {
     await openScene(page, 'results');
     await page.waitForTimeout(600);
-    const surface = page.locator('.content-main .focusable-content[role="button"]').first();
+    const surface = page.locator('.content-main .focusable-content__expand').first();
     await surface.focus();
     await page.keyboard.press('Enter');
     await expect(page.locator('.focus-layer__return')).toBeFocused();

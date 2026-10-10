@@ -383,7 +383,8 @@ describe('the panel frame round a calendar', () => {
     expect(declared('.calendar-object .focusable-content', '--slot-top')).toEqual([]);
     expect(declared('.calendar-object .focusable-content', '--slot-bottom')).toEqual([]);
     expect(declared('.calendar-object .focusable-content', 'padding')).toEqual(['0 clamp(18px, 2.2cqw, 38px)']);
-    expect(declared(`${slot} > *`, 'grid-row')).toEqual(['2']);
+    // What the slot holds, not the surface's own button, which covers it all (#269).
+    expect(declared(`${slot} > :not(.focusable-content__expand)`, 'grid-row')).toEqual(['2']);
   });
 
   it('keeps it clear of the steps of an aux cell as tall as the aux row may grow, in an inset the row is asked for', () => {
