@@ -282,8 +282,8 @@ export class AudioPlayback {
     // A repeat of what is already set retires nothing: every reconnect's
     // `hello_ack` arrives here, and clearing would cut the clip playing.
     if (enabled === this.mseEnabled) return;
-    this.mseEnabled = enabled;
-    if (!enabled) this.clearMsePlayback();
+    if (enabled) this.mseEnabled = true;
+    else this.mseStop(null);
   }
 
   /**
@@ -579,8 +579,7 @@ export class AudioPlayback {
       this.queueMseFallback(utterance);
       if (this.mseActive === utterance) this.mseActive = null;
       this.msePending = null;
-      if (!this.playing && !this.playbackOwner && this.gapTimer === null)
-        this.playNext();
+      this.playReplayIfIdle();
       this.notifyPlaybackChange();
       return;
     }
@@ -613,6 +612,21 @@ export class AudioPlayback {
     URL.revokeObjectURL(owner.url);
     this.playing = false;
     this.notifyPlaybackChange();
+  }
+
+  /**
+   * Starts the next whole replay if nothing holds the element: no replay, no
+   * stream still playing out, no pause between messages.
+   */
+  private playReplayIfIdle(): void {
+    if (
+      this.audioQueue.length &&
+      !this.playing &&
+      !this.playbackOwner &&
+      !this.mseActive &&
+      this.gapTimer === null
+    )
+      this.playNext();
   }
 
   private consumeOwner(owner: PlaybackOwner): void {
@@ -843,39 +857,60 @@ export class AudioPlayback {
     this.playing = false;
     if (utterance.url) URL.revokeObjectURL(utterance.url);
     if (this.mseQueue.length) this.afterGap(() => this.mseStartNext());
+    // Streaming stopped while this one played out (`mseStop`): what queued
+    // behind it waits as whole replays.
+    else if (this.audioQueue.length) this.afterGap(() => this.playReplayIfIdle());
     this.notifyPlaybackChange();
   }
 
   private mseFail(utterance: MseUtterance, error: unknown): void {
     if (utterance.failed) return;
     utterance.failed = true;
-    const player = this.player;
-    if (this.mseActive === utterance) {
-      this.clearProgressWatch();
-      this.stopEnvelopeMeter();
-      this.playing = false;
-      this.notifyPlaybackChange();
-      this.mseDetach(utterance);
-      player.pause();
-      player.removeAttribute("src");
-      player.load();
-      if (utterance.url) URL.revokeObjectURL(utterance.url);
-      utterance.url = null;
-    }
     this.options.onStatus(
       "Streaming audio failed; using the complete replay (" +
         mediaErrorName(error) +
         ").",
       true,
     );
-    this.mseEnabled = false;
     this.mseRefused = true;
-    if (utterance.done && this.mseActive === utterance) {
-      this.queueMseFallback(utterance);
-      this.mseActive = null;
-      if (!this.playing && !this.playbackOwner && this.gapTimer === null)
-        this.playNext();
+    this.mseStop(utterance);
+  }
+
+  /**
+   * Streaming stops here, because `failed` could not be streamed or because
+   * the service turned it off. This is the one place that happens, and
+   * nothing it held is lost (#259): every utterance goes on as a whole
+   * replay, in order. One that is complete is queued now; one still
+   * arriving falls back on its `audio_done`. A complete stream that did not
+   * fail plays out, and the replays follow it (`mseFinished`). A replay that
+   * owns the element is left alone.
+   */
+  private mseStop(failed: MseUtterance | null): void {
+    this.mseEnabled = false;
+    const active = this.mseActive;
+    if (active && (active === failed || !active.done)) {
+      // Its bytes can no longer go in: take it off the element.
+      active.failed = true;
+      this.clearProgressWatch();
+      this.stopEnvelopeMeter();
+      this.playing = false;
+      this.notifyPlaybackChange();
+      this.mseDetach(active);
+      const player = this.player;
+      player.pause();
+      player.removeAttribute("src");
+      player.load();
+      if (active.url) URL.revokeObjectURL(active.url);
+      active.url = null;
+      if (active.done) {
+        this.queueMseFallback(active);
+        this.mseActive = null;
+      }
     }
+    for (const utterance of this.mseQueue)
+      if (utterance.done) this.queueMseFallback(utterance);
+    this.mseQueue = [];
+    this.playReplayIfIdle();
     this.notifyPlaybackChange();
   }
 
@@ -962,6 +997,18 @@ export class AudioPlayback {
     // already on, so an engine that refuses the source says so and the whole
     // replay follows.
     player.src = utterance.url;
+    // An engine can also leave the source `closed` and set no error (WebKit
+    // with a bare page, #203). Nothing appends then, so the watch `msePlay`
+    // arms never starts, and the call heard nothing with nothing said
+    // (#259). This one holds once the source is open and waiting for bytes;
+    // the first append re-arms it as the stream's own.
+    this.watchProgress(
+      () => {
+        if (this.mseActive === utterance && !utterance.failed)
+          this.mseFail(utterance, new Error("MediaSource did not open"));
+      },
+      () => utterance.buffer !== null,
+    );
   }
 
   /** Takes an utterance's element handlers back off the element. */
