@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import type { MessageData } from '../controller/types';
+import { usePinnedScroll } from '../hooks/usePinnedScroll';
 import { RichText } from '../primitives/RichText';
 
 type TranscriptLine = NonNullable<MessageData['transcript']>[number];
@@ -58,24 +59,40 @@ export function transcriptSpeaker(line: TranscriptLine): string {
 }
 
 function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
-  const bodyRef = useRef<HTMLDivElement>(null);
   // The newest turn is the one the caller opened the history to see, and a
-  // typed turn arrives here as the server's echo of it.
-  useEffect(() => {
-    const body = bodyRef.current;
-    if (body) body.scrollTop = body.scrollHeight;
-  }, [lines.length]);
+  // typed turn arrives here as the server's echo of it: the body follows the
+  // newest line as the live log does, and stays where the caller scrolled up
+  // to while they reread (#267). It keys on the lines, not on their count,
+  // which stops changing once the page's history holds its 200 lines.
+  const { ref, onScroll } = usePinnedScroll<HTMLDivElement>(lines);
+  const rowKey = useRowKeys();
 
   return (
-    <div className="transcript__body" ref={bodyRef}>
-      {lines.map((line, index) => (
-        <div className={`transcript-line${line.speaker === 'DAMOCLES' ? ' transcript-line--ai' : ''}`} key={`${index}-${line.speaker}`}>
+    <div className="transcript__body" ref={ref} onScroll={onScroll}>
+      {lines.map((line) => (
+        <div className={`transcript-line${line.speaker === 'DAMOCLES' ? ' transcript-line--ai' : ''}`} key={rowKey(line)}>
           <span className="transcript-line__speaker tech micro">{transcriptSpeaker(line)}</span>
           <div className="transcript-line__text"><RichText segments={[{ text: line.text }]} allowLinks /></div>
         </div>
       ))}
     </div>
   );
+}
+
+// A row's key is its line's: the page's history hands over the same line
+// object in each new window of it, so dropping the oldest line keeps every
+// other row instead of renumbering, and remounting, all of them (#267).
+function useRowKeys(): (line: TranscriptLine) => number {
+  const keys = useRef(new WeakMap<TranscriptLine, number>());
+  const next = useRef(0);
+  return (line) => {
+    let key = keys.current.get(line);
+    if (key === undefined) {
+      key = next.current++;
+      keys.current.set(line, key);
+    }
+    return key;
+  };
 }
 
 // The draft stays in the field until the runtime has put it on the socket, so

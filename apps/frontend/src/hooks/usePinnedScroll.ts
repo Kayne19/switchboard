@@ -28,6 +28,8 @@ function pinTop(element: HTMLElement): number {
  * lines can be read while new ones arrive, and scrolling back down pins it
  * again. `content` is what the log renders; a change to it is new content.
  * A surface that is not a log (`enabled` false) is left where it is.
+ * The live response's log (`SpokenLog`) and the history drawer
+ * (`TranscriptDrawer`) both follow their newest line through it.
  */
 export function usePinnedScroll<T extends HTMLElement>(content: unknown, enabled = true) {
   const ref = useRef<T>(null);
