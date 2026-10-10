@@ -254,9 +254,38 @@ for (const dir of ["apps/frontend/tests", "apps/host-agent/tests"]) {
 	}
 }
 
+// 15. A backend test waits on a channel, a Notify, a watch, a stream, a
+//     oneshot or a task's JoinHandle through within()
+//     (apps/backend/src/main.rs), which fails the test by name after a
+//     generous deadline. libtest has no per-test timeout, so a bare await
+//     whose wake-up is lost hangs cargo test forever with no output (#338).
+//     A handle aborted on the line before is not waited on. A fake that is
+//     meant to wait as long as its test says so on the line before:
+//     `// unbounded: <why>`.
+{
+	// `.recv()`, `.next()`, `.notified()`, `.changed()`, or a bare name (a
+	// oneshot receiver, a JoinHandle), awaited on the same line or, split by
+	// rustfmt, on the next.
+	const wait = /(?:\.(?:recv|next|notified|changed)\(\)|(?<![.\w])([a-z_]\w*))/;
+	const sameLine = new RegExp(`${wait.source}\\s*\\.await\\b`);
+	const lineEnd = new RegExp(`${wait.source}$`);
+	for (const file of files(path.join(root, "apps/backend/tests"), new Set([".rs"]))) {
+		const text = lines(file);
+		text.forEach((line, index) => {
+			const before = text[index - 1] ?? "";
+			const match = sameLine.exec(line) ?? (/^\s*\.await\b/.test(text[index + 1] ?? "") ? lineEnd.exec(line.trimEnd()) : null);
+			if (!match) return;
+			// Inside a timeout(..., async { loop { ... } }) the wait is bounded.
+			const bounded = text.slice(Math.max(0, index - 3), index + 1).some((near) => /\b(?:within|timeout)\(/.test(near));
+			const aborted = match[1] !== undefined && before.includes(`${match[1]}.abort()`);
+			if (!bounded && !aborted && !/\/\/ unbounded: \S/.test(before)) findings.push(`${rel(file)}:${index + 1}: a test await with no deadline (wrap it in within(), or mark a fake \`// unbounded: <why>\`)`);
+		});
+	}
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits");

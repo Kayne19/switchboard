@@ -219,6 +219,32 @@ impl Config {
     }
 }
 
+/// How long a test waits on a channel, a `Notify`, a watch, a stream, a
+/// oneshot or a spawned task before it fails. A hang detector, not a timing
+/// assertion: generous, so a loaded machine does not trip it.
+#[cfg(test)]
+const TEST_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Awaits `future`, or fails the test once `TEST_WAIT` has passed, naming
+/// `what` and the caller's line. libtest has no per-test timeout, so a bare
+/// await whose wake-up is lost hangs `cargo test` forever with no output;
+/// through this it is a failure with a name (#338). `scripts/check_hygiene.mjs`
+/// holds the tests in `apps/backend/tests` to it.
+#[cfg(test)]
+#[track_caller]
+pub(crate) fn within<F: std::future::Future>(
+    what: &'static str,
+    future: F,
+) -> impl std::future::Future<Output = F::Output> {
+    let caller = std::panic::Location::caller();
+    async move {
+        match tokio::time::timeout(TEST_WAIT, future).await {
+            Ok(output) => output,
+            Err(_) => panic!("{caller}: waited {TEST_WAIT:?} on {what}"),
+        }
+    }
+}
+
 /// The one lookup every setting goes through, so `docs/environment.md`'s
 /// "Blank means unset" has a single owner: a missing value and one that is
 /// blank after trimming are both `None`, and a present value comes back

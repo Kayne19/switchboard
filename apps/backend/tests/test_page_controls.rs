@@ -14,6 +14,7 @@ use crate::pbx::{Switchboard, OPERATOR};
 use crate::pi_client::{LegSession, PiSession};
 use crate::registry::Registry;
 use crate::turns::alpha_caller_turn_in_flight;
+use crate::within;
 use axum::http::{Method, StatusCode};
 use axum::response::Response;
 use http_body_util::BodyExt;
@@ -52,13 +53,13 @@ async fn page_rescue_aborts_work_before_waiting_for_the_pbx_lock() {
         .lock()
         .await
         .insert(abort.id(), abort);
-    locked_rx.await.unwrap();
+    within("locked_rx", locked_rx).await.unwrap();
 
     let interrupted = timeout(Duration::from_secs(1), interrupt_active_turn(&state))
         .await
         .expect("rescue should not wait for the wedged turn");
     assert_eq!(interrupted.as_deref(), Some(OPERATOR));
-    assert!(turn.await.unwrap_err().is_cancelled());
+    assert!(within("turn", turn).await.unwrap_err().is_cancelled());
     assert!(!session.alive().await);
     assert!(timeout(Duration::from_secs(1), state.0.switchboard.lock())
         .await
@@ -83,7 +84,7 @@ async fn newer_page_control_supersedes_setup_before_a_session_exists() {
     .await
     .unwrap();
 
-    assert!(first.await.unwrap_err().is_cancelled());
+    assert!(within("first", first).await.unwrap_err().is_cancelled());
     clear_active_operation(&state, first_id).await;
     assert_eq!(
         timeout(Duration::from_secs(1), second)
@@ -350,7 +351,7 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
 
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body, json!({"hungup":true, "left":"alpha"}));
-    assert!(turn.await.unwrap_err().is_cancelled());
+    assert!(within("turn", turn).await.unwrap_err().is_cancelled());
     assert!(!incoming.alive().await);
     until_named(&host, "kill").await;
     // The operator was never the one hung up on: its process is the live
@@ -492,7 +493,7 @@ async fn hanging_up_a_project_leg_from_the_page_does_not_wait_for_its_turn() {
     })
     .await
     .unwrap();
-    locked_rx.await.unwrap();
+    within("locked_rx", locked_rx).await.unwrap();
     let (mut connection, _, _) = state.register_connection().await;
     let before = state.0.coordinator.generation();
 
@@ -505,7 +506,7 @@ async fn hanging_up_a_project_leg_from_the_page_does_not_wait_for_its_turn() {
 
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body, json!({"hungup":true, "left":"alpha"}));
-    assert!(wedged.await.unwrap_err().is_cancelled());
+    assert!(within("wedged", wedged).await.unwrap_err().is_cancelled());
     assert!(!project.alive().await, "alpha was left running");
     assert_eq!(state.0.coordinator.route(), OPERATOR);
     assert_eq!(current_status(&state).route, OPERATOR);
@@ -691,7 +692,7 @@ async fn a_picker_on_the_operator_answers_without_touching_its_turn() {
         .lock()
         .await
         .insert(abort.id(), abort);
-    locked_rx.await.unwrap();
+    within("locked_rx", locked_rx).await.unwrap();
     let generation = state.0.coordinator.generation();
 
     for (path, body, told, error) in [
@@ -757,7 +758,7 @@ async fn a_picker_model_change_cancels_a_wedged_turn_and_keeps_the_session() {
             json!({"model":"anthropic/next", "error":null})
         )
     );
-    assert!(turn.await.unwrap_err().is_cancelled());
+    assert!(within("turn", turn).await.unwrap_err().is_cancelled());
     // The same session, changed in place: its turn was aborted, not ended.
     let swapped = state
         .0
@@ -832,7 +833,7 @@ async fn a_picker_redial_decided_for_a_leg_the_caller_has_left_cancels_nothing()
         },
     );
 
-    let (code, answer) = request.await.unwrap();
+    let (code, answer) = within("request", request).await.unwrap();
 
     assert_eq!(
         (code, answer),
@@ -866,9 +867,10 @@ async fn a_picker_redial_whose_leg_is_left_after_its_rescue_is_refused() {
     let mover = tokio::spawn(async move {
         let board = mover_state.0.switchboard.lock();
         let _ = queued_tx.send(());
+        // unbounded: inside the spawned mover; the test bounds `mover` itself.
         board.await.force_hangup().await
     });
-    queued_rx.await.unwrap();
+    within("queued_rx", queued_rx).await.unwrap();
 
     let (code, answer) = timeout(
         Duration::from_secs(5),
@@ -889,8 +891,11 @@ async fn a_picker_redial_whose_leg_is_left_after_its_rescue_is_refused() {
             json!({"detail":"model change was superseded"})
         )
     );
-    assert!(turn.await.unwrap_err().is_cancelled());
-    assert_eq!(mover.await.unwrap().as_deref(), Some("alpha"));
+    assert!(within("turn", turn).await.unwrap_err().is_cancelled());
+    assert_eq!(
+        within("mover", mover).await.unwrap().as_deref(),
+        Some("alpha")
+    );
     assert_eq!(state.0.coordinator.route(), OPERATOR);
     assert!(call.host.named("set_model").is_empty());
     until_named(&call.host, "kill").await;
@@ -977,7 +982,7 @@ async fn queue_a_clip_while_a_page_control_starts_a_leg(
     let control = tokio::spawn(async move {
         hold_turn_lock(&control_state, Some(locked_tx)).await;
     });
-    locked_rx.await.unwrap();
+    within("locked_rx", locked_rx).await.unwrap();
     cancel_active_operations(state).await;
     begin_alpha_candidate(state, "alpha-leg");
 
@@ -1218,6 +1223,6 @@ async fn wedge_a_turn(state: &AppState) -> JoinHandle<()> {
         .lock()
         .await
         .insert(abort.id(), abort);
-    locked_rx.await.unwrap();
+    within("locked_rx", locked_rx).await.unwrap();
     turn
 }

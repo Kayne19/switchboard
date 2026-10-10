@@ -65,10 +65,10 @@ commit.
   a grep can check (private modules, no lint allowances, one `Config`, a
   documented environment, one fake-executable writer, one skill socket path,
   one frame depth, one set of size caps, CPU-time budgets, no focused
-  `.only` test, no user-agent checks, live paths, routes and settings in
-  the docs); a new rule of that kind gets a check there. Both Playwright
-  configs also set `forbidOnly` on CI, so a focused spec fails its
-  browser leg.
+  `.only` test, no user-agent checks, bounded test awaits, live paths,
+  routes and settings in the docs); a new rule of that kind gets a
+  check there. Both Playwright configs also set `forbidOnly` on CI, so a
+  focused spec fails its browser leg.
 - CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
   `npm run test:browser` (every spec in `apps/frontend/tests/visual` but
   the pixel goldens, which are tagged `@golden`) and `npm run
@@ -134,6 +134,13 @@ commit.
   refuses `performance.now`, `Date.now` and `process.hrtime` in
   `apps/frontend/tests/unit` outside `cpuTime.ts`, and in
   `apps/host-agent/tests`.
+- A backend test awaits a channel, a `Notify`, a watch, a stream, a
+  oneshot or a task's `JoinHandle` through `within`
+  (`apps/backend/src/main.rs`), which fails it by name after 10
+  seconds: libtest has no per-test timeout, and a lost wake-up behind a bare
+  await hangs `cargo test` with no output (`docs/concurrency-and-test-hazards.md`,
+  "A test await with no deadline"). `scripts/check_hygiene.mjs` refuses a
+  bare one in `apps/backend/tests`.
 - Keep the backend module layout: one concern per file in `apps/backend/src/`,
   no new module layers until something concrete needs one.
 - The backend's modules are private (`mod`, not `pub mod`, in `main.rs`), and

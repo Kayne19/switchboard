@@ -3,6 +3,7 @@
 use super::*;
 use crate::app_state::AppState;
 use crate::registry::Registry;
+use crate::within;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use http_body_util::BodyExt;
@@ -389,15 +390,18 @@ async fn hosts_ignore_frames_from_a_fenced_link() {
     let (newer, _newer_frames) = mpsc::unbounded_channel();
     assert_eq!(hosts.admit(hello("hello"), newer), Ok(2));
     // The older link got its welcome, then the fence.
-    assert!(matches!(older_frames.recv().await, Some(Message::Text(_))));
     assert!(matches!(
-        older_frames.recv().await,
+        within("older_frames", older_frames.recv()).await,
+        Some(Message::Text(_))
+    ));
+    assert!(matches!(
+        within("older_frames", older_frames.recv()).await,
         Some(Message::Close(Some(CloseFrame {
             code: CLOSE_FENCED,
             ..
         })))
     ));
-    assert!(older_frames.recv().await.is_none());
+    assert!(within("older_frames", older_frames.recv()).await.is_none());
 
     // An event and a `synced` still in flight on the fenced link change nothing.
     hosts.on_frame(

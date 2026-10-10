@@ -1,4 +1,5 @@
 use super::*;
+use crate::within;
 use serde_json::json;
 
 fn examples() -> Vec<(&'static str, DebugEvent)> {
@@ -538,9 +539,9 @@ async fn a_feed_skips_live_frames_its_snapshot_already_holds() {
         last_seq: snapshot.last_seq,
         last_resync: None,
     };
-    assert_eq!(live_seq(feed.next().await), 3);
+    assert_eq!(live_seq(within("feed", feed.next()).await), 3);
     bus.publish(host_link(4));
-    assert_eq!(live_seq(feed.next().await), 4);
+    assert_eq!(live_seq(within("feed", feed.next()).await), 4);
 }
 
 #[tokio::test]
@@ -550,7 +551,7 @@ async fn an_attached_feed_starts_exactly_after_its_snapshot() {
     let (mut feed, snapshot) = Feed::attach(bus.clone());
     assert_eq!(snapshot.last_seq, 1);
     bus.publish(host_link(2));
-    assert_eq!(live_seq(feed.next().await), 2);
+    assert_eq!(live_seq(within("feed", feed.next()).await), 2);
 }
 
 #[tokio::test]
@@ -561,13 +562,13 @@ async fn a_lagging_feed_resyncs_with_one_fresh_snapshot_and_no_stale_replay() {
     for n in 0..total as usize {
         bus.publish(host_link(n));
     }
-    let Some(Outgoing::Snapshot(snapshot)) = feed.next().await else {
+    let Some(Outgoing::Snapshot(snapshot)) = within("feed", feed.next()).await else {
         panic!("expected a resync snapshot")
     };
     assert_eq!(snapshot.last_seq, total);
     assert_eq!(snapshot.events.len(), total as usize);
     bus.publish(host_link(0));
-    assert_eq!(live_seq(feed.next().await), total + 1);
+    assert_eq!(live_seq(within("feed", feed.next()).await), total + 1);
 }
 
 mod wire {
@@ -1180,14 +1181,20 @@ async fn a_feed_that_lags_twice_within_the_interval_is_closed() {
     };
     let (mut feed, _) = Feed::attach(bus.clone());
     lag(&bus);
-    assert!(matches!(feed.next().await, Some(Outgoing::Snapshot(_))));
+    assert!(matches!(
+        within("feed", feed.next()).await,
+        Some(Outgoing::Snapshot(_))
+    ));
     // Behind again once the interval has passed: one more resync.
     feed.last_resync = Some(Instant::now() - RESYNC_INTERVAL - Duration::from_millis(1));
     lag(&bus);
-    assert!(matches!(feed.next().await, Some(Outgoing::Snapshot(_))));
+    assert!(matches!(
+        within("feed", feed.next()).await,
+        Some(Outgoing::Snapshot(_))
+    ));
     // Behind again within it: closed.
     lag(&bus);
-    assert!(feed.next().await.is_none());
+    assert!(within("feed", feed.next()).await.is_none());
 }
 
 #[test]

@@ -15,6 +15,7 @@ use crate::pbx::{Switchboard, OPERATOR};
 use crate::pi_client::{AgentCall, LegSession, PiSession, ProjectTurn};
 use crate::registry::Registry;
 use crate::router::Decision;
+use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
@@ -160,7 +161,7 @@ async fn steer_rechecks_generation_under_the_active_session_guard() {
         )
         .await;
     });
-    responded.notified().await;
+    within("responded", responded.notified()).await;
     state.0.coordinator.begin_rescue("test rescue");
     drop(active_guard);
     dispatch.await.expect("dispatch");
@@ -350,7 +351,7 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
         .expect("a slow host query does not hold the PBX lock");
     drop(guard);
     host.disconnect_fake("scriptorium");
-    let _ = routing
+    let _ = within("routing", routing)
         .await
         .expect("routing completed after the host link closed");
     state.0.switchboard.lock().await.shutdown().await;

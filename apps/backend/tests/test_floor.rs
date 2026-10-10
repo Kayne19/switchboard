@@ -1,5 +1,6 @@
 use super::*;
 use crate::debug::DebugEvent;
+use crate::within;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::Duration;
@@ -76,8 +77,14 @@ async fn queue_order_and_one_speaker_at_a_time() {
     });
     yield_worker().await;
     assert_eq!(gates.load(Ordering::SeqCst), 2);
-    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
-    assert_eq!(results.recv().await.unwrap(), "update 2:update 2");
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 2:update 2"
+    );
     assert_eq!(floor.queue_len().await, 0);
     worker.abort();
 }
@@ -110,6 +117,7 @@ async fn releases_record_no_overlapping_speakers() {
             events.send(format!("start:{}", request.message)).unwrap();
             if request.message == "update 1" {
                 if let Some(signal) = allow_signal.lock().await.take() {
+                    // unbounded: the fake speaker holds the floor until the test releases it.
                     let _ = signal.await;
                 }
             }
@@ -123,12 +131,24 @@ async fn releases_record_no_overlapping_speakers() {
     floor.enqueue(request(2)).await;
     let floor_worker = floor.clone();
     let worker = tokio::spawn(async move { floor_worker.run(h).await });
-    assert_eq!(event_rx.recv().await.as_deref(), Some("start:update 1"));
+    assert_eq!(
+        within("event_rx", event_rx.recv()).await.as_deref(),
+        Some("start:update 1")
+    );
     assert!(event_rx.try_recv().is_err(), "second speaker started early");
     allow_first.send(()).unwrap();
-    assert_eq!(event_rx.recv().await.as_deref(), Some("end:update 1"));
-    assert_eq!(event_rx.recv().await.as_deref(), Some("start:update 2"));
-    assert_eq!(event_rx.recv().await.as_deref(), Some("end:update 2"));
+    assert_eq!(
+        within("event_rx", event_rx.recv()).await.as_deref(),
+        Some("end:update 1")
+    );
+    assert_eq!(
+        within("event_rx", event_rx.recv()).await.as_deref(),
+        Some("start:update 2")
+    );
+    assert_eq!(
+        within("event_rx", event_rx.recv()).await.as_deref(),
+        Some("end:update 2")
+    );
     assert_eq!(maximum.load(Ordering::SeqCst), 1);
     worker.abort();
 }
@@ -162,7 +182,10 @@ async fn gate_negative_answer_holds_until_the_next_quiet_moment() {
     assert!(results.try_recv().is_err());
     floor.force_quiet_for_test().await;
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     worker.abort();
 }
@@ -193,7 +216,10 @@ async fn gate_rejection_requires_a_new_quiet_period() {
     assert!(results.try_recv().is_err());
     floor.force_quiet_for_test().await;
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     worker.abort();
 }
@@ -214,6 +240,7 @@ async fn gate_timeout_is_treated_as_a_hold_then_quiet_releases() {
         let gate_signal = gate_signal.clone();
         Box::pin(async move {
             if let Some(signal) = gate_signal.lock().await.take() {
+                // unbounded: the fake gate holds its answer until the test releases it.
                 let _ = signal.await;
             }
             Err(())
@@ -228,7 +255,10 @@ async fn gate_timeout_is_treated_as_a_hold_then_quiet_releases() {
     assert!(results.try_recv().is_err());
     floor.force_quiet_for_test().await;
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
     worker.abort();
 }
 
@@ -252,8 +282,11 @@ async fn rewrite_receives_held_display_status() {
         let floor = floor.clone();
         async move { floor.run(h).await }
     });
-    assert_eq!(flags_rx.recv().await, Some(true));
-    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
+    assert_eq!(within("flags_rx", flags_rx.recv()).await, Some(true));
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
     worker.abort();
 }
 
@@ -270,7 +303,10 @@ async fn rewrite_error_uses_the_original_message() {
     let floor_worker = floor.clone();
     let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
     worker.abort();
 }
 
@@ -302,9 +338,14 @@ async fn rewrite_timeout_uses_the_original_message() {
     let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
     assert!(results.try_recv().is_err());
-    timeout_events.recv().await.unwrap();
+    within("timeout_events", timeout_events.recv())
+        .await
+        .unwrap();
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
     worker.abort();
 }
 
@@ -335,14 +376,24 @@ async fn announcement_is_first_only_after_quiet_threshold() {
     let floor_worker = floor.clone();
     let worker = tokio::spawn(async move { floor_worker.run(h).await });
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap(), "update 1:update 1");
-    assert!(!rewrite_inputs.recv().await.unwrap());
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 1:update 1"
+    );
+    assert!(!within("rewrite_inputs", rewrite_inputs.recv())
+        .await
+        .unwrap());
     floor.enqueue(request(2)).await;
     floor.caller_spoke().await;
     floor.force_quiet_for_test().await;
     yield_worker().await;
-    assert_eq!(results.recv().await.unwrap(), "update 2:update 2");
-    assert!(rewrite_inputs.recv().await.unwrap());
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "update 2:update 2"
+    );
+    assert!(within("rewrite_inputs", rewrite_inputs.recv())
+        .await
+        .unwrap());
     worker.abort();
 }
 
@@ -383,12 +434,22 @@ async fn queued_work_waits_without_a_page_and_disconnect_holds_the_rest() {
     connected.store(true, Ordering::SeqCst);
     floor.set_page_connected(true).await;
     yield_worker().await;
-    assert_eq!(actual_results.recv().await.unwrap(), "update 1:update 1");
+    assert_eq!(
+        within("actual_results", actual_results.recv())
+            .await
+            .unwrap(),
+        "update 1:update 1"
+    );
     yield_worker().await;
     assert!(actual_results.try_recv().is_err());
     connected.store(true, Ordering::SeqCst);
     floor.set_page_connected(true).await;
-    assert_eq!(actual_results.recv().await.unwrap(), "update 2:update 2");
+    assert_eq!(
+        within("actual_results", actual_results.recv())
+            .await
+            .unwrap(),
+        "update 2:update 2"
+    );
     worker.abort();
 }
 
@@ -442,7 +503,7 @@ async fn rewrite_receives_conversation_project_quiet_and_message() {
         async move { floor.run(h).await }
     });
     assert_eq!(
-        input_rx.recv().await.unwrap(),
+        within("input_rx", input_rx.recv()).await.unwrap(),
         (
             "caller: previous line".to_owned(),
             "grape".to_owned(),
@@ -450,7 +511,10 @@ async fn rewrite_receives_conversation_project_quiet_and_message() {
             "update 1".to_owned()
         )
     );
-    assert_eq!(results.recv().await.unwrap(), "spoken result:update 1");
+    assert_eq!(
+        within("results", results.recv()).await.unwrap(),
+        "spoken result:update 1"
+    );
     worker.abort();
 }
 
@@ -482,7 +546,7 @@ async fn the_floor_traces_one_message_from_request_to_release_under_one_id() {
     let worker_floor = floor.clone();
     let worker = tokio::spawn(async move { worker_floor.run(h).await });
     assert_eq!(
-        results.recv().await.unwrap(),
+        within("results", results.recv()).await.unwrap(),
         "Grape says: update 1:update 1"
     );
     worker.abort();
@@ -542,7 +606,7 @@ async fn the_floor_traces_a_gate_yes_release_and_a_dropped_message() {
     floor.enqueue(request(1)).await;
     let worker_floor = floor.clone();
     let worker = tokio::spawn(async move { worker_floor.run(h).await });
-    results.recv().await.unwrap();
+    within("results", results.recv()).await.unwrap();
     live.store(false, Ordering::SeqCst);
     floor.enqueue(request(2)).await;
     while floor.queue_len().await > 0 {
