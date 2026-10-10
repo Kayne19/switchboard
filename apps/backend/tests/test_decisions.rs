@@ -134,11 +134,9 @@ async fn multi_target_jev_retries_a_single_utility_target_then_splits() {
         }),
     );
     board
-        .transfer_ctx(
+        .transfer_to(
             &transcript("connect grape-segmentation"),
             "grape-segmentation",
-            "",
-            "",
         )
         .await;
 
@@ -209,11 +207,9 @@ async fn multi_target_jev_uses_a_first_utility_split_without_retry() {
         }),
     );
     board
-        .transfer_ctx(
+        .transfer_to(
             &transcript("connect grape-segmentation"),
             "grape-segmentation",
-            "",
-            "",
         )
         .await;
     let reply = board
@@ -268,11 +264,9 @@ async fn multi_target_jev_that_never_splits_is_handled_by_operator() {
     );
     let log = serve(&board, Box::new(|_, _| says("grape should not see this")));
     board
-        .transfer_ctx(
+        .transfer_to(
             &transcript("connect grape-segmentation"),
             "grape-segmentation",
-            "",
-            "",
         )
         .await;
     let reply = board
@@ -326,7 +320,7 @@ async fn utility_split_keeps_the_current_agent_foreground_even_without_jev_multi
         }),
     );
     let connected = board
-        .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
+        .transfer_to(&transcript("connect alpha"), "alpha")
         .await;
     assert_eq!(connected.route, "alpha");
     let before = prompts(&log).len();
@@ -385,7 +379,7 @@ async fn utility_operator_target_is_handled_by_the_operator_leg() {
     );
     let _log = serve(&board, Box::new(|_, _| says("Alpha is ready.")));
     let connected = board
-        .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
+        .transfer_to(&transcript("connect alpha"), "alpha")
         .await;
     assert_eq!(connected.route, "alpha");
     let decision = Decision {
@@ -422,10 +416,7 @@ async fn background_split_selects_foreground_and_hangup_keeps_residents() {
         }),
     );
     assert_eq!(
-        board
-            .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-            .await
-            .route,
+        board.transfer_to(&transcript("alpha"), "alpha").await.route,
         "alpha"
     );
     let reply = board
@@ -485,9 +476,7 @@ async fn idle_background_split_part_continues_without_a_new_session() {
             says("handled")
         }),
     );
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .dispatch_parts(
             "first",
@@ -573,9 +562,7 @@ async fn promoting_a_background_resident_cancels_its_detached_prompt_before_fore
             says("ready")
         }),
     );
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .start_background_part("beta", "background work")
         .await
@@ -628,9 +615,7 @@ async fn foreground_continuation_publishes_busy_before_prompt() {
         Box::pin(async {})
     })));
     let _log = serve(&board, Box::new(|_, _| says("ready")));
-    board
-        .transfer_ctx(&transcript("start alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("start alpha"), "alpha").await;
     notices.lock().unwrap().clear();
 
     let reply = board.handle_agent_ctx(&transcript("continue work")).await;
@@ -702,9 +687,7 @@ async fn failed_background_promotion_adoption_rolls_back_the_candidate() {
             says("handled")
         }),
     );
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .start_background_part("beta", "beta chart")
         .await
@@ -767,9 +750,7 @@ async fn a_promoted_agent_holds_the_session_guard_during_its_foreground_turn() {
             says("handled")
         }),
     );
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .start_background_part("beta", "beta chart")
         .await
@@ -807,9 +788,7 @@ async fn a_failed_promotion_turn_gives_the_session_guard_back() {
         .then(|| Some(Err(("prompt_failed".into(), "promotion failed".into()))))
     }));
     fake.serve(board.hosts().connect_fake(HOST));
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .start_background_part("beta", "beta chart")
         .await
@@ -849,9 +828,7 @@ async fn a_promotion_whose_turn_fails_without_detail_reports_the_fallback() {
         .then(|| Some(Err(("prompt_failed".into(), String::new()))))
     }));
     fake.serve(board.hosts().connect_fake(HOST));
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .start_background_part("beta", "beta chart")
         .await
@@ -914,9 +891,7 @@ async fn a_promotion_and_a_transfer_commit_their_steps_in_one_order() {
     })));
     let _log = serve(&board, Box::new(|_, _| says("handled")));
 
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .start_background_part("beta", "beta chart")
         .await
@@ -949,9 +924,7 @@ async fn a_promotion_and_a_transfer_commit_their_steps_in_one_order() {
     let promoted = std::mem::take(&mut *events.lock().unwrap());
 
     // A fresh transfer from a project: beta is shelved before gamma settles.
-    let reply = board
-        .transfer_ctx(&transcript("gamma"), "gamma", "", "")
-        .await;
+    let reply = board.transfer_to(&transcript("gamma"), "gamma").await;
     assert_eq!(reply.route, "gamma", "{reply:?}");
     let transferred = std::mem::take(&mut *events.lock().unwrap());
 
@@ -980,9 +953,7 @@ async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
             says("handled")
         }),
     );
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .dispatch_parts(
             "first",
@@ -1048,9 +1019,7 @@ async fn busy_background_split_part_is_refused_and_fresh_brings_the_live_agent_f
             }
         }),
     );
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .dispatch_parts(
             "first",
@@ -1203,7 +1172,7 @@ async fn a_stop_asked_before_a_hangup_is_not_confirmed_after_it() {
     board.coordinator.begin_rescue("operation interrupted");
     assert_eq!(board.force_hangup().await.as_deref(), Some("alpha"));
     let back = board
-        .transfer_ctx(&transcript("back to alpha"), "alpha", "", "")
+        .transfer_to(&transcript("back to alpha"), "alpha")
         .await;
     assert_eq!(back.route, "alpha");
 
@@ -1300,9 +1269,7 @@ async fn go_to_project_with_fresh_brings_a_live_background_agent_forward() {
             says("handled")
         }),
     );
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .dispatch_parts(
             "both",
@@ -1393,9 +1360,7 @@ async fn a_failed_move_to_the_background_closes_the_previous_agent() {
             .then(|| Some(Err(("mode_failed".into(), "cannot switch mode".into()))))
     }));
     fake.serve(board.hosts().connect_fake(HOST));
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     let alpha = board.agent.clone().expect("alpha on the line");
 
     let reply = board
@@ -1429,9 +1394,7 @@ async fn a_promoted_agent_is_told_it_is_in_the_foreground() {
             says("handled")
         }),
     );
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .start_background_part("beta", "beta chart")
         .await
@@ -1712,7 +1675,7 @@ async fn jev_branches_are_traced_and_work_outside_a_decision_is_not() {
     let _log = serve(&board, Box::new(|_, _| says("Alpha here.")));
     // A direct transfer is not a caller utterance: nothing is traced.
     board
-        .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
+        .transfer_to(&transcript("connect alpha"), "alpha")
         .await;
     assert!(route_trace(&board).is_empty());
 
@@ -1822,7 +1785,7 @@ async fn a_route_to_a_project_id_another_project_uses_as_an_alias_goes_to_that_i
     let mut board = board_on(vec![project("web", ""), webapp], &[], two_model_catalog());
     let _log = serve(&board, Box::new(|_, _| says("here")));
     let on = board
-        .transfer_ctx(&transcript("go to webapp"), "webapp", "", "")
+        .transfer_to(&transcript("go to webapp"), "webapp")
         .await;
     assert_eq!(on.route, "webapp", "{on:?}");
 
@@ -1844,9 +1807,7 @@ async fn a_caller_turn_never_goes_to_another_projects_session() {
         two_model_catalog(),
     );
     let log = serve(&board, Box::new(|_, _| says("On it.")));
-    let reply = board
-        .transfer_ctx(&transcript("look at beta"), "beta", "", "")
-        .await;
+    let reply = board.transfer_to(&transcript("look at beta"), "beta").await;
     assert_eq!(reply.route, "beta", "{reply:?}");
     crate::pbx::put_on(&board, "alpha", "anthropic/current", two_model_catalog());
 

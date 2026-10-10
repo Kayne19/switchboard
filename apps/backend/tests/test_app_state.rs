@@ -165,7 +165,7 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
         .switchboard
         .lock()
         .await
-        .transfer_ctx(&context, "alpha", "", "")
+        .transfer_to(&context, "alpha")
         .await;
     assert_eq!(reply.route, "alpha");
     assert_lifecycle_consistent(&state).await;

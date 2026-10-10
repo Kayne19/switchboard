@@ -1,11 +1,12 @@
 //! Leg transitions: every way a project leg comes onto the line or leaves it.
-//! A transfer, a background promotion and a takeover of a desk session all
-//! start a candidate leg and commit it through `Switchboard::commit_leg`, so
-//! each takes the same steps in the same order; a failure rolls the candidate
-//! back and leaves the caller where they were. Dropping the agent, hanging up,
-//! stopping a project and returning to the operator end a leg.
+//! A transfer, a background promotion, a takeover of a desk session and a
+//! redial (`redial.rs`) each bring a leg up through one `Startup`, which
+//! commits it onto the line or abandons it, so each takes the same steps in
+//! the same order; an abandoned bring-up leaves the caller where they were.
+//! Dropping the agent, hanging up, stopping a project and returning to the
+//! operator end a leg.
 use crate::hosts::Hosts;
-use crate::lifecycle::{CandidateLeg, LifecycleError};
+use crate::lifecycle::{CandidateLeg, Coordinator, LegIdentity, LifecycleError};
 use crate::pbx::{uuid_like, Switchboard, TransferContext, OPERATOR};
 use crate::pi_client::{LegSession, PiSessionError, Turn};
 use crate::prewarm::LaunchPlan;
@@ -67,45 +68,16 @@ impl Switchboard {
 }
 
 impl Switchboard {
+    /// Puts the caller through to `project`, a registered project the
+    /// caller of this has already resolved: routing's targets are exact
+    /// ids, and `dial` resolves the words the page sends.
     pub async fn transfer_ctx(
         &mut self,
         context: &TransferContext,
-        spoken: &str,
+        project: &Project,
         requested_model: &str,
         requested_thinking: &str,
     ) -> Reply {
-        let project = match self.registry.resolve_detailed(spoken) {
-            crate::registry::ResolveResult::Exact(project) => project.clone(),
-            // A refused transfer leaves the caller on the leg they are on.
-            crate::registry::ResolveResult::Ambiguous(candidates) => {
-                let candidates_text = candidates.join(", ");
-                self.operator_note = Some(format!(
-                    "Couldn't tell which project {spoken:?} meant: {candidates_text}."
-                ));
-                return self.reply_transfer_error(
-                    format!(
-                        "Which project did you mean by {spoken}? It could be {candidates_text}."
-                    ),
-                    Some(format!("ambiguous project {spoken:?}: {candidates_text}")),
-                );
-            }
-            crate::registry::ResolveResult::Unknown => {
-                let known = self.registry.ids();
-                let known_text = if known.is_empty() {
-                    "nothing yet".to_owned()
-                } else {
-                    known.join(", ")
-                };
-                self.operator_note = Some(format!(
-                    "No project matches {spoken:?}. Registered: {known_text}."
-                ));
-                return self.reply_transfer_error(
-                    self.unknown_project_line(spoken),
-                    Some(format!("unknown project {spoken:?}")),
-                );
-            }
-        };
-
         tracing::info!(
             from = %self.coordinator.route(),
             to = %project.id,
@@ -131,12 +103,7 @@ impl Switchboard {
             }
         }
 
-        // The leg the caller is on now, which every failure below hands the
-        // line back to: the project leg on an agent-to-agent transfer, else
-        // the operator, as in `drop_agent`.
-        let live_session = self.agent_leg().or_else(|| self.operator_leg());
-
-        let plan = match self.prewarm.launch_plan(&project).await {
+        let plan = match self.prewarm.launch_plan(project).await {
             Ok(plan) => plan,
             Err(err) => {
                 tracing::warn!(project = %project.id, error = %err, "the project's host is not ready");
@@ -146,7 +113,7 @@ impl Switchboard {
         };
 
         let model = match self.select_transfer_model(
-            &project,
+            project,
             &plan.catalog,
             requested_model,
             requested_thinking,
@@ -171,8 +138,8 @@ impl Switchboard {
             thinking_in_spec(&model),
         )
         .with_catalog(plan.catalog.clone());
-        let leg = match self.coordinator.begin_candidate(candidate) {
-            Ok(leg) => leg,
+        let mut startup = match self.begin_startup(candidate, LegChange::NewAgent) {
+            Ok(startup) => startup,
             Err(error) => {
                 tracing::warn!(project = %project.id, %error, "candidate startup was refused");
                 return self.couldnt_open(&project.id, error.to_string());
@@ -191,7 +158,7 @@ impl Switchboard {
             }
         }
 
-        let session = match self.start_agent(&project, &model, &leg_token, &plan).await {
+        let session = match self.start_agent(project, &model, &leg_token, &plan).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(
@@ -200,17 +167,14 @@ impl Switchboard {
                     error = %e,
                     "could not connect to project"
                 );
-                self.rollback_startup(format!("startup failed: {e}"));
-                self.set_active_session(live_session.clone()).await;
+                startup.abandon(self, format!("startup failed: {e}")).await;
                 self.operator_note = Some(open_failed_note(&project.id, &e.to_string()));
                 return self.couldnt_open(&project.id, e.to_string());
             }
         };
+        startup.attach(self, &session).await;
 
-        self.set_active_session(Some(LegSession::Project(session.clone())))
-            .await;
-
-        let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
+        let intro_prompt = build_intro_prompt(context, project, plan.prepare_report.as_ref());
 
         self.announce_agent_state(&project.id, "busy").await;
         let utterance = self.current_utterance();
@@ -232,25 +196,17 @@ impl Switchboard {
                 turn.error
             };
             tracing::error!(project = %project.id, %detail, "project intro turn failed");
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            self.set_active_session(live_session.clone()).await;
-            self.rollback_startup(format!("intro failed: {detail}"));
+            startup
+                .abandon(self, format!("intro failed: {detail}"))
+                .await;
             self.operator_note = Some(open_failed_note(&project.id, &detail));
             return self.couldnt_open(&project.id, detail);
         }
 
-        if let Err(error) = self
-            .commit_leg(&project.id, &leg_token, &session, LegChange::NewAgent)
-            .await
-        {
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            self.set_active_session(live_session.clone()).await;
-            self.rollback_startup(format!("adoption failed: {error}"));
-            return self.couldnt_open(&project.id, error.to_string());
+        match startup.commit(self).await {
+            Ok(leg) => self.reply_with_turn_on(turn, &leg),
+            Err(error) => self.couldnt_open(&project.id, error.to_string()),
         }
-        self.reply_with_turn_on(turn, &leg)
     }
 
     pub(crate) async fn promote_background(
@@ -258,9 +214,10 @@ impl Switchboard {
         session: ProjectSession,
         context: TransferContext,
     ) -> Reply {
-        let project = match self.registry.resolve_detailed(session.label()) {
-            crate::registry::ResolveResult::Exact(project) => project.clone(),
-            _ => {
+        // A resident is labelled with its project's id.
+        let project = match self.registry.get(session.label()) {
+            Some(project) => project.clone(),
+            None => {
                 let project = session.label().to_owned();
                 session.close();
                 self.announce_agent_state(&project, "finished").await;
@@ -270,44 +227,41 @@ impl Switchboard {
                 );
             }
         };
-        // Kept for a failed promotion, as in `take_over`: the leg the caller
-        // was on goes back on the active-session guard.
-        let previous_foreground = self.active_session.lock().await.clone();
         let token = uuid_like();
-        if let Err(error) = session.set_mode("foreground").await {
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            return self.couldnt_bring_back(&project.id, error.to_string());
+        let joined = async {
+            session.set_mode("foreground").await?;
+            session
+                .join_call_mode(&token, &self.persona, self.speech_deadline_ms, "foreground")
+                .await
         }
-        if let Err(error) = session
-            .join_call_mode(&token, &self.persona, self.speech_deadline_ms, "foreground")
-            .await
-        {
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            return self.couldnt_bring_back(&project.id, error.to_string());
-        }
-        self.announce_agent_state(&project.id, "busy").await;
-        let candidate = CandidateLeg::new(
-            project.id.clone(),
-            project.id.clone(),
-            session.session_id(),
-            token.clone(),
-            "",
-            self.coordinator.thinking_default(),
-        );
-        let leg = match self.coordinator.begin_candidate(candidate) {
-            Ok(leg) => leg,
+        .await;
+        let begun = match joined {
+            Ok(_) => {
+                self.announce_agent_state(&project.id, "busy").await;
+                let candidate = CandidateLeg::new(
+                    project.id.clone(),
+                    project.id.clone(),
+                    session.session_id(),
+                    token.clone(),
+                    "",
+                    self.coordinator.thinking_default(),
+                );
+                self.begin_startup(candidate, LegChange::NewAgent)
+                    .map_err(|error| error.to_string())
+            }
+            Err(error) => Err(error.to_string()),
+        };
+        let mut startup = match begun {
+            Ok(startup) => startup,
             Err(error) => {
                 session.close();
                 self.announce_agent_state(&project.id, "finished").await;
-                return self.couldnt_bring_back(&project.id, error.to_string());
+                return self.couldnt_bring_back(&project.id, error);
             }
         };
         // Steering and a page rescue reach the leg being brought up, as they
         // do on a transfer or a takeover.
-        self.set_active_session(Some(LegSession::Project(session.clone())))
-            .await;
+        startup.attach(self, &session).await;
         // The agent was told background rules when it was shelved. Tell it
         // they no longer apply before it answers the caller.
         let prompt = format!("{FOREGROUND_NOTICE}\n\n{}", context.exact_caller_transcript);
@@ -322,23 +276,15 @@ impl Switchboard {
             } else {
                 turn.error
             };
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            self.rollback_startup(format!("background promotion failed: {detail}"));
-            self.set_active_session(previous_foreground).await;
+            startup
+                .abandon(self, format!("background promotion failed: {detail}"))
+                .await;
             return self.couldnt_bring_back(&project.id, detail);
         }
-        if let Err(error) = self
-            .commit_leg(&project.id, &token, &session, LegChange::NewAgent)
-            .await
-        {
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            self.rollback_startup(format!("background promotion adoption failed: {error}"));
-            self.set_active_session(previous_foreground).await;
-            return self.couldnt_bring_back(&project.id, error.to_string());
+        match startup.commit(self).await {
+            Ok(leg) => self.reply_with_turn_on(turn, &leg),
+            Err(error) => self.couldnt_bring_back(&project.id, error.to_string()),
         }
-        self.reply_with_turn_on(turn, &leg)
     }
 
     /// Find one untracked top-level desk session for a registered project.
@@ -420,10 +366,6 @@ impl Switchboard {
                 Some(format!("unknown project {target:?}")),
             );
         };
-        // Keep the exact foreground owner across a failed takeover. The
-        // coordinator rolls its route back, but the active-session guard is a
-        // separate lifecycle handoff and must follow the same previous leg.
-        let previous_foreground = self.active_session.lock().await.clone();
         if self
             .agent
             .as_ref()
@@ -485,8 +427,8 @@ impl Switchboard {
                 thinking.clone()
             },
         );
-        let leg = match self.coordinator.begin_candidate(candidate) {
-            Ok(leg) => leg,
+        let mut startup = match self.begin_startup(candidate, LegChange::NewAgent) {
+            Ok(startup) => startup,
             Err(error) => return self.couldnt_take_over(&project.id, error.to_string()),
         };
         let host = match project.canonical_host() {
@@ -506,31 +448,38 @@ impl Switchboard {
             on_closed: Some(self.session_closed_callback()),
             debug: Some(self.debug.clone()),
         };
-        let session = match ProjectSession::attach(&self.hosts, launch, session_handle).await {
-            Ok((session, state)) => {
-                self.confirm_thinking(&leg_token, &state);
-                session
+        // The desk session, attached and on the call under the leg's token.
+        // One that attaches but cannot join is released here: it never
+        // reached the guard.
+        let joined = async {
+            let (session, state) =
+                ProjectSession::attach(&self.hosts, launch, session_handle).await?;
+            self.confirm_thinking(&leg_token, &state);
+            if let Err(error) = session
+                .join_call_mode(
+                    &leg_token,
+                    &self.persona,
+                    self.speech_deadline_ms,
+                    "foreground",
+                )
+                .await
+            {
+                session.close();
+                return Err(error);
             }
+            Ok(session)
+        }
+        .await;
+        let session = match joined {
+            Ok(session) => session,
             Err(error) => {
-                self.rollback_startup(format!("takeover failed: {error}"));
+                startup
+                    .abandon(self, format!("takeover failed: {error}"))
+                    .await;
                 return self.couldnt_take_over(&project.id, error.to_string());
             }
         };
-        if let Err(error) = session
-            .join_call_mode(
-                &leg_token,
-                &self.persona,
-                self.speech_deadline_ms,
-                "foreground",
-            )
-            .await
-        {
-            session.close();
-            self.rollback_startup(format!("takeover call registration failed: {error}"));
-            return self.couldnt_take_over(&project.id, error.to_string());
-        }
-        self.set_active_session(Some(LegSession::Project(session.clone())))
-            .await;
+        startup.attach(self, &session).await;
         self.announce_agent_state(&project.id, "busy").await;
         let utterance = self.current_utterance();
         let turn = session
@@ -543,62 +492,34 @@ impl Switchboard {
             } else {
                 turn.error.clone()
             };
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            self.rollback_startup(format!("takeover turn failed: {detail}"));
-            self.set_active_session(previous_foreground.clone()).await;
+            startup
+                .abandon(self, format!("takeover turn failed: {detail}"))
+                .await;
             return self.couldnt_take_over(&project.id, detail);
         }
-        if let Err(error) = self
-            .commit_leg(&project.id, &leg_token, &session, LegChange::NewAgent)
-            .await
-        {
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            self.rollback_startup(format!("takeover adoption failed: {error}"));
-            self.set_active_session(previous_foreground).await;
-            return self.couldnt_take_over(&project.id, error.to_string());
+        match startup.commit(self).await {
+            Ok(leg) => self.reply_with_turn_on(turn, &leg),
+            Err(error) => self.couldnt_take_over(&project.id, error.to_string()),
         }
-        self.reply_with_turn_on(turn, &leg)
     }
 
-    /// Makes the staged project leg the one on the line. Every transition
-    /// that brings a project leg up (a transfer, a background promotion, a
-    /// takeover, a redial) commits through here, so none of them can skip a
-    /// step or take one out of order:
-    ///
-    /// 1. adopt the candidate under `token`. It may be adopted already: a
-    ///    candidate is promoted on its first sign of life, which usually
-    ///    arrives during its first turn. Either way the coordinator names it
-    ///    from here on; the switchboard only swaps the session handles;
-    /// 2. end the intro;
-    /// 3. on a [`LegChange::NewAgent`], shelve the previous foreground and
-    ///    settle the incoming agent, published busy for its first turn, to
-    ///    idle;
-    /// 4. name the session on the PBX and on the active-session guard;
-    /// 5. announce the route.
-    ///
-    /// A failed adoption commits nothing and is returned. Abandoning the leg
-    /// is the caller's, because where the line goes back to differs.
-    pub(crate) async fn commit_leg(
-        &mut self,
-        project: &str,
-        token: &str,
-        session: &ProjectSession,
+    /// Stages `candidate` for a bring-up that makes `change`. The startup it
+    /// returns owns the bring-up until it commits the leg onto the line or
+    /// abandons it.
+    pub(crate) fn begin_startup(
+        &self,
+        candidate: CandidateLeg,
         change: LegChange,
-    ) -> Result<(), LifecycleError> {
-        if self.coordinator.is_candidate() {
-            self.coordinator.adopt_candidate(token)?;
-        }
-        self.coordinator.finish_intro();
-        if change == LegChange::NewAgent {
-            self.shelve_previous_foreground(project).await;
-            self.announce_agent_state(project, "idle").await;
-        }
-        self.agent = Some(session.clone());
-        self.set_active_session(self.agent_leg()).await;
-        self.announce_route().await;
-        Ok(())
+    ) -> Result<Startup, LifecycleError> {
+        let project = candidate.project.clone();
+        let identity = self.coordinator.begin_candidate(candidate)?;
+        Ok(Startup {
+            coordinator: self.coordinator.clone(),
+            project,
+            identity,
+            change,
+            attached: None,
+        })
     }
 
     /// Starts a project leg on its host from its launch plan and puts it on
@@ -722,16 +643,51 @@ impl Switchboard {
         }
     }
 
-    pub async fn dial(&mut self, project: &str, intent: &str) -> Reply {
+    /// `/connect`: hangs up whatever is on the line and puts the caller
+    /// through to the project `spoken` names. The page sends words, not an
+    /// id, so this is the one place a project is resolved by name; a name
+    /// that matches no project, or several, is refused here with the
+    /// projects there are.
+    pub async fn dial(&mut self, spoken: &str, intent: &str) -> Reply {
         self.force_hangup().await;
-        if project.eq_ignore_ascii_case(OPERATOR) {
+        if spoken.eq_ignore_ascii_case(OPERATOR) {
             return self.reply(["Back at the front desk."], None);
         }
+        let project = match self.registry.resolve_detailed(spoken) {
+            crate::registry::ResolveResult::Exact(project) => project.clone(),
+            crate::registry::ResolveResult::Ambiguous(candidates) => {
+                let candidates_text = candidates.join(", ");
+                self.operator_note = Some(format!(
+                    "Couldn't tell which project {spoken:?} meant: {candidates_text}."
+                ));
+                return self.reply_transfer_error(
+                    format!(
+                        "Which project did you mean by {spoken}? It could be {candidates_text}."
+                    ),
+                    Some(format!("ambiguous project {spoken:?}: {candidates_text}")),
+                );
+            }
+            crate::registry::ResolveResult::Unknown => {
+                let known = self.registry.ids();
+                let known_text = if known.is_empty() {
+                    "nothing yet".to_owned()
+                } else {
+                    known.join(", ")
+                };
+                self.operator_note = Some(format!(
+                    "No project matches {spoken:?}. Registered: {known_text}."
+                ));
+                return self.reply_transfer_error(
+                    self.unknown_project_line(spoken),
+                    Some(format!("unknown project {spoken:?}")),
+                );
+            }
+        };
         let context = TransferContext {
             derived_intent: intent.to_owned(),
             ..TransferContext::default()
         };
-        self.transfer_ctx(&context, project, "", "").await
+        self.transfer_ctx(&context, &project, "", "").await
     }
 
     pub(crate) async fn stop_project(&mut self, target: &str) -> Reply {
@@ -775,7 +731,7 @@ impl Switchboard {
 }
 
 /// What a committed leg does to the foreground it takes the line from
-/// (`Switchboard::commit_leg`).
+/// (`Startup::commit`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LegChange {
     /// Another agent takes the line: a transfer, a background promotion, a
@@ -787,6 +743,128 @@ pub(crate) enum LegChange {
     /// its context is the one already on the line, and shelving it would
     /// close it. Its state was never published busy, so it is left alone.
     Redial,
+}
+
+/// A project leg being brought up, from the candidate it staged until it is
+/// committed onto the line or abandoned. Every transition that brings a
+/// project leg up (a transfer, a background promotion, a takeover, a
+/// redial) holds one: it stages the candidate (`Switchboard::begin_startup`),
+/// puts its session on the active-session guard (`attach`), runs its first
+/// turn, then ends with `commit` or `abandon`. Each ending is written once,
+/// so no bring-up can skip a step of it or take one out of order. One that
+/// ends neither way (its future dropped, or a panic in it) rolls its
+/// candidate back when it is dropped.
+pub(crate) struct Startup {
+    coordinator: Coordinator,
+    project: String,
+    /// The identity the candidate is staged under. Adoption puts it on the
+    /// line, and the bring-up's reply is delivered at its generation.
+    identity: LegIdentity,
+    change: LegChange,
+    /// The session, once it is on the guard; `None` while only the
+    /// candidate is staged.
+    attached: Option<Attached>,
+}
+
+/// A bring-up's session on the active-session guard, and what it took the
+/// guard from: the leg an abandoned bring-up hands the guard back to.
+struct Attached {
+    session: ProjectSession,
+    displaced: Option<LegSession>,
+}
+
+impl Startup {
+    /// Puts `session` on the active-session guard, so steering and a page
+    /// rescue reach the leg being brought up.
+    pub(crate) async fn attach(&mut self, board: &Switchboard, session: &ProjectSession) {
+        let displaced = board
+            .active_session
+            .lock()
+            .await
+            .replace(LegSession::Project(session.clone()));
+        self.attached = Some(Attached {
+            session: session.clone(),
+            displaced,
+        });
+    }
+
+    /// Makes the attached leg the one on the line:
+    ///
+    /// 1. adopt the candidate. It may be adopted already: a candidate is
+    ///    promoted on its first sign of life, which usually arrives during
+    ///    its first turn. Either way the coordinator names it from here on;
+    ///    the switchboard only swaps the session handles;
+    /// 2. end the intro;
+    /// 3. on a [`LegChange::NewAgent`], shelve the previous foreground and
+    ///    settle the incoming agent, published busy for its first turn, to
+    ///    idle;
+    /// 4. name the session on the PBX and on the active-session guard;
+    /// 5. announce the route.
+    ///
+    /// Returns the identity the leg is on the line under. A failed adoption
+    /// commits nothing: the startup is abandoned and the error returned.
+    pub(crate) async fn commit(
+        mut self,
+        board: &mut Switchboard,
+    ) -> Result<LegIdentity, LifecycleError> {
+        if self.coordinator.is_candidate() {
+            if let Err(error) = self.coordinator.adopt_candidate(&self.identity.token) {
+                self.abandon(board, format!("adoption failed: {error}"))
+                    .await;
+                return Err(error);
+            }
+        }
+        let Some(attached) = self.attached.take() else {
+            unreachable!("a bring-up commits the session it attached");
+        };
+        self.coordinator.finish_intro();
+        if self.change == LegChange::NewAgent {
+            board.shelve_previous_foreground(&self.project).await;
+            board.announce_agent_state(&self.project, "idle").await;
+        }
+        board.agent = Some(attached.session);
+        board.set_active_session(board.agent_leg()).await;
+        board.announce_route().await;
+        Ok(self.identity.clone())
+    }
+
+    /// Ends a bring-up that failed, in one order whichever step it failed
+    /// at: the session it attached is ended, a new agent is published
+    /// finished (it was published busy around its attach), and the guard
+    /// and the call line go back to the leg before it together. A rescue
+    /// takes the guard under the same lock, so it finds either the
+    /// bring-up's session on a line still starting, or the leg before it
+    /// on the line it is back on.
+    pub(crate) async fn abandon(mut self, board: &Switchboard, reason: String) {
+        let attached = self.attached.take();
+        if let Some(Attached { session, .. }) = &attached {
+            session.close();
+            if self.change == LegChange::NewAgent {
+                board.announce_agent_state(&self.project, "finished").await;
+            }
+        }
+        let mut guard = board.active_session.lock().await;
+        self.coordinator
+            .rollback_startup(self.identity.generation, reason);
+        if let Some(Attached { displaced, .. }) = attached {
+            *guard = displaced;
+        }
+    }
+}
+
+/// A bring-up dropped before it committed or was abandoned: a page rescue
+/// aborted it, or it panicked. The coordinator's half of `abandon` is the
+/// one that cannot wait, so it is done here: the candidate is rolled back
+/// if it is still in flight. After a commit, an abandon or a rescue it is
+/// not, and this does nothing. The guard and the session are left to the
+/// next owner of the line: a rescue takes the guard and ends its session.
+impl Drop for Startup {
+    fn drop(&mut self) {
+        self.coordinator.rollback_startup(
+            self.identity.generation,
+            "the bring-up was dropped before it ended",
+        );
+    }
 }
 
 /// A prompt that could not be sent, as the failed turn the leg transitions

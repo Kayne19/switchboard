@@ -323,14 +323,12 @@ done
         .switchboard
         .lock()
         .await
-        .transfer_ctx(
+        .transfer_to(
             &crate::pbx::TransferContext {
                 exact_caller_transcript: "start on switchboard".into(),
                 ..Default::default()
             },
             "switchboard",
-            "",
-            "",
         )
         .await;
     assert_eq!(foreground_reply.route, "switchboard");
