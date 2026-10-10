@@ -289,6 +289,9 @@ export class PushToTalk {
     // iPad's audio session -- and the page went on saying it was recording
     // (#262).
     recorder.onstop = () => {
+      // A recorder fires `stop` after its `error`, and the error has already
+      // ended the recording and handed the microphone back.
+      if (recorderFailed) return;
       releaseMeter(recording);
       releaseStream();
       const current = this.activeRecording === recording;
@@ -298,7 +301,6 @@ export class PushToTalk {
       if (current) this.activeRecording = null;
       if (this.mediaRecorder === recorder) this.mediaRecorder = null;
       this.options.resumeHandsFree();
-      if (recorderFailed) return;
       if (current) this.options.onRecordingChange(false);
       if (recording.discard) {
         onStatus(this.options.idleText, false);

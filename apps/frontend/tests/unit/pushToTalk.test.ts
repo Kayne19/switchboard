@@ -769,9 +769,10 @@ describe("push-to-talk lifecycle: phase x event", () => {
     { from: "stopping, discard", event: "stopped", seen: { ...ENDED, status: IDLE }, then: "idle" },
     { from: "stopping, discard", event: "recorder error", seen: { ...ENDED, status: FAILED }, then: "idle" },
 
-    // A recorder fires `dataavailable` and `stop` after its `error`.
+    // A recorder fires `dataavailable` and `stop` after its `error`; the
+    // error already handed the microphone back.
     { from: "failed", event: "late data", seen: {}, then: "idle" },
-    { from: "failed", event: "late stop", seen: { resumed: 1 }, then: "idle" },
+    { from: "failed", event: "late stop", seen: {}, then: "idle" },
     { from: "failed", event: "press", seen: { asked: 1, paused: 1 }, then: "acquiring" },
   ];
 
