@@ -83,7 +83,8 @@ commit.
   fonts raster differently, so they stay a local gate: run `npm run
   test:visual -- --project=chromium` before a change that moves pixels.
   The suite starts its own server on port 4183 (`PLAYWRIGHT_PORT` moves
-  it) and fails rather than test a server it finds there. `master`
+  it) and fails rather than test a server it finds there; `test:integration`
+  does the same on port 4184 (`PLAYWRIGHT_INTEGRATION_PORT` moves it). `master`
   requires only `test`; a red `browser` is still a failure to fix, not to
   merge over. Every job runs on a named Ubuntu release (`runs-on:
   ubuntu-24.04`), as the toolchain is pinned: the specs' geometry was
