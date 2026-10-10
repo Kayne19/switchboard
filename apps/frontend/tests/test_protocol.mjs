@@ -149,6 +149,20 @@ try {
 
 	globalThis.fetch = async () => ({ ok: false, status: 503 });
 	await assert.rejects(postJson("/connect", { project: "alpha" }), /HTTP 503/);
+
+	// A control the service refuses says why in `detail`, and the caller
+	// reads that, not a bare status code (#263).
+	globalThis.fetch = async () => ({
+		ok: false,
+		status: 409,
+		json: async () => ({
+			detail: "model change was refused: the line moved on (the page held generation 1, the call is at 2)",
+		}),
+	});
+	await assert.rejects(postJson("/model", { model: "provider/model", generation: 1 }), {
+		message:
+			"HTTP 409: model change was refused: the line moved on (the page held generation 1, the call is at 2)",
+	});
 } finally {
 	globalThis.fetch = previousFetch;
 }

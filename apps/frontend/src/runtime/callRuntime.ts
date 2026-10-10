@@ -386,29 +386,40 @@ export class CallRuntime {
         : "Connecting to " + route + "...",
       false,
     );
-    void this.requestLineChange("route", "/connect", { project: route });
+    void this.requestLineChange("route", "/connect", {
+      project: route,
+      generation: this.turnEpoch,
+    });
   }
 
   selectModel(model: string): void {
     this.setStatus("Switching to " + model + "...", false);
-    void this.requestLineChange("model", "/model", { model });
+    void this.requestLineChange("model", "/model", {
+      model,
+      generation: this.turnEpoch,
+    });
   }
 
   selectThinking(level: string): void {
     this.setStatus("Setting thinking to " + level + "...", false);
-    void this.requestLineChange("thinking", "/thinking", { level });
+    void this.requestLineChange("thinking", "/thinking", {
+      level,
+      generation: this.turnEpoch,
+    });
   }
 
   // Goes straight to the backend rather than through the agent on the line,
   // which is the whole point — it has to work when that agent is the problem,
-  // including while it is still mid-turn.
+  // including while it is still mid-turn. It carries the epoch this page
+  // holds, so it hangs up the leg the caller saw; the service ignores one the
+  // call has moved on from, and says so (#263).
   async hangup(): Promise<void> {
     if (this.hangupPending) return;
     this.handsFree?.disable("Hands-free stopped for hangup.");
     this.clearResponseBarrier();
     this.hangupPending = true;
     try {
-      await this.postJson("/hangup", {});
+      await this.postJson("/hangup", { generation: this.turnEpoch });
     } catch (err) {
       this.setStatus("Could not hang up: " + errorText(err), true);
     } finally {
@@ -534,11 +545,14 @@ export class CallRuntime {
   // --- Line controls ----------------------------------------------------
 
   // Requests run one at a time across all three controls, and every picker
-  // stays locked until the queue drains.
+  // stays locked until the queue drains. Each carries the epoch the page held
+  // when the caller acted, not when it goes out: the service refuses one the
+  // call has moved on from, so a request queued behind a slow one cannot act
+  // on a leg the caller never chose (#263).
   private async requestLineChange(
     control: LineControl,
     url: string,
-    body: Record<string, string>,
+    body: Record<string, string | number>,
   ): Promise<void> {
     const request = ++this.lineRequestIds[control];
     this.lineRequestsPending += 1;

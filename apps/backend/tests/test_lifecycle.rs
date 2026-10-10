@@ -192,6 +192,28 @@ fn stale_generation_and_concurrent_prompt_are_rejected() {
 }
 
 #[test]
+fn a_rescue_at_a_generation_the_call_has_left_rescues_nothing() {
+    // A page control rescues only the leg the page saw when the caller acted
+    // (#263); the check and the rescue are one step under the state lock.
+    let (coordinator, notices) = coordinator_with_notices();
+    coordinator.begin_candidate(alpha_candidate()).unwrap();
+    let held = coordinator.generation();
+    let moved = coordinator.begin_rescue("transfer");
+    assert_eq!(moved.generation, held + 1);
+    let told = notices.lock().unwrap().len();
+
+    assert!(coordinator.begin_rescue_at(held, "page connect").is_none());
+    assert_eq!(coordinator.current_identity(), moved, "nothing was rescued");
+    assert_eq!(notices.lock().unwrap().len(), told, "nothing was announced");
+
+    let rescued = coordinator
+        .begin_rescue_at(moved.generation, "page connect")
+        .expect("the generation the call is at is rescued");
+    assert_eq!(rescued.generation, moved.generation + 1);
+    assert_eq!(phase(&coordinator), Phase::Quiescing);
+}
+
+#[test]
 fn stale_generation_cannot_settle_a_lifecycle_projection() {
     let coordinator = coordinator();
     let called = Arc::new(std::sync::atomic::AtomicBool::new(false));

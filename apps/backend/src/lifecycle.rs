@@ -649,6 +649,22 @@ impl Coordinator {
         rescue.next
     }
 
+    /// `begin_rescue`, only while the call is still at `generation`; `None`
+    /// rescues nothing. A page control carries the generation the page held
+    /// when the caller acted, so one meant for a leg the call has since left
+    /// does not rescue the leg it moved to (#263).
+    pub fn begin_rescue_at(
+        &self,
+        generation: u64,
+        reason: impl Into<String>,
+    ) -> Option<LegIdentity> {
+        let rescue = self.linearize(|state| {
+            (state.leg.generation == generation).then(|| self.rescue_locked(state, reason.into()))
+        })?;
+        self.announce_rescue(&rescue);
+        Some(rescue.next)
+    }
+
     /// `begin_rescue`, only while `leg` is still the leg on the line and no
     /// startup is in flight; `None` rescues nothing. A control that decided on
     /// the leg it read earlier does not cancel work on a leg the caller has

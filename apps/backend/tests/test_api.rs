@@ -78,7 +78,7 @@ async fn http_contract_exposes_status_health_and_page_controls() {
         &state,
         Method::POST,
         "/connect",
-        Some(json!({"project":"operator"})),
+        Some(json!({"project":"operator", "generation":state.0.coordinator.generation()})),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
@@ -88,7 +88,7 @@ async fn http_contract_exposes_status_health_and_page_controls() {
         &state,
         Method::POST,
         "/thinking",
-        Some(json!({"level":"high"})),
+        Some(json!({"level":"high", "generation":state.0.coordinator.generation()})),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
@@ -99,7 +99,7 @@ async fn http_contract_exposes_status_health_and_page_controls() {
         &state,
         Method::POST,
         "/model",
-        Some(json!({"model":"anthropic/next"})),
+        Some(json!({"model":"anthropic/next", "generation":state.0.coordinator.generation()})),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
