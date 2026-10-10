@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { PREPARE_OUTPUT_LIMIT, runPrepare } from "../src/prepare.ts";
+import { PREPARE_OUTPUT_LIMIT, Prepares, runPrepare } from "../src/prepare.ts";
 
 test("prepare: output, failure, bounded output and timeout reports", async () => {
 	const cwd = mkdtempSync(path.join(os.tmpdir(), "sb-prep-"));
@@ -38,4 +38,19 @@ test("prepare: a shell that exits while a process it started holds the output pi
 	assert.equal(overrun.outcome, "timed_out", JSON.stringify(overrun));
 	assert.equal(overrun.stdout, "started\n");
 	assert.ok(overrun.duration_ms < 6000, `settled after ${overrun.duration_ms} ms, not when the setsid process let go`);
+});
+
+test("prepare: a second run_prepare of the same command in the same folder joins the running one", async () => {
+	// The service sends run_prepare again when its link drops mid-prepare;
+	// a second copy must not race the first in the same tree (#292).
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "sb-prep-"));
+	const prepares = new Prepares();
+	const command = "echo x >> runs.txt; sleep 1; echo done";
+	const [first, second] = await Promise.all([prepares.run({ cwd, command }), prepares.run({ cwd, command })]);
+	assert.equal(readFileSync(path.join(cwd, "runs.txt"), "utf8"), "x\n", "the command ran once");
+	assert.deepEqual(second, first);
+	assert.equal(first.outcome, "succeeded");
+	// Once it has finished, the same command runs again.
+	await prepares.run({ cwd, command: "echo x >> runs.txt" });
+	assert.equal(readFileSync(path.join(cwd, "runs.txt"), "utf8"), "x\nx\n");
 });

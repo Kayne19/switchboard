@@ -111,3 +111,24 @@ export function runPrepare(options: { cwd: string; command: string; timeoutMs?: 
 		child.on("close", () => finish());
 	});
 }
+
+/**
+ * The prepare commands running on this host, by folder and command. A
+ * `run_prepare` for one already running starts nothing and answers with
+ * that run's result: the service sends run_prepare again when its link
+ * drops mid-prepare, and a second copy would race the first in the same
+ * tree, and the first run's report would be lost (#292).
+ */
+export class Prepares {
+	readonly #running = new Map<string, Promise<PrepareResult>>();
+
+	/** Run a prepare command, or join the same command already running in the same folder. */
+	run(options: { cwd: string; command: string; timeoutMs?: number }): Promise<PrepareResult> {
+		const key = JSON.stringify([options.cwd, options.command]);
+		const running = this.#running.get(key);
+		if (running) return running;
+		const run = runPrepare(options).finally(() => this.#running.delete(key));
+		this.#running.set(key, run);
+		return run;
+	}
+}

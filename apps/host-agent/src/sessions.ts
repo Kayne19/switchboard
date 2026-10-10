@@ -15,7 +15,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DaemonCommandError, type DaemonEvent, type DaemonPort, type DaemonSession, type SessionConfig } from "./daemon_port.ts";
-import { type PrepareResult, runPrepare } from "./prepare.ts";
+import { Prepares } from "./prepare.ts";
 
 export type Provenance = "created" | "taken_over";
 export type CallMode = "foreground" | "background" | "active";
@@ -147,8 +147,7 @@ export class SessionManager {
 	readonly #shortId: () => string;
 	readonly #tracked = new Map<string, Tracked>();
 	readonly #usedNames = new Set<string>();
-	/** The prepare commands still running, by folder and command. */
-	readonly #prepares = new Map<string, Promise<PrepareResult>>();
+	readonly #prepares = new Prepares();
 
 	constructor(options: SessionManagerOptions) {
 		this.#port = options.port;
@@ -308,21 +307,6 @@ export class SessionManager {
 
 	// -- commands ----------------------------------------------------------
 
-	/**
-	 * Run a prepare command, or join the same command already running in the
-	 * same folder and answer with its result. The service sends run_prepare
-	 * again when its link drops mid-prepare; a second copy would race the
-	 * first in the same tree, and the first run's report would be lost (#292).
-	 */
-	#prepare(options: { cwd: string; command: string; timeoutMs?: number }): Promise<PrepareResult> {
-		const key = JSON.stringify([options.cwd, options.command]);
-		const running = this.#prepares.get(key);
-		if (running) return running;
-		const run = runPrepare(options).finally(() => this.#prepares.delete(key));
-		this.#prepares.set(key, run);
-		return run;
-	}
-
 	/** Dispatch one host-link command. Throws CommandError or DaemonCommandError. */
 	async handle(name: string, args: Record<string, unknown>): Promise<unknown> {
 		switch (name) {
@@ -355,7 +339,7 @@ export class SessionManager {
 			case "list_models":
 				return { models: await this.#port.listModels() };
 			case "run_prepare":
-				return this.#prepare({
+				return this.#prepares.run({
 					cwd: requireString(args, "cwd"),
 					command: requireString(args, "command"),
 					timeoutMs: typeof args.timeout_ms === "number" ? args.timeout_ms : undefined,
