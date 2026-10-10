@@ -272,8 +272,10 @@ export class CallRuntime {
       flush: () => this.flushOutbox(),
       onRecordingChange: (recording) => this.update({ recording }),
       onStatus: (text, error) => this.setStatus(text, error),
-      pauseHandsFree: () => this.handsFree?.pauseForPtt(),
-      resumeHandsFree: () => this.handsFree?.resumeAfterPtt(),
+      onActive: (active) =>
+        active
+          ? this.handsFree?.pauseForPtt()
+          : this.handsFree?.resumeAfterPtt(),
     });
     this.applyLine();
   }
@@ -355,10 +357,6 @@ export class CallRuntime {
 
   send(): void {
     this.pushToTalk.stop(true);
-  }
-
-  cancel(): void {
-    this.pushToTalk.stop(false);
   }
 
   /** Forces a fresh connection and resends every clip still in the outbox. */

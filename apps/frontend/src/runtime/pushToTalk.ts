@@ -42,11 +42,13 @@ export interface PushToTalkOptions {
   enqueue: (clip: Clip) => boolean;
   flush: () => void;
   onRecordingChange: (recording: boolean) => void;
-  /** `error` undefined leaves the current error flag as it is. */
   /** Every status says whether it is an error (`CallRuntime.setStatus`). */
   onStatus: (text: string, error: boolean) => void;
-  pauseHandsFree: () => void;
-  resumeHandsFree: () => void;
+  /**
+   * Push-to-talk took the microphone (a press) or let go of it (the press
+   * ended, `isActive` already false). Hands-free pauses and resumes on it.
+   */
+  onActive: (active: boolean) => void;
 }
 
 function defaultCreateRecorder(stream: MediaStream): MediaRecorder {
@@ -304,9 +306,9 @@ export class PushToTalk {
     }
   }
 
-  /** Enter `acquiring`: hands-free lets go, the meter's context is made, the microphone is asked for. */
+  /** Enter `acquiring`: push-to-talk takes the microphone, makes the meter's context, and asks for it. */
   private ask(): Phase {
-    this.options.pauseHandsFree();
+    this.options.onActive(true);
     const press: Press = { meter: this.openMeter() };
     // A `getUserMedia` that throws instead of rejecting is a refusal too.
     const answered = new Promise<MediaStream>((resolve) =>
@@ -521,7 +523,7 @@ export class PushToTalk {
    */
   private end(outcome: Outcome): void {
     const { onStatus } = this.options;
-    this.options.resumeHandsFree();
+    this.options.onActive(false);
     this.options.onRecordingChange(false);
     switch (outcome.kind) {
       case "refused":

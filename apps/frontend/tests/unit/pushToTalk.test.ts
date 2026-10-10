@@ -104,8 +104,7 @@ function harness(overrides: Partial<PushToTalkOptions> = {}) {
       status.text = text;
       if (error !== undefined) status.error = error;
     },
-    pauseHandsFree: () => {},
-    resumeHandsFree: () => {},
+    onActive: () => {},
     ...overrides,
   });
   return {
@@ -306,8 +305,8 @@ describe("PushToTalk", () => {
     let activeAtResume: boolean | null = null;
     let ptt: PushToTalk | null = null;
     const h = harness({
-      resumeHandsFree: () => {
-        activeAtResume = ptt!.isActive;
+      onActive: (active) => {
+        if (!active) activeAtResume = ptt!.isActive;
       },
     });
     ptt = h.ptt;
@@ -356,8 +355,7 @@ describe("PushToTalk", () => {
         status.text = text;
         if (error !== undefined) status.error = error;
       },
-      pauseHandsFree: () => {},
-      resumeHandsFree: () => {},
+      onActive: () => {},
     });
     expect(navigator.mediaDevices, "the test page is not a secure origin").toBe(
       undefined,
@@ -420,6 +418,7 @@ describe("push-to-talk lifecycle: phase x event", () => {
     recording: boolean;
     /** The status the event set, or null when it set none. */
     status: [string, boolean] | null;
+    /** `onActive(true)`, which pauses hands-free, and `onActive(false)`, which resumes it. */
     paused: number;
     resumed: number;
     /** `getUserMedia` calls. */
@@ -527,8 +526,7 @@ describe("push-to-talk lifecycle: phase x event", () => {
       flush: () => frames.push("flush"),
       onRecordingChange: (on) => (recording = on),
       onStatus: (text, error) => (status = [text, error]),
-      pauseHandsFree: () => (counts.paused += 1),
-      resumeHandsFree: () => (counts.resumed += 1),
+      onActive: (active) => (active ? (counts.paused += 1) : (counts.resumed += 1)),
     });
     const released = () => streams.reduce((sum, stream) => sum + stream.stops(), 0);
     let mark = { released: 0, closed: 0, frames: 0, clips: 0 };
