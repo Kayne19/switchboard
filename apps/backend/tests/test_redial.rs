@@ -76,6 +76,37 @@ async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() 
     assert_eq!(board.coordinator.status().model, "anthropic/current:high");
 }
 
+/// A command the host refuses leaves the handle unusable, not the session
+/// ended: the service still ends the session it created, so it does not run
+/// on with the caller's conversation and block a desk takeover (#291).
+#[tokio::test]
+async fn a_model_the_daemon_refuses_still_ends_the_session_on_its_host() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("On it.")));
+    host.on_command = Some(Box::new(|name, _| {
+        (name == "set_model").then(|| {
+            Some(Err((
+                "daemon_error".to_owned(),
+                "unknown model anthropic/next".to_owned(),
+            )))
+        })
+    }));
+    let log = host.serve(board.hosts().connect_fake(HOST));
+    let reply = board
+        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let live = board.agent.clone().expect("alpha is on the line");
+
+    let decided = board.planner.model_change("anthropic/next").await;
+    let reply = redialed(&mut board, decided).await;
+
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert!(!live.alive());
+    assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
+    board.shutdown().await;
+}
+
 #[test]
 fn transfer_model_selection_honors_thinking_without_model() {
     let project = Project {

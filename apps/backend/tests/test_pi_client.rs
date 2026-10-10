@@ -287,6 +287,7 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         busy: AtomicBool::new(true),
         closed: AtomicBool::new(false),
         released: AtomicBool::new(false),
+        ended_on_host: AtomicBool::new(false),
         brief: String::new(),
         brief_due: AtomicBool::new(false),
         turn: StdMutex::new(None),
