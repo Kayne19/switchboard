@@ -22,9 +22,9 @@ use crate::routing_view::RoutingView;
 use crate::speech::{deliver_turn_if_current, SpeechGroup};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{mpsc, Mutex};
-use tokio::task::Id as TaskId;
 #[cfg(test)]
 use tokio::time::{timeout, Duration};
 use tracing::Instrument;
@@ -519,7 +519,7 @@ pub(crate) async fn process_turns(state: AppState) {
         let Some(operation) = admit_turn(&state, &id, generation).await else {
             continue;
         };
-        let mut run = TurnRun::begin(&state, id, generation, operation, started);
+        let run = TurnRun::begin(&state, id, generation, operation, started);
         let turn_state = state.clone();
         let turn_id = run.id.clone();
         let handle_turn = async move {
@@ -529,27 +529,7 @@ pub(crate) async fn process_turns(state: AppState) {
                 .handle_decision_with_takeover(&turn_id, &transcript, &decision, takeover)
                 .await
         };
-        // Register the abort handle before awaiting the task, so a page
-        // rescue can cancel the turn even while transfer setup has no
-        // session yet.
-        let outcome = match spawn_registered_operation(
-            &state,
-            generation,
-            handle_turn.instrument(run.span.clone()),
-        )
-        .await
-        {
-            None => TurnOutcome::NotRegistered,
-            Some((task, task_id)) => {
-                run.task = Some(task_id);
-                match task.await {
-                    Ok(reply) => TurnOutcome::Replied(reply),
-                    Err(error) if error.is_cancelled() => TurnOutcome::Cancelled,
-                    Err(error) => TurnOutcome::Failed(error),
-                }
-            }
-        };
-        run.finish(&state, outcome).await;
+        run.drive(&state, handle_turn).await;
     }
     tracing::warn!("the turn worker stopped; no further turns will be dispatched");
 }
@@ -612,9 +592,9 @@ enum TurnOutcome {
 }
 
 /// A caller turn from its admission to its end: the operation the
-/// coordinator admitted it under, the leg it runs on, its speech group, and
-/// its task once registered. `begin` opens it (in flight, speech group,
-/// `turn_start`, `thinking`) and `finish` is its one end, whatever the
+/// coordinator admitted it under, the leg it runs on, and its speech group.
+/// `begin` opens it (in flight, speech group, `turn_start`, `thinking`),
+/// `drive` runs its task, and `finish` is its one end, whatever the
 /// outcome.
 #[must_use = "a caller turn ends only through `finish`"]
 struct TurnRun {
@@ -624,7 +604,6 @@ struct TurnRun {
     route: String,
     operation: OperationIdentity,
     group: SpeechGroup,
-    task: Option<TaskId>,
     /// The PBX, the agent, and the reply's synthesis all log under the clip
     /// that started the turn.
     span: tracing::Span,
@@ -665,19 +644,38 @@ impl TurnRun {
             route,
             operation,
             group,
-            task: None,
             span,
             started,
         }
     }
 
-    /// The one end of a caller turn. The task and the operation are released
-    /// first, the turn is traced to its end and its outcome reported, and
-    /// only then is the speech group dropped and the worker free.
+    /// Runs the turn's task to its end and ends the turn with how it went.
+    /// The task is registered before it is awaited, so a page rescue can
+    /// cancel it even while transfer setup has no session yet, and it leaves
+    /// the registry as soon as it ends.
+    async fn drive(self, state: &AppState, task: impl Future<Output = Reply> + Send + 'static) {
+        let registered =
+            spawn_registered_operation(state, self.generation, task.instrument(self.span.clone()))
+                .await;
+        let outcome = match registered {
+            None => TurnOutcome::NotRegistered,
+            Some((task, task_id)) => {
+                let ended = task.await;
+                clear_active_operation(state, task_id).await;
+                match ended {
+                    Ok(reply) => TurnOutcome::Replied(reply),
+                    Err(error) if error.is_cancelled() => TurnOutcome::Cancelled,
+                    Err(error) => TurnOutcome::Failed(error),
+                }
+            }
+        };
+        self.finish(state, outcome).await;
+    }
+
+    /// The one end of a caller turn. The operation is released first, the
+    /// turn is traced to its end and its outcome reported, and only then is
+    /// the speech group dropped and the worker free.
     async fn finish(self, state: &AppState, outcome: TurnOutcome) {
-        if let Some(task) = self.task {
-            clear_active_operation(state, task).await;
-        }
         state.0.coordinator.finish_operation(&self.operation);
         let (id, generation) = (self.id.as_str(), self.generation);
         match outcome {
