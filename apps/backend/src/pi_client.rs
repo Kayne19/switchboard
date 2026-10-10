@@ -440,7 +440,9 @@ impl PiSession {
     }
 
     /// Releases the process: its input, the process tree, and the stderr
-    /// drain. Run once, on entry to `Closed`.
+    /// drain. Run on entry to `Closed`, and by a `close` that finds the
+    /// process already `Closed`; each resource is taken once, so a second
+    /// run only waits for the first.
     async fn release(&self) {
         self.inner.stdin.lock().await.take();
         if let Some(mut child) = self.inner.child.lock().await.take() {
@@ -529,13 +531,13 @@ impl PiSession {
     pub async fn close(&self) {
         match self.transition(ProcessEvent::Close) {
             Some(teardown) => self.tear_down(Some(teardown)).await,
-            // A release already under way holds `stdin`, then `child`;
-            // both locks are fair, so taking them in that order waits for
-            // it to finish.
-            None => {
-                drop(self.inner.stdin.lock().await);
-                drop(self.inner.child.lock().await);
-            }
+            // Already `Closed`: the path that closed it runs `release`, and
+            // may not have taken `stdin` yet (its `transition` and its first
+            // lock are two steps another thread can run between). Running
+            // the same release here waits on one that holds `child`, and
+            // does it when it has not started, so this never returns while
+            // the process still runs. `release` takes each resource once.
+            None => self.release().await,
         }
     }
 

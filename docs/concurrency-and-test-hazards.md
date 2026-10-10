@@ -610,7 +610,10 @@ The state has one writer, `PiSession::transition`, and one table, `step`.
 Every prompt event carries the prompt's number, so a late one (the guard of a
 prompt whose process its owner closed mid-turn) leaves the state alone. A new
 flag on this process (a second "busy", a "closing") is a new row or phase in
-`step`, not a field beside it.
+`step`, not a field beside it. A `close()` that finds the process already
+`Closed` runs the same idempotent release, which waits on one that is under
+way: the path that entered `Closed` may not have taken its first lock yet, and
+an owner that closes and restarts must not find the old process running.
 
 
 ## Prepare reports are final

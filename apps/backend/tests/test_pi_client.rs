@@ -596,6 +596,27 @@ async fn idle_and_close_is_gone_and_refuses_prompt_steer_and_a_second_close() {
     assert_eq!(seen(&session).await, Seen::Gone);
 }
 
+/// A `close` that finds the process already `Closed` (another path entered
+/// it and has not started its release yet: its `transition` and its first
+/// lock are two steps another thread can run between) still returns only
+/// once the process is gone.
+#[tokio::test]
+async fn closed_and_close_before_the_release_has_started_still_ends_the_process() {
+    let session = fake_agent(&answering("hi"), Duration::from_secs(5)).await;
+    // Enter `Closed` the way another path does, and hold its release back.
+    assert_eq!(
+        session.transition(ProcessEvent::Close),
+        Some(Teardown::Release)
+    );
+    assert!(session.inner.child.lock().await.is_some());
+    within("the close", session.close()).await;
+    assert!(
+        session.inner.child.lock().await.is_none(),
+        "close returned while the process still ran"
+    );
+    assert!(session.inner.stdin.lock().await.is_none());
+}
+
 #[tokio::test]
 async fn idle_and_the_agent_exits_on_its_own_is_gone_and_refuses_the_next_prompt() {
     let session = fake_agent("exit 0", Duration::from_secs(5)).await;
