@@ -419,6 +419,12 @@ impl Clip {
         self.remaining = self.remaining.saturating_sub(bytes.max(1));
     }
 
+    /// One JSON node kept in the record: a `Value` is this size in memory
+    /// whatever its text, so an empty string or array is not free.
+    fn node(&mut self) {
+        self.spend(std::mem::size_of::<Value>());
+    }
+
     /// Scrubs `text` and keeps at most `field_limit` bytes of it, and no
     /// more than the record has left. Only the window that can be kept is
     /// scrubbed.
@@ -448,12 +454,14 @@ impl Clip {
 
     fn marker(&mut self, dropped: usize) -> Value {
         let marker = format!("{CLIP_MARKER} {dropped} more");
+        self.node();
         self.spend(marker.len());
         self.clipped = true;
         Value::String(marker)
     }
 
     fn json(&mut self, value: &mut Value) {
+        self.node();
         match value {
             Value::String(text) => self.text(text),
             Value::Array(items) => {
@@ -467,10 +475,13 @@ impl Clip {
                     kept += 1;
                 }
                 if kept < items.len() {
+                    // A new buffer: `truncate` would keep the input's whole
+                    // allocation, which the byte estimate does not see.
                     let dropped = items.len() - kept;
-                    items.truncate(kept);
-                    let marker = self.marker(dropped);
-                    items.push(marker);
+                    let mut cut = Vec::with_capacity(kept + 1);
+                    cut.extend(items.drain(..kept));
+                    cut.push(self.marker(dropped));
+                    *items = cut;
                 }
             }
             Value::Object(map) => {

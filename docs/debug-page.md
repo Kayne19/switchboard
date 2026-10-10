@@ -124,7 +124,10 @@ events and 8 MiB of logs by each record's estimated size; past either bound
 the oldest records go first. One record is also bounded in bytes: each text
 field is cut at 4 KiB, each name, id or JSON object key at 256 bytes, a JSON
 value keeps at most 64 items per array or object, and a record keeps about
-16 KiB of text in total, whatever its input. A cut string ends with
+16 KiB in total, whatever its input. That total counts each kept JSON value's
+own size in memory (a `serde_json::Value`, 32 bytes) as well as its text, so a
+record of many empty strings or arrays is bounded too, and a cut array is
+copied into a new buffer rather than keeping its input's. A cut string ends with
 `…[clipped]`, a cut array or object gains a `…[clipped] N more` entry, and the
 record carries `"clipped": true`. The field is absent when nothing was cut.
 A field is cut before it is scrubbed, so publishing a 16 MiB value costs about
