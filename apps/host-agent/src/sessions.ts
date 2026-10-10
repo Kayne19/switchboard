@@ -746,7 +746,8 @@ class Tail {
  * left running (`server &`) inherits the output pipes and can hold them open
  * for as long as it runs; waiting for them would hold the prepare until its
  * timeout. Output the shell wrote is already in the pipes, so a short wait
- * reads it; whatever comes later is not collected.
+ * reads it. Then our ends are closed: a process left behind that writes to
+ * them later gets SIGPIPE, which ends it unless it ignores the signal.
  */
 export const PREPARE_DRAIN_MS = 500;
 
