@@ -7,7 +7,7 @@ use crate::leg_transitions::LegChange;
 use crate::lifecycle::{CandidateLeg, Coordinator, LifecycleError, ProjectLeg};
 use crate::models::{normalize_thinking, parse_spec, pin_thinking, ModelCatalog};
 use crate::pbx::{uuid_like, Switchboard, OPERATOR};
-use crate::pi_client::{LegSession, PiSessionError};
+use crate::pi_client::PiSessionError;
 use crate::prewarm::{LaunchPlan, Prewarm};
 use crate::project_session::{ProjectSession, SessionState};
 use crate::registry::{Project, Registry};
@@ -296,8 +296,8 @@ impl Switchboard {
             thinking_in_spec(&spec),
         )
         .with_catalog(launch.catalog.clone());
-        let staged = match self.coordinator.begin_candidate(candidate) {
-            Ok(staged) => staged,
+        let mut startup = match self.begin_startup(candidate, LegChange::Redial) {
+            Ok(startup) => startup,
             Err(error) => {
                 tracing::warn!(project = %project.id, %error, "candidate startup for the model change was refused");
                 return self.reply_failure(
@@ -307,12 +307,17 @@ impl Switchboard {
             }
         };
 
+        // A failed change loses the leg. The session it kept is still the
+        // switchboard's agent, so `drop_agent` ends it and announces its
+        // `finished`, exactly once.
         let session = match self.switch_live(&leg.model, &spec, &leg_token).await {
             Ok(session) => session,
             Err(error) => {
                 tracing::error!(project = %project.id, %spec, %error, "could not change the leg's model");
-                self.abandon_swap(format!("model change failed: {error}"))
+                startup
+                    .abandon(self, format!("model change failed: {error}"))
                     .await;
+                self.drop_agent().await;
                 self.operator_note = Some(format!(
                     "Couldn't move {} to {spec}: {}.",
                     project.id,
@@ -321,28 +326,19 @@ impl Switchboard {
                 return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
             }
         };
-        self.set_active_session(Some(LegSession::Project(session.clone())))
-            .await;
+        startup.attach(self, &session).await;
 
-        if let Err(error) = self
-            .commit_leg(&project.id, &leg_token, &session, LegChange::Redial)
-            .await
-        {
-            session.close();
-            self.abandon_swap(format!("adoption failed: {error}")).await;
-            return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
+        match startup.commit(self).await {
+            Ok(leg) => {
+                let mut reply = self.reply([format!("Now on {spoken}.")], None);
+                reply.delivery_generation = Some(leg.generation);
+                reply
+            }
+            Err(error) => {
+                self.drop_agent().await;
+                self.couldnt_bring_up_on(&project.id, &spoken, error.to_string())
+            }
         }
-        let mut reply = self.reply([format!("Now on {spoken}.")], None);
-        reply.delivery_generation = Some(staged.generation);
-        reply
-    }
-
-    /// Ends a model change that failed. The live session is still the
-    /// switchboard's agent, so `drop_agent` announces its `finished`, exactly
-    /// once.
-    async fn abandon_swap(&mut self, rollback: String) {
-        self.rollback_startup(rollback);
-        self.drop_agent().await;
     }
 
     /// Changes the live session's model and thinking level from `from` to

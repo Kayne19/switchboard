@@ -334,7 +334,7 @@ was made for, and each is closed where its side effect happens:
   because a return to the operator keeps the generation.
 - **While the leg is coming up.** A candidate is adopted on its first sign of
   life, but the PBX holds its session (`Switchboard::agent`) only once its
-  intro ends and `commit_leg` runs. In between, the coordinator names the new
+  intro ends and its `Startup` commits. In between, the coordinator names the new
   project while the PBX still holds the leg before it. A redial then would
   rescue the transfer's turn, which cancels it before it commits, and switch
   the old session under the new project's name (#236). So the planner refuses

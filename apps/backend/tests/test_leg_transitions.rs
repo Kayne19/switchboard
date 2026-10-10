@@ -6,6 +6,7 @@ use crate::pbx::{
     board_on, board_with, on_alpha, project, prompts, says, scratch_dir, serve, transcript,
     two_model_catalog, until_named, HOST,
 };
+use crate::redial::Redial;
 use crate::router::{Action, ConversationMode, Decision};
 use crate::within;
 use serde_json::json;
@@ -22,7 +23,7 @@ fn read_lines(path: &std::path::Path) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
+async fn a_dial_to_an_ambiguous_name_asks_which_project_was_meant() {
     let p1 = Project {
         id: "proj-a".into(),
         description: String::new(),
@@ -43,12 +44,8 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
     };
 
     let mut board = board_with(vec![p1, p2], true);
-    let ctx = TransferContext {
-        exact_caller_transcript: "transfer to shared".into(),
-        derived_intent: String::new(),
-    };
 
-    let reply = board.transfer_ctx(&ctx, "shared", "", "").await;
+    let reply = board.dial("shared", "").await;
     assert!(reply
         .to_speak
         .iter()
@@ -60,17 +57,21 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         .contains("Couldn't tell which project \"shared\" meant: proj-a, proj-b."));
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn a_refused_transfer_keeps_the_caller_on_the_leg_they_are_on() {
-    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("here"))).await;
-    let reply = board
-        .transfer_ctx(&transcript("go to gamma"), "gamma", "", "")
-        .await;
-    assert!(reply.error.is_some(), "{reply:?}");
-    assert_eq!(board.coordinator.route(), "alpha");
-    assert!(board.agent.is_some(), "the refusal dropped alpha");
-    board.shutdown().await;
+async fn a_dial_to_an_unknown_name_names_the_projects_there_are() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+
+    let reply = board.dial("gamma", "").await;
+
+    assert_eq!(
+        reply.to_speak,
+        ["I don't have a project called gamma. The ones I have are alpha, beta."]
+    );
+    assert_eq!(reply.error.as_deref(), Some("unknown project \"gamma\""));
+    assert_eq!(
+        board.operator_note.as_deref(),
+        Some("No project matches \"gamma\". Registered: alpha, beta.")
+    );
 }
 
 #[tokio::test]
@@ -220,7 +221,7 @@ async fn a_transfer_to_a_host_that_is_not_connected_is_refused_with_the_reason()
     let mut board = board_with(vec![project("alpha", "")], true);
 
     let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
 
     assert_eq!(reply.route, OPERATOR);
@@ -244,8 +245,9 @@ async fn a_transfer_resolves_a_bare_model_against_the_launch_catalog() {
     let mut board = board_with(vec![project("alpha", "")], true);
     let log = serve(&board, Box::new(|_, _| says("Ready.")));
 
+    let alpha = project("alpha", "");
     let reply = board
-        .transfer_ctx(&transcript("connect me"), "alpha", "current", "high")
+        .transfer_ctx(&transcript("connect me"), &alpha, "current", "high")
         .await;
 
     assert!(reply.error.is_none(), "transfer failed: {:?}", reply.error);
@@ -298,7 +300,7 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
         turn_board
             .lock()
             .await
-            .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+            .transfer_to(&transcript("put me through"), "alpha")
             .await
     });
 
@@ -463,7 +465,7 @@ async fn a_transfer_whose_session_cannot_start_leaves_the_caller_on_the_operator
     let generation = coordinator.generation();
 
     let reply = board
-        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .transfer_to(&transcript("put me through to alpha"), "alpha")
         .await;
 
     let error = reply.error.clone().expect("the transfer failed");
@@ -514,7 +516,7 @@ async fn an_intro_that_never_settles_is_dropped_at_the_turn_deadline() {
     let generation = coordinator.generation();
 
     let reply = board
-        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .transfer_to(&transcript("put me through to alpha"), "alpha")
         .await;
 
     assert_eq!(reply.error.as_deref(), Some("the agent stopped responding"));
@@ -604,7 +606,7 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
     })));
     board.handle("hello").await;
     let reply = board
-        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .transfer_to(&transcript("put me through to alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
     let agent = board.agent.clone().expect("the project leg is live");
@@ -638,9 +640,7 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
 async fn at_most_one_session_per_project_stays_up() {
     let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("On it."))).await;
     // Put through to alpha again from alpha: the old session ends.
-    let reply = board
-        .transfer_ctx(&transcript("again"), "alpha", "", "")
-        .await;
+    let reply = board.transfer_to(&transcript("again"), "alpha").await;
     assert_eq!(reply.route, "alpha");
     assert_eq!(log.named("create_session").len(), 2);
     assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
@@ -684,7 +684,7 @@ async fn failed_transfer_adoption_returns_to_the_operator_and_cleans_up() {
     let log = serve(&board, Box::new(|_, _| says("ready")));
 
     let reply = board
-        .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+        .transfer_to(&transcript("put me through"), "alpha")
         .await;
 
     assert!(reply.error.is_some(), "adoption must fail: {reply:?}");
@@ -722,7 +722,7 @@ async fn failed_transfer_intro_publishes_finished_instead_of_stuck_busy() {
     fake.serve(board.hosts().connect_fake(HOST));
 
     let reply = board
-        .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+        .transfer_to(&transcript("put me through"), "alpha")
         .await;
 
     assert!(reply.error.is_some());
@@ -747,9 +747,7 @@ async fn a_stopped_project_starts_fresh_after_close() {
         .handle_decision("yes", &Decision::fallback("confirm"))
         .await;
     assert_eq!(stopped.route, OPERATOR);
-    let resumed = board
-        .transfer_ctx(&transcript("fresh alpha"), "alpha", "", "")
-        .await;
+    let resumed = board.transfer_to(&transcript("fresh alpha"), "alpha").await;
     assert_eq!(resumed.route, "alpha");
     assert_ne!(board.agent.as_ref().unwrap().session_id(), first);
     assert_eq!(log.named("create_session").len(), 2);
@@ -845,9 +843,7 @@ async fn takeover_backgrounds_an_existing_service_foreground_agent() {
         None
     }));
     let log = host.serve(board.hosts().connect_fake(HOST));
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     let alpha = board.agent.clone().expect("alpha is foreground");
     let reply = board
         .handle_decision(
@@ -1036,9 +1032,7 @@ async fn leaving_a_taken_over_leg_by_transfer_detaches_without_kill() {
             },
         )
         .await;
-    let reply = board
-        .transfer_ctx(&transcript("beta"), "beta", "", "")
-        .await;
+    let reply = board.transfer_to(&transcript("beta"), "beta").await;
     assert_eq!(reply.route, "beta");
     tokio::time::timeout(Duration::from_secs(1), detached_rx)
         .await
@@ -1198,7 +1192,7 @@ async fn failed_takeover_from_project_restores_foreground_for_steering() {
     }));
     let log = host.serve(board.hosts().connect_fake(HOST));
     board
-        .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
+        .transfer_to(&transcript("connect alpha"), "alpha")
         .await;
     assert_eq!(board.coordinator.route(), "alpha");
 
@@ -1414,3 +1408,346 @@ async fn host_loss_closes_a_taken_over_session_without_killing_the_desk_process(
     session.close();
     assert!(!log.names().contains(&"kill".into()));
 }
+
+#[tokio::test]
+async fn a_bring_up_dropped_before_it_ends_rolls_its_candidate_back() {
+    let (mut board, coordinator, notices) = coordinated_board(project("alpha", ""), &[]);
+    // The intro never settles, so the transfer is still in its first turn
+    // when it is dropped.
+    let log = serve(&board, Box::new(|_, _| vec![Step::Hold]));
+    let generation = coordinator.generation();
+
+    {
+        let context = transcript("put me through to alpha");
+        let transfer = board.transfer_to(&context, "alpha");
+        tokio::select! {
+            _ = transfer => panic!("the intro never settles"),
+            _ = until_named(&log, "prompt") => {}
+        }
+    }
+
+    // No rescue ended it (a panic in a bring-up drops it the same way): the
+    // candidate is rolled back, so the call takes turns again on the leg it
+    // was on, and the browser stops showing "connecting".
+    assert!(!coordinator.startup_in_flight());
+    assert_eq!(coordinator.route(), OPERATOR);
+    assert_eq!(coordinator.generation(), generation);
+    assert_eq!(
+        notices
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|notice| notice.ended)
+            .collect::<Vec<_>>(),
+        [None, Some(crate::protocol::CandidateEnd::RolledBack)]
+    );
+    assert!(coordinator
+        .begin_prompt(&coordinator.current_identity())
+        .is_ok());
+    board.shutdown().await;
+}
+
+// The bring-up table. A transfer, a background promotion, a takeover and a
+// redial each bring a project leg up the same way: stage a candidate, put
+// its session on the active-session guard, run its first turn, then commit
+// it or abandon it. Each row runs one of them from the caller on alpha to
+// one of its exits and shows what it left: the reply, the call line and the
+// candidate notices the browser was sent, the guard, the PBX's agent and
+// residents, the agent states the page was told, and whether the session it
+// brought up still runs.
+
+/// Where a bring-up is made to fail: the host refuses a command, or a
+/// competing owner restages the candidate when the host sees one, so the
+/// bring-up's adoption fails.
+#[derive(Clone, Copy)]
+enum Fault {
+    Refuse(&'static str),
+    Restage(&'static str),
+}
+
+/// A switchboard with the caller on alpha, recording what a bring-up does.
+struct BringUp {
+    board: Switchboard,
+    alpha: ProjectSession,
+    fault: Arc<StdMutex<Option<Fault>>>,
+    notices: Arc<StdMutex<Vec<crate::lifecycle::CandidateNotice>>>,
+    states: Arc<StdMutex<Vec<String>>>,
+    state_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    /// The session the bring-up puts on the line, once there is one: the
+    /// project session on the guard when its project is published busy, or
+    /// the session a promotion or a redial starts from.
+    subject: Arc<StdMutex<Option<ProjectSession>>>,
+}
+
+async fn bring_up_scene() -> BringUp {
+    let mut board = board_on(
+        vec![project("alpha", ""), project("beta", "")],
+        &[],
+        two_model_catalog(),
+    );
+    let mut coordinator = board.coordinator();
+    let notices = Arc::new(StdMutex::new(Vec::new()));
+    let recorded = Arc::clone(&notices);
+    coordinator.set_candidate_callback(Arc::new(move |notice| {
+        recorded.lock().unwrap().push(notice.clone());
+    }));
+    let states = Arc::new(StdMutex::new(Vec::new()));
+    let subject: Arc<StdMutex<Option<ProjectSession>>> = Arc::default();
+    let (state_tx, state_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (recorded, seen, guard) = (
+        Arc::clone(&states),
+        Arc::clone(&subject),
+        board.session_control(),
+    );
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let state = format!("{}:{}", notice.project, notice.state);
+        recorded.lock().unwrap().push(state.clone());
+        let _ = state_tx.send(state);
+        let (seen, guard) = (Arc::clone(&seen), Arc::clone(&guard));
+        Box::pin(async move {
+            if notice.state != "busy" {
+                return;
+            }
+            if let Some(LegSession::Project(session)) = guard.lock().await.clone() {
+                if session.label() == notice.project {
+                    seen.lock().unwrap().get_or_insert(session);
+                }
+            }
+        })
+    })));
+    let fault: Arc<StdMutex<Option<Fault>>> = Arc::default();
+    let armed = Arc::clone(&fault);
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("ready")));
+    host.on_command = Some(Box::new(move |name, _| {
+        let mut armed = armed.lock().unwrap();
+        match *armed {
+            Some(Fault::Refuse(command)) if command == name => {
+                *armed = None;
+                Some(Some(Err(("failed".into(), format!("{name} failed")))))
+            }
+            Some(Fault::Restage(command)) if command == name => {
+                *armed = None;
+                coordinator.set_candidate_token_for_test("restaged");
+                None
+            }
+            _ => None,
+        }
+    }));
+    host.serve(board.hosts().connect_fake(HOST));
+    let reply = board
+        .transfer_to(&transcript("look at alpha"), "alpha")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let alpha = board.agent.clone().expect("alpha is on the line");
+    BringUp {
+        board,
+        alpha,
+        fault,
+        notices,
+        states,
+        state_rx,
+        subject,
+    }
+}
+
+/// A project session as a row shows it: its project, and whether it is
+/// alpha's session from before the bring-up, and whether it has ended.
+fn session_shown(scene: &BringUp, session: &ProjectSession) -> String {
+    let before = if session.same_session(&scene.alpha) {
+        " (before)"
+    } else {
+        ""
+    };
+    let ended = if session.alive() { "" } else { " ended" };
+    format!("{}{before}{ended}", session.label())
+}
+
+async fn bring_up_shown(scene: &BringUp, reply: &Reply) -> String {
+    let board = &scene.board;
+    let error = if reply.error.is_some() { " error" } else { "" };
+    let starting = if board.coordinator.startup_in_flight() {
+        " starting"
+    } else {
+        ""
+    };
+    let notices: Vec<String> = scene
+        .notices
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|notice| {
+            let ended = notice
+                .ended
+                .map_or_else(|| "staged".to_owned(), |ended| format!("{ended:?}"));
+            format!("{} {ended}", notice.route)
+        })
+        .collect();
+    let guard = match board.active_session.lock().await.clone() {
+        None => "none".to_owned(),
+        Some(LegSession::Operator(_)) => "operator".to_owned(),
+        Some(LegSession::Project(session)) => session_shown(scene, &session),
+    };
+    let agent = board
+        .agent
+        .as_ref()
+        .map_or_else(|| "none".to_owned(), |agent| session_shown(scene, agent));
+    let brought_up = match scene.subject.lock().unwrap().as_ref() {
+        None => "-",
+        Some(session) if session.alive() => "runs",
+        Some(_) => "ended",
+    };
+    format!(
+        "{}{error} {:?} | line {}{starting} [{}] | guard {guard} | agent {agent} | residents [{}] | states [{}] | brought up {brought_up}",
+        reply.route,
+        reply.to_speak.join(" "),
+        board.coordinator.route(),
+        notices.join(", "),
+        board.background_agents.projects().join(", "),
+        scene.states.lock().unwrap().join(", "),
+    )
+}
+
+/// Runs the `kind` of bring-up to its `exit` and shows what it left.
+async fn bring_up_row(kind: &str, exit: &str) -> String {
+    let mut scene = bring_up_scene().await;
+    let fault = match (kind, exit) {
+        (_, "refused" | "commits") => None,
+        (_, "session fails") => Some(Fault::Refuse("create_session")),
+        (_, "set_mode fails") => Some(Fault::Refuse("set_mode")),
+        (_, "attach fails") => Some(Fault::Refuse("attach")),
+        (_, "join fails") => Some(Fault::Refuse("join_call")),
+        (_, "model fails") => Some(Fault::Refuse("set_model")),
+        (_, "first turn fails") => Some(Fault::Refuse("prompt")),
+        ("redial", "adoption fails") => Some(Fault::Restage("join_call")),
+        (_, "adoption fails") => Some(Fault::Restage("prompt")),
+        other => panic!("no bring-up exit {other:?}"),
+    };
+    let board = &mut scene.board;
+    // What the bring-up starts from: a resident to promote, a redial
+    // decided on the leg on the line.
+    let mut plan = None;
+    match kind {
+        "promotion" => {
+            board
+                .start_background_part("beta", "beta work")
+                .await
+                .expect("beta starts in the background");
+            within("beta to settle idle", async {
+                while scene.state_rx.recv().await.as_deref() != Some("beta:idle") {}
+            })
+            .await;
+            *scene.subject.lock().unwrap() = board.background_agents.get("beta");
+        }
+        "redial" => {
+            let Redial::Planned(planned) = board.planner.model_change("anthropic/next").await
+            else {
+                panic!("the redial is planned");
+            };
+            plan = Some(*planned);
+            *scene.subject.lock().unwrap() = Some(scene.alpha.clone());
+        }
+        "transfer" | "takeover" => *scene.subject.lock().unwrap() = None,
+        other => panic!("no bring-up {other}"),
+    }
+    if exit == "refused" {
+        // Another startup holds the line, so this one cannot stage.
+        board
+            .coordinator
+            .begin_candidate(CandidateLeg::new(
+                "gamma",
+                "gamma",
+                "gamma-session",
+                "gamma-leg",
+                "",
+                "",
+            ))
+            .unwrap();
+    }
+    scene.states.lock().unwrap().clear();
+    scene.notices.lock().unwrap().clear();
+    *scene.fault.lock().unwrap() = fault;
+    let reply = match kind {
+        "transfer" | "promotion" => {
+            board
+                .transfer_to(&transcript("put me through to beta"), "beta")
+                .await
+        }
+        "takeover" => {
+            let desk = json!({
+                "session": "desk-beta", "session_id": "desk-saved",
+                "cwd": "/srv/beta", "provenance": null,
+            });
+            board
+                .take_over("take over beta", "beta", Ok(Some(desk)))
+                .await
+        }
+        _ => board
+            .redial(plan.expect("a planned redial"))
+            .await
+            .expect("alpha is still the leg on the line"),
+    };
+    let shown = bring_up_shown(&scene, &reply).await;
+    scene.board.shutdown().await;
+    format!("{kind} | {exit} => {shown}")
+}
+
+const BRING_UP_EXITS: [(&str, &str); 21] = [
+    ("transfer", "refused"),
+    ("transfer", "session fails"),
+    ("transfer", "first turn fails"),
+    ("transfer", "adoption fails"),
+    ("transfer", "commits"),
+    ("promotion", "set_mode fails"),
+    ("promotion", "join fails"),
+    ("promotion", "refused"),
+    ("promotion", "first turn fails"),
+    ("promotion", "adoption fails"),
+    ("promotion", "commits"),
+    ("takeover", "refused"),
+    ("takeover", "attach fails"),
+    ("takeover", "join fails"),
+    ("takeover", "first turn fails"),
+    ("takeover", "adoption fails"),
+    ("takeover", "commits"),
+    ("redial", "refused"),
+    ("redial", "model fails"),
+    ("redial", "adoption fails"),
+    ("redial", "commits"),
+];
+
+#[tokio::test]
+async fn every_bring_up_exit_leaves_the_line_as_the_table_says() {
+    let mut rows = Vec::new();
+    for (kind, exit) in BRING_UP_EXITS {
+        rows.push(bring_up_row(kind, exit).await);
+    }
+    let expected: Vec<&str> = BRING_UP_TABLE.trim().lines().map(str::trim).collect();
+    if rows != expected {
+        eprintln!("{}", rows.join("\n"));
+    }
+    assert_eq!(rows, expected);
+}
+
+const BRING_UP_TABLE: &str = r#"
+transfer | refused => alpha error "I couldn't open beta." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
+transfer | session fails => alpha error "I couldn't open beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
+transfer | first turn fails => alpha error "I couldn't open beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+transfer | adoption fails => alpha error "I couldn't open beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+transfer | commits => beta "" | line beta [beta staged, beta Adopted] | guard beta | agent beta | residents [alpha] | states [beta:busy, alpha:idle, beta:idle] | brought up runs
+promotion | set_mode fails => alpha error "I couldn't pick beta back up." | line alpha [] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:finished] | brought up ended
+promotion | join fails => alpha error "I couldn't pick beta back up." | line alpha [] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:finished] | brought up ended
+promotion | refused => alpha error "I couldn't pick beta back up." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+promotion | first turn fails => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+promotion | adoption fails => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+promotion | commits => beta "" | line beta [beta staged, beta Adopted] | guard beta | agent beta | residents [alpha] | states [beta:busy, alpha:idle, beta:idle] | brought up runs
+takeover | refused => alpha error "I couldn't take over beta." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
+takeover | attach fails => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
+takeover | join fails => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
+takeover | first turn fails => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+takeover | adoption fails => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+takeover | commits => beta "" | line beta [beta staged, beta Adopted] | guard beta | agent beta | residents [alpha] | states [beta:busy, alpha:idle, beta:idle] | brought up runs
+redial | refused => alpha error "I couldn't change the model on alpha." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up runs
+redial | model fails => operator error "I couldn't bring alpha back up on next on anthropic, thinking medium." | line operator [alpha staged, alpha RolledBack] | guard none | agent none | residents [] | states [alpha:finished] | brought up ended
+redial | adoption fails => operator error "I couldn't bring alpha back up on next on anthropic, thinking medium." | line operator [alpha staged, alpha RolledBack] | guard none | agent none | residents [] | states [alpha:finished] | brought up ended
+redial | commits => alpha "Now on next on anthropic, thinking medium." | line alpha [alpha staged, alpha Adopted] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up runs
+"#;

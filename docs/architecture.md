@@ -136,8 +136,9 @@ thinking, catalog) and builds the status from it alone; the PBX owns the
 processes and changes the leg only through the coordinator's named transitions
 (`begin_candidate`, `adopt_candidate`, `rollback_startup`,
 `return_to_operator`). Every transition that brings a project leg up (a
-transfer, a background promotion, a takeover, a redial) commits it through
-`Switchboard::commit_leg` (`leg_transitions.rs`), so each takes the same steps in the same order. A
+transfer, a background promotion, a takeover, a redial) holds one `Startup`
+(`leg_transitions.rs`) from the candidate it stages until it commits the leg
+or abandons it, so each takes the same steps in the same order. A
 rescue ends in `settle`, which every page control and
 delivered turn passes through. A model or thinking redial is decided before
 anything is torn down: `RedialPlanner` (`redial.rs`) makes every refusal from the
@@ -442,7 +443,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `call_line.rs` | the call line (`Line`, its phase data and its one transition function, `Line::next`; see "Call line"): pure, it reads the line and returns the next one | the lock, writing the line, sending notices, async work or I/O |
 | `pbx.rs` | the `Switchboard`: its state, construction, callbacks, shared session guard and shutdown; the call types the other files share (`OPERATOR`, `TransferContext`, `AgentStateNotice`) | host setup, browser rendering, TTS encoding, a copy of the route |
 | `decisions.rs` | what a Jev decision does with a caller's line: continue, go to a project, split, take over, stop on confirmation, the utility's second opinion, the operator fallback; the routing trace | Jev's classification (`router.rs`), a second commit path |
-| `leg_transitions.rs` | transfer, background promotion, takeover, return, hangup and stop; the one commit path (`commit_leg`) and its rollbacks | which leg is on the line (the coordinator's), redial decisions |
+| `leg_transitions.rs` | transfer, background promotion, takeover, return, hangup and stop; the one bring-up owner (`Startup`: `commit` and `abandon`) | which leg is on the line (the coordinator's), redial decisions |
 | `redial.rs` | model and thinking changes: `RedialPlanner`'s decision without the PBX lock, and `Switchboard::redial` | a second commit path |
 | `residents.rs` | background residents: `BackgroundRegistry`, shelving, split-part starts, detached prompts, eviction on host loss | which leg is on the line, promotion (`leg_transitions.rs`) |
 | `operator.rs` | the operator's Pi process and the routing utility process: startup, recovery, utility requests, floor rewrites | routing policy |
@@ -499,6 +500,35 @@ rollback of an adopted leg announces `rolled_back` again.
 `the_call_line_phase_by_event` in `apps/backend/tests/test_lifecycle.rs`
 pins every phase against every event. A new way to move the call is an
 `Event` and its arms in `Line::next`, never a field beside the line.
+
+### A leg's bring-up
+
+A transfer, a background promotion, a takeover and a redial bring a
+project leg up through the call line, never beside it. Each is a fixed
+sequence with failure exits, not a machine: one `Startup` value
+(`leg_transitions.rs`) owns it from the candidate it stages until it
+commits or abandons, and the call line is what it commits or rolls back.
+
+| step | what the `Startup` holds | on failure |
+|---|---|---|
+| `Switchboard::begin_startup` | the staged candidate's identity, the project, the change (`LegChange`: a new agent or a redial) | refused before anything is staged: the caller answers |
+| `attach` | the session, now on the active-session guard, and what it displaced from the guard | `abandon` (nothing attached: the rollback alone) |
+| the first turn (a redial has none) | the same | `abandon` |
+| `commit` | consumed: the leg is the PBX's agent and the guard's, and the identity it is on the line under is returned | a failed adoption abandons |
+
+`abandon` is the one failure exit, in one order: the attached session is
+ended, a new agent is published `finished`, and the guard goes back to
+what the attach displaced while, under the guard's lock, the call line
+rolls back to the leg before it. A redial's failure then drops the leg
+(`drop_agent`). A `Startup` dropped without either (its future aborted, a
+panic) rolls its candidate back in `Drop`; the guard and the session are
+left to the rescue that aborted it. A rollback names the generation its
+startup staged at (`rollback_startup`), so one whose startup has already
+ended (committed, rescued, rolled back) does nothing.
+`every_bring_up_exit_leaves_the_line_as_the_table_says` in
+`apps/backend/tests/test_leg_transitions.rs` pins every bring-up at every
+exit. A new way to bring a leg up holds a `Startup`; a new failure exit
+calls `abandon`.
 
 ## Turn lifecycle
 

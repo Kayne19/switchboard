@@ -915,14 +915,12 @@ pub(crate) async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> 
 async fn foreground_alpha_turn(state: &AppState) -> (String, u64) {
     let mut board = state.0.switchboard.lock().await;
     let reply = board
-        .transfer_ctx(
+        .transfer_to(
             &crate::pbx::TransferContext {
                 exact_caller_transcript: "put me through to alpha".into(),
                 ..Default::default()
             },
             "alpha",
-            "",
-            "",
         )
         .await;
     assert_eq!(reply.route, "alpha");

@@ -729,8 +729,12 @@ impl Coordinator {
         self.step(Event::FinishIntro).is_ok()
     }
 
-    pub fn rollback_startup(&self, reason: impl Into<String>) -> bool {
-        let Ok(Some(notice)) = self.step(Event::Rollback) else {
+    /// Rolls back the startup staged at `generation`, if it is still in
+    /// flight: the line goes back to the leg before it. False if that
+    /// startup has already ended (committed, rescued, rolled back) or
+    /// another is in flight.
+    pub fn rollback_startup(&self, generation: u64, reason: impl Into<String>) -> bool {
+        let Ok(Some(notice)) = self.step(Event::Rollback { generation }) else {
             return false;
         };
         tracing::info!(route = %notice.route, reason = %reason.into(), "a startup was rolled back");
