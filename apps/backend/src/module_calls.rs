@@ -1,13 +1,13 @@
 //! A project session's module calls over the host link: the `/host`
 //! upgrade, the admission every acting call passes, and `speak`,
 //! `request_to_speak`, `display` and `view`.
+use crate::app_state::emit_message;
 use crate::app_state::AppState;
-use crate::app_state::{emit_message, publish_agents};
 use crate::browser::MAX_WEBSOCKET_MESSAGE_BYTES;
 use crate::display::DISPLAY_CONFIRM_DEADLINE_MS;
 use crate::floor::FloorRequest;
 use crate::project_session::AgentCall;
-use crate::protocol::{AgentRequest, ServerMessage};
+use crate::protocol::ServerMessage;
 #[cfg(test)]
 use crate::speech::start_speech_worker_for_test;
 use crate::speech::{
@@ -299,8 +299,8 @@ fn recent_floor_context(entries: &[crate::history::TranscriptEntry]) -> String {
         .join("\n")
 }
 
-/// Records a background agent's request without speaking for it. The floor
-/// slice consumes this state when the caller answers waiting.
+/// Queues a background agent's request to speak on the floor, without
+/// speaking for it. The floor owns who is waiting (`floor::Waiting`).
 pub(crate) async fn request_to_speak(state: AppState, token: &str, raw: Value) -> Response {
     let Some(message) = raw
         .get("message")
@@ -327,27 +327,21 @@ pub(crate) async fn request_to_speak(state: AppState, token: &str, raw: Value) -
         )
             .into_response();
     };
-    let request = AgentRequest {
-        message: message.to_owned(),
-        reason: reason.to_owned(),
-    };
     let generation = state.0.coordinator.generation();
     let context = recent_floor_context(&state.0.transcript_log.lock().await.entries());
-    let Some((project, change, held_display)) =
-        state.0.coordinator.with_background(token, |project| {
-            let project = project.to_owned();
-            let held_display = state.0.projection.has_held_display(&project);
-            let change = state.0.projection.waiting(project.clone(), request.clone());
-            (project, change, held_display)
-        })
-    else {
+    let Some((project, held_display)) = state.0.coordinator.with_background(token, |project| {
+        (
+            project.to_owned(),
+            state.0.projection.has_held_display(project),
+        )
+    }) else {
         return (
             axum::http::StatusCode::CONFLICT,
             Json(json!({"delivered":false,"reason":"not_on_call","detail":"this session is not a background call"})),
         )
             .into_response();
     };
-    publish_agents(&state, change);
+    // The floor marks the agent waiting as it queues the request.
     state
         .0
         .floor
@@ -357,8 +351,8 @@ pub(crate) async fn request_to_speak(state: AppState, token: &str, raw: Value) -
             token: token.to_owned(),
             generation,
             context,
-            message: request.message,
-            reason: request.reason,
+            message: message.to_owned(),
+            reason: reason.to_owned(),
             held_display,
         })
         .await;

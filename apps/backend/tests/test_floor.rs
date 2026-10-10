@@ -135,12 +135,12 @@ async fn a_floor_event_between_the_check_and_the_wait_is_not_lost() {
     floor.set_page_connected(true).await;
     floor.enqueue(request(1)).await;
     let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
-    // The page's second check reads it gone, and it comes back before the
-    // worker waits: the wake-up lands in the gap after the state is read.
+    // The worker's first read finds the page gone, and it comes back before
+    // the worker waits: the wake-up lands in the gap after the state is read.
     let checks = Arc::new(AtomicUsize::new(0));
     let racing = floor.clone();
     h.connected = Arc::new(move || {
-        if checks.fetch_add(1, Ordering::SeqCst) == 1 {
+        if checks.fetch_add(1, Ordering::SeqCst) == 0 {
             racing.changed.notify_waiters();
             return false;
         }
@@ -734,4 +734,761 @@ async fn the_floor_traces_a_gate_yes_release_and_a_dropped_message() {
             ("dropped_agent_gone".to_owned(), Some("floor-2".to_owned())),
         ]
     );
+}
+
+// The front request's phase x event table, written against the worker's
+// behaviour before it became a machine (#395). Each row starts one worker on
+// `update 1`, drives the front request into a phase through scripted hooks,
+// applies one event and names what the worker does next: which hook it calls,
+// or how the request leaves the floor. The hooks wait for the row to answer
+// them, so a row decides when each gate, rewrite and release returns.
+
+/// A hook call the worker made, with the row's way to answer it.
+enum Call {
+    Gate(String, oneshot::Sender<Result<bool, ()>>),
+    Rewrite(FloorRewriteInput, oneshot::Sender<Result<String, ()>>),
+    Release(String, oneshot::Sender<ReleaseOutcome>),
+}
+
+impl Call {
+    fn name(&self) -> String {
+        match self {
+            Call::Gate(message, _) => format!("gate({message})"),
+            Call::Rewrite(input, _) => format!("rewrite({}, quiet {})", input.message, input.quiet),
+            Call::Release(words, _) => format!("release({words})"),
+        }
+    }
+}
+
+/// One step of a row.
+#[derive(Clone, Copy, Debug)]
+enum Do {
+    /// The page comes or goes: the floor is told and the hook agrees.
+    Page(bool),
+    CallerSpeaks,
+    /// The caller last spoke longer than the threshold ago.
+    QuietLine,
+    /// Another request from another agent joins the queue.
+    Enqueue(usize),
+    /// The request's agent is no longer live.
+    AgentGone,
+    Sleep(u64),
+    /// The next call is the gate, for this message; it waits for `Answer*`.
+    ExpectGate(&'static str),
+    AnswerGate(Result<bool, ()>),
+    ExpectRewrite {
+        quiet: bool,
+    },
+    AnswerRewrite(Result<&'static str, ()>),
+    ExpectRelease(&'static str),
+    AnswerRelease(ReleaseOutcome),
+    /// The worker calls no hook for this many milliseconds.
+    ExpectNothing(u64),
+    /// `update 1` left the floor this way (`FloorReleased.how`).
+    ExpectLeft(&'static str),
+    /// `update 1` was held (`FloorHeld`).
+    ExpectHeld,
+    ExpectQueue(usize),
+}
+
+struct Row {
+    name: &'static str,
+    quiet_threshold_ms: u64,
+    page: bool,
+    steps: &'static [Do],
+}
+
+const PLAYED: ReleaseOutcome = ReleaseOutcome::Played;
+const RETRY: ReleaseOutcome = ReleaseOutcome::Retry;
+const DROP: ReleaseOutcome = ReleaseOutcome::Drop;
+const LONG: u64 = 10_000;
+const SHORT: u64 = 50;
+
+const fn row(name: &'static str, quiet_threshold_ms: u64, page: bool, steps: &'static [Do]) -> Row {
+    Row {
+        name,
+        quiet_threshold_ms,
+        page,
+        steps,
+    }
+}
+
+const ROWS: &[Row] = &[
+    // awaiting the page
+    row(
+        "awaiting_page + page comes -> gating",
+        LONG,
+        false,
+        &[
+            Do::ExpectNothing(100),
+            Do::Page(true),
+            Do::ExpectGate("update 1"),
+        ],
+    ),
+    row(
+        "awaiting_page + caller speaks, request queued -> still awaiting the page",
+        LONG,
+        false,
+        &[
+            Do::CallerSpeaks,
+            Do::Enqueue(2),
+            Do::ExpectNothing(100),
+            Do::Page(true),
+            Do::ExpectGate("update 1"),
+        ],
+    ),
+    // gating
+    row(
+        "gating + yes on a busy line -> rewriting, not quiet",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+        ],
+    ),
+    row(
+        "gating + yes on a quiet line -> rewriting, quiet",
+        LONG,
+        true,
+        &[
+            Do::QuietLine,
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: true },
+        ],
+    ),
+    row(
+        "gating + no -> held until quiet",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(false)),
+            Do::ExpectHeld,
+            Do::ExpectNothing(100),
+        ],
+    ),
+    row(
+        "gating + failed -> held until quiet, as for no",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Err(())),
+            Do::ExpectHeld,
+            Do::ExpectNothing(100),
+        ],
+    ),
+    row(
+        "gating + yes after the agent went -> dropped before the rewrite",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AgentGone,
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectLeft("dropped_agent_gone"),
+            Do::ExpectNothing(SHORT),
+            Do::ExpectQueue(0),
+        ],
+    ),
+    row(
+        "gating + page goes, then yes -> rewritten and handed to the release",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::Page(false),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+        ],
+    ),
+    // awaiting quiet (held)
+    row(
+        "awaiting_quiet + quiet reached -> rewriting without the gate",
+        SHORT,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(false)),
+            Do::ExpectRewrite { quiet: true },
+        ],
+    ),
+    row(
+        "awaiting_quiet + caller speaks, request queued -> still held, gate not asked",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(false)),
+            Do::CallerSpeaks,
+            Do::Enqueue(2),
+            Do::ExpectNothing(100),
+        ],
+    ),
+    row(
+        "awaiting_quiet + page goes and comes back after quiet -> rewriting without the gate",
+        SHORT,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::Page(false),
+            Do::AnswerGate(Ok(false)),
+            Do::ExpectNothing(150),
+            Do::Page(true),
+            Do::ExpectRewrite { quiet: true },
+        ],
+    ),
+    // rewriting
+    row(
+        "rewriting + text -> releasing those words",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+        ],
+    ),
+    row(
+        "rewriting + failure -> releasing the agent's own words",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Err(())),
+            Do::ExpectRelease("update 1"),
+        ],
+    ),
+    row(
+        "rewriting + agent gone -> dropped, never released",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AgentGone,
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectLeft("dropped_agent_gone"),
+            Do::ExpectNothing(SHORT),
+            Do::ExpectQueue(0),
+        ],
+    ),
+    // releasing
+    row(
+        "releasing + played -> left as gate_yes, next request gated",
+        LONG,
+        true,
+        &[
+            Do::Enqueue(2),
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+            Do::AnswerRelease(PLAYED),
+            Do::ExpectLeft("gate_yes"),
+            Do::ExpectGate("update 2"),
+        ],
+    ),
+    row(
+        "releasing + played after a hold -> left as quiet_after_hold",
+        SHORT,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(false)),
+            Do::ExpectRewrite { quiet: true },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+            Do::AnswerRelease(PLAYED),
+            Do::ExpectLeft("quiet_after_hold"),
+            Do::ExpectQueue(0),
+        ],
+    ),
+    row(
+        "releasing + drop -> left as dropped_agent_gone",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+            Do::AnswerRelease(DROP),
+            Do::ExpectLeft("dropped_agent_gone"),
+            Do::ExpectQueue(0),
+        ],
+    ),
+    row(
+        "releasing + retry with the page gone -> awaiting the page, then gated and rewritten again",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+            Do::Page(false),
+            Do::AnswerRelease(RETRY),
+            Do::ExpectNothing(1_500),
+            Do::Page(true),
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+        ],
+    ),
+    row(
+        "releasing + retry with the page there -> the same words again, gate not asked",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+            Do::AnswerRelease(RETRY),
+            Do::ExpectNothing(300),
+            Do::ExpectRelease("said"),
+            Do::AnswerRelease(PLAYED),
+            Do::ExpectLeft("gate_yes"),
+        ],
+    ),
+    row(
+        "releasing + floor event during it, then retry -> gating again",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+            Do::Enqueue(2),
+            Do::AnswerRelease(RETRY),
+            Do::ExpectGate("update 1"),
+        ],
+    ),
+    row(
+        "releasing + retry after a hold, page gone and back -> rewriting without the gate",
+        SHORT,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(false)),
+            Do::ExpectRewrite { quiet: true },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+            Do::Page(false),
+            Do::AnswerRelease(RETRY),
+            Do::Sleep(100),
+            Do::Page(true),
+            Do::ExpectRewrite { quiet: true },
+        ],
+    ),
+    // retrying the release
+    row(
+        "retrying_release + floor event -> gating again",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+            Do::AnswerRelease(RETRY),
+            Do::CallerSpeaks,
+            Do::ExpectGate("update 1"),
+        ],
+    ),
+    row(
+        "retrying_release + timer with the agent gone -> the release decides",
+        LONG,
+        true,
+        &[
+            Do::ExpectGate("update 1"),
+            Do::AnswerGate(Ok(true)),
+            Do::ExpectRewrite { quiet: false },
+            Do::AnswerRewrite(Ok("said")),
+            Do::ExpectRelease("said"),
+            Do::AgentGone,
+            Do::AnswerRelease(RETRY),
+            Do::ExpectRelease("said"),
+            Do::AnswerRelease(DROP),
+            Do::ExpectLeft("dropped_agent_gone"),
+        ],
+    ),
+];
+
+fn scripted_hooks(
+    connected: Arc<AtomicBool>,
+    live: Arc<AtomicBool>,
+    calls: mpsc::UnboundedSender<Call>,
+) -> FloorHooks {
+    let gate_calls = calls.clone();
+    let rewrite_calls = calls.clone();
+    FloorHooks {
+        connected: Arc::new(move || connected.load(Ordering::SeqCst)),
+        live: Arc::new(move |_| live.load(Ordering::SeqCst)),
+        gate: Arc::new(move |request| {
+            let (answer, answered) = oneshot::channel();
+            gate_calls
+                .send(Call::Gate(request.message.clone(), answer))
+                .unwrap();
+            Box::pin(async move {
+                // unbounded: the row answers the gate when it chooses.
+                answered.await.unwrap_or(Err(()))
+            }) as GateFuture
+        }),
+        rewrite: Arc::new(move |input| {
+            let (answer, answered) = oneshot::channel();
+            rewrite_calls.send(Call::Rewrite(input, answer)).unwrap();
+            Box::pin(async move {
+                // unbounded: the row answers the rewrite when it chooses.
+                answered.await.unwrap_or(Err(()))
+            }) as RewriteFuture
+        }),
+        release: Arc::new(move |_, words| {
+            let (answer, answered) = oneshot::channel();
+            calls.send(Call::Release(words, answer)).unwrap();
+            Box::pin(async move {
+                // unbounded: the row answers the release when it chooses.
+                answered.await.unwrap_or(ReleaseOutcome::Retry)
+            }) as ReleaseFuture
+        }),
+    }
+}
+
+fn other_request(n: usize) -> FloorRequest {
+    let mut request = request(n);
+    request.project = format!("agent-{n}");
+    request.token = format!("agent-{n}-token");
+    request
+}
+
+async fn run_row(row: &Row) {
+    let bus = crate::debug::DebugBus::new();
+    let floor = Floor::new(Duration::from_millis(row.quiet_threshold_ms)).with_debug(bus.clone());
+    let connected = Arc::new(AtomicBool::new(row.page));
+    let live = Arc::new(AtomicBool::new(true));
+    let (calls, mut called) = mpsc::unbounded_channel();
+    floor.set_page_connected(row.page).await;
+    floor.enqueue(request(1)).await;
+    let worker = tokio::spawn({
+        let floor = floor.clone();
+        let hooks = scripted_hooks(connected.clone(), live.clone(), calls);
+        async move { floor.run(hooks).await }
+    });
+    let mut gate = None;
+    let mut rewrite = None;
+    let mut release = None;
+    let name = row.name;
+    for (index, step) in row.steps.iter().enumerate() {
+        let at = format!("{name}: step {index} {step:?}");
+        match *step {
+            Do::Page(on) => {
+                connected.store(on, Ordering::SeqCst);
+                floor.set_page_connected(on).await;
+            }
+            Do::CallerSpeaks => floor.caller_spoke().await,
+            Do::QuietLine => floor.force_quiet_for_test().await,
+            Do::Enqueue(n) => floor.enqueue(other_request(n)).await,
+            Do::AgentGone => live.store(false, Ordering::SeqCst),
+            Do::Sleep(ms) => tokio::time::sleep(Duration::from_millis(ms)).await,
+            Do::ExpectGate(message) => match within("a gate call", called.recv()).await {
+                Some(Call::Gate(asked, answer)) if asked == message => gate = Some(answer),
+                other => panic!("{at}: got {:?}", other.map(|call| call.name())),
+            },
+            Do::AnswerGate(answer) => {
+                let _ = gate.take().expect(&at).send(answer);
+            }
+            Do::ExpectRewrite { quiet } => match within("a rewrite call", called.recv()).await {
+                Some(Call::Rewrite(input, answer)) if input.quiet == quiet && input.message == "update 1" => {
+                    rewrite = Some(answer)
+                }
+                other => panic!("{at}: got {:?}", other.map(|call| call.name())),
+            },
+            Do::AnswerRewrite(answer) => {
+                let _ = rewrite
+                    .take()
+                    .expect(&at)
+                    .send(answer.map(str::to_owned));
+            }
+            Do::ExpectRelease(words) => match within("a release call", called.recv()).await {
+                Some(Call::Release(said, answer)) if said == words => release = Some(answer),
+                other => panic!("{at}: got {:?}", other.map(|call| call.name())),
+            },
+            Do::AnswerRelease(outcome) => {
+                let _ = release.take().expect(&at).send(outcome);
+            }
+            Do::ExpectNothing(ms) => {
+                if let Ok(call) = tokio::time::timeout(Duration::from_millis(ms), called.recv()).await {
+                    panic!("{at}: got {:?}", call.map(|call| call.name()));
+                }
+            }
+            Do::ExpectLeft(how) => {
+                within("the front request leaving", async {
+                    loop {
+                        let left = debug_events(&bus).into_iter().find_map(|event| match event {
+                            DebugEvent::FloorReleased { how, floor_id, .. }
+                                if floor_id.as_deref() == Some("floor-1") =>
+                            {
+                                Some(how)
+                            }
+                            _ => None,
+                        });
+                        if let Some(left) = left {
+                            assert_eq!(left, how, "{at}");
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                })
+                .await
+            }
+            Do::ExpectHeld => {
+                within("the hold", async {
+                    while !debug_events(&bus).iter().any(|event| {
+                        matches!(event, DebugEvent::FloorHeld { floor_id, .. } if floor_id.as_deref() == Some("floor-1"))
+                    }) {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                })
+                .await
+            }
+            Do::ExpectQueue(len) => {
+                // The front leaves the queue just after its trace.
+                within("the queue length", async {
+                    while floor.queue_len().await != len {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                })
+                .await
+            }
+        }
+    }
+    worker.abort();
+}
+
+#[tokio::test]
+async fn the_front_request_phase_by_event_table() {
+    for row in ROWS {
+        run_row(row).await;
+    }
+}
+
+fn view(page: bool, caller_last_spoke: Instant) -> FloorView {
+    FloorView {
+        page,
+        caller_last_spoke,
+        quiet_threshold: THRESHOLD,
+    }
+}
+
+const THRESHOLD: Duration = Duration::from_secs(10);
+
+/// `step`, the front request's one transition, row by row: the phase, the
+/// event, and the phase it moves to or how the request leaves.
+#[test]
+fn step_moves_the_front_request_by_its_table() {
+    use FloorEvent as Event;
+    use FrontPhase as Phase;
+    let now = Instant::now();
+    let long_ago = now - THRESHOLD * 3;
+    let held = Clearance::QuietAfterHold {
+        held_since: long_ago,
+    };
+    let releasing = |clearance| Phase::Releasing {
+        words: "said".into(),
+        clearance,
+    };
+    let retrying = |clearance| Phase::RetryingRelease {
+        words: "said".into(),
+        clearance,
+        next: now,
+    };
+    let rows: Vec<(&str, Phase, Event, Step)> = vec![
+        (
+            "reading + no page -> awaiting the page",
+            Phase::Reading { hold: None },
+            Event::Read(view(false, long_ago)),
+            Step::Next(Phase::AwaitingPage { hold: None }),
+        ),
+        (
+            "awaiting the page, held + still no page -> still held",
+            Phase::AwaitingPage { hold: Some(now) },
+            Event::Read(view(false, long_ago)),
+            Step::Next(Phase::AwaitingPage { hold: Some(now) }),
+        ),
+        (
+            "reading + page, quiet line -> gating, quiet",
+            Phase::Reading { hold: None },
+            Event::Read(view(true, long_ago)),
+            Step::Next(Phase::Gating { quiet: true }),
+        ),
+        (
+            "awaiting the page + page, caller just spoke -> gating, not quiet",
+            Phase::AwaitingPage { hold: None },
+            Event::Read(view(true, now)),
+            Step::Next(Phase::Gating { quiet: false }),
+        ),
+        (
+            "reading just held + page, quiet line -> awaiting quiet from the hold",
+            Phase::Reading { hold: Some(now) },
+            Event::Read(view(true, long_ago)),
+            Step::Next(Phase::AwaitingQuiet {
+                held_since: now,
+                until: now + THRESHOLD,
+            }),
+        ),
+        (
+            "awaiting quiet + caller spoke after the hold -> quiet counts from the caller",
+            Phase::AwaitingQuiet {
+                held_since: long_ago,
+                until: long_ago + THRESHOLD,
+            },
+            Event::Read(view(true, now)),
+            Step::Next(Phase::AwaitingQuiet {
+                held_since: long_ago,
+                until: now + THRESHOLD,
+            }),
+        ),
+        (
+            "awaiting quiet + quiet reached -> rewriting, no gate",
+            Phase::AwaitingQuiet {
+                held_since: long_ago,
+                until: long_ago + THRESHOLD,
+            },
+            Event::Read(view(true, long_ago)),
+            Step::Next(Phase::Rewriting {
+                quiet: true,
+                clearance: held,
+            }),
+        ),
+        (
+            "awaiting quiet + page gone -> awaiting the page, still held",
+            Phase::AwaitingQuiet {
+                held_since: long_ago,
+                until: now,
+            },
+            Event::Read(view(false, long_ago)),
+            Step::Next(Phase::AwaitingPage {
+                hold: Some(long_ago),
+            }),
+        ),
+        (
+            "gating + yes -> rewriting",
+            Phase::Gating { quiet: false },
+            Event::GateAnswered(Ok(true)),
+            Step::Next(Phase::Rewriting {
+                quiet: false,
+                clearance: Clearance::GateYes,
+            }),
+        ),
+        (
+            "gating + no -> held now",
+            Phase::Gating { quiet: true },
+            Event::GateAnswered(Ok(false)),
+            Step::Next(Phase::Reading { hold: Some(now) }),
+        ),
+        (
+            "gating + failed -> held now",
+            Phase::Gating { quiet: true },
+            Event::GateAnswered(Err(())),
+            Step::Next(Phase::Reading { hold: Some(now) }),
+        ),
+        (
+            "rewriting + words -> releasing them",
+            Phase::Rewriting {
+                quiet: true,
+                clearance: held,
+            },
+            Event::Rewritten("said".into()),
+            Step::Next(releasing(held)),
+        ),
+        (
+            "rewriting + agent gone -> left, agent gone",
+            Phase::Rewriting {
+                quiet: false,
+                clearance: Clearance::GateYes,
+            },
+            Event::AgentGone,
+            Step::Left(Left::AgentGone),
+        ),
+        (
+            "releasing + played -> left, played as cleared",
+            releasing(held),
+            Event::Played,
+            Step::Left(Left::Played(held)),
+        ),
+        (
+            "releasing + agent gone -> left, agent gone",
+            releasing(Clearance::GateYes),
+            Event::AgentGone,
+            Step::Left(Left::AgentGone),
+        ),
+        (
+            "releasing + not released, page there -> retrying the same words",
+            releasing(Clearance::GateYes),
+            Event::NotReleased { page: true },
+            Step::Next(Phase::RetryingRelease {
+                words: "said".into(),
+                clearance: Clearance::GateYes,
+                next: now + RETRY_AFTER,
+            }),
+        ),
+        (
+            "releasing + not released, page gone -> reading, still held",
+            releasing(held),
+            Event::NotReleased { page: false },
+            Step::Next(Phase::Reading {
+                hold: Some(long_ago),
+            }),
+        ),
+        (
+            "retrying + due -> releasing the same words",
+            retrying(Clearance::GateYes),
+            Event::RetryDue,
+            Step::Next(releasing(Clearance::GateYes)),
+        ),
+        (
+            "retrying + floor changed -> reading, gate again",
+            retrying(Clearance::GateYes),
+            Event::FloorChanged,
+            Step::Next(Phase::Reading { hold: None }),
+        ),
+        (
+            "retrying after a hold + floor changed -> reading, still held",
+            retrying(held),
+            Event::FloorChanged,
+            Step::Next(Phase::Reading {
+                hold: Some(long_ago),
+            }),
+        ),
+        (
+            "gating + an event it does not wait for -> unchanged",
+            Phase::Gating { quiet: true },
+            Event::Played,
+            Step::Next(Phase::Gating { quiet: true }),
+        ),
+    ];
+    for (name, phase, event, want) in rows {
+        assert_eq!(step(phase, event, now), want, "{name}");
+    }
+    assert_eq!(Left::Played(Clearance::GateYes).how(), "gate_yes");
+    assert_eq!(Left::Played(held).how(), "quiet_after_hold");
+    assert_eq!(Left::AgentGone.how(), "dropped_agent_gone");
 }
