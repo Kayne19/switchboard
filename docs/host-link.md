@@ -402,13 +402,36 @@ Each session is reattached on its own, at start and after a reconnect. A
 session whose `attach` fails and that the daemon no longer lists gets
 `session_closed` `gone`; the others are reattached and snapshotted anyway.
 One the daemon still lists stays tracked (its provenance is kept) and gets
-no events until it attaches: the host agent runs the resync again with the
-connect backoff (1 s, doubling to 30 s) until every listed session is
-attached. A session detached or killed while its reattach is in flight
-stays released; the reattach does not track it again. A resync that fails
-as a whole (the daemon cannot `list`) is
-retried the same way, at start too: the host agent starts its link without
-those sessions rather than exit.
+no events until it attaches. Commands to it still run on the daemon (it
+does not ask for an attach to take a prompt); only its events are missing.
+The host agent tries again, with the connect backoff (1 s, doubling to
+30 s), to attach only the sessions that would not attach, until every
+listed session is attached: the sessions already attached are not
+reattached, and are not snapshotted again. A session detached or killed
+while its reattach is in flight stays released; the reattach does not
+track it again. A resync that fails as a whole (the daemon cannot `list`)
+is run again whole, with the same backoff, at start too: the host agent
+starts its link without those sessions rather than exit.
+
+`DaemonKeeper` (`apps/host-agent/src/daemon_keeper.ts`) owns this. Its
+phase is one value, written only by `#step`:
+
+| Phase | Event | Next | Done |
+|---|---|---|---|
+| `disconnected` | start, or the daemon closed | `resyncing` once connected | dial with the connect backoff until the daemon answers (it never starts one) |
+| `resyncing` | the resync attaches every listed session | `attached` | snapshot each session it attached |
+| `resyncing` | the resync leaves sessions unattached | `retrying` (those sessions) | snapshot the rest; wait the backoff |
+| `resyncing` | the resync throws | `resyncing` | wait the backoff, then the whole resync again |
+| `retrying` | the reattach attaches them, or they are gone or let go | `attached` | snapshot each one that attached |
+| `retrying` | some still will not attach | `retrying` (those) | wait the backoff |
+| `retrying` | the reattach throws | `retrying` | wait the backoff |
+| any but `disconnected` | the daemon closes | `disconnected` | a pass that was running ends, and its outcome is dropped; a wait in progress is not cut short |
+| `attached` | anything but a close | `attached` | nothing |
+
+The keeping loop runs exactly while the phase is not `attached`; leaving
+`attached` starts it. The backoff starts again at 1 s after a pass that
+attached everything it tried. The table test is in
+`apps/host-agent/tests/daemon_keeper.test.ts` ("keeper table").
 
 ### Module calls
 
