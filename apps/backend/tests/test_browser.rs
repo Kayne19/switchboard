@@ -1,6 +1,6 @@
 use super::*;
 use crate::app_state::AppState;
-use crate::app_state::{begin_alpha_candidate, emit, next_event_of, state};
+use crate::app_state::{begin_alpha_candidate, emit, next_event_of, state, state_on};
 use crate::caller_input::MAX_TYPED_TURN_CHARS;
 use crate::delivery::{DeliveryFrame, Event, DELIVERY_QUEUE};
 use crate::history::CALLER;
@@ -45,6 +45,74 @@ async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
         (id.as_str(), text.as_str(), turn_generation),
         ("typed-1", "deploy it", generation)
     );
+}
+
+/// Each typed turn is routed off the reader, and routing asks Jev, which can
+/// answer a later line first. The agent must still get the lines in the
+/// order the caller typed them.
+#[tokio::test]
+async fn typed_turns_reach_the_agent_in_the_order_they_were_sent() {
+    let jev = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(|request| async move {
+        // Jev is slow on the first line and quick on the second.
+        if request.state["caller_just_said"] == "run the tests" {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        Ok(serde_json::from_value(json!({"model":"jev-test","answers":{
+            "action": {"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},
+            "for_current_agent": {"type":"noul","noul":0.0},
+            "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
+            "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
+            "multi_target": {"type":"noul","noul":0.0}
+        }}))
+        .expect("fixture response"))
+    });
+    let config = crate::Config::for_tests(&[]);
+    let registry = crate::registry::Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("test catalog"),
+    );
+    let state = state_on(crate::pbx::Switchboard::new_with_jev(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+        jev,
+    ));
+    let connection = state.0.delivery.register();
+    let generation = state.0.coordinator.generation();
+    let mut turns = state.0.turns.take_receiver().await;
+    for (id, text) in [
+        ("typed-1", "run the tests"),
+        ("typed-2", "then deploy if they pass"),
+    ] {
+        let frame = json!({"type":"typed_turn", "id":id, "generation":generation, "text":text});
+        handle_text_frame(
+            &state,
+            connection.epoch,
+            &mut None,
+            &mut None,
+            &frame.to_string(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let mut order = Vec::new();
+    for _ in 0..2 {
+        let (id, _, _) = timeout(Duration::from_secs(5), turns.recv())
+            .await
+            .expect("a typed turn was queued")
+            .expect("the turn channel is open");
+        order.push(id);
+    }
+    assert_eq!(order, ["typed-1", "typed-2"]);
 }
 
 #[tokio::test]
