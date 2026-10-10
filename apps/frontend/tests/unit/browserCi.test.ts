@@ -58,6 +58,16 @@ describe('the CI browser job', () => {
   });
 });
 
+describe('the CI triggers', () => {
+  // A pull request is tested by its pull_request run: that run tests the merge
+  // with master, and its `test` check is the one master requires. A push run
+  // of the same head adds nothing to it, doubles the jobs each update queues,
+  // and gives a flaky leg a second chance to paint the pull request red.
+  it('runs on a pull request and on a push to master, not on a push to every branch', () => {
+    expect(workflow).toMatch(/^on:\n  push:\n    branches: \[master\]\n  pull_request:\n/m);
+  });
+});
+
 describe('the pixel goldens', () => {
   const dir = path.join(root, 'apps/frontend/tests/visual');
   const specs = readdirSync(dir).filter((file) => file.endsWith('.spec.ts'));
