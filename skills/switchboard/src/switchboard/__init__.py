@@ -593,8 +593,14 @@ def display(action=None, **fields):
         if result.delivered or result.accepted:
             if data.get("held") is True:
                 return "Held until the caller comes back to you. Say it's ready, not that it's on screen."
+            if data.get("rejected") is True:
+                return (
+                    f"The caller's screen could not show it: {data.get('reason') or 'it gave no reason'}. "
+                    "Adjust the payload and try again."
+                )
             if data.get("rendered") is False:
-                return "Sent, but the caller's screen has not confirmed it; it may not be visible yet."
+                reason = f" ({data['reason']})" if data.get("reason") else ""
+                return f"Sent, but the caller's screen has not confirmed it{reason}; it may not be visible yet."
             return "On screen."
         if result.reason == "too_large":
             return (

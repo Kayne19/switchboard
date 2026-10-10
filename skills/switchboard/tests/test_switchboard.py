@@ -278,6 +278,22 @@ class CallsTest(ModuleTestCase):
         _, shown_line = self.run_call(switchboard.display, op="clear")
         self.assertEqual(shown_line, "switchboard.display: On screen.")
 
+    def test_display_names_the_reason_the_screen_gives(self):
+        # The page refused the action: the line says why, so the agent can
+        # fix the payload. It used to read "has not confirmed it" (#255).
+        mode = {"result": {"delivered": True, "rendered": False, "rejected": True, "reason": "unknown field in chart data: zeta"}}
+        self.host(reply=lambda request: {"status": "delivered", "reason": None, "result": mode["result"]})
+        _, rejected = self.run_call(switchboard.display, op="clear")
+        self.assertIn("unknown field in chart data: zeta", rejected)
+        self.assertIn("Adjust the payload", rejected)
+        self.assertNotIn("has not confirmed", rejected)
+
+        # Every other unrendered answer names its reason too.
+        mode["result"] = {"delivered": True, "rendered": False, "reason": "no confirmation from the browser"}
+        _, unconfirmed = self.run_call(switchboard.display, op="clear")
+        self.assertIn("has not confirmed it", unconfirmed)
+        self.assertIn("no confirmation from the browser", unconfirmed)
+
     def test_request_and_caller_away_lines_point_to_the_next_step(self):
         mode = {"reply": {"status": "accepted", "reason": None}}
         self.host(reply=lambda request: mode["reply"])
