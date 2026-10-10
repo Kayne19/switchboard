@@ -1496,9 +1496,8 @@ impl ProjectSession {
     /// Sends `message` and collects the turn until the host link says it has
     /// settled. The voice brief goes first when it is due: on the first
     /// prompt, and on the first after a compaction. `source` says for the
-    /// debug page what the message is (`caller`, `intro`, `foreground`,
-    /// `model_change`), and `utterance_id` names the caller line it carries,
-    /// if any.
+    /// debug page what the message is (`caller`, `intro`, `foreground`), and
+    /// `utterance_id` names the caller line it carries, if any.
     pub async fn prompt_as(
         &self,
         message: &str,
@@ -1893,13 +1892,6 @@ async fn module_reply(inner: &ProjectInner, call: &crate::hosts::ModuleCall) -> 
         return json!({"status": "refused", "reason": "not_on_call"});
     }
     match call.call.as_str() {
-        // These names remain recognized for one release so hosts that still
-        // have the old module installed get a useful result. They are not
-        // signals: stale hosts must never move the caller.
-        "transfer_to_project" | "return_to_operator" | "set_model" => {
-            tracing::info!(%label, call = %call.call, "removed project routing call refused");
-            json!({"status": "refused", "reason": "removed"})
-        }
         SPEAK_TOOL | "request_to_speak" | "display" | "view" => {
             let Some(callback) = inner.on_module.clone() else {
                 return json!({"status": "failed", "reason": "failed"});

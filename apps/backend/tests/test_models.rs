@@ -21,6 +21,84 @@ fn parses_and_normalizes_specs() {
 }
 
 #[test]
+fn a_colon_in_a_model_id_is_not_a_thinking_level() {
+    // The suffix after the last ':' is thinking only if it is a thinking
+    // level, as pi's own `provider/id:level` parsing does; otherwise it is
+    // part of the model id (OpenRouter's `:free`, Ollama's `:32b`).
+    assert_eq!(
+        parse_spec("openrouter/qwen/qwen3-coder:free"),
+        (
+            "openrouter".into(),
+            "qwen/qwen3-coder:free".into(),
+            "".into()
+        )
+    );
+    assert_eq!(
+        parse_spec("ollama/qwen3:32b"),
+        ("ollama".into(), "qwen3:32b".into(), "".into())
+    );
+    assert_eq!(
+        parse_spec("ollama/qwen3:32b:high"),
+        ("ollama".into(), "qwen3:32b".into(), "high".into())
+    );
+    assert_eq!(
+        parse_spec("openrouter/qwen/qwen3-coder:free:xhigh"),
+        (
+            "openrouter".into(),
+            "qwen/qwen3-coder:free".into(),
+            "xhigh".into()
+        )
+    );
+    // A suffix with no letters in it is a tag, not an empty thinking level.
+    assert_eq!(
+        parse_spec("ollama/qwen2.5:7"),
+        ("ollama".into(), "qwen2.5:7".into(), "".into())
+    );
+    assert_eq!(
+        pin_thinking("ollama/qwen3:32b", "medium"),
+        "ollama/qwen3:32b:medium"
+    );
+    let choice = ModelChoice {
+        provider: "ollama".into(),
+        model: "qwen3:32b".into(),
+        thinking: "medium".into(),
+    };
+    assert_eq!(choice.spec(), "ollama/qwen3:32b:medium");
+    assert_eq!(
+        parse_spec(&choice.spec()),
+        ("ollama".into(), "qwen3:32b".into(), "medium".into())
+    );
+}
+
+#[test]
+fn a_catalog_entry_whose_id_has_a_colon_can_be_picked() {
+    let catalog = ModelCatalog::from_host_models(&json!({"models": [
+        {"provider": "ollama", "id": "qwen3:8b", "name": "Qwen3 8B", "reasoning": true},
+        {"provider": "ollama", "id": "qwen3:32b", "name": "Qwen3 32B", "reasoning": true},
+        {"provider": "openrouter", "id": "qwen/qwen3-coder:free", "name": "Qwen3 Coder (free)", "reasoning": false},
+    ]}));
+    assert_eq!(
+        catalog.resolve("ollama/qwen3:32b", "").unwrap().spec(),
+        "ollama/qwen3:32b"
+    );
+    assert_eq!(
+        catalog.resolve("ollama/qwen3:32b:high", "").unwrap().spec(),
+        "ollama/qwen3:32b:high"
+    );
+    assert_eq!(
+        catalog.resolve("ollama/qwen3:8b", "low").unwrap().spec(),
+        "ollama/qwen3:8b:low"
+    );
+    assert_eq!(
+        catalog
+            .resolve("openrouter/qwen/qwen3-coder:free", "")
+            .unwrap()
+            .spec(),
+        "openrouter/qwen/qwen3-coder:free"
+    );
+}
+
+#[test]
 fn catalog_exposes_provider_models_with_decimal_and_short_names() {
     let catalog = ModelCatalog::from_host_models(&json!({"models": [
         {"provider": "openai", "id": "gpt-5.6", "name": "GPT 5.6", "reasoning": true},

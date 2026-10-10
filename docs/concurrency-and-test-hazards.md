@@ -24,6 +24,16 @@ re-check it at their short linearization points: turn dispatch,
 `synthesize_reply_if_current`. `operation_transition` still protects the
 async resource handoff; it is not a second lifecycle authority.
 
+A turn's reply carries the generation of the leg it ran on, never the one
+current when the reply is built: a rescue bumps the generation before it
+aborts the work, so a turn that returns in between would otherwise pass the
+check. A continuing turn's reply is delivered at the generation its operation
+was admitted at; the first turn of a transfer, promotion, takeover or redial,
+at the generation its candidate was staged under (`begin_candidate` returns
+it). A rescue that abandons a candidate retires the candidate's generation as
+well as the line's, so nothing stamped with the abandoned leg's generation
+passes after it.
+
 Two properties are load-bearing and easy to break by accident:
 
 - **The epoch is stamped when a clip is accepted, not when its transcript comes
@@ -89,7 +99,7 @@ lose speech, never misroute it.
 
 Only an adoption carries the marked clips along. A hangup while the leg is
 connecting rescues the call, and a rescue sends the browser the same two
-signals an adoption does: a clear notice and an epoch one higher. Taken for
+signals an adoption does: a clear notice and a higher epoch. Taken for
 an adoption, it re-stamped the caller's words to alpha and they ran as a turn
 on the operator (#70). So `candidate_cleared` names the candidate's `route`
 and says how it ended (`reason`: `adopted`, `rolled_back`, or `rescued`), and
@@ -280,8 +290,8 @@ it up. `run_redial_control` in `apps/backend/src/page_controls.rs` runs that dec
 registered operation that leaves running work alone. A refusal is delivered at
 the generation the decision started on; nothing is cancelled and no epoch is
 sent. Only a plan that will go ahead is followed by a rescue and then
-`Switchboard::redial`. The agent's own `set_model` goes through the same
-planner, so there is one copy of each check.
+`Switchboard::redial`. The pickers are the planner's only callers; a project
+agent's own `set_model` is refused (`pi_client.rs`).
 
 Deciding early opens two windows in which the caller can leave the leg the plan
 was made for, and each is closed where its side effect happens:
@@ -296,6 +306,19 @@ was made for, and each is closed where its side effect happens:
   it, and refuses (`StaleLeg`) without launching anything. The comparison is
   the whole leg (project, identity, model, session), not the generation alone,
   because a return to the operator keeps the generation.
+- **While the leg is coming up.** A candidate is adopted on its first sign of
+  life, but the PBX holds its session (`Switchboard::agent`) only once its
+  intro ends and `commit_leg` runs. In between, the coordinator names the new
+  project while the PBX still holds the leg before it. A redial then would
+  rescue the transfer's turn, which cancels it before it commits, and switch
+  the old session under the new project's name (#236). So the planner refuses
+  while `Coordinator::startup_in_flight`, and `begin_rescue_of` refuses too, in
+  the same lock as its check. A rescue that does cancel a startup (a hangup, a
+  connect) ends that startup with it: it clears the startup's rollback, so a
+  late rollback has nothing to restore. And the PBX only acts on its project
+  session for the leg on the line (a caller turn, a redial) while that
+  session belongs to the coordinator's project (`agent_on_the_line`); a turn
+  that finds another project's session returns the caller to the operator.
 
 ## A run that starts as the caller's turn settles
 

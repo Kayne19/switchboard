@@ -1146,6 +1146,80 @@ async fn stop_requires_confirmation_before_closing_a_project() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_punctuated_yes_from_speech_to_text_confirms_a_stop() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let generation = board.coordinator.generation();
+    board
+        .decisions
+        .set_pending_stop_for_test("alpha", generation);
+    let stopped = board
+        .handle_decision("Yes.", &Decision::fallback("confirmation"))
+        .await;
+    assert_eq!(stopped.text, "Stopped alpha.");
+    assert_eq!(stopped.route, OPERATOR);
+    assert!(board.agent.is_none());
+    board.shutdown().await;
+}
+
+#[test]
+fn a_confirmation_is_a_leading_yes_in_any_punctuation() {
+    for yes in [
+        "yes",
+        "Yes.",
+        "Yes, stop it.",
+        "  YEAH   do it! ",
+        "Yep",
+        "Confirm.",
+        "Do it.",
+        "Stop it!",
+    ] {
+        assert!(is_confirmation(yes), "{yes:?} confirms");
+    }
+    for no in [
+        "",
+        "no",
+        "No, keep it going.",
+        "yesterday",
+        "not yet",
+        "I said yes",
+    ] {
+        assert!(!is_confirmation(no), "{no:?} does not confirm");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stop_asked_before_a_hangup_is_not_confirmed_after_it() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let ask = board
+        .handle_decision(
+            "stop alpha",
+            &decision(crate::router::Action::Stop, Some("alpha"), None),
+        )
+        .await;
+    assert!(ask.text.contains("Say yes to confirm"));
+    // The caller hangs up from the page instead of answering: `/hangup`
+    // rescues, then drops the leg.
+    board.coordinator.begin_rescue("operation interrupted");
+    assert_eq!(board.force_hangup().await.as_deref(), Some("alpha"));
+    let back = board
+        .transfer_ctx(&transcript("back to alpha"), "alpha", "", "")
+        .await;
+    assert_eq!(back.route, "alpha");
+
+    let reply = board
+        .handle_decision(
+            "yes",
+            &decision(crate::router::Action::Continue, None, None),
+        )
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    assert!(board.agent.is_some(), "the stale stop closed alpha");
+    board.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn the_operator_gets_the_call_state_once_per_utterance() {
     let root = scratch_dir("operator-call-state");
     let seen = root.join("operator-input");
@@ -1738,4 +1812,50 @@ async fn an_operator_answer_ends_the_trace_at_the_operator() {
     );
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_route_to_a_project_id_another_project_uses_as_an_alias_goes_to_that_id() {
+    let mut webapp = project("webapp", "");
+    webapp.aliases = vec!["web".into()];
+    let mut board = board_on(vec![project("web", ""), webapp], &[], two_model_catalog());
+    let _log = serve(&board, Box::new(|_, _| says("here")));
+    let on = board
+        .transfer_ctx(&transcript("go to webapp"), "webapp", "", "")
+        .await;
+    assert_eq!(on.route, "webapp", "{on:?}");
+
+    let reply = board
+        .route_project_part("go to web", "web", ConversationMode::Continue, Some("jev"))
+        .await;
+    assert_eq!(reply.route, "web", "{reply:?}");
+    board.shutdown().await;
+}
+
+/// The coordinator names alpha while the PBX still holds beta (an adopted
+/// transfer whose task was cancelled before it committed). The caller's
+/// words must not go to beta under alpha's name (#236).
+#[tokio::test]
+async fn a_caller_turn_never_goes_to_another_projects_session() {
+    let mut board = board_on(
+        vec![project("alpha", ""), project("beta", "")],
+        &[],
+        two_model_catalog(),
+    );
+    let log = serve(&board, Box::new(|_, _| says("On it.")));
+    let reply = board
+        .transfer_ctx(&transcript("look at beta"), "beta", "", "")
+        .await;
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    crate::pbx::put_on(&board, "alpha", "anthropic/current", two_model_catalog());
+
+    board.handle_agent_ctx(&transcript("carry on")).await;
+
+    assert!(
+        !prompts(&log).iter().any(|prompt| prompt == "carry on"),
+        "{:?}",
+        prompts(&log)
+    );
+    board.shutdown().await;
 }

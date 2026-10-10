@@ -452,6 +452,14 @@ impl Coordinator {
         self.linearize(|state| state.project_leg())
     }
 
+    /// True while a leg is coming up: from `begin_candidate` until its
+    /// startup commits (`finish_intro`) or is rolled back. The leg on the
+    /// line may already be the new one, adopted on its first sign of life,
+    /// while the PBX still holds the leg before it.
+    pub fn startup_in_flight(&self) -> bool {
+        self.linearize(|state| state.startup_rollback.is_some())
+    }
+
     /// The level the next project call is asked for when the caller names
     /// none.
     pub fn thinking_default(&self) -> String {
@@ -641,9 +649,10 @@ impl Coordinator {
         rescue.next
     }
 
-    /// `begin_rescue`, only while `leg` is still the leg on the line; `None`
-    /// rescues nothing. A control that decided on the leg it read earlier
-    /// does not cancel work on a leg the caller has since moved to. Returns
+    /// `begin_rescue`, only while `leg` is still the leg on the line and no
+    /// startup is in flight; `None` rescues nothing. A control that decided on
+    /// the leg it read earlier does not cancel work on a leg the caller has
+    /// since moved to, nor on one the PBX does not hold yet. Returns
     /// the leg as the rescue left it: the same project, model, and session
     /// under a new identity.
     pub fn begin_rescue_of(
@@ -652,7 +661,10 @@ impl Coordinator {
         reason: impl Into<String>,
     ) -> Option<ProjectLeg> {
         let (rescue, rescued) = self.linearize(|state| {
-            if state.phase == Phase::Shutdown || state.project_leg().as_ref() != Some(leg) {
+            if state.phase == Phase::Shutdown
+                || state.startup_rollback.is_some()
+                || state.project_leg().as_ref() != Some(leg)
+            {
                 return None;
             }
             let rescue = self.rescue_locked(state, reason.into());
@@ -664,11 +676,23 @@ impl Coordinator {
 
     /// Retires the current leg. A rescue abandons any in-flight startup: a
     /// rescued candidate must never be adopted, and the browser must stop
-    /// showing "connecting".
+    /// showing "connecting". A candidate already adopted on its first sign of
+    /// life keeps the line, but its startup is over too: the rescue cancels
+    /// the work that would have committed or rolled it back, so nothing is
+    /// left for a late rollback to restore.
     fn rescue_locked(&self, state: &mut CallLifecycle, reason: String) -> Rescue {
-        let abandoned_candidate = state.candidate.take().map(|candidate| candidate.route);
-        let next_token = format!("{}-rescue-{}", state.leg.token, state.leg.generation + 1);
-        state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
+        let abandoned = state.candidate.take();
+        // The rescue retires the candidate's generation too, so work stamped
+        // with the abandoned candidate's generation is stale after it.
+        let retired = abandoned
+            .as_ref()
+            .map_or(state.leg.generation, |candidate| {
+                candidate.identity.generation.max(state.leg.generation)
+            });
+        let abandoned_candidate = abandoned.map(|candidate| candidate.route);
+        state.startup_rollback = None;
+        let next_token = format!("{}-rescue-{}", state.leg.token, retired + 1);
+        state.leg = LegIdentity::new(next_token, retired + 1);
         if state.phase != Phase::Shutdown {
             state.phase = Phase::Quiescing;
             state.operation = None;
@@ -750,7 +774,13 @@ impl Coordinator {
         });
     }
 
-    pub fn begin_candidate(&self, mut candidate: CandidateLeg) -> Result<(), LifecycleError> {
+    /// Stages `candidate` and returns the identity it is staged under, the
+    /// one an adoption puts on the line: its first turn is delivered at that
+    /// generation.
+    pub fn begin_candidate(
+        &self,
+        mut candidate: CandidateLeg,
+    ) -> Result<LegIdentity, LifecycleError> {
         self.linearize(|state| {
             if state.phase == Phase::Shutdown {
                 return Err(LifecycleError::Shutdown);
@@ -774,6 +804,7 @@ impl Coordinator {
             });
             state.phase = Phase::Starting;
             let route = candidate.route.clone();
+            let identity = candidate.identity.clone();
             state.candidate = Some(candidate);
             self.notify_candidate(&CandidateNotice {
                 route,
@@ -781,7 +812,7 @@ impl Coordinator {
                 ended: None,
             });
             self.operation_changed.notify_waiters();
-            Ok(())
+            Ok(identity)
         })
     }
 

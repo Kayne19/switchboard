@@ -60,6 +60,19 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         .contains("Couldn't tell which project \"shared\" meant: proj-a, proj-b."));
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_refused_transfer_keeps_the_caller_on_the_leg_they_are_on() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("here"))).await;
+    let reply = board
+        .transfer_ctx(&transcript("go to gamma"), "gamma", "", "")
+        .await;
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert!(board.agent.is_some(), "the refusal dropped alpha");
+    board.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_takeover_of_an_unknown_project_names_the_ones_there_are() {
     let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
@@ -129,8 +142,9 @@ async fn a_transfer_and_a_return_act_on_a_session_over_the_host_link() {
     assert_eq!(announced.models.len(), 2);
 
     let returned = board.handle("we are done").await;
-    // A host that still has the removed module receives a refusal. It cannot
-    // move the caller or kill the live project leg.
+    // A call outside the module's surface, such as the routing calls an old
+    // module made, is refused as unknown. It cannot move the caller or kill
+    // the live project leg.
     assert_eq!(returned.route, "alpha");
     assert!(returned.text.contains("Alpha finished."), "{returned:?}");
     assert_eq!(board.coordinator.route(), "alpha");
@@ -143,7 +157,7 @@ async fn a_transfer_and_a_return_act_on_a_session_over_the_host_link() {
             .collect::<Vec<_>>(),
         [json!("refused")]
     );
-    assert_eq!(log.module_replies()[0]["reason"], "removed");
+    assert_eq!(log.module_replies()[0]["reason"], "unknown_call");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -186,7 +200,7 @@ async fn an_agent_to_agent_transfer_ends_the_old_session_after_the_new_one_is_up
     assert_eq!(r2.route, "alpha");
     assert_eq!(r2.text, "Alpha transferring to Beta.");
     assert!(r2.to_speak.is_empty());
-    // The stale host's transfer signal is refused, so beta is never started.
+    // The unknown transfer call is refused, so beta is never started.
     assert_eq!(log.named("create_session").len(), 1);
     assert!(log.named("kill").is_empty());
     assert_eq!(
@@ -196,7 +210,7 @@ async fn an_agent_to_agent_transfer_ends_the_old_session_after_the_new_one_is_up
             .collect::<Vec<_>>(),
         [json!("refused")]
     );
-    assert_eq!(log.module_replies()[0]["reason"], "removed");
+    assert_eq!(log.module_replies()[0]["reason"], "unknown_call");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -724,7 +738,10 @@ async fn failed_transfer_intro_publishes_finished_instead_of_stuck_busy() {
 async fn a_stopped_project_starts_fresh_after_close() {
     let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
     let first = board.agent.as_ref().unwrap().session_id().to_owned();
-    board.decisions.set_pending_stop_for_test("alpha");
+    let generation = board.coordinator.generation();
+    board
+        .decisions
+        .set_pending_stop_for_test("alpha", generation);
     let stopped = board
         .handle_decision("yes", &Decision::fallback("confirm"))
         .await;

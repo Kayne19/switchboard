@@ -354,12 +354,32 @@ impl Switchboard {
         *self.active_session.lock().await = session;
     }
 
+    /// Empties the guard only if the operator holds it: a project on the
+    /// line keeps the guard while the operator answers for it.
+    pub(crate) async fn release_operator_guard(&self) {
+        let mut guard = self.active_session.lock().await;
+        if matches!(*guard, Some(LegSession::Operator(_))) {
+            *guard = None;
+        }
+    }
+
     pub(crate) fn operator_leg(&self) -> Option<LegSession> {
         self.operator.clone().map(LegSession::Operator)
     }
 
     pub(crate) fn agent_leg(&self) -> Option<LegSession> {
         self.agent.clone().map(LegSession::Project)
+    }
+
+    /// The PBX's project session, if it is the session of the project leg
+    /// the coordinator names; `None` otherwise. Work done on the leg on the
+    /// line (a caller turn, a redial) goes to this session only: a session
+    /// of another project must never answer under that leg's name (#236).
+    pub(crate) fn agent_on_the_line(&self) -> Option<ProjectSession> {
+        let leg = self.coordinator.project_leg()?;
+        self.agent
+            .clone()
+            .filter(|agent| agent.label() == leg.project)
     }
 
     pub fn route_label(&self) -> String {

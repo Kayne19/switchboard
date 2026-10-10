@@ -155,11 +155,10 @@ the page's pickers (`POST /model`, `POST /thinking`). Asking for it out loud
 reaches the operator, which points them to the picker. `redial.rs` decides and
 makes the change.
 
-The conversation survives the change. A change that keeps the context is made
-on the live session: `set_model` and `set_thinking` over the host link, and
-the session keeps its history. Keeping is the default; `keep_context: false`
-ends the session and creates a new one, and the agent is told the history was
-cleared on purpose so it does not try to recall it.
+The conversation survives the change. The change is made on the live
+session: `set_model` and `set_thinking` over the host link, and the session
+keeps its history. There is no fresh-context change; a project agent's own
+`set_model` call is refused.
 
 What the caller says goes through speech-to-text and then through a model's
 guess, so `models.rs` refuses rather than guesses. A bare name is resolved
@@ -177,7 +176,10 @@ the caller was not that specific.
 If the catalog cannot be read at all, a provider-qualified spec is passed
 through (it is unambiguous by construction) and a bare name is refused. A
 thinking suffix such as `provider/model:high` is normalized and retained during
-that fallback and on a context-preserving redial. When discovery succeeds, the
+that fallback and on a context-preserving redial. The suffix is the text after
+the last `:`, and only when it is a thinking level, as pi itself reads
+`provider/id:level`; otherwise the colon is part of the model id
+(`openrouter/qwen/qwen3-coder:free`, `ollama/qwen3:32b:high`). When discovery succeeds, the
 picker contains only the provider-qualified entries from that host's catalog;
 the current entry is retained even if a refreshed catalog no longer lists it.
 
@@ -277,9 +279,11 @@ Edit `switchboard_projects` in `ansible/roles/damocles/defaults/main.yml` and
 open a PR. The deploy re-renders `/etc/switchboard/projects.json`, which the
 service loads into the operator's system-prompt catalog and uses for routing,
 so the operator and switchboard cannot disagree. Aliases are matched against
-a speech-to-text transcript, so be generous with them. An entry carries `id`,
-`description`, `aliases`, `host`, `cwd`, `model` and `prepare`; `host` is the
-id of a host agent and is required.
+a speech-to-text transcript, so be generous with them. An id always names its
+own project: an alias that says another project's id is dropped at load, with
+a warning in the journal. An entry carries `id`, `description`, `aliases`,
+`host`, `cwd`, `model` and `prepare`; `host` is the id of a host agent and is
+required.
 
 A project host needs three things, none of which this repo can do for hosts it
 does not manage:

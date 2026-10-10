@@ -77,16 +77,11 @@ impl Switchboard {
     ) -> Reply {
         let project = match self.registry.resolve_detailed(spoken) {
             crate::registry::ResolveResult::Exact(project) => project.clone(),
+            // A refused transfer leaves the caller on the leg they are on.
             crate::registry::ResolveResult::Ambiguous(candidates) => {
                 let candidates_text = candidates.join(", ");
-                let from = (self.coordinator.route() != OPERATOR).then(|| self.route_label());
-                if from.is_some() {
-                    self.drop_agent().await;
-                }
                 self.operator_note = Some(format!(
-                    "Couldn't tell which project {spoken:?} meant: {candidates_text}.{}",
-                    from.map(|name| format!(" The caller was on {name}."))
-                        .unwrap_or_default()
+                    "Couldn't tell which project {spoken:?} meant: {candidates_text}."
                 ));
                 return self.reply_transfer_error(
                     format!(
@@ -102,14 +97,8 @@ impl Switchboard {
                 } else {
                     known.join(", ")
                 };
-                let from = (self.coordinator.route() != OPERATOR).then(|| self.route_label());
-                if from.is_some() {
-                    self.drop_agent().await;
-                }
                 self.operator_note = Some(format!(
-                    "No project matches {spoken:?}. Registered: {known_text}.{}",
-                    from.map(|name| format!(" The caller was on {name}."))
-                        .unwrap_or_default()
+                    "No project matches {spoken:?}. Registered: {known_text}."
                 ));
                 return self.reply_transfer_error(
                     self.unknown_project_line(spoken),
@@ -183,10 +172,13 @@ impl Switchboard {
             thinking_in_spec(&model),
         )
         .with_catalog(plan.catalog.clone());
-        if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            tracing::warn!(project = %project.id, %error, "candidate startup was refused");
-            return self.couldnt_open(&project.id, error.to_string());
-        }
+        let leg = match self.coordinator.begin_candidate(candidate) {
+            Ok(leg) => leg,
+            Err(error) => {
+                tracing::warn!(project = %project.id, %error, "candidate startup was refused");
+                return self.couldnt_open(&project.id, error.to_string());
+            }
+        };
 
         // At most one session per project: one the caller is on is ended
         // before another is made for the same project.
@@ -259,7 +251,7 @@ impl Switchboard {
             self.rollback_startup(format!("adoption failed: {error}"));
             return self.couldnt_open(&project.id, error.to_string());
         }
-        self.reply_with_turn(turn)
+        self.reply_with_turn_on(turn, &leg)
     }
 
     pub(crate) async fn promote_background(
@@ -305,11 +297,14 @@ impl Switchboard {
             "",
             self.coordinator.thinking_default(),
         );
-        if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            return self.couldnt_bring_back(&project.id, error.to_string());
-        }
+        let leg = match self.coordinator.begin_candidate(candidate) {
+            Ok(leg) => leg,
+            Err(error) => {
+                session.close();
+                self.announce_agent_state(&project.id, "finished").await;
+                return self.couldnt_bring_back(&project.id, error.to_string());
+            }
+        };
         // Steering and a page rescue reach the leg being brought up, as they
         // do on a transfer or a takeover.
         self.set_active_session(Some(LegSession::Project(session.clone())))
@@ -344,7 +339,7 @@ impl Switchboard {
             self.set_active_session(previous_foreground).await;
             return self.couldnt_bring_back(&project.id, error.to_string());
         }
-        self.reply_with_turn(turn)
+        self.reply_with_turn_on(turn, &leg)
     }
 
     /// Find one untracked top-level desk session for a registered project.
@@ -491,9 +486,10 @@ impl Switchboard {
                 thinking.clone()
             },
         );
-        if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            return self.couldnt_take_over(&project.id, error.to_string());
-        }
+        let leg = match self.coordinator.begin_candidate(candidate) {
+            Ok(leg) => leg,
+            Err(error) => return self.couldnt_take_over(&project.id, error.to_string()),
+        };
         let host = match project.canonical_host() {
             Some(host) => host.to_owned(),
             None => unreachable!("desk_session_for_takeover checked project host"),
@@ -564,7 +560,7 @@ impl Switchboard {
             self.set_active_session(previous_foreground).await;
             return self.couldnt_take_over(&project.id, error.to_string());
         }
-        self.reply_with_turn(turn)
+        self.reply_with_turn_on(turn, &leg)
     }
 
     /// Makes the staged project leg the one on the line. Every transition
@@ -796,7 +792,7 @@ pub(crate) enum LegChange {
 
 /// A prompt that could not be sent, as the failed turn the leg transitions
 /// check for: no text, no signals, and the error as its detail.
-pub(crate) fn failed_turn(error: PiSessionError) -> Turn {
+fn failed_turn(error: PiSessionError) -> Turn {
     Turn {
         text: String::new(),
         signals: vec![],

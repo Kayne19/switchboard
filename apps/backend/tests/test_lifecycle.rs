@@ -55,9 +55,11 @@ fn candidate_notices_track_startup_adopt_rollback_and_rescue() {
                 generation: 0,
                 ended: None,
             },
+            // The rescue retires the candidate's generation (1) as well
+            // as the line's (0).
             CandidateNotice {
                 route: "alpha".into(),
-                generation: 1,
+                generation: 2,
                 ended: Some(CandidateEnd::Rescued),
             },
         ]
@@ -514,11 +516,12 @@ fn the_adoption_is_on_the_line_until_the_leg_is_replaced() {
     call.return_to_operator();
     assert_eq!(call.generation_and_adoption(), (1, None));
 
-    // A candidate rescued while it starts was never adopted.
+    // A candidate rescued while it starts was never adopted, and the rescue
+    // retires its generation (1) too.
     let call = coordinator();
     call.begin_candidate(alpha_candidate()).unwrap();
     call.begin_rescue("hangup");
-    assert_eq!(call.generation_and_adoption(), (1, None));
+    assert_eq!(call.generation_and_adoption(), (2, None));
 }
 
 // Issue #77: a return to the operator kept the project leg's identity, so a
@@ -849,4 +852,60 @@ fn a_caller_operation_bound_to_a_host_turn_still_finishes() {
     assert!(coordinator.finish_operation(&operation));
     assert_eq!(phase(&coordinator), Phase::Active);
     assert!(coordinator.begin_prompt(&leg).is_ok());
+}
+
+/// A transfer's candidate is adopted on its first sign of life, but its
+/// startup ends only when its intro does. A rescue in between cancels the
+/// work that would commit or roll it back, so the startup ends with the
+/// rescue: nothing is left for a late rollback to restore (#236).
+#[test]
+fn a_rescue_during_an_adopted_legs_intro_ends_its_startup() {
+    let call = coordinator();
+    on_alpha(&call);
+    call.begin_candidate(CandidateLeg::new(
+        "beta",
+        "beta",
+        "beta-session",
+        "beta-leg",
+        "anthropic/sonnet",
+        "medium",
+    ))
+    .unwrap();
+    call.adopt_candidate("beta-leg").unwrap();
+    assert_eq!(call.route(), "beta");
+
+    let rescued = call.begin_rescue("page rescue");
+    call.settle();
+
+    assert!(!call.finish_intro());
+    assert!(!call.rollback_startup("late"));
+    assert_eq!(call.route(), "beta");
+    assert_eq!(call.current_identity(), rescued);
+}
+
+/// A rescue for a redial is refused while a startup is in flight: the leg
+/// the coordinator names is not yet the PBX's.
+#[test]
+fn a_redial_rescue_waits_for_the_startup_to_commit() {
+    let call = coordinator();
+    on_alpha(&call);
+    call.begin_candidate(CandidateLeg::new(
+        "beta",
+        "beta",
+        "beta-session",
+        "beta-leg",
+        "anthropic/sonnet",
+        "medium",
+    ))
+    .unwrap();
+    call.adopt_candidate("beta-leg").unwrap();
+    let beta = call.project_leg().unwrap();
+    let generation = call.generation();
+
+    assert_eq!(call.begin_rescue_of(&beta, "redial"), None);
+    assert_eq!(call.generation(), generation);
+    assert_eq!(call.route(), "beta");
+
+    assert!(call.finish_intro());
+    assert!(call.begin_rescue_of(&beta, "redial").is_some());
 }
