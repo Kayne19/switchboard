@@ -4325,10 +4325,11 @@ button {
   display: grid;
   grid-template-rows: max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px));
 }
-.calendar-object > .focusable-content > *,
-.tasks-object > .focusable-content > *,
-.inbox-object > .focusable-content > *,
-.image-object > .focusable-content > * {
+/* What the surface holds, not its own button, which stands over all of it. */
+.calendar-object > .focusable-content > :not(.focusable-content__expand),
+.tasks-object > .focusable-content > :not(.focusable-content__expand),
+.inbox-object > .focusable-content > :not(.focusable-content__expand),
+.image-object > .focusable-content > :not(.focusable-content__expand) {
   grid-row: 2;
   min-height: 0;
 }
@@ -5652,7 +5653,7 @@ button {
     grid-template-rows: minmax(0, 1fr) max(8px, var(--panel-inset));
     padding: 14px 8px 0;
   }
-  .chart-object > .focusable-content > * {
+  .chart-object > .focusable-content > :not(.focusable-content__expand) {
     grid-row: 1;
     min-height: 0;
   }

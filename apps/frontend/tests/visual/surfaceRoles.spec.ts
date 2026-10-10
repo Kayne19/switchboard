@@ -26,14 +26,26 @@ const unnamed = () =>
     return name?.trim() ? [] : [`${stop.tagName.toLowerCase()}.${stop.className}`];
   });
 
+// The button stands over its whole surface, so focus brings all of it into
+// view; a rule that places what a surface holds in a row of its grid
+// (`> *`) placed the button in that row too, and cut it to the row.
+const uncovered = () =>
+  [...document.querySelectorAll('.focusable-content__expand')].flatMap((button) => {
+    const own = button.getBoundingClientRect();
+    const surface = button.parentElement!.getBoundingClientRect();
+    const off = Math.max(...(['top', 'right', 'bottom', 'left'] as const).map((side) => Math.abs(own[side] - surface[side])));
+    return off < 1 ? [] : [`${button.getAttribute('aria-label')} is ${Math.round(own.height)}px of a ${Math.round(surface.height)}px surface`];
+  });
+
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-  test(`no surface is a button round a scroll, and every tab stop is named / ${viewport.width}x${viewport.height}`, async ({ page }) => {
+  test(`no surface is a button round a scroll, every tab stop is named, and a surface's button covers it / ${viewport.width}x${viewport.height}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     for (const scene of fixtures) {
       await openScene(page, scene);
       await page.waitForTimeout(400);
       expect(await page.evaluate(faults), scene).toEqual([]);
       expect(await page.evaluate(unnamed), scene).toEqual([]);
+      expect(await page.evaluate(uncovered), scene).toEqual([]);
     }
   });
 }
