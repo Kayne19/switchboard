@@ -213,7 +213,11 @@ done
         queue_a_clip_while_a_page_control_starts_a_leg(&state, "while-connecting").await;
     assert!(state.0.coordinator.is_candidate());
 
-    assert!(state.0.coordinator.rollback_startup("startup failed"));
+    let startup = state.0.coordinator.candidate_identity().unwrap();
+    assert!(state
+        .0
+        .coordinator
+        .rollback_startup(startup.generation, "startup failed"));
     control.abort();
 
     let frames = frames_until(&mut connection, "reply").await;

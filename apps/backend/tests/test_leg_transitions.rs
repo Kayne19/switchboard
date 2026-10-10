@@ -1409,6 +1409,44 @@ async fn host_loss_closes_a_taken_over_session_without_killing_the_desk_process(
     assert!(!log.names().contains(&"kill".into()));
 }
 
+#[tokio::test]
+async fn a_bring_up_dropped_before_it_ends_rolls_its_candidate_back() {
+    let (mut board, coordinator, notices) = coordinated_board(project("alpha", ""), &[]);
+    // The intro never settles, so the transfer is still in its first turn
+    // when it is dropped.
+    let log = serve(&board, Box::new(|_, _| vec![Step::Hold]));
+    let generation = coordinator.generation();
+
+    {
+        let context = transcript("put me through to alpha");
+        let transfer = board.transfer_to(&context, "alpha");
+        tokio::select! {
+            _ = transfer => panic!("the intro never settles"),
+            _ = until_named(&log, "prompt") => {}
+        }
+    }
+
+    // No rescue ended it (a panic in a bring-up drops it the same way): the
+    // candidate is rolled back, so the call takes turns again on the leg it
+    // was on, and the browser stops showing "connecting".
+    assert!(!coordinator.startup_in_flight());
+    assert_eq!(coordinator.route(), OPERATOR);
+    assert_eq!(coordinator.generation(), generation);
+    assert_eq!(
+        notices
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|notice| notice.ended)
+            .collect::<Vec<_>>(),
+        [None, Some(crate::protocol::CandidateEnd::RolledBack)]
+    );
+    assert!(coordinator
+        .begin_prompt(&coordinator.current_identity())
+        .is_ok());
+    board.shutdown().await;
+}
+
 // The bring-up table. A transfer, a background promotion, a takeover and a
 // redial each bring a project leg up the same way: stage a candidate, put
 // its session on the active-session guard, run its first turn, then commit

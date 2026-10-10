@@ -102,8 +102,8 @@ fn candidate_notices_track_startup_adopt_rollback_and_rescue() {
     );
 
     let (coordinator, notices) = coordinator_with_notices();
-    coordinator.begin_candidate(alpha_candidate()).unwrap();
-    assert!(coordinator.rollback_startup("startup failed"));
+    let startup = coordinator.begin_candidate(alpha_candidate()).unwrap();
+    assert!(coordinator.rollback_startup(startup.generation, "startup failed"));
     assert_eq!(
         *notices.lock().unwrap(),
         vec![
@@ -326,7 +326,7 @@ fn invalid_startup_thinking_is_rejected() {
 #[test]
 fn candidate_failure_rolls_back_private_state_and_side_effects_are_rejected() {
     let coordinator = coordinator();
-    coordinator
+    let startup = coordinator
         .begin_candidate(CandidateLeg::new(
             "alpha",
             "alpha",
@@ -344,7 +344,7 @@ fn candidate_failure_rolls_back_private_state_and_side_effects_are_rejected() {
         coordinator.accept_thinking_callback("candidate", "high"),
         Ok(false)
     );
-    assert!(coordinator.rollback_startup("intro failed"));
+    assert!(coordinator.rollback_startup(startup.generation, "intro failed"));
     assert_eq!(coordinator.status().route, "operator");
     assert!(coordinator.candidate_identity().is_none());
     assert!(!coordinator.is_candidate());
@@ -894,15 +894,16 @@ fn a_caller_operation_bound_to_a_host_turn_still_finishes() {
 fn a_rescue_during_an_adopted_legs_intro_ends_its_startup() {
     let call = coordinator();
     on_alpha(&call);
-    call.begin_candidate(CandidateLeg::new(
-        "beta",
-        "beta",
-        "beta-session",
-        "beta-leg",
-        "anthropic/sonnet",
-        "medium",
-    ))
-    .unwrap();
+    let startup = call
+        .begin_candidate(CandidateLeg::new(
+            "beta",
+            "beta",
+            "beta-session",
+            "beta-leg",
+            "anthropic/sonnet",
+            "medium",
+        ))
+        .unwrap();
     call.adopt_candidate("beta-leg").unwrap();
     assert_eq!(call.route(), "beta");
 
@@ -910,7 +911,7 @@ fn a_rescue_during_an_adopted_legs_intro_ends_its_startup() {
     call.settle();
 
     assert!(!call.finish_intro());
-    assert!(!call.rollback_startup("late"));
+    assert!(!call.rollback_startup(startup.generation, "late"));
     assert_eq!(call.route(), "beta");
     assert_eq!(call.current_identity(), rescued);
 }
@@ -952,7 +953,7 @@ fn a_shutdown_ends_the_startup_in_flight_and_nothing_reopens_the_call() {
     // A candidate staged: abandoned as a rescue abandons it.
     let (call, notices) = coordinator_with_notices();
     on_alpha(&call);
-    call.begin_candidate(beta_candidate()).unwrap();
+    let startup = call.begin_candidate(beta_candidate()).unwrap();
     notices.lock().unwrap().clear();
     assert!(call.begin_shutdown());
     assert!(!call.startup_in_flight());
@@ -971,17 +972,17 @@ fn a_shutdown_ends_the_startup_in_flight_and_nothing_reopens_the_call() {
         call.adopt_candidate("beta-leg"),
         Err(LifecycleError::NoCandidate)
     );
-    assert!(!call.rollback_startup("startup failed"));
+    assert!(!call.rollback_startup(startup.generation, "startup failed"));
     assert_eq!(phase(&call), "shutdown");
 
     // A candidate adopted, its intro not finished: nothing to roll back to.
     let call = coordinator();
     on_alpha(&call);
-    call.begin_candidate(beta_candidate()).unwrap();
+    let startup = call.begin_candidate(beta_candidate()).unwrap();
     call.adopt_candidate("beta-leg").unwrap();
     assert!(call.begin_shutdown());
     assert!(!call.startup_in_flight());
-    assert!(!call.rollback_startup("intro failed"));
+    assert!(!call.rollback_startup(startup.generation, "intro failed"));
     assert!(!call.finish_intro());
     assert_eq!(phase(&call), "shutdown");
     assert_eq!(
@@ -1008,8 +1009,8 @@ fn every_candidate_notice_is_sent_under_the_state_lock() {
     }));
     call.begin_candidate(alpha_candidate()).unwrap();
     call.adopt_candidate("cand").unwrap();
-    call.begin_candidate(beta_candidate()).unwrap();
-    assert!(call.rollback_startup("startup failed"));
+    let startup = call.begin_candidate(beta_candidate()).unwrap();
+    assert!(call.rollback_startup(startup.generation, "startup failed"));
     call.begin_candidate(beta_candidate()).unwrap();
     call.begin_rescue("hangup");
     assert_eq!(
@@ -1035,10 +1036,10 @@ fn every_candidate_notice_is_sent_under_the_state_lock() {
 fn a_rollback_restores_the_leg_as_the_adoption_found_it() {
     let call = coordinator();
     on_alpha(&call);
-    call.begin_candidate(beta_candidate()).unwrap();
+    let startup = call.begin_candidate(beta_candidate()).unwrap();
     assert_eq!(call.accept_thinking_callback("cand", "high"), Ok(true));
     call.adopt_candidate("beta-leg").unwrap();
-    assert!(call.rollback_startup("intro failed"));
+    assert!(call.rollback_startup(startup.generation, "intro failed"));
     let status = call.status();
     assert_eq!(
         (
@@ -1051,10 +1052,10 @@ fn a_rollback_restores_the_leg_as_the_adoption_found_it() {
 
     let call = coordinator();
     on_alpha(&call);
-    call.begin_candidate(beta_candidate()).unwrap();
+    let startup = call.begin_candidate(beta_candidate()).unwrap();
     call.return_to_operator();
     call.adopt_candidate("beta-leg").unwrap();
-    assert!(call.rollback_startup("intro failed"));
+    assert!(call.rollback_startup(startup.generation, "intro failed"));
     assert_on_the_operator(&call);
     assert_eq!(call.current_identity(), LegIdentity::new("operator", 2));
 }
@@ -1075,16 +1076,16 @@ fn a_turn_waiting_on_the_line_is_woken_when_a_startup_or_the_call_ends() {
     };
     // Behind a staged candidate.
     let call = coordinator();
-    call.begin_candidate(alpha_candidate()).unwrap();
+    let startup = call.begin_candidate(alpha_candidate()).unwrap();
     assert!(woken(&call, &|call| assert!(
-        call.rollback_startup("startup failed")
+        call.rollback_startup(startup.generation, "startup failed")
     )));
     // Behind an adopted candidate's intro.
     let call = coordinator();
-    call.begin_candidate(alpha_candidate()).unwrap();
+    let startup = call.begin_candidate(alpha_candidate()).unwrap();
     call.adopt_candidate("cand").unwrap();
     assert!(woken(&call, &|call| assert!(
-        call.rollback_startup("intro failed")
+        call.rollback_startup(startup.generation, "intro failed")
     )));
     // Behind a turn, when the call shuts down.
     let call = coordinator();
@@ -1105,8 +1106,8 @@ fn a_turn_waiting_on_the_line_is_woken_when_a_startup_or_the_call_ends() {
 fn the_phase_at_rest_follows_from_the_line_and_its_turn() {
     let call = coordinator();
     let caller = call.begin_prompt(&call.current_identity()).unwrap();
-    call.begin_candidate(alpha_candidate()).unwrap();
-    assert!(call.rollback_startup("startup failed"));
+    let startup = call.begin_candidate(alpha_candidate()).unwrap();
+    assert!(call.rollback_startup(startup.generation, "startup failed"));
     assert_eq!(phase(&call), "turn running");
     assert_eq!(
         call.attach_steer(&call.current_identity()),
@@ -1371,7 +1372,13 @@ const TABLE_EVENTS: [(&str, TableEvent); 20] = [
         phase.call.finish_intro().to_string()
     }),
     ("rollback_startup", |phase| {
-        phase.call.rollback_startup("failed").to_string()
+        // The startup in flight: the staged candidate, or the adopted leg.
+        let call = &phase.call;
+        let startup = call
+            .candidate_identity()
+            .unwrap_or_else(|| call.current_identity());
+        call.rollback_startup(startup.generation, "failed")
+            .to_string()
     }),
     ("begin_shutdown", |phase| {
         phase.call.begin_shutdown().to_string()

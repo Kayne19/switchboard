@@ -6,7 +6,7 @@
 //! Dropping the agent, hanging up, stopping a project and returning to the
 //! operator end a leg.
 use crate::hosts::Hosts;
-use crate::lifecycle::{CandidateLeg, LegIdentity, LifecycleError};
+use crate::lifecycle::{CandidateLeg, Coordinator, LegIdentity, LifecycleError};
 use crate::pbx::{uuid_like, Switchboard, TransferContext, OPERATOR};
 use crate::pi_client::{LegSession, PiSessionError, Turn};
 use crate::prewarm::LaunchPlan;
@@ -514,6 +514,7 @@ impl Switchboard {
         let project = candidate.project.clone();
         let identity = self.coordinator.begin_candidate(candidate)?;
         Ok(Startup {
+            coordinator: self.coordinator.clone(),
             project,
             identity,
             change,
@@ -750,8 +751,11 @@ pub(crate) enum LegChange {
 /// redial) holds one: it stages the candidate (`Switchboard::begin_startup`),
 /// puts its session on the active-session guard (`attach`), runs its first
 /// turn, then ends with `commit` or `abandon`. Each ending is written once,
-/// so no bring-up can skip a step of it or take one out of order.
+/// so no bring-up can skip a step of it or take one out of order. One that
+/// ends neither way (its future dropped, or a panic in it) rolls its
+/// candidate back when it is dropped.
 pub(crate) struct Startup {
+    coordinator: Coordinator,
     project: String,
     /// The identity the candidate is staged under. Adoption puts it on the
     /// line, and the bring-up's reply is delivered at its generation.
@@ -803,8 +807,8 @@ impl Startup {
         mut self,
         board: &mut Switchboard,
     ) -> Result<LegIdentity, LifecycleError> {
-        if board.coordinator.is_candidate() {
-            if let Err(error) = board.coordinator.adopt_candidate(&self.identity.token) {
+        if self.coordinator.is_candidate() {
+            if let Err(error) = self.coordinator.adopt_candidate(&self.identity.token) {
                 self.abandon(board, format!("adoption failed: {error}"))
                     .await;
                 return Err(error);
@@ -813,7 +817,7 @@ impl Startup {
         let Some(attached) = self.attached.take() else {
             unreachable!("a bring-up commits the session it attached");
         };
-        board.coordinator.finish_intro();
+        self.coordinator.finish_intro();
         if self.change == LegChange::NewAgent {
             board.shelve_previous_foreground(&self.project).await;
             board.announce_agent_state(&self.project, "idle").await;
@@ -821,7 +825,7 @@ impl Startup {
         board.agent = Some(attached.session);
         board.set_active_session(board.agent_leg()).await;
         board.announce_route().await;
-        Ok(self.identity)
+        Ok(self.identity.clone())
     }
 
     /// Ends a bring-up that failed, in one order whichever step it failed
@@ -840,10 +844,26 @@ impl Startup {
             }
         }
         let mut guard = board.active_session.lock().await;
-        board.coordinator.rollback_startup(reason);
+        self.coordinator
+            .rollback_startup(self.identity.generation, reason);
         if let Some(Attached { displaced, .. }) = attached {
             *guard = displaced;
         }
+    }
+}
+
+/// A bring-up dropped before it committed or was abandoned: a page rescue
+/// aborted it, or it panicked. The coordinator's half of `abandon` is the
+/// one that cannot wait, so it is done here: the candidate is rolled back
+/// if it is still in flight. After a commit, an abandon or a rescue it is
+/// not, and this does nothing. The guard and the session are left to the
+/// next owner of the line: a rescue takes the guard and ends its session.
+impl Drop for Startup {
+    fn drop(&mut self) {
+        self.coordinator.rollback_startup(
+            self.identity.generation,
+            "the bring-up was dropped before it ended",
+        );
     }
 }
 

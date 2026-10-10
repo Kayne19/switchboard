@@ -269,7 +269,7 @@ pub(crate) enum Event<'a> {
     LegThinking { token: &'a str, level: &'a str },
     Adopt { token: &'a str, intro: u64 },
     FinishIntro,
-    Rollback,
+    Rollback { generation: u64 },
     BeginShutdown,
 }
 
@@ -547,14 +547,19 @@ impl Line {
                 } => Ok((Self::at_rest(leg.clone()), None)),
                 _ => Err(LifecycleError::WrongPhase),
             },
-            Event::Rollback => match self {
+            // Only the startup staged at `generation`. A candidate's
+            // generation is used again only after its own startup rolled it
+            // back, and a rescue or a shutdown moves the line past it, so a
+            // startup that has ended (committed, rescued, rolled back) finds
+            // nothing of its own to roll back.
+            Event::Rollback { generation } => match self {
                 // Before adoption the line never moved: the leg on it keeps
                 // its turn.
                 Self::Starting {
                     leg,
                     candidate,
                     turn,
-                } => {
+                } if candidate.identity.generation == generation => {
                     let notice = candidate_notice(
                         &candidate.route,
                         leg.identity.generation,
@@ -568,7 +573,7 @@ impl Line {
                 }
                 // After adoption the leg it replaced comes back, at the
                 // generation the line is at.
-                Self::Adopted { leg, replaced, .. } => {
+                Self::Adopted { leg, replaced, .. } if leg.identity.generation == generation => {
                     let identity =
                         LegIdentity::new(replaced.identity.token.clone(), leg.identity.generation);
                     let notice = candidate_notice(
@@ -578,7 +583,10 @@ impl Line {
                     );
                     Ok((Self::at_rest(replaced.renamed(identity)), notice))
                 }
-                _ => Err(LifecycleError::NoCandidate),
+                Self::Starting { .. } | Self::Adopted { .. } => Err(LifecycleError::StaleLeg),
+                Self::Open { .. } | Self::Quiescing { .. } | Self::Shutdown { .. } => {
+                    Err(LifecycleError::NoCandidate)
+                }
             },
             // A shutdown ends a startup the way a rescue does.
             Event::BeginShutdown => {
