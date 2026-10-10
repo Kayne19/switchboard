@@ -23,16 +23,7 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
     let release_state = state.clone();
     let hooks = FloorHooks {
         connected: Arc::new(move || connected_state.0.delivery.connected()),
-        live: Arc::new(move |request: &FloorRequest| {
-            let current_generation = live_state.0.coordinator.generation();
-            live_state
-                .0
-                .coordinator
-                .with_background(&request.token, |project| {
-                    project == request.project && current_generation == request.generation
-                })
-                .is_some()
-        }),
+        live: Arc::new(move |request: &FloorRequest| still_live(&live_state, request)),
         gate: Arc::new(move |request: &FloorRequest| {
             let state = gate_state.clone();
             let request = request.clone();
@@ -114,6 +105,19 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
     tokio::spawn(async move { floor.run(hooks).await });
 }
 
+/// Whether `request` may still be spoken: it was queued under the current
+/// generation, and its token is still a background resident of its project.
+/// The floor asks before and after the rewrite, and the release before it
+/// reserves audio and again once it has it; all four are this one check.
+fn still_live(state: &AppState, request: &FloorRequest) -> bool {
+    request.generation == state.0.coordinator.generation()
+        && state
+            .0
+            .coordinator
+            .with_background(&request.token, |project| project == request.project)
+            == Some(true)
+}
+
 /// Send one background update through the same ordered speech worker as every
 /// other utterance. The lifecycle token is checked both before reserving audio
 /// and after synthesis starts; a promoted or stopped resident can never speak
@@ -126,13 +130,7 @@ async fn release_floor(
     if !state.0.delivery.connected() {
         return ReleaseOutcome::Retry;
     }
-    let live = request.generation == state.0.coordinator.generation()
-        && state
-            .0
-            .coordinator
-            .with_background(&request.token, |project| project == request.project)
-            .is_some();
-    if !live {
+    if !still_live(state, &request) {
         return ReleaseOutcome::Drop;
     }
     let mut text = rewritten.trim().to_owned();
@@ -165,13 +163,7 @@ async fn release_floor(
     // Promotion or host loss may have happened while the audio slot was
     // reserved. Do not let a stale background request cross the final speech
     // side-effect boundary.
-    if request.generation != state.0.coordinator.generation()
-        || state
-            .0
-            .coordinator
-            .with_background(&request.token, |project| project == request.project)
-            .is_none()
-    {
+    if !still_live(state, &request) {
         release_reply_voice(state, Some(reserved), generation).await;
         return ReleaseOutcome::Drop;
     }

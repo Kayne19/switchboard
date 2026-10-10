@@ -511,6 +511,33 @@ done
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A route rescue makes a queued request stale even though its agent is
+/// still in the background. The floor drops it before it asks the utility
+/// for words: its liveness check is the same one the release makes, and it
+/// checks the generation.
+#[tokio::test]
+async fn a_request_a_rescue_made_stale_is_dropped_before_the_rewrite() {
+    let (client, _, _) = fake_jev_client();
+    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
+    state.0.coordinator.begin_rescue("new foreground leg");
+    spawn_floor_worker(state.clone());
+
+    let left = until_debug(&state, |event| {
+        matches!(event, crate::debug::DebugEvent::FloorReleased { .. })
+    })
+    .await;
+    assert!(matches!(
+        left,
+        crate::debug::DebugEvent::FloorReleased { ref how, .. } if how == "dropped_agent_gone"
+    ));
+    assert!(
+        !debug_events(&state)
+            .iter()
+            .any(|event| matches!(event, crate::debug::DebugEvent::FloorRewrite { .. })),
+        "a stale request is not rewritten"
+    );
+}
+
 #[tokio::test]
 async fn stale_floor_request_is_dropped_before_audio_reservation() {
     let state = state();
