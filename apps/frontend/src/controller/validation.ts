@@ -52,8 +52,9 @@ export function normalizeProgressValue(value: number): number {
 }
 
 // The names a field takes from a fixed set, each in the schema's order. A
-// refused name is `invalidName`'s text, which lists them.
-const OPERATIONS = ['show', 'hide', 'focus', 'say', 'clear'] as const;
+// refused name is `invalidName`'s text, which lists them. `OPERATIONS` is
+// also what `window.SwitchboardController.protocol` publishes (App.tsx).
+export const OPERATIONS = ['show', 'hide', 'focus', 'say', 'clear'] as const;
 const OBJECT_TYPES = [
   'chart',
   'metric',

@@ -1,4 +1,5 @@
 import type { ControllerState, FixtureName } from './controller/types';
+import type { OPERATIONS } from './controller/validation';
 
 declare global {
   interface Window {
@@ -7,7 +8,7 @@ declare global {
       run: (actions: unknown[]) => void;
       load: (fixture: FixtureName) => void;
       state: () => ControllerState;
-      protocol: readonly ['show', 'hide', 'say', 'focus', 'listen', 'clear'];
+      protocol: typeof OPERATIONS;
     };
   }
 }

@@ -24,20 +24,14 @@ Damocles or development sandbox
 
 ## Controller state
 
-The reducer stores semantic objects by stable ID, insertion order, speech state, listening state, and focused object ID.
+The reducer stores semantic objects by stable ID, insertion order, speech state, listening state, and focused object ID. `ControllerState` (`src/controller/types.ts`) holds them twice over:
+
+- the agent's objects, order and speech (`agentObjects`, `agentOrder`, `agentSpeech`), from the `display` channel;
+- the runtime's (`runtimeObjects`, `runtimeOrder`, `runtimeSpeech`): the conversation and other page-owned objects, whose IDs start with `RUNTIME_ID_PREFIX` (`__runtime/`), so an agent ID never lands there;
+- `objects`, `order` and `speech`, the two merged, which the renderer reads;
+- `workspace` (the requested and effective view), `activity`, `toolRun`, `listening`, `focusId` and `revision`.
 
 Stable IDs are critical. Reusing an ID for `show` updates the object in place and allows React and Motion to preserve continuity.
-
-```ts
-interface ControllerState {
-  objects: Record<string, SceneObject>;
-  order: string[];
-  speech: SpeechState | null;
-  listening: boolean;
-  focusId: string | null;
-  revision: number;
-}
-```
 
 ## Scene classification
 

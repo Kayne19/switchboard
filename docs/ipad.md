@@ -57,6 +57,7 @@ never breakpoints.
 |---|---|---|
 | `apps/frontend/src/styles/index.css`, `.calendar-event__title` | `display: -webkit-box` with `-webkit-line-clamp` | the prefixed form is the one both engines support for clamping lines |
 | `apps/frontend/src/styles/index.css`, `::-webkit-scrollbar` beside `scrollbar-width: none` | prefixed scrollbar hiding | Safari before 18.2 has no `scrollbar-width` |
+| `apps/frontend/src/debug/debug.css`, `summary::-webkit-details-marker` beside `list-style: none` (debug page only) | prefixed disclosure-marker hiding | WebKit draws a `<summary>`'s triangle through this pseudo-element, which `list-style: none` does not reach in every Safari the iPad may run |
 
 ## Before a pin bump
 

@@ -9,8 +9,6 @@ import type {
 } from './types';
 import { RUNTIME_ID_PREFIX } from './types';
 
-export const PROTOCOL_OPERATIONS = ['show', 'hide', 'say', 'focus', 'listen', 'clear'] as const;
-
 export function normalizeViewTarget(target: string | null | undefined): string | null {
   if (!target) return null;
   const t = target.trim().toLowerCase();

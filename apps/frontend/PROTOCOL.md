@@ -44,7 +44,9 @@ Display a current explanation, optionally attached to an object or a semantic po
 
 ### `focus`
 
-Expand an existing object. Use `null` or omit `id` to leave focus.
+Expand an existing object. `id` is required: the guarded boundary refuses a
+missing or `null` one. There is no operation to leave focus; the caller leaves
+it (Esc, RETURN), and hiding the focused object or `clear` ends it.
 
 ```json
 { "op": "focus", "id": "loss" }

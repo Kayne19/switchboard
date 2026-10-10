@@ -16,6 +16,8 @@ Read `DESIGN_SYSTEM.md`, `ARCHITECTURE.md`, and `PROTOCOL.md` before changing th
 - Redrawing or approximating the Damocles glyph
 - Device-name or device-width breakpoints
 - Model-controlled coordinates, dimensions, or CSS
+- Backend-specific UI payloads in place of the scene protocol
+- Turning the primitives into a generic component library
 - Rounded dashboard cards or generic enterprise UI
 - Fake telemetry
 - Separate implementations of focus, listening, scrolling, or presence per page
