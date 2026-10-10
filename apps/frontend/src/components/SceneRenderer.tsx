@@ -44,7 +44,8 @@ function SceneContent({
     // An explanation offers the history only when there is one to open.
     onOpenHistory: conversation ? () => setTranscriptOpen(true) : undefined,
     setTranscriptOpen,
-    behindFocus: focusedObject !== null,
+    // Both cover the scene and are modal: behind either it is inert.
+    behindModal: focusedObject !== null || transcriptOpen,
   };
 
   return (
