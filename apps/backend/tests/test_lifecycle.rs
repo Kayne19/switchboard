@@ -1,6 +1,6 @@
 use super::*;
 use crate::models::{CatalogEntry, ModelCatalog};
-use crate::protocol::CandidateEnd;
+use crate::protocol::{CandidateEnd, ModelEntry};
 use futures_util::FutureExt;
 use std::sync::Arc;
 use std::thread;
