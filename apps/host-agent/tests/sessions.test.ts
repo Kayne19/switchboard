@@ -395,6 +395,21 @@ test("prepare: output, failure, bounded output and timeout reports", async () =>
 	assert.equal(viaCommand.outcome, "succeeded");
 });
 
+test("prepare: a shell that exits while a process it started holds the output pipes settles on the shell's exit", async () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "sb-prep-"));
+	// The backgrounded sleep inherits stdout and stderr; the shell exits 0 at once.
+	const background = await runPrepare({ cwd, command: "sleep 6 & echo started", timeoutMs: 5000 });
+	assert.equal(background.outcome, "succeeded", JSON.stringify(background));
+	assert.equal(background.exit_code, 0);
+	assert.equal(background.stdout, "started\n");
+	// A shell that does overrun is killed with its group, and the reply still
+	// comes when a process in another session (setsid) keeps the pipes open.
+	const overrun = await runPrepare({ cwd, command: "setsid sleep 8 & echo started; sleep 5", timeoutMs: 200 });
+	assert.equal(overrun.outcome, "timed_out", JSON.stringify(overrun));
+	assert.equal(overrun.stdout, "started\n");
+	assert.ok(overrun.duration_ms < 6000, `settled after ${overrun.duration_ms} ms, not when the setsid process let go`);
+});
+
 test("a host-agent restart reattaches from the daemon and sends each session a snapshot", async () => {
 	const dir = mkdtempSync(path.join(os.tmpdir(), "sb-host-"));
 	const stateFile = path.join(dir, "sessions.json");
