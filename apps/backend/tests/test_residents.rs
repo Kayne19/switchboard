@@ -1,7 +1,7 @@
 use super::*;
 use crate::hosts::{FakeHostAgent, Step};
 use crate::pbx::{board_on, board_with, project, says, serve, transcript, two_model_catalog, HOST};
-use crate::pi_client::ProjectLaunch;
+use crate::project_session::ProjectLaunch;
 use crate::within;
 use serde_json::json;
 use std::sync::{Arc, Mutex as StdMutex};

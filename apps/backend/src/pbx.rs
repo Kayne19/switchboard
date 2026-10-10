@@ -26,10 +26,9 @@ use crate::lifecycle::{Coordinator, StatusConfig};
 #[cfg(test)]
 use crate::models::ModelCatalog;
 use crate::operator::OperatorLaunch;
-use crate::pi_client::{
-    ActivityCallback, LegSession, PiSession, ProjectSession, SessionClosedCallback,
-};
+use crate::pi_client::{ActivityCallback, LegSession, PiSession};
 use crate::prewarm::Prewarm;
+use crate::project_session::{ProjectSession, SessionClosedCallback};
 #[cfg(test)]
 use crate::redial::thinking_in_spec;
 use crate::redial::RedialPlanner;

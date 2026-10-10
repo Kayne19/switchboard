@@ -22,9 +22,8 @@ use crate::page_controls::interrupt_active_turn;
 #[cfg(test)]
 use crate::pbx::OPERATOR;
 use crate::pbx::{AgentStateCallback, AgentStateNotice, RouteCallback, Switchboard};
-use crate::pi_client::{
-    Activity, ActivityCallback, AgentCall, LegSession, ModuleCallback, ProjectTurn, TurnCallback,
-};
+use crate::pi_client::{Activity, ActivityCallback, LegSession};
+use crate::project_session::{AgentCall, ModuleCallback, ProjectTurn, TurnCallback};
 use crate::protocol::{AgentRequest, AgentState, ServerMessage};
 use crate::redial::RedialPlanner;
 #[cfg(test)]

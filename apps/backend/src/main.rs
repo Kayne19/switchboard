@@ -21,6 +21,7 @@ mod page_controls;
 mod pbx;
 mod pi_client;
 mod prewarm;
+mod project_session;
 mod prompts;
 mod protocol;
 mod redial;

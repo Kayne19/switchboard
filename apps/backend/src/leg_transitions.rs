@@ -7,10 +7,9 @@
 use crate::hosts::Hosts;
 use crate::lifecycle::{CandidateLeg, LifecycleError};
 use crate::pbx::{uuid_like, Switchboard, TransferContext, OPERATOR};
-use crate::pi_client::{
-    LegSession, ModuleCallback, PiSessionError, ProjectLaunch, ProjectSession, Turn, TurnCallback,
-};
+use crate::pi_client::{LegSession, PiSessionError, Turn};
 use crate::prewarm::LaunchPlan;
+use crate::project_session::{ModuleCallback, ProjectLaunch, ProjectSession, TurnCallback};
 use crate::prompts::{build_intro_prompt, FOREGROUND_NOTICE};
 use crate::redial::thinking_in_spec;
 use crate::registry::{Project, Registry};
