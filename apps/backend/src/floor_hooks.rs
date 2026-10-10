@@ -11,8 +11,8 @@ use crate::floor::{
 use crate::pbx::Switchboard;
 use crate::protocol::AgentRequest;
 use crate::speech::{
-    finish_audio, release_reply_voice, reserve_speech, send_speech, trace_speech,
-    ContinuationScope, SpeakUnder, SpeechAdmission, SpeechFailure, WhenQueueFull,
+    reserve_speech, send_speech, trace_speech, ContinuationScope, SpeakUnder, SpeechAdmission,
+    SpeechFailure, WhenQueueFull,
 };
 use crate::turns::{call_summary_without_desk_sessions, jev_response_event};
 use std::sync::{Arc, Weak};
@@ -190,18 +190,17 @@ async fn release_floor(
             Err(_) => return ReleaseOutcome::Retry,
         };
     let generation = reserved.generation;
-    let sequence = reserved.sequence;
     // The page may have gone while the request waited for its place; the
     // place is given back and the request waits for the page.
     if !state.0.delivery.connected() {
-        release_reply_voice(state, Some(reserved), generation).await;
+        reserved.give_back(state).await;
         return ReleaseOutcome::Retry;
     }
     // Promotion or host loss may have happened while the audio slot was
     // reserved. Do not let a stale background request cross the final speech
     // side-effect boundary.
     if !still_live(state, &request) {
-        release_reply_voice(state, Some(reserved), generation).await;
+        reserved.give_back(state).await;
         return ReleaseOutcome::Drop;
     }
     let scope = if state.0.take_foreground_audio(generation) {
@@ -236,8 +235,8 @@ async fn release_floor(
         // spoken is reported gone.
         Ok(()) if state.0.coordinator.is_background(&request.token) => ReleaseOutcome::Played,
         Ok(()) => ReleaseOutcome::Drop,
+        // The worker closed the slot of a request it did not speak.
         Err(SpeechFailure::NotSpoken(_)) => {
-            finish_audio(state, sequence, generation, Vec::new()).await;
             if state.0.delivery.connected() {
                 ReleaseOutcome::Drop
             } else {

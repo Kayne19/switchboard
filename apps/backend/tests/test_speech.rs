@@ -385,6 +385,252 @@ async fn speech_a_rescue_stops_is_not_shown_to_the_caller_as_an_error() {
     }
 }
 
+/// What happens to a speech request on its way through the worker, for the
+/// completion table below.
+#[derive(Clone, Copy, Debug)]
+enum SpeechEvent {
+    /// A rescue retires the generation after the request's place was
+    /// reserved, before the worker admits it.
+    RetiredBeforeAdmission,
+    /// The provider refuses the request when it is admitted.
+    ProviderRefuses,
+    /// A rescue retires the generation and aborts the drain.
+    RescueDuringDrain,
+    /// The generation moves on while the body drains; nothing is aborted.
+    RetiredDuringDrain,
+    /// The provider's body fails partway.
+    BodyFails,
+    /// The body drains to its end with a browser connected.
+    BodyDrained,
+    /// The body drains to its end with no browser connected.
+    BodyDrainedNoBrowser,
+}
+
+/// What a speech request's completion did, as seen from outside the worker.
+#[derive(Debug, PartialEq, Eq)]
+struct SpeechCompletion {
+    /// What the requester (`speak`, a reply, a floor release) was answered.
+    answer: Result<(), String>,
+    /// The caller's page was sent an `error`.
+    page_error: bool,
+    /// The line was written to the spoken transcript and sent as `spoken`.
+    spoken_line: bool,
+    /// The request's audio slot is still open, holding back later audio.
+    slot_left_open: bool,
+    /// The request's text is still pending continuity for the next request.
+    pending_text_left: bool,
+}
+
+/// Runs one speech request through the real worker to `event` and reports
+/// what its completion did.
+async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCompletion {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let gate = TestTtsGate::new();
+    let deadline = Duration::from_millis(25_000);
+    let speaker = match event {
+        SpeechEvent::ProviderRefuses => Speaker::offline(100, deadline),
+        SpeechEvent::RetiredBeforeAdmission
+        | SpeechEvent::BodyDrained
+        | SpeechEvent::BodyDrainedNoBrowser => Speaker::test_success(100, deadline),
+        SpeechEvent::RescueDuringDrain
+        | SpeechEvent::RetiredDuringDrain
+        | SpeechEvent::BodyFails => Speaker::test_gated(100, deadline, gate.clone()),
+    };
+    if matches!(event, SpeechEvent::BodyFails) {
+        gate.fail_first();
+    }
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        speaker,
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let _connection = match event {
+        SpeechEvent::BodyDrainedNoBrowser => None,
+        _ => Some(state.register_connection().await),
+    };
+    start_speech_worker_for_test(&state);
+    let mut events = state.0.events.subscribe();
+    let generation = state.0.coordinator.generation();
+    let admission = SpeechAdmission {
+        text: "One line.".into(),
+        route: OPERATOR.into(),
+        generation,
+        deadline: std::time::Instant::now() + Duration::from_secs(1),
+        scope: ContinuationScope::FreshTurn,
+        group: state.0.new_speech_group(),
+        log_spoken,
+    };
+    let reserved = reserve_speech(
+        &state,
+        SpeakUnder::Generation(generation),
+        WhenQueueFull::Wait,
+    )
+    .await
+    .unwrap_or_else(|failure| panic!("the request gets a place: {failure}"));
+    if matches!(event, SpeechEvent::RetiredBeforeAdmission) {
+        state.0.coordinator.begin_rescue("test rescue");
+    }
+    // `send_speech` borrows the place it is given, so the request is sent
+    // from this task while the event is driven beside it.
+    let drive = async {
+        match event {
+            SpeechEvent::RescueDuringDrain
+            | SpeechEvent::RetiredDuringDrain
+            | SpeechEvent::BodyFails => {
+                timeout(Duration::from_secs(1), gate.wait_started())
+                    .await
+                    .expect("the drain started");
+                match event {
+                    SpeechEvent::RescueDuringDrain => {
+                        cancel_active_operations(&state).await;
+                    }
+                    SpeechEvent::RetiredDuringDrain => {
+                        state.0.coordinator.begin_rescue("test rescue");
+                    }
+                    _ => {}
+                }
+                gate.release();
+            }
+            _ => {}
+        }
+    };
+    let (answer, ()) = within(
+        "the request's answer",
+        futures_util::future::join(send_speech(&state, admission, reserved), drive),
+    )
+    .await;
+    // Whatever the completion does after it answers happens before the
+    // completion task next yields.
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    let mut page_error = false;
+    let mut spoken_line = false;
+    while let Ok(event) = events.try_recv() {
+        if let Event::Json(value) = event {
+            page_error |= value["type"] == "error";
+            spoken_line |= value["type"] == "spoken";
+        }
+    }
+    let slot_left_open = !state.0.audio.lock().await.slots.is_empty();
+    SpeechCompletion {
+        answer: answer.map_err(|failure| failure.to_string()),
+        page_error,
+        spoken_line,
+        slot_left_open,
+        pending_text_left: state.0.continuity_snapshot().pending_text.is_some(),
+    }
+}
+
+/// The speech request's phase × event table (#385): every way the worker
+/// can end a request, and what its one completion does. A rescue's ends
+/// are answered as not spoken and kept off the page (#247); a provider
+/// failure at the current generation is shown; every end closes the
+/// request's audio slot and leaves none of its text pending.
+#[tokio::test]
+async fn every_end_of_a_speech_request_completes_it_once() {
+    struct Row {
+        phase: &'static str,
+        event: SpeechEvent,
+        log_spoken: bool,
+        answer: Result<(), &'static str>,
+        page_error: bool,
+        spoken_line: bool,
+    }
+    let superseded = "speech generation was superseded";
+    let rows = [
+        Row {
+            phase: "queued",
+            event: SpeechEvent::RetiredBeforeAdmission,
+            log_spoken: true,
+            answer: Err(superseded),
+            page_error: false,
+            spoken_line: false,
+        },
+        Row {
+            phase: "admitting",
+            event: SpeechEvent::ProviderRefuses,
+            log_spoken: true,
+            answer: Err("tests do not reach ElevenLabs"),
+            page_error: true,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::RescueDuringDrain,
+            log_spoken: true,
+            answer: Err("speech was cancelled"),
+            page_error: false,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::RetiredDuringDrain,
+            log_spoken: true,
+            answer: Err(superseded),
+            page_error: false,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::BodyFails,
+            log_spoken: true,
+            answer: Err("gated test failure"),
+            page_error: true,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::BodyDrained,
+            log_spoken: true,
+            answer: Ok(()),
+            page_error: false,
+            spoken_line: true,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::BodyDrained,
+            log_spoken: false,
+            answer: Ok(()),
+            page_error: false,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::BodyDrainedNoBrowser,
+            log_spoken: true,
+            answer: Err("no browser connected or the writer rejected audio"),
+            page_error: false,
+            spoken_line: false,
+        },
+    ];
+    for row in rows {
+        let observed = complete_one_request(row.event, row.log_spoken).await;
+        assert_eq!(
+            observed,
+            SpeechCompletion {
+                answer: row.answer.map_err(str::to_owned),
+                page_error: row.page_error,
+                spoken_line: row.spoken_line,
+                slot_left_open: false,
+                pending_text_left: false,
+            },
+            "{} x {:?} (log_spoken: {})",
+            row.phase,
+            row.event,
+            row.log_spoken,
+        );
+    }
+}
+
 #[tokio::test]
 async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
     let state = state();
