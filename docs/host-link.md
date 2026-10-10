@@ -411,9 +411,20 @@ behavior. If no reply arrives in time, or the link is down, the module gets
 (`SPEAK_REPLY_MARGIN_MS` in `skill_socket.ts`). The service starts its own
 speech deadline only when it admits the call, after the frame has crossed the
 link, and answers `delivered` once the whole line has played; the margin lets
-that answer, not the host agent's clock, decide. The skill module waits one
-margin longer again. A call that cannot
+that answer, not the host agent's clock, decide. A call that cannot
 go out because the link's socket is already closing gets `failed` at once.
+
+Each wait on a `speak` has one owner, and each is longer than the one it
+waits on, so the service's answer is the one that decides:
+
+| Wait | Owner | Length |
+|---|---|---|
+| The speech itself | the service (`module_calls.rs`, from admission) | `SWITCHBOARD_SPEECH_DEADLINE_MS`, given to the session in `join_call` |
+| The relayed call | the host agent (`speakReplyMs` in `skill_socket.ts`) | the speech deadline and `SPEAK_REPLY_MARGIN_MS` (5 s); sent to the module as the hello's `speak_reply_ms` |
+| The socket reply | the skill module (`_call_host_agent`) | the hello's `speak_reply_ms` and `_MARGIN_S` (5 s) |
+
+Only the host agent holds its margin; the module reads the result from the
+hello rather than keeping a copy.
 
 ### Frames the service cannot read
 
@@ -496,11 +507,15 @@ a number. Replies:
 
 ```json
 { "on_call": false }
-{ "on_call": true, "token": "<call token>", "persona": "...", "speech_deadline_ms": 25000 }
+{ "on_call": true, "token": "<call token>", "persona": "...", "speech_deadline_ms": 25000, "speak_reply_ms": 30000 }
 { "on_call": false, "reason": "subagent" }
 ```
 
-The last is the reply for any `depth` other than 0.
+The last is the reply for any `depth` other than 0. `speak_reply_ms` is how
+long the host agent waits for the service's answer to a relayed `speak` on
+this call (below, "If no reply arrives in time"); the module waits that and
+its own 5 s more. A hello without it, from a host agent older than the field,
+makes the module wait for a `speak` as for any other call: 35 s.
 
 ### Calls
 
