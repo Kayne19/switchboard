@@ -277,6 +277,26 @@ microphone, and nothing else: the meter's graph is built after
 is a picture of the caller's voice, and a browser that cannot draw one still
 has to record.
 
+Push-to-talk is one machine (`PushToTalk`). Its `Phase` names where a press
+is and holds what exists only there; `transition()` is the only writer, the
+phase x event table in `tests/unit/pushToTalk.test.ts` pins it, and `leave()`
+releases what the old phase holds and the new one does not:
+
+| phase | holds | left by |
+|---|---|---|
+| `idle` | nothing | a press (`acquiring`) |
+| `acquiring` | the press's meter context; `cancelled` once Send or Discard came during the prompt | the grant (`recording`, or `idle` when cancelled or no recorder can be made), the refusal (`idle`) |
+| `recording` | the take: recorder, stream, meter, clip id, epoch and transfer stamp, chunks | Send or Discard (`stopping`), the recorder stopping by itself (`idle`, the clip sent, #262), a recorder error or a failed `start()` (`idle`) |
+| `stopping` | the take, and whether to send it | the recorder's `stop` event (`idle`, sent or discarded), a recorder error (`idle`) |
+
+Every way into `idle` runs `end()` in one order: push-to-talk has let go of
+the microphone, `onActive(false)` lets hands-free take it back (#257), the
+page is told it is not recording, then the clip goes to the outbox and one
+status line says how the press ended. A recorder or permission callback
+names its take or press, so one that arrives after its phase is dropped (a
+recorder fires `stop` after its `error`). A second press while the
+permission prompt is open is ignored.
+
 ## Extension strategy
 
 Add a new content type in this order:
