@@ -308,9 +308,25 @@ for (const dir of ["apps/frontend/tests", "apps/host-agent/tests"]) {
 	if (copies.length !== 1) findings.push(`the '__runtime/' prefix is written ${copies.length} times (${copies.join(", ")}); import RUNTIME_ID_PREFIX from controller/types.ts`);
 }
 
+// 18. The layout reads only the stage's own geometry (docs/ipad.md): a
+//     size in the stylesheet is in container units, not the viewport's.
+//     Safari's `vh` is its large viewport, taller than what shows with
+//     its toolbars out, and a focus box sized in it ran under them (#271);
+//     `lvh` names that viewport outright and `svh` is no stage either.
+//     The stage sizes itself (`100vw`, and `100vh` before `100dvh`).
+{
+	const stylesheet = path.join(root, "apps/frontend/src/styles/index.css");
+	let inStage = false;
+	lines(stylesheet).forEach((line, index) => {
+		if (/^\.stage \{$/.test(line)) inStage = true;
+		else if (inStage && /^\}$/.test(line)) inStage = false;
+		else if (!inStage && /\d[ls]?v(?:h|w|i|b|min|max)\b/.test(line)) findings.push(`${rel(stylesheet)}:${index + 1}: a viewport unit (size it in cqw/cqh from the stage)`);
+	});
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes");
