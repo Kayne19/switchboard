@@ -483,10 +483,17 @@ export class HandsFreeController {
 		}, MAX_HANDS_FREE_UTTERANCE_MS);
 	}
 
+	/**
+	 * Ends the current capture. A discarded capture is retired here, before
+	 * the recorder is asked to stop: every caller that discards has already
+	 * moved `runtimeToken` on, so the recorder's `onstop` would see a stale
+	 * token and leave the capture in place for good (#256).
+	 */
 	private stopCapture(discard: boolean): void {
 		const capture = this.capture;
 		if (!capture) return;
 		capture.discard ||= discard;
+		if (capture.discard) this.capture = null;
 		if (capture.recorder.state !== "inactive") {
 			try {
 				capture.recorder.stop();
