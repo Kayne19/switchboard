@@ -179,9 +179,16 @@ export class SessionManager {
 	/**
 	 * Load provenance from the state file and reattach to every recorded
 	 * session the daemon still has. Used at start and after the daemon
-	 * connection was replaced. Returns the sessions kept and the ones gone.
+	 * connection was replaced. Returns the sessions kept, the ones gone, and
+	 * the ones the daemon still lists but would not attach.
+	 *
+	 * Each session is reattached on its own: one whose attach fails does not
+	 * stop the rest, and the state file is written either way. An attach that
+	 * fails because the session ended after the list is a close (`gone`); one
+	 * the daemon still lists stays tracked, so its provenance is kept and the
+	 * caller's next resync tries it again.
 	 */
-	async resync(): Promise<{ live: string[]; closed: string[] }> {
+	async resync(): Promise<{ live: string[]; closed: string[]; failed: { session: string; error: string }[] }> {
 		const state = this.#readState();
 		for (const n of state.used_names) this.#usedNames.add(n);
 		const recorded = new Map(state.sessions.map((s) => [s.handle, s]));
@@ -189,30 +196,30 @@ export class SessionManager {
 		const live = new Set((await this.#port.list()).map((s) => s.handle));
 		const kept: string[] = [];
 		const closed: string[] = [];
+		const refused: { rec: StateFile["sessions"][number]; previous: Tracked | undefined; error: string }[] = [];
+		// A session detached or killed while its attach was in flight stays
+		// let go: the keeper runs this again while the link is up, so a
+		// command can land between the attach and its result.
+		const letGo = (handle: string, previous: Tracked | undefined) => previous !== undefined && this.#tracked.get(handle) !== previous;
+		const gone = (handle: string) => {
+			if (this.#tracked.delete(handle)) this.#emit(handle, { kind: "session_closed", reason: "gone" });
+			closed.push(handle);
+		};
 		for (const rec of recorded.values()) {
 			if (!live.has(rec.handle)) {
-				if (this.#tracked.delete(rec.handle)) this.#emit(rec.handle, { kind: "session_closed", reason: "gone" });
-				closed.push(rec.handle);
+				gone(rec.handle);
 				continue;
 			}
-			const snapshot = await this.#port.attach(rec.handle);
 			const previous = this.#tracked.get(rec.handle);
-			const t: Tracked = previous ?? {
-				handle: rec.handle,
-				sessionId: rec.session_id,
-				name: rec.name,
-				project: rec.project,
-				cwd: rec.cwd,
-				provenance: rec.provenance,
-				turnOpen: false,
-				inputs: 0,
-				pending: 0,
-				turnId: null,
-				turnCause: null,
-				call: null,
-				last: null,
-				killing: false,
-			};
+			let snapshot: DaemonSession;
+			try {
+				snapshot = await this.#port.attach(rec.handle);
+			} catch (error) {
+				refused.push({ rec, previous, error: error instanceof Error ? error.message : String(error) });
+				continue;
+			}
+			if (letGo(rec.handle, previous)) continue;
+			const t = this.#tracked.get(rec.handle) ?? this.#untracked(rec);
 			t.last = snapshot;
 			this.#tracked.set(rec.handle, t);
 			// A busy session rebuilt from a snapshot has no reliable cause. Keep
@@ -221,8 +228,48 @@ export class SessionManager {
 			if (t.turnOpen) this.#settle(t);
 			kept.push(rec.handle);
 		}
+		const failed: { session: string; error: string }[] = [];
+		if (refused.length > 0) {
+			// Ask once more which of them the daemon still runs. If it cannot
+			// say, keep them all: a later resync decides.
+			let still: Set<string> | null = null;
+			try {
+				still = new Set((await this.#port.list()).map((s) => s.handle));
+			} catch {
+				still = null;
+			}
+			for (const { rec, previous, error } of refused) {
+				if (letGo(rec.handle, previous)) continue;
+				if (still && !still.has(rec.handle)) {
+					gone(rec.handle);
+					continue;
+				}
+				if (!this.#tracked.has(rec.handle)) this.#tracked.set(rec.handle, this.#untracked(rec));
+				failed.push({ session: rec.handle, error });
+			}
+		}
 		this.#writeState();
-		return { live: kept, closed };
+		return { live: kept, closed, failed };
+	}
+
+	/** A recorded session this process has not tracked yet, with no turn open. */
+	#untracked(rec: StateFile["sessions"][number]): Tracked {
+		return {
+			handle: rec.handle,
+			sessionId: rec.session_id,
+			name: rec.name,
+			project: rec.project,
+			cwd: rec.cwd,
+			provenance: rec.provenance,
+			turnOpen: false,
+			inputs: 0,
+			pending: 0,
+			turnId: null,
+			turnCause: null,
+			call: null,
+			last: null,
+			killing: false,
+		};
 	}
 
 	/** Wire-level description of a tracked session, used in snapshots and replies. */
