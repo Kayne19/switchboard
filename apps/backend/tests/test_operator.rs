@@ -1,6 +1,6 @@
 use super::*;
 use crate::pbx::{
-    board_on, board_with, decision, project, says, scratch_dir, serve, two_model_catalog,
+    board_on, board_with, decision, on_alpha, project, says, scratch_dir, serve, two_model_catalog,
 };
 use tokio::time::Duration;
 
@@ -123,4 +123,92 @@ async fn the_routing_utility_request_carries_the_call_state() {
     assert!(request.contains("[CALL STATE]"), "{request}");
     assert!(request.contains("has something to say"), "{request}");
     assert!(request.contains("pull it up"), "{request}");
+}
+
+/// The operator answers some lines while a project stays on the line. Its
+/// (re)start must not take the session guard off that project: the guard is
+/// what a steer and a page rescue reach.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_operator_started_while_a_project_is_on_the_line_leaves_the_guard_on_it() {
+    let root = scratch_dir("operator-guard-start");
+    let binary = fake_routing_process(
+        &root,
+        r#"{"type":"tool_execution_start","toolName":"second_opinion","args":{"confident":false}}"#,
+        Some(
+            r#"{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Alpha is running."}}"#,
+        ),
+    );
+    let (mut board, _log) = on_alpha(
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        Box::new(|_, _| says("Alpha handled it.")),
+    )
+    .await;
+    assert!(board.operator.is_none(), "no operator is running yet");
+
+    let reply = board
+        .handle_decision(
+            "what's running?",
+            &decision(crate::router::Action::Status, None, None),
+        )
+        .await;
+
+    assert_eq!(reply.text, "Alpha is running.", "{reply:?}");
+    assert!(board.operator.is_some(), "the operator answered");
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert_eq!(
+        guard_label(&board).await.as_deref(),
+        Some("alpha"),
+        "the project on the line keeps the session guard"
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A failed operator turn while a project is on the line drops the operator,
+/// not the project's hold on the session guard.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failed_operator_turn_while_a_project_is_on_the_line_leaves_the_guard_on_it() {
+    let root = scratch_dir("operator-guard-recover");
+    let binary = root.join("fake-failing-operator");
+    crate::pi_client::write_executable_script(
+        &binary,
+        "while IFS= read -r _line; do exit 1; done\n",
+    );
+    let (mut board, _log) = on_alpha(
+        &[("SWITCHBOARD_PI_BINARY", &binary.to_string_lossy())],
+        Box::new(|_, _| says("Alpha handled it.")),
+    )
+    .await;
+
+    let reply = board
+        .handle_decision(
+            "what's running?",
+            &decision(crate::router::Action::Status, None, None),
+        )
+        .await;
+
+    assert!(
+        board.operator.is_none(),
+        "the failed operator was dropped: {reply:?}"
+    );
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert_eq!(
+        guard_label(&board).await.as_deref(),
+        Some("alpha"),
+        "the project on the line keeps the session guard"
+    );
+    board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+async fn guard_label(board: &Switchboard) -> Option<String> {
+    board
+        .session_control()
+        .lock()
+        .await
+        .as_ref()
+        .map(|session| session.label().to_owned())
 }
