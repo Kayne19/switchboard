@@ -1145,6 +1145,49 @@ async fn stop_requires_confirmation_before_closing_a_project() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_punctuated_yes_from_speech_to_text_confirms_a_stop() {
+    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("handled"))).await;
+    let generation = board.coordinator.generation();
+    board
+        .decisions
+        .set_pending_stop_for_test("alpha", generation);
+    let stopped = board
+        .handle_decision("Yes.", &Decision::fallback("confirmation"))
+        .await;
+    assert_eq!(stopped.text, "Stopped alpha.");
+    assert_eq!(stopped.route, OPERATOR);
+    assert!(board.agent.is_none());
+    board.shutdown().await;
+}
+
+#[test]
+fn a_confirmation_is_a_leading_yes_in_any_punctuation() {
+    for yes in [
+        "yes",
+        "Yes.",
+        "Yes, stop it.",
+        "  YEAH   do it! ",
+        "Yep",
+        "Confirm.",
+        "Do it.",
+        "Stop it!",
+    ] {
+        assert!(is_confirmation(yes), "{yes:?} confirms");
+    }
+    for no in [
+        "",
+        "no",
+        "No, keep it going.",
+        "yesterday",
+        "not yet",
+        "I said yes",
+    ] {
+        assert!(!is_confirmation(no), "{no:?} does not confirm");
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn the_operator_gets_the_call_state_once_per_utterance() {
     let root = scratch_dir("operator-call-state");
     let seen = root.join("operator-input");

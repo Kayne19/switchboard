@@ -711,10 +711,18 @@ impl Switchboard {
     }
 }
 
+/// Whether the caller's answer to "Say yes to confirm" says yes. Speech to
+/// text punctuates ("Yes.", "Yes, stop it."), so case and punctuation are
+/// ignored, and a yes that leads a longer answer counts.
 fn is_confirmation(text: &str) -> bool {
+    let lowered = text.to_lowercase();
+    let words: Vec<&str> = lowered
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|word| !word.is_empty())
+        .collect();
     matches!(
-        text.trim().to_ascii_lowercase().as_str(),
-        "yes" | "yeah" | "yep" | "confirm" | "do it" | "stop it"
+        words.as_slice(),
+        ["yes" | "yeah" | "yep" | "confirm", ..] | ["do" | "stop", "it", ..]
     )
 }
 
