@@ -202,6 +202,11 @@ class FailureTest(ModuleTestCase):
         self.assertEqual((result.status, result.reason), ("failed", "link_down"))
         self.assertIn("link_down", line)
 
+    def test_a_refusal_sentence_is_not_given_a_second_period(self):
+        self.host(reply=lambda request: {"status": "refused", "reason": "the caller's screen moved to a new leg."})
+        _, line = self.run_call(switchboard.view, "visual")
+        self.assertEqual(line, "switchboard.view: The switchboard refused that view request: the caller's screen moved to a new leg.")
+
     def test_refusals_never_raise(self):
         for reason in ("caller_away", "not_on_call", "subagent", "unknown_call", "bad_request", None):
             self.host(reply=lambda request, reason=reason: {"status": "refused", "reason": reason})
