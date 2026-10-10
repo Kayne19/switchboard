@@ -1102,6 +1102,7 @@ impl Coordinator {
                     ended: Some(CandidateEnd::RolledBack),
                 });
                 self.refresh_locked(state);
+                self.operation_changed.notify_waiters();
                 return true;
             }
             let Some(previous) = state.startup_rollback.take() else {
@@ -1125,6 +1126,7 @@ impl Coordinator {
                 ended: Some(CandidateEnd::RolledBack),
             });
             self.refresh_locked(state);
+            self.operation_changed.notify_waiters();
             true
         })
     }
@@ -1158,6 +1160,7 @@ impl Coordinator {
                 });
             }
             self.refresh_locked(state);
+            self.operation_changed.notify_waiters();
             true
         })
     }

@@ -1,6 +1,7 @@
 use super::*;
 use crate::models::{CatalogEntry, ModelCatalog};
 use crate::protocol::CandidateEnd;
+use futures_util::FutureExt;
 use std::sync::Arc;
 use std::thread;
 
@@ -1057,6 +1058,39 @@ fn a_rollback_restores_the_leg_as_the_adoption_found_it() {
     assert!(call.rollback_startup("intro failed"));
     assert_on_the_operator(&call);
     assert_eq!(call.current_identity(), LegIdentity::new("operator", 2));
+}
+
+/// A queued caller turn waits on `operation_changed` while a candidate is
+/// staged or a turn is open (`admit_turn`), and is let through only when it
+/// is woken. A rollback ends the startup and closes the intro's turn, and a
+/// shutdown closes any turn, but neither woke the waiters: the queued turn
+/// slept until some unrelated transition happened to wake it.
+#[test]
+fn a_turn_waiting_on_the_line_is_woken_when_a_startup_or_the_call_ends() {
+    let woken = |call: &Coordinator, transition: &dyn Fn(&Coordinator)| {
+        let notify = call.operation_changed();
+        let mut waiting = std::pin::pin!(notify.notified());
+        waiting.as_mut().enable();
+        transition(call);
+        waiting.now_or_never().is_some()
+    };
+    // Behind a staged candidate.
+    let call = coordinator();
+    call.begin_candidate(alpha_candidate()).unwrap();
+    assert!(woken(&call, &|call| assert!(
+        call.rollback_startup("startup failed")
+    )));
+    // Behind an adopted candidate's intro.
+    let call = coordinator();
+    call.begin_candidate(alpha_candidate()).unwrap();
+    call.adopt_candidate("cand").unwrap();
+    assert!(woken(&call, &|call| assert!(
+        call.rollback_startup("intro failed")
+    )));
+    // Behind a turn, when the call shuts down.
+    let call = coordinator();
+    call.begin_prompt(&call.current_identity()).unwrap();
+    assert!(woken(&call, &|call| assert!(call.begin_shutdown())));
 }
 
 // The call line, phase by event. Each phase is reached the way a call reaches
