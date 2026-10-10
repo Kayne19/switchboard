@@ -57,8 +57,8 @@ pub(crate) struct AgentProjection {
     // owner holds its lifecycle mutex while it validates a resident and
     // applies a waiting/display mutation, so the check and write cannot be
     // separated by promotion.
-    pub(crate) states: Arc<StdMutex<Vec<AgentState>>>,
-    pub(crate) displays: Arc<StdMutex<HashMap<String, Value>>>,
+    states: Arc<StdMutex<Vec<AgentState>>>,
+    displays: Arc<StdMutex<HashMap<String, Value>>>,
 }
 
 /// A change to the agent projection, as each of its mutators returns it.

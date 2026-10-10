@@ -1138,13 +1138,7 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
         .as_str()
         .unwrap()
         .contains("not on screen yet"));
-    assert!(state
-        .0
-        .projection
-        .displays
-        .lock()
-        .unwrap()
-        .contains_key("alpha"));
+    assert!(state.0.projection.has_held_display("alpha"));
 
     begin_alpha_candidate(&state, "foreground-token");
     assert!(
@@ -1159,13 +1153,7 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
     assert!(frames
         .iter()
         .any(|frame| frame["type"] == "display" && frame["action"]["id"] == "d1"));
-    assert!(!state
-        .0
-        .projection
-        .displays
-        .lock()
-        .unwrap()
-        .contains_key("alpha"));
+    assert!(!state.0.projection.has_held_display("alpha"));
 }
 
 #[tokio::test]
@@ -1223,7 +1211,7 @@ async fn an_idle_notice_does_not_clear_a_background_speak_request() {
     .await;
     assert_lifecycle_consistent(&state).await;
 
-    let agents = state.0.projection.states.lock().unwrap();
+    let agents = state.0.projection.snapshot();
     let agent = agents
         .iter()
         .find(|agent| agent.project == "alpha")
