@@ -340,7 +340,7 @@ impl AppInner {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(generation);
     }
 
-    fn take_foreground_audio(&self, generation: u64) -> bool {
+    pub(crate) fn take_foreground_audio(&self, generation: u64) -> bool {
         let mut foreground = self
             .foreground_audio_generation
             .lock()
@@ -505,7 +505,12 @@ async fn append_audio(state: &AppState, sequence: u64, generation: u64, bytes: V
     publish_audio_events(state, events).await
 }
 
-async fn finish_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) -> bool {
+pub(crate) async fn finish_audio(
+    state: &AppState,
+    sequence: u64,
+    generation: u64,
+    bytes: Vec<u8>,
+) -> bool {
     let (events, current) = {
         let mut audio = state.0.audio.lock().await;
         let current = generation == state.0.coordinator.generation();
@@ -1274,7 +1279,11 @@ async fn reserve_reply_voice<'a>(
 
 /// Gives back a reply's reserved first utterance that will not be spoken. Its
 /// audio slot is closed, or every later utterance would wait behind it.
-async fn release_reply_voice(state: &AppState, voice: Option<ReservedSpeech<'_>>, generation: u64) {
+pub(crate) async fn release_reply_voice(
+    state: &AppState,
+    voice: Option<ReservedSpeech<'_>>,
+    generation: u64,
+) {
     if let Some(ReservedSpeech {
         permit, sequence, ..
     }) = voice
