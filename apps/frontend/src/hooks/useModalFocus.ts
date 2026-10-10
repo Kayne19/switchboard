@@ -120,12 +120,6 @@ function canHoldFocus(element: HTMLElement): boolean {
   return element.isConnected && !element.matches(':disabled');
 }
 
-/** Whether `element` is in a scene that is leaving: the stage draws the scene it goes to after it. */
-function leaving(element: Element): boolean {
-  const scene = element.closest('.stage > [data-scene]');
-  return scene !== null && scene !== [...document.querySelectorAll('.stage > [data-scene]')].at(-1);
-}
-
 /** One dialog's focus, from opening to the last try to give it back. */
 class ModalFocus {
   private phase: ModalFocusPhase = CLOSED;
@@ -210,7 +204,10 @@ class ModalFocus {
    * most `GIVE_BACK_TRIES`.
    */
   private giveBack({ opener, triesLeft }: Extract<ModalFocusPhase, { kind: 'restoring' }>): ModalFocusPhase {
-    if (!opener.isConnected || leaving(opener)) return CLOSED;
+    // An inert opener cannot take focus: one in a scene that is leaving
+    // (Scenes.tsx makes it inert until its exit ends), or behind a dialog
+    // still open.
+    if (!opener.isConnected || opener.closest('[inert]') !== null) return CLOSED;
     const active = document.activeElement;
     if (active && active !== document.body && !active.closest(this.layer)) return CLOSED;
     opener.focus({ preventScroll: true });
