@@ -112,6 +112,45 @@ async fn steer_writes_into_the_running_process() {
 }
 
 #[tokio::test]
+async fn a_cancelled_prompt_leaves_no_turn_for_the_next_prompt_to_read() {
+    // The first prompt is answered late; every later one at once.
+    let script = "read line; sleep 1; printf '%s\\n' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"first\"}}' '{\"type\":\"agent_settled\"}'; while read line; do printf '%s\\n' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"second\"}}' '{\"type\":\"agent_settled\"}'; done";
+    let session = PiSession::start(
+        vec!["sh".into(), "-c".into(), script.into()],
+        "test",
+        "test-leg",
+        None,
+        None,
+        Duration::from_secs(5),
+        None,
+    )
+    .await
+    .unwrap();
+    // The floor rewrite's timeout, or a rescue aborting the turn task.
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), session.prompt("one"))
+            .await
+            .is_err()
+    );
+    assert!(
+        !session.busy(),
+        "a cancelled prompt must not leave the leg busy"
+    );
+    assert!(
+        !session.alive().await,
+        "a process left mid-turn must not be reused"
+    );
+    match session.prompt("two").await {
+        Ok(turn) => panic!(
+            "the next prompt read {:?} from the cancelled turn",
+            turn.text
+        ),
+        Err(error) => assert!(error.to_string().contains("not running"), "{error}"),
+    }
+    session.close().await;
+}
+
+#[tokio::test]
 async fn process_prompt_collects_text_and_route_signal() {
     let script = "read line; printf '%s\n' '{\"type\":\"message_update\",\"assistantMessageEvent\":{\"type\":\"text_end\",\"content\":\"Connecting.\"}}' '{\"type\":\"tool_execution_start\",\"toolName\":\"route\",\"args\":{\"target\":\"alpha\",\"mode\":\"fresh\"}}' '{\"type\":\"agent_settled\"}'";
     let session = PiSession::start(

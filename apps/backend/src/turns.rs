@@ -41,8 +41,24 @@ async fn call_summary_without_pbx_lock(
     let routing = &state.0.turns.routing;
     let live_desk_sessions =
         Switchboard::live_desk_sessions_from(routing.hosts(), routing.registry()).await;
-    let mut summary = routing.call_summary(entries, screen, utterance);
+    let (router, mut summary) =
+        call_summary_without_desk_sessions(state, entries, screen, utterance);
     summary.live_desk_sessions = live_desk_sessions;
+    (router, summary)
+}
+
+/// Jev's view of the call without the PBX lock and without asking the hosts
+/// for desk sessions: what the floor's good-moment gate weighs an update
+/// against. A foreground turn holds the PBX lock for its whole prompt, and
+/// that is when the caller waits on a quiet line (#245).
+pub(crate) fn call_summary_without_desk_sessions(
+    state: &AppState,
+    entries: &[crate::history::TranscriptEntry],
+    screen: Value,
+    utterance: impl Into<String>,
+) -> (crate::router::Router, CallSummary) {
+    let routing = &state.0.turns.routing;
+    let mut summary = routing.call_summary(entries, screen, utterance);
     summary.merge_live_agents(&live_agents(state));
     (routing.router(), summary)
 }
@@ -67,7 +83,7 @@ async fn prepare_takeover_lookup(
 
 /// Every agent the presentation side knows on this call, with its live
 /// state, waiting request and held display.
-pub(crate) fn live_agents(state: &AppState) -> Vec<crate::router::LiveAgent> {
+fn live_agents(state: &AppState) -> Vec<crate::router::LiveAgent> {
     state
         .0
         .projection
@@ -242,7 +258,7 @@ pub(crate) async fn dispatch_routed_transcript(
         return;
     }
     let steered = if can_steer {
-        let _transition = state.0.operation_transition.lock().await;
+        let transition = state.0.operation_transition.lock().await;
         if generation != state.0.coordinator.generation() {
             trace_stale_utterance(state, id, generation);
             emit_stale_clip(state, id);
@@ -260,20 +276,36 @@ pub(crate) async fn dispatch_routed_transcript(
             emit_stale_clip(state, id);
             return;
         }
-        match active.as_ref().cloned() {
-            None => false,
+        let queued = match active.as_ref().cloned() {
+            None => None,
             Some(session)
                 if steer_operation.is_none() || !session.busy() || !session.alive().await =>
             {
-                false
+                None
             }
-            Some(session) => match session.steer(&transcript, Some(id)).await {
-                Ok(()) => active
-                    .as_ref()
-                    .is_some_and(|current| current.same_session(&session)),
+            Some(session) => match session.queue_steer(&transcript, Some(id)).await {
+                Ok(queued) => Some(queued),
                 Err(error) => {
                     tracing::warn!(%error, clip = id, "steering failed; queueing routed utterance");
-                    false
+                    None
+                }
+            },
+        };
+        // The steer is checked and queued under both guards, so it reaches
+        // the host ahead of any close or abort a rescue queues after it. The
+        // host's answer can take its whole command wait; a rescue, a project
+        // turn's end, transcript logging and reply admission must not wait
+        // for it (#250).
+        let steered_into = state.0.coordinator.route();
+        drop(active);
+        drop(transition);
+        match queued {
+            None => None,
+            Some(queued) => match queued.sent().await {
+                Ok(()) => Some(steered_into),
+                Err(error) => {
+                    tracing::warn!(%error, clip = id, "steering failed; queueing routed utterance");
+                    None
                 }
             },
         }
@@ -289,13 +321,13 @@ pub(crate) async fn dispatch_routed_transcript(
             return;
         }
         drop(active);
-        false
+        None
     };
-    if steered {
+    if let Some(to_agent) = steered {
         // Steering is this utterance's destination: the live turn on the line.
         state.0.debug.publish(DebugEvent::Routed {
             utterance_id: id.to_owned(),
-            to_agent: state.0.coordinator.route(),
+            to_agent,
             text_part: transcript,
             mode: "steer".into(),
             via: "jev".into(),
@@ -370,7 +402,8 @@ pub(crate) struct TurnState {
     receiver: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
     /// What routing reads about the call. Routing must never wait on the PBX
     /// lock: the turn worker holds it for a whole prompt, and an utterance
-    /// routed only after the prompt ends can no longer steer it.
+    /// routed only after the prompt ends can no longer steer it. The floor's
+    /// good-moment gate reads it through `call_summary_without_desk_sessions`.
     routing: RoutingView,
     /// Decisions made before a queued turn reaches the PBX lock. Keeping the
     /// decision with the clip prevents a second Jev request while preserving

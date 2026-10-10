@@ -784,7 +784,12 @@ pub struct ConfirmState {
 
 Every `screen_state` report folds its `applied_seq` into this watch
 (`ConfirmState::fold_report`) as a running per-generation maximum, and adds its `rejected`, if it carries one,
-to `rejections`. The page sends each rejection once, and a `watch` keeps only
+to `rejections`. Only the active connection's
+report counts, and only for the current generation; any other is ignored and
+not acknowledged (`apply_screen_state` in `apps/backend/src/browser.rs`). Two
+tabs are two connections, and the newest one is active. When the active tab
+closes, the newest tab still open takes over (`DeliveryState::retire`), and the
+screen the agent's `view` reads is stale until that tab sends its next report. The page sends each rejection once, and a `watch` keeps only
 its latest value, so a rejection is never cleared by a later report without
 one: it stays in the map, and a waiter checks the map for its own `seq`
 before it checks the watermark. The map keeps the newest

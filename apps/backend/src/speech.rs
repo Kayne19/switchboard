@@ -14,7 +14,7 @@ use crate::floor::{FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome};
 use crate::history::AGENT;
 use crate::pbx::Switchboard;
 use crate::protocol::ServerMessage;
-use crate::turns::{jev_response_event, live_agents};
+use crate::turns::{call_summary_without_desk_sessions, jev_response_event};
 use futures_util::StreamExt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -405,14 +405,8 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
                     .find(|entry| entry.role == crate::history::CALLER)
                     .map(|entry| entry.text.clone())
                     .unwrap_or_default();
-                let (router, mut summary) = {
-                    let board = state.0.switchboard.lock().await;
-                    (
-                        board.router(),
-                        board.call_summary(&entries, screen, caller_last),
-                    )
-                };
-                summary.merge_live_agents(&live_agents(&state));
+                let (router, mut summary) =
+                    call_summary_without_desk_sessions(&state, &entries, screen, caller_last);
                 summary.queued_update = Some(crate::router::QueuedUpdate {
                     from_agent: request.project.clone(),
                     message: request.message.clone(),
@@ -440,12 +434,15 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
         rewrite: Arc::new(move |input: FloorRewriteInput| {
             let state = rewrite_state.clone();
             Box::pin(async move {
-                let session = {
-                    let mut board = state.0.switchboard.lock().await;
-                    board.floor_rewrite_session().await.map_err(|_| ())?
-                };
                 let project = input.project.clone();
+                // The utility is reached through the PBX lock, which a
+                // foreground turn holds for its whole prompt, so the wait for
+                // it is inside the timeout too.
                 let operation = async {
+                    let session = {
+                        let mut board = state.0.switchboard.lock().await;
+                        board.floor_rewrite_session().await.map_err(|_| ())?
+                    };
                     Switchboard::rewrite_floor_with_session(&session, &input)
                         .await
                         .map_err(|error| {
@@ -610,13 +607,13 @@ async fn drain_speech_stream(
 async fn complete_speech_request(
     state: &AppState,
     text: String,
-    route: String,
+    generation: u64,
     result: oneshot::Sender<Result<(), String>>,
     synthesized: Result<(usize, bool), crate::audio::AudioError>,
     started: std::time::Instant,
-    // The utterance's sequence when the line is written to the spoken
-    // transcript; None when it is not.
-    spoken_as: Option<u64>,
+    // The utterance's sequence, and the route it is logged under, when the
+    // line is written to the spoken transcript; None when it is not.
+    spoken_as: Option<(u64, String)>,
 ) {
     match synthesized {
         Ok((bytes, delivered)) => {
@@ -627,7 +624,7 @@ async fn complete_speech_request(
                 "synthesized a speech line"
             );
             if delivered {
-                if let Some(sequence) = spoken_as {
+                if let Some((sequence, route)) = spoken_as {
                     if let Some(entry) = state
                         .0
                         .transcript_log
@@ -656,6 +653,13 @@ async fn complete_speech_request(
         Err(error) => {
             let detail = error.to_string();
             let _ = result.send(Err(detail.clone()));
+            // A rescue retires the generation before it stops that
+            // generation's speech, so speech it cancelled or superseded went
+            // as meant: the caller is not shown it as an error.
+            if generation != state.0.coordinator.generation() {
+                tracing::info!(%error, chars = text.chars().count(), "speech for a retired generation was not spoken");
+                return;
+            }
             tracing::error!(%error, chars = text.chars().count(), "speech synthesis failed");
             emit_message(state, ServerMessage::error(detail));
         }
@@ -753,11 +757,11 @@ async fn process_speech(state: AppState) {
                 complete_speech_request(
                     &state,
                     text,
-                    route,
+                    generation,
                     result,
                     Err(error),
                     started,
-                    log_spoken.then_some(sequence),
+                    log_spoken.then_some((sequence, route)),
                 )
                 .await;
                 continue;
@@ -791,13 +795,13 @@ async fn process_speech(state: AppState) {
             complete_speech_request(
                 &state,
                 text,
-                route,
+                generation,
                 result,
                 Err(crate::audio::AudioError::Tts(
                     "speech generation was superseded".into(),
                 )),
                 started,
-                log_spoken.then_some(sequence),
+                log_spoken.then_some((sequence, route)),
             )
             .await;
             continue;
@@ -830,11 +834,11 @@ async fn process_speech(state: AppState) {
             complete_speech_request(
                 &completion_state,
                 text,
-                route,
+                generation,
                 result,
                 synthesized,
                 started,
-                log_spoken.then_some(sequence),
+                log_spoken.then_some((sequence, route)),
             )
             .await;
         });
@@ -1397,7 +1401,11 @@ async fn synthesize_reply_if_current(
         )
         .await
         {
-            tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
+            if generation == state.0.coordinator.generation() {
+                tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
+            } else {
+                tracing::info!(%error, "a rescue stopped this reply's speech");
+            }
             success = false;
             break;
         }

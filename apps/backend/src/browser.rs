@@ -5,7 +5,7 @@
 use crate::app_state::AppState;
 use crate::caller_input::{
     cancel_stream_clip, end_stream_clip, handle_audio_frame, is_clip_id, parse_clip_header,
-    parse_typed_turn, route_final_transcript, start_stream_clip, ClipHeader, StreamChunkHeader,
+    parse_typed_turn, route_typed_turn, start_stream_clip, ClipHeader, StreamChunkHeader,
 };
 use crate::delivery::{DeliveryConnection, DeliveryFrame, Event};
 use crate::display::{is_display_event, stamp_display_seq};
@@ -24,8 +24,6 @@ impl AppState {
     pub async fn register_connection(&self) -> (DeliveryConnection, Vec<Value>, u64) {
         let mut gate = self.0.display_gate.lock().await;
         let connection = self.0.delivery.register();
-        let epoch = connection.epoch;
-        gate.active_epoch = Some(epoch);
         gate.screen_state["stale"] = json!(true);
         self.0.floor.set_page_connected(true).await;
         self.start_debug_call();
@@ -36,13 +34,16 @@ impl AppState {
 
     pub async fn retire_connection(&self, epoch: u64) {
         {
+            // Under the gate, as in `register_connection`: the screen the
+            // agent was told about is the active tab's, and it is stale once
+            // that tab has gone, until the tab taking over reports its own.
             let mut gate = self.0.display_gate.lock().await;
-            if gate.active_epoch == Some(epoch) || gate.active_epoch.is_none() {
-                gate.active_epoch = None;
+            let active = self.0.delivery.active_epoch();
+            if active == Some(epoch) || active.is_none() {
                 gate.screen_state["stale"] = json!(true);
             }
+            self.0.delivery.retire(epoch);
         }
-        self.0.delivery.retire(epoch);
         let connected = self.0.delivery.connected();
         self.0.floor.set_page_connected(connected).await;
         if !connected {
@@ -400,14 +401,8 @@ pub(crate) async fn handle_text_frame(
             tracing::info!(turn = %turn, generation, chars = text.chars().count(), "typed turn");
             // A typed turn is a transcript that needs no transcription, so it
             // takes the same path as a streamed one: epoch check, log, echo,
-            // then steer or queue. It runs off this reader because that path
-            // waits on `operation_transition`, which a transfer can hold for
-            // seconds, and the reader must keep answering pings meanwhile.
-            let state = state.clone();
-            tokio::spawn(
-                async move { route_final_transcript(&state, &turn, generation, text).await }
-                    .in_current_span(),
-            );
+            // then steer or queue, off this reader and in typed order.
+            route_typed_turn(state, turn, generation, text);
             Ok(())
         }
         ClientMessage::Clip {

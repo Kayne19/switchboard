@@ -317,14 +317,15 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
     assert_eq!(status.model, "anthropic/current:medium");
     assert_eq!(status.models.len(), 2);
 
-    control
+    let steer = control
         .lock()
         .await
         .as_ref()
         .expect("the incoming leg is the live session")
-        .steer("go on", None)
+        .queue_steer("go on", None)
         .await
         .unwrap();
+    within("steer answer", steer.sent()).await.unwrap();
     let reply = within("turn", turn).await.unwrap();
 
     assert_eq!(reply.route, "alpha");

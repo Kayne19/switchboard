@@ -15,6 +15,11 @@ use tokio::time::{sleep_until, Duration, Instant};
 /// Rewrite work is best effort and must not delay a queued announcement.
 pub(crate) const REWRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a release that could not get its audio waits before it tries
+/// again, when no floor event wakes it first. Audio slots free up as clips
+/// finish, and nothing tells the floor when.
+const RETRY_AFTER: Duration = Duration::from_secs(1);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FloorRequest {
     /// Links one message's floor events on the debug page. `Floor::enqueue`
@@ -127,7 +132,20 @@ impl Floor {
         self
     }
 
+    /// Queues `request`. An agent has at most one request waiting: a newer
+    /// one takes the place of the one it already has behind the front, and
+    /// that one's trace ends as `replaced`. The front is not replaced, as it
+    /// may already be on its way to the caller. So the queue holds at most
+    /// two requests per agent, however often one asks (#252); the projection
+    /// shows only the newest request too (`AgentProjection::waiting`).
     pub(crate) async fn enqueue(&self, mut request: FloorRequest) {
+        let mut state = self.state.lock().await;
+        let waiting = state
+            .queue
+            .iter()
+            .skip(1)
+            .position(|entry| entry.request.token == request.token)
+            .map(|index| index + 1);
         request.floor_id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -136,10 +154,18 @@ impl Floor {
             message: request.message.clone(),
             floor_id: Some(request.floor_debug_id()),
         });
-        self.state.lock().await.queue.push_back(QueuedRequest {
+        let entry = QueuedRequest {
             request,
             held_after: None,
-        });
+        };
+        match waiting.and_then(|index| state.queue.get_mut(index)) {
+            Some(slot) => {
+                let replaced = std::mem::replace(slot, entry);
+                self.trace_released(&replaced.request, "replaced");
+            }
+            None => state.queue.push_back(entry),
+        }
+        drop(state);
         self.changed.notify_waiters();
     }
 
@@ -216,7 +242,7 @@ impl Floor {
                 self.drop_front(&entry.request).await;
                 continue;
             }
-            let outcome = (hooks.release)(entry.request.clone(), rewritten).await;
+            let outcome = self.release(&hooks, &entry.request, rewritten).await;
             match outcome {
                 ReleaseOutcome::Played | ReleaseOutcome::Drop => {
                     let how = match outcome {
@@ -227,11 +253,37 @@ impl Floor {
                     self.trace_released(&entry.request, how);
                     self.drop_front(&entry.request).await;
                 }
-                ReleaseOutcome::Retry => {
-                    // A page disconnect wakes the queue. A failed audio
-                    // reservation is treated the same way and never spins.
-                    self.changed.notified().await;
-                }
+                // The page went, or the floor changed while the release
+                // waited for its audio: `next_ready` waits for the page and
+                // asks the gate again, as the moment has changed.
+                ReleaseOutcome::Retry => {}
+            }
+        }
+    }
+
+    /// Releases `request`. A release that could not get its audio is tried
+    /// again every `RETRY_AFTER`, with the same words, while the page is there
+    /// and nothing on the floor changes: audio slots free up as clips finish,
+    /// and nothing tells the floor when. It never asks Jev or the utility
+    /// again on a timer. A floor event or a lost page ends it with `Retry`.
+    async fn release(
+        &self,
+        hooks: &FloorHooks,
+        request: &FloorRequest,
+        rewritten: String,
+    ) -> ReleaseOutcome {
+        loop {
+            // Listening before the release, so a floor event while it runs
+            // is not missed.
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let outcome = (hooks.release)(request.clone(), rewritten.clone()).await;
+            if outcome != ReleaseOutcome::Retry || !(hooks.connected)() {
+                return outcome;
+            }
+            if tokio::time::timeout(RETRY_AFTER, changed).await.is_ok() {
+                return outcome;
             }
         }
     }
@@ -241,11 +293,17 @@ impl Floor {
     /// when it has).
     async fn next_ready(&self, hooks: &FloorHooks) -> (QueuedRequest, bool) {
         loop {
+            // Listening before the state is read: `notify_waiters` stores no
+            // permit, so a request queued between the read and the wait
+            // would otherwise sleep until some later floor event.
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let (entry, wait_until, quiet, blocked_by_page) = {
                 let state = self.state.lock().await;
                 let Some(entry) = state.queue.front().cloned() else {
                     drop(state);
-                    self.changed.notified().await;
+                    changed.await;
                     continue;
                 };
                 if !state.page_connected || !(hooks.connected)() {
@@ -266,18 +324,18 @@ impl Floor {
                 }
             };
             if blocked_by_page {
-                self.changed.notified().await;
+                changed.await;
                 continue;
             }
             if let Some(deadline) = wait_until {
                 tokio::select! {
                     _ = sleep_until(deadline) => {},
-                    _ = self.changed.notified() => {},
+                    _ = changed => {},
                 }
                 continue;
             }
             if !(hooks.connected)() {
-                self.changed.notified().await;
+                changed.await;
                 continue;
             }
             // A Jev failure/negative answer is held until quiet. The next

@@ -1,6 +1,6 @@
 use super::*;
 use crate::app_state::AppState;
-use crate::app_state::{begin_alpha_candidate, emit, next_event_of, state};
+use crate::app_state::{begin_alpha_candidate, emit, next_event_of, state, state_on};
 use crate::caller_input::MAX_TYPED_TURN_CHARS;
 use crate::delivery::{DeliveryFrame, Event, DELIVERY_QUEUE};
 use crate::history::CALLER;
@@ -46,6 +46,74 @@ async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
         (id.as_str(), text.as_str(), turn_generation),
         ("typed-1", "deploy it", generation)
     );
+}
+
+/// Each typed turn is routed off the reader, and routing asks Jev, which can
+/// answer a later line first. The agent must still get the lines in the
+/// order the caller typed them.
+#[tokio::test]
+async fn typed_turns_reach_the_agent_in_the_order_they_were_sent() {
+    let jev = crate::jev::JevClient::new(
+        "http://unused.invalid/v1/systemone",
+        "/nonexistent/typesafe-api-key",
+        Duration::from_secs(1),
+    )
+    .expect("client")
+    .with_test_responder(|request| async move {
+        // Jev is slow on the first line and quick on the second.
+        if request.state["caller_just_said"] == "run the tests" {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        Ok(serde_json::from_value(json!({"model":"jev-test","answers":{
+            "action": {"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},
+            "for_current_agent": {"type":"noul","noul":0.0},
+            "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
+            "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
+            "multi_target": {"type":"noul","noul":0.0}
+        }}))
+        .expect("fixture response"))
+    });
+    let config = crate::Config::for_tests(&[]);
+    let registry = crate::registry::Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("test catalog"),
+    );
+    let state = state_on(crate::pbx::Switchboard::new_with_jev(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+        jev,
+    ));
+    let connection = state.0.delivery.register();
+    let generation = state.0.coordinator.generation();
+    let mut turns = state.0.turns.take_receiver().await;
+    for (id, text) in [
+        ("typed-1", "run the tests"),
+        ("typed-2", "then deploy if they pass"),
+    ] {
+        let frame = json!({"type":"typed_turn", "id":id, "generation":generation, "text":text});
+        handle_text_frame(
+            &state,
+            connection.epoch,
+            &mut None,
+            &mut None,
+            &frame.to_string(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let mut order = Vec::new();
+    for _ in 0..2 {
+        let (id, _, _) = timeout(Duration::from_secs(5), turns.recv())
+            .await
+            .expect("a typed turn was queued")
+            .expect("the turn channel is open");
+        order.push(id);
+    }
+    assert_eq!(order, ["typed-1", "typed-2"]);
 }
 
 #[tokio::test]
@@ -330,6 +398,45 @@ async fn display_projection_screen_state_retirement() {
     // display action was posted, so there is nothing to title.
     assert_eq!(resp["screen"]["title"], "");
     assert_eq!(resp["screen"]["stale"], false);
+}
+
+/// Two tabs are two connections, and the newest is the one whose screen
+/// reports count. When it closes, the tab still open takes over: its reports
+/// confirm what the agent displays, and each is acknowledged.
+#[tokio::test]
+async fn the_tab_left_open_is_active_again_when_the_newest_closes() {
+    let state = state();
+    let (mut desktop, _, _) = state.register_connection().await;
+    let (ipad, _, _) = state.register_connection().await;
+    state.retire_connection(ipad.epoch).await;
+    while desktop.receiver.try_recv().is_ok() {}
+
+    let generation = state.0.coordinator.generation();
+    handle_text_frame(
+        &state,
+        desktop.epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state", "view":"visual", "has_visual":true,
+                "generation":generation, "applied_seq":7})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        state.0.display_confirm.borrow().watermark,
+        Some(7),
+        "the open tab's confirmation was ignored"
+    );
+    let mut acknowledged = false;
+    while let Ok(frame) = desktop.receiver.try_recv() {
+        if let DeliveryFrame::Message(Message::Text(text)) = frame {
+            acknowledged |= text.contains("screen_state_ack");
+        }
+    }
+    assert!(acknowledged, "the open tab's report was not acknowledged");
+    assert_eq!(state.0.delivery.active_epoch(), Some(desktop.epoch));
 }
 
 #[tokio::test]

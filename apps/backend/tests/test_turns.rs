@@ -11,6 +11,7 @@ use crate::delivery::Event;
 use crate::hosts::{FakeHostAgent, Step};
 use crate::jev::fake_jev_client;
 use crate::module_calls::{diagram_show, module_call, request_to_speak};
+use crate::page_controls::cancel_active_operations;
 use crate::pbx::{Switchboard, OPERATOR};
 use crate::pi_client::{AgentCall, LegSession, PiSession, ProjectTurn};
 use crate::registry::Registry;
@@ -507,6 +508,49 @@ async fn a_caller_message_steers_an_autonomous_project_turn() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn a_rescue_does_not_wait_for_the_host_to_answer_a_steer() {
+    let root = scratch_root("steer-slow-host");
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }));
+    // A half-open link: the steer is taken and never answered.
+    fake.on_command = Some(Box::new(|name, _| (name == "steer").then_some(None)));
+    let (state, host) = state_with_agents_and_jev(&root, fake);
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-slow"}),
+    );
+    until_autonomous(&state, instance_id).await;
+    let generation = state.0.coordinator.generation();
+    let dispatch = tokio::spawn({
+        let state = state.clone();
+        async move {
+            dispatch_routed_transcript(&state, "steer-slow", generation, "and the docs".into())
+                .await;
+        }
+    });
+    timeout(Duration::from_secs(5), async {
+        while host.named("steer").is_empty() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the steer reached the host");
+
+    // Hangup is the caller's way out; the steer's 30 s wait must not hold it.
+    timeout(Duration::from_secs(1), cancel_active_operations(&state))
+        .await
+        .expect("the rescue does not wait for the host to answer the steer");
+
+    dispatch.abort();
+    let _ = dispatch.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn a_turn_resumed_after_an_external_abort_can_speak() {
     let root = scratch_root("autonomous-after-abort");
     let (state, _host, token, instance_id, worker) = alpha_caller_turn_in_flight(&root).await;
@@ -690,6 +734,81 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
     )
     .await;
     assert!(next_event_of(&mut events, "thinking").await["type"] == "thinking");
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A self-woken turn whose session closes on its host (the host agent
+/// restarted, its link dropped, or someone closed it at the desk) never
+/// reports its `turn_end`. The caller's next line must not wait behind it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caller_turn_runs_after_an_autonomous_turn_whose_session_closed() {
+    let root = scratch_root("autonomous-session-closed");
+    let (state, _host) = state_with_agents_and_jev(
+        &root,
+        FakeHostAgent::new(Box::new(|_, _| {
+            vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+        })),
+    );
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-closed"}),
+    );
+    until_autonomous(&state, instance_id).await;
+
+    alpha_host_event(
+        &state,
+        json!({"kind":"session_closed","reason":"host_link_closed"}),
+    );
+    timeout(Duration::from_secs(5), async {
+        while state.0.coordinator.route() != OPERATOR {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the closed session was retired");
+
+    let mut events = state.0.events.subscribe();
+    let generation = state.0.coordinator.generation();
+    state
+        .0
+        .turns
+        .routed_decisions
+        .lock()
+        .await
+        .insert("after-close".into(), Decision::fallback("test").into());
+    state.0.queued_turns.store(1, Ordering::Release);
+    let worker = tokio::spawn(process_turns(state.clone()));
+    state
+        .0
+        .turns
+        .sender
+        .send(("after-close".into(), "are you there?".into(), generation))
+        .await
+        .unwrap();
+    let thinking = timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(Event::Json(value)) = events.recv().await {
+                if value["type"] == "thinking" {
+                    return value;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the caller turn waited behind a turn whose session had closed");
+    assert_eq!(thinking["type"], "thinking");
+    assert!(!state
+        .0
+        .turns
+        .autonomous_operations
+        .lock()
+        .await
+        .contains_key(&instance_id));
     worker.abort();
     let _ = worker.await;
     state.0.switchboard.lock().await.shutdown().await;

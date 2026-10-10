@@ -259,6 +259,23 @@ pub struct TtsChunkStream {
 }
 
 impl TtsChunkStream {
+    /// Bounds a provider body by the request's deadline and the audio size
+    /// limit. Every body the speaker reads, audio or refusal, is read through
+    /// one, so no await on the provider outlives the speech deadline.
+    fn new(response: TtsResponse, deadline: Instant) -> Self {
+        Self {
+            inner: response.stream,
+            deadline,
+            deadline_wake: Box::pin(tokio::time::sleep_until(TokioInstant::from_std(deadline))),
+            bytes: 0,
+            finished: false,
+            metadata: TtsResponseMetadata {
+                request_id: response.request_id,
+                content_length: response.content_length,
+            },
+        }
+    }
+
     /// The request id is safe to commit for a later request only after the
     /// stream has been read to its end, which is the provider's stream
     /// stitching requirement; the speech worker does that.
@@ -1074,7 +1091,7 @@ impl Speaker {
             // Consume the refusal body before retrying.  This keeps the
             // transport lifecycle deterministic and prevents a response task
             // from retaining the connection while the fallback is admitted.
-            let _ = collect_error_body(&mut response.stream).await?;
+            let _ = collect_error_body(TtsChunkStream::new(response, deadline)).await?;
             let mut retry_body = base_body();
             retry_body
                 .as_object_mut()
@@ -1095,19 +1112,19 @@ impl Speaker {
                 .await?;
         }
         let elapsed = started.elapsed();
-        if response.status != StatusCode::OK {
+        let status = response.status;
+        if status != StatusCode::OK {
             tracing::warn!(
                 voice = %self.tts.voice_id,
                 model = %self.tts.model_id,
                 chars,
-                status = %response.status,
+                %status,
                 ?elapsed,
                 "ElevenLabs refused the request"
             );
-            let body = collect_error_body(&mut response.stream).await?;
+            let body = collect_error_body(TtsChunkStream::new(response, deadline)).await?;
             return Err(AudioError::Tts(format!(
-                "ElevenLabs TTS failed ({}): {}",
-                response.status,
+                "ElevenLabs TTS failed ({status}): {}",
                 String::from_utf8_lossy(&body)
                     .chars()
                     .take(500)
@@ -1124,21 +1141,16 @@ impl Speaker {
             request_id = ?response.request_id,
             "ElevenLabs answered; streaming speech"
         );
-        Ok(TtsChunkStream {
-            inner: response.stream,
-            deadline,
-            deadline_wake: Box::pin(tokio::time::sleep_until(TokioInstant::from_std(deadline))),
-            bytes: 0,
-            finished: false,
-            metadata: TtsResponseMetadata {
-                request_id: response.request_id,
-                content_length: response.content_length,
-            },
-        })
+        Ok(TtsChunkStream::new(response, deadline))
     }
 }
 
-async fn collect_error_body(stream: &mut TtsByteStream) -> Result<Vec<u8>, AudioError> {
+/// Reads the start of a refusal's body. It reads through the same
+/// `TtsChunkStream` as audio, so it ends at the request's deadline: the
+/// transport's own deadline ends when the headers arrive, and a body that
+/// stalls after them would otherwise hold the speech worker, and every reply
+/// behind it, for ever.
+async fn collect_error_body(mut stream: TtsChunkStream) -> Result<Vec<u8>, AudioError> {
     let mut body = Vec::new();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;

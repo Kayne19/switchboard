@@ -513,7 +513,9 @@ Calls: `speak {text}`, `request_to_speak {message, reason}` (`reason` is
 `view {target?}`. For `request_to_speak`, `message` is exactly what the caller
 should hear: the actual result, decision question and options, or problem and
 need. It is queued and lightly smoothed; it does not ask the caller to bring
-the background session forward.
+the background session forward. A session has at most one request waiting: a
+newer one takes the place of the one it already has in the queue, unless that
+one is next to be spoken.
 
 Reply: `{status, reason, result?}`, `status` one of `delivered`, `accepted`,
 `refused`, `failed`. Checks, in order:

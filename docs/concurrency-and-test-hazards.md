@@ -48,6 +48,13 @@ Two properties are load-bearing and easy to break by accident:
   lock still observes the new value. If the rescue wins instead, the session is
   already closed and the clip falls through to the queue path, where the epoch
   check discards it.
+  Only the check and the send happen under the guard. A project leg's steer is
+  queued on the host link there, and its answer is awaited after the guard
+  (and `operation_transition`) is dropped. The link sends one host's commands
+  in the order they are queued, so a close or abort a rescue queues later
+  still goes out behind the steer. The answer can take the host's 30 s command
+  wait, and a rescue, a project turn's end, transcript logging and reply
+  admission all take that guard: they must not wait for it (#250).
 
 - **Routing never takes the PBX lock.** The turn worker holds that lock for a
   whole prompt, so anything on the steer path that waits for it runs only after
@@ -569,6 +576,26 @@ just passed locally.
 `rust-toolchain.toml` now pins the version for both, so a local run and CI reach
 the same verdict, and an upgrade is a deliberate, reviewable change to that file
 rather than a surprise on an unrelated pull request.
+
+## A local prompt cancelled mid-turn
+
+A local `PiSession` (the operator and the routing utility) reads its prompt's
+answer from one stdout stream, up to the first `agent_settled`. Nothing in an
+event names the prompt that caused it. Two paths drop a prompt's future while
+the process is still running it: the floor rewrite's `REWRITE_TIMEOUT`, and a
+rescue that aborts the turn task while it waits on the utility or the operator.
+The rest of that turn stays in the pipe, and the next prompt read it as its own
+answer: the caller heard the rewrite of an older update, or a line was routed
+by a decision made for other words (#243). The session also stayed `busy`, so
+an idle operator looked like a running turn to steer into.
+
+`prompt_for` holds a `Prompting` guard from the write until the turn settles.
+Dropped before that, it clears `busy`, marks the process abandoned, and closes
+it. `alive()` is false at once, so `ensure_operator` and `ensure_utility` start
+a fresh process for the next prompt. Both get the call state with every prompt,
+so a restart loses only the process's own memory of its earlier prompts.
+Draining the old turn before the next prompt would also work, but it keeps a
+process of unknown state alive.
 
 ## Prepare reports are final
 
