@@ -38,6 +38,13 @@ Two properties are load-bearing and easy to break by accident:
   lock still observes the new value. If the rescue wins instead, the session is
   already closed and the clip falls through to the queue path, where the epoch
   check discards it.
+  Only the check and the send happen under the guard. A project leg's steer is
+  queued on the host link there, and its answer is awaited after the guard
+  (and `operation_transition`) is dropped. The link sends one host's commands
+  in the order they are queued, so a close or abort a rescue queues later
+  still goes out behind the steer. The answer can take the host's 30 s command
+  wait, and a rescue, a project turn's end, transcript logging and reply
+  admission all take that guard: they must not wait for it (#250).
 
 - **Routing never takes the PBX lock.** The turn worker holds that lock for a
   whole prompt, so anything on the steer path that waits for it runs only after
