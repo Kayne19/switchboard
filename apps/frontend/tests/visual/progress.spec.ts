@@ -35,18 +35,33 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   test(`a short plan as the primary is framed to its height and centred / ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await show(page, [{ op: 'show', id: 'plan', type: 'progress', role: 'primary', data: { label: 'SHIP', steps: steps(4, 2) } }]);
+    // The column reaches its height a moment after the scene changes: at
+    // 390x844 it is 488 px, then 498 px some 450 to 560 ms after the actions
+    // on a loaded WebKit, while the panel is placed for the settled column
+    // from its first frame. A single read 600 ms in found the column still
+    // short and the panel 4.9 px off its centre (#341); polled, the centring
+    // is read once the column settles.
+    await expect.poll(async () => {
+      const { column, panel } = await primaryGeometry(page);
+      return Math.abs((panel.top + panel.bottom) / 2 - (column.top + column.bottom) / 2);
+    }).toBeLessThanOrEqual(2);
     const { column, panel, listScrolls } = await primaryGeometry(page);
     expect(panel.height).toBeLessThan(column.height * 0.8);
-    expect(Math.abs((panel.top + panel.bottom) / 2 - (column.top + column.bottom) / 2)).toBeLessThanOrEqual(2);
     expect(listScrolls).toBe(false);
   });
 
   test(`a long plan as the primary fills the column and scrolls its list inside / ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await show(page, [{ op: 'show', id: 'plan', type: 'progress', role: 'primary', data: { label: 'MIGRATION', steps: steps(30, 12) } }]);
+    // The panel is placed for the settled column, which at 390x844 gains its
+    // last 10 px late (the short plan's test above, #391): read once, the
+    // panel stood 9.8 px past a column still short, 2 runs in 20 on a loaded
+    // WebKit. Polled, it is read once the column settles.
+    await expect.poll(async () => {
+      const { column, panel } = await primaryGeometry(page);
+      return Math.max(column.top - panel.top, panel.bottom - column.bottom);
+    }).toBeLessThanOrEqual(1);
     const { column, panel, listScrolls } = await primaryGeometry(page);
-    expect(panel.top).toBeGreaterThanOrEqual(column.top - 1);
-    expect(panel.bottom).toBeLessThanOrEqual(column.bottom + 1);
     expect(panel.height).toBeGreaterThan(column.height - 2);
     expect(listScrolls).toBe(true);
   });
