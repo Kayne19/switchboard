@@ -11,6 +11,7 @@ use crate::delivery::Event;
 use crate::hosts::{FakeHostAgent, Step};
 use crate::jev::fake_jev_client;
 use crate::module_calls::{diagram_show, module_call, request_to_speak};
+use crate::page_controls::cancel_active_operations;
 use crate::pbx::{Switchboard, OPERATOR};
 use crate::pi_client::{AgentCall, LegSession, PiSession, ProjectTurn};
 use crate::registry::Registry;
@@ -501,6 +502,49 @@ async fn a_caller_message_steers_an_autonomous_project_turn() {
             .collect::<Vec<_>>(),
         vec!["what branch are you on?".to_owned()]
     );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_rescue_does_not_wait_for_the_host_to_answer_a_steer() {
+    let root = scratch_root("steer-slow-host");
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }));
+    // A half-open link: the steer is taken and never answered.
+    fake.on_command = Some(Box::new(|name, _| (name == "steer").then_some(None)));
+    let (state, host) = state_with_agents_and_jev(&root, fake);
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-slow"}),
+    );
+    until_autonomous(&state, instance_id).await;
+    let generation = state.0.coordinator.generation();
+    let dispatch = tokio::spawn({
+        let state = state.clone();
+        async move {
+            dispatch_routed_transcript(&state, "steer-slow", generation, "and the docs".into())
+                .await;
+        }
+    });
+    timeout(Duration::from_secs(5), async {
+        while host.named("steer").is_empty() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the steer reached the host");
+
+    // Hangup is the caller's way out; the steer's 30 s wait must not hold it.
+    timeout(Duration::from_secs(1), cancel_active_operations(&state))
+        .await
+        .expect("the rescue does not wait for the host to answer the steer");
+
+    dispatch.abort();
+    let _ = dispatch.await;
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }

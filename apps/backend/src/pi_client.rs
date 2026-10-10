@@ -292,6 +292,7 @@ impl PiSession {
         )
     }
 
+    #[cfg(test)]
     pub fn same_session(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -1394,23 +1395,25 @@ impl ProjectSession {
     async fn command(
         &self,
         name: &str,
-        mut args: Value,
+        args: Value,
     ) -> Result<crate::hosts::CommandReply, PiSessionError> {
+        self.send(name, args).await?.reply().await
+    }
+
+    /// Queues command `name` for this session on the host link now, ahead
+    /// of anything queued after it; `HostCommand::reply` waits for the
+    /// host's answer.
+    async fn send(&self, name: &str, mut args: Value) -> Result<HostCommand, PiSessionError> {
         if !self.alive() {
             return Err(PiSessionError("the project session has ended".into()));
         }
         args["session"] = Value::String(self.inner.session.clone());
-        match self
-            .inner
-            .hosts
-            .command(&self.inner.host, name, args, SESSION_COMMAND_WAIT)
-            .await
-        {
-            Ok(reply) => Ok(reply),
+        match self.inner.hosts.send_command(&self.inner.host, name, args) {
+            Ok(sent) => Ok(HostCommand {
+                session: self.clone(),
+                sent,
+            }),
             Err(error) => {
-                // A failed host command means this resident is no longer
-                // usable. Mark it closed before returning so its owner can
-                // evict it instead of publishing a misleading idle state.
                 self.inner.mark_closed().await;
                 Err(PiSessionError(error.to_string()))
             }
@@ -1515,23 +1518,34 @@ impl ProjectSession {
         message: &str,
         utterance_id: Option<&str>,
     ) -> Result<(), PiSessionError> {
-        if !self.busy() {
-            return Err(PiSessionError("agent turn is no longer running".into()));
-        }
-        let result = self
-            .command("steer", json!({"message": message}))
-            .await
-            .map(|_| ());
-        match &result {
-            Ok(()) => {
-                tracing::info!(label = %self.inner.label, chars = message.chars().count(), "steered the running turn");
-                self.inner.publish_input(message, "steer", utterance_id);
-            }
+        self.queue_steer(message, utterance_id).await?.sent().await
+    }
+
+    /// Queues `message` as a steer of the running turn on the host link, and
+    /// returns without waiting for the host. A steer is checked and queued
+    /// under the caller's guards; its answer can take the host's whole
+    /// command wait, and nothing needs the guards held for that.
+    pub async fn queue_steer(
+        &self,
+        message: &str,
+        utterance_id: Option<&str>,
+    ) -> Result<QueuedSteer, PiSessionError> {
+        let queued = if self.busy() {
+            self.send("steer", json!({"message": message})).await
+        } else {
+            Err(PiSessionError("agent turn is no longer running".into()))
+        };
+        match queued {
+            Ok(command) => Ok(QueuedSteer {
+                command,
+                message: message.to_owned(),
+                utterance_id: utterance_id.map(str::to_owned),
+            }),
             Err(error) => {
-                tracing::info!(label = %self.inner.label, %error, "could not steer the running turn")
+                tracing::info!(label = %self.inner.label, %error, "could not steer the running turn");
+                Err(error)
             }
         }
-        result
     }
 
     /// `prompt_as` for a caller line with no utterance id. Production code
@@ -2000,6 +2014,79 @@ async fn module_reply(inner: &ProjectInner, call: &crate::hosts::ModuleCall) -> 
     }
 }
 
+/// A command queued for a project session on its host link.
+struct HostCommand {
+    session: ProjectSession,
+    sent: crate::hosts::SentCommand,
+}
+
+impl HostCommand {
+    /// Waits, at most `SESSION_COMMAND_WAIT`, for the host's answer.
+    async fn reply(self) -> Result<crate::hosts::CommandReply, PiSessionError> {
+        match self.sent.reply(SESSION_COMMAND_WAIT).await {
+            Ok(reply) => Ok(reply),
+            Err(error) => {
+                // A failed host command means this resident is no longer
+                // usable. Mark it closed before returning so its owner can
+                // evict it instead of publishing a misleading idle state.
+                self.session.inner.mark_closed().await;
+                Err(PiSessionError(error.to_string()))
+            }
+        }
+    }
+}
+
+/// A steer on the host link, not yet answered.
+pub struct QueuedSteer {
+    command: HostCommand,
+    message: String,
+    utterance_id: Option<String>,
+}
+
+impl QueuedSteer {
+    /// Waits for the host to take the steer.
+    pub async fn sent(self) -> Result<(), PiSessionError> {
+        let Self {
+            command,
+            message,
+            utterance_id,
+        } = self;
+        let session = command.session.clone();
+        let label = &session.inner.label;
+        match command.reply().await {
+            Ok(_) => {
+                tracing::info!(%label, chars = message.chars().count(), "steered the running turn");
+                session
+                    .inner
+                    .publish_input(&message, "steer", utterance_id.as_deref());
+                Ok(())
+            }
+            Err(error) => {
+                tracing::info!(%label, %error, "could not steer the running turn");
+                Err(error)
+            }
+        }
+    }
+}
+
+/// A steer of the leg on the line: written to the operator's process, or
+/// queued on a project session's host link.
+pub enum LegSteer {
+    Written,
+    Queued(QueuedSteer),
+}
+
+impl LegSteer {
+    /// Waits for the steer to be taken: at once for the operator, on the
+    /// host's answer for a project session.
+    pub async fn sent(self) -> Result<(), PiSessionError> {
+        match self {
+            Self::Written => Ok(()),
+            Self::Queued(steer) => steer.sent().await,
+        }
+    }
+}
+
 /// The leg on the line, as the application's controls see it: the local
 /// operator's process, or a project session.
 #[derive(Clone)]
@@ -2034,16 +2121,27 @@ impl LegSession {
             Self::Project(session) => session.alive(),
         }
     }
-    pub async fn steer(
+    /// Steers the leg's running turn: writes it to the operator's process,
+    /// or queues it on the project session's host link. `LegSteer::sent`
+    /// waits for the host's answer, which needs none of the guards a steer
+    /// is checked and queued under.
+    pub async fn queue_steer(
         &self,
         message: &str,
         utterance_id: Option<&str>,
-    ) -> Result<(), PiSessionError> {
+    ) -> Result<LegSteer, PiSessionError> {
         match self {
-            Self::Operator(session) => session.steer(message, utterance_id).await,
-            Self::Project(session) => session.steer(message, utterance_id).await,
+            Self::Operator(session) => session
+                .steer(message, utterance_id)
+                .await
+                .map(|()| LegSteer::Written),
+            Self::Project(session) => session
+                .queue_steer(message, utterance_id)
+                .await
+                .map(LegSteer::Queued),
         }
     }
+    #[cfg(test)]
     pub fn same_session(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Operator(left), Self::Operator(right)) => left.same_session(right),
