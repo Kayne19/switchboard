@@ -218,7 +218,8 @@ for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set(["
 // 13. The layout reads only the stage's own geometry (docs/ipad.md): a
 //     size in the stylesheet is in container units, not the viewport's.
 //     Safari's `vh` is its large viewport, taller than what shows with
-//     its toolbars out, and a focus box sized in it ran under them (#271).
+//     its toolbars out, and a focus box sized in it ran under them (#271);
+//     `lvh` names that viewport outright and `svh` is no stage either.
 //     The stage sizes itself (`100vw`, and `100vh` before `100dvh`).
 {
 	const stylesheet = path.join(root, "apps/frontend/src/styles/index.css");
@@ -226,7 +227,7 @@ for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set(["
 	lines(stylesheet).forEach((line, index) => {
 		if (/^\.stage \{$/.test(line)) inStage = true;
 		else if (inStage && /^\}$/.test(line)) inStage = false;
-		else if (!inStage && /\d(?:vh|vw|vmin|vmax)\b/.test(line)) findings.push(`${rel(stylesheet)}:${index + 1}: a large-viewport unit (size it in cqw/cqh from the stage)`);
+		else if (!inStage && /\d[ls]?v(?:h|w|i|b|min|max)\b/.test(line)) findings.push(`${rel(stylesheet)}:${index + 1}: a viewport unit (size it in cqw/cqh from the stage)`);
 	});
 }
 
