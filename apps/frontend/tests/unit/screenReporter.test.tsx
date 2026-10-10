@@ -182,10 +182,10 @@ describe('screen reports: phase x event', () => {
       expect(sent().some((report) => report.object_ids?.includes('a'))).toBe(false);
     });
 
-    it('unready | ack: today a stray ack sends the queued scene before the epoch, at generation 0', async () => {
+    it('unready | ack: a stray ack before the epoch sends nothing', async () => {
       await open();
       await receive(show('a', 1), ack);
-      expect(sent().map((report) => report.generation)).toEqual([0]);
+      expect(sent()).toEqual([]);
     });
 
     it('unready (line down) | scene: nothing is sent while the line is down', async () => {

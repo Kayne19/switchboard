@@ -102,7 +102,10 @@ export function RuntimeIntegration() {
     [callRuntime],
   );
 
+  // An ack answers a report this connection sent after its epoch; one before
+  // the epoch (or after the line went down) answers nothing.
   const handleScreenStateAck = useCallback(() => {
+    if (!transportReadyRef.current) return;
     inFlightReportRef.current = null;
     if (pendingReportRef.current) {
       const next = pendingReportRef.current;
