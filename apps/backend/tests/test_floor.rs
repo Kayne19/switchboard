@@ -127,6 +127,37 @@ async fn an_agent_keeps_one_request_waiting_however_often_it_asks() {
 }
 
 #[tokio::test]
+async fn a_floor_event_between_the_check_and_the_wait_is_not_lost() {
+    let floor = Floor::new(Duration::ZERO);
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    let (released, mut results) = mpsc::unbounded_channel();
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
+    // The page's second check reads it gone, and it comes back before the
+    // worker waits: the wake-up lands in the gap after the state is read.
+    let checks = Arc::new(AtomicUsize::new(0));
+    let racing = floor.clone();
+    h.connected = Arc::new(move || {
+        if checks.fetch_add(1, Ordering::SeqCst) == 1 {
+            racing.changed.notify_waiters();
+            return false;
+        }
+        true
+    });
+    let worker = tokio::spawn({
+        let floor = floor.clone();
+        async move { floor.run(h).await }
+    });
+    let released = tokio::time::timeout(Duration::from_secs(2), results.recv())
+        .await
+        .expect("the worker woke for the event it was about to wait for");
+    assert_eq!(released.unwrap(), "update 1:update 1");
+    worker.abort();
+}
+
+#[tokio::test]
 async fn releases_record_no_overlapping_speakers() {
     let floor = Floor::new(Duration::ZERO);
     let connected = Arc::new(AtomicBool::new(true));

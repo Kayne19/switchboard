@@ -237,6 +237,11 @@ impl Floor {
                 self.drop_front(&entry.request).await;
                 continue;
             }
+            // Listening before the release, so a page that comes back while
+            // it runs is not missed.
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let outcome = (hooks.release)(entry.request.clone(), rewritten).await;
             match outcome {
                 ReleaseOutcome::Played | ReleaseOutcome::Drop => {
@@ -251,7 +256,7 @@ impl Floor {
                 ReleaseOutcome::Retry => {
                     // A page disconnect wakes the queue. A failed audio
                     // reservation is treated the same way and never spins.
-                    self.changed.notified().await;
+                    changed.await;
                 }
             }
         }
@@ -262,11 +267,17 @@ impl Floor {
     /// when it has).
     async fn next_ready(&self, hooks: &FloorHooks) -> (QueuedRequest, bool) {
         loop {
+            // Listening before the state is read: `notify_waiters` stores no
+            // permit, so a request queued between the read and the wait
+            // would otherwise sleep until some later floor event.
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let (entry, wait_until, quiet, blocked_by_page) = {
                 let state = self.state.lock().await;
                 let Some(entry) = state.queue.front().cloned() else {
                     drop(state);
-                    self.changed.notified().await;
+                    changed.await;
                     continue;
                 };
                 if !state.page_connected || !(hooks.connected)() {
@@ -287,18 +298,18 @@ impl Floor {
                 }
             };
             if blocked_by_page {
-                self.changed.notified().await;
+                changed.await;
                 continue;
             }
             if let Some(deadline) = wait_until {
                 tokio::select! {
                     _ = sleep_until(deadline) => {},
-                    _ = self.changed.notified() => {},
+                    _ = changed => {},
                 }
                 continue;
             }
             if !(hooks.connected)() {
-                self.changed.notified().await;
+                changed.await;
                 continue;
             }
             // A Jev failure/negative answer is held until quiet. The next
