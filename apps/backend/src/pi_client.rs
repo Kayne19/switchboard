@@ -795,8 +795,15 @@ struct ProjectInner {
     debug: Option<DebugBus>,
     turn_lock: Mutex<()>,
     busy: AtomicBool,
+    /// The handle is no longer used: closed by its owner, ended on the host,
+    /// or left unusable by a failed command.
     closed: AtomicBool,
     released: AtomicBool,
+    /// The host reported the session closed (`session_closed`, the
+    /// service's own `host_link_closed` included), so there is nothing left
+    /// for a release to end. A failed command does not set it: the session
+    /// is still on its host, and `close` or the last drop ends it (#291).
+    ended_on_host: AtomicBool,
     brief: String,
     brief_due: AtomicBool,
     /// Where the events of the caller turn being collected go.
@@ -927,14 +934,21 @@ impl ProjectInner {
         }
     }
 
-    /// Queues release for this session exactly once. A session taken over from
-    /// a desk is never killed: abort its active turn first, then detach it so
-    /// the desk can keep owning it. Release is separate from `closed`: a host
-    /// command can mark a handle closed before its lifecycle owner gets a
-    /// chance to release a taken-over session.
-    fn release_in_background(&self) {
+    /// Whether the session still needs a release on its host. A taken-over
+    /// session is always detached; one the service created is killed unless
+    /// the host already reported it closed. Release is separate from
+    /// `closed`: a failed host command marks a handle closed before its
+    /// lifecycle owner gets a chance to release the session.
+    fn release_owed(&self) -> bool {
+        self.provenance == "taken_over" || !self.ended_on_host.load(Ordering::Acquire)
+    }
+
+    /// Queues release for this session exactly once; true when this call
+    /// queued it. A session taken over from a desk is never killed: abort its
+    /// active turn first, then detach it so the desk can keep owning it.
+    fn release_in_background(&self) -> bool {
         if self.released.swap(true, Ordering::AcqRel) {
-            return;
+            return false;
         }
         self.hosts.unsubscribe(&self.host, &self.session);
         let host = self.host.clone();
@@ -943,7 +957,7 @@ impl ProjectInner {
         let taken_over = self.provenance == "taken_over";
         let hosts = self.hosts.clone();
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return;
+            return false;
         };
         runtime.spawn(async move {
             if taken_over {
@@ -971,6 +985,7 @@ impl ProjectInner {
                 }
             }
         });
+        true
     }
 
     async fn report_closed(&self) {
@@ -1090,10 +1105,8 @@ impl Drop for ProjectInner {
     /// A session the service created dies with its last handle, so one whose
     /// transfer was cancelled half way is not left running on its host.
     fn drop(&mut self) {
-        if self.provenance == "taken_over" {
-            self.closed.store(true, Ordering::Release);
-            self.release_in_background();
-        } else if !self.closed.swap(true, Ordering::AcqRel) {
+        self.closed.store(true, Ordering::Release);
+        if self.release_owed() {
             self.release_in_background();
         }
     }
@@ -1288,6 +1301,7 @@ impl ProjectSession {
             busy: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             released: AtomicBool::new(false),
+            ended_on_host: AtomicBool::new(false),
             brief: launch.brief,
             brief_due: AtomicBool::new(true),
             turn: StdMutex::new(None),
@@ -1417,10 +1431,9 @@ impl ProjectSession {
 
     /// Ends the session on its host. Idempotent; nothing waits for the host.
     pub fn close(&self) {
-        let was_closed = self.inner.closed.swap(true, Ordering::AcqRel);
-        if self.inner.provenance == "taken_over" || !was_closed {
+        self.inner.closed.store(true, Ordering::Release);
+        if self.inner.release_owed() && self.inner.release_in_background() {
             tracing::info!(label = %self.inner.label, "closing the project session");
-            self.inner.release_in_background();
         }
     }
 
@@ -1713,6 +1726,7 @@ async fn pump(
                         inner.brief_due.store(true, Ordering::Release);
                     }
                     "session_closed" => {
+                        inner.ended_on_host.store(true, Ordering::Release);
                         inner.mark_closed().await;
                     }
                     "tool_start" => {

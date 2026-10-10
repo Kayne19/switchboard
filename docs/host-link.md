@@ -188,6 +188,12 @@ Error codes:
 | `daemon_error` | The daemon ran the command and it failed; `message` has the daemon's text. |
 | `failed` | Anything else. |
 
+The service stops using a session after any failed command to it (any code
+above, or no reply within its 30 s wait), but it still releases the
+session: it sends `kill` for one it created and `abort` then `detach` for
+one it took over. Only a `session_closed` event tells it the session is
+already gone, and then it sends nothing.
+
 ### Commands
 
 A session description (`info`) as returned by `create_session`,
