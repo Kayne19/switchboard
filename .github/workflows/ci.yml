@@ -14,6 +14,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A hung test fails the job instead of holding the runner until GitHub's
+    # six-hour default (#335). About twice the slowest normal run (2-4 min).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
@@ -73,6 +76,11 @@ jobs:
     # `browser (chromium 1/4)` .. `browser (webkit integration)`.
     name: browser (${{ matrix.browser }} ${{ matrix.part }})
     runs-on: ubuntu-latest
+    # About twice the slowest normal leg (6-17 min). Playwright's own
+    # globalTimeout (apps/frontend/playwright*.config.ts) ends the specs a
+    # little sooner, so the log names the tests that did not finish and the
+    # traces are still uploaded.
+    timeout-minutes: 35
     strategy:
       # A failure in one leg does not cancel the others: each reports what it
       # found.

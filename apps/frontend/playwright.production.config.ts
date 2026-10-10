@@ -5,6 +5,9 @@ const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
 export default defineConfig({
   testDir: './tests/integration',
   timeout: 30_000,
+  // On CI a run past this ends with the tests that did not finish named, a
+  // little before the job's own timeout-minutes in .github/workflows/ci.yml.
+  globalTimeout: process.env.CI ? 30 * 60_000 : 0,
   expect: { timeout: 8_000 },
   fullyParallel: false,
   workers: 1,

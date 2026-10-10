@@ -58,6 +58,32 @@ describe('the CI browser job', () => {
   });
 });
 
+// A hung test must end as a named failure, not hold a runner until GitHub's
+// six-hour default kills the job and cuts the log off (#335). Each job has
+// its own limit; inside the browser legs Playwright stops first, so it names
+// the tests that did not finish and leaves test-results/ for the trace
+// upload; the host-agent tests each have a default deadline.
+describe('the CI time limits', () => {
+  const minutes = (name: string) => Number(/^ {4}timeout-minutes: (\d+)$/m.exec(job(name))?.[1]);
+  const globalTimeout = (config: string) => /globalTimeout: process\.env\.CI \? (\d+) \* 60_000 : 0,/.exec(read(config))?.[1];
+
+  it('bounds every job', () => {
+    for (const name of ['test', 'browser']) expect(minutes(name), name).toBeGreaterThan(0);
+  });
+
+  it('stops Playwright on CI before the browser job\'s own limit', () => {
+    for (const config of ['apps/frontend/playwright.config.ts', 'apps/frontend/playwright.production.config.ts']) {
+      const limit = Number(globalTimeout(config));
+      expect(limit, config).toBeGreaterThan(0);
+      expect(limit, config).toBeLessThan(minutes('browser'));
+    }
+  });
+
+  it('gives each host-agent test a default deadline', () => {
+    expect(scripts['test:host-agent']).toMatch(/--test-timeout=\d+/);
+  });
+});
+
 describe('the pixel goldens', () => {
   const dir = path.join(root, 'apps/frontend/tests/visual');
   const specs = readdirSync(dir).filter((file) => file.endsWith('.spec.ts'));
