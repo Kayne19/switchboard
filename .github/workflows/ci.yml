@@ -25,6 +25,9 @@ jobs:
     # with this release's fonts and runs WebKit on its libraries, so moving
     # to a new release is its own pull request that runs the suite there.
     runs-on: ubuntu-24.04
+    # A hung test fails the job instead of holding the runner until GitHub's
+    # six-hour default (#335). About twice the slowest normal run (2-4 min).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
@@ -85,6 +88,11 @@ jobs:
     name: browser (${{ matrix.browser }} ${{ matrix.part }})
     # The same named release as `test`, and for the same reason.
     runs-on: ubuntu-24.04
+    # About twice the slowest normal leg (6-17 min). Playwright's own
+    # globalTimeout (apps/frontend/playwright*.config.ts) ends the specs a
+    # little sooner, so the log names the tests that did not finish and the
+    # traces are still uploaded.
+    timeout-minutes: 35
     strategy:
       # A failure in one leg does not cancel the others: each reports what it
       # found.

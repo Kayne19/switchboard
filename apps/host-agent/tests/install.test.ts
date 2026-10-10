@@ -86,7 +86,11 @@ exit 0
 
 function install(r: Rig, args: string[]) {
 	const env = { HOME: r.home, TMPDIR: r.tmp, PATH: `${r.bin}:${path.dirname(r.primeAgent)}:/usr/local/bin:/usr/bin:/bin` };
-	const p = spawnSync(process.execPath, [INSTALLER, "--systemctl", path.join(r.bin, "systemctl"), "--loginctl", path.join(r.bin, "loginctl"), ...args], { env, encoding: "utf8" });
+	// spawnSync blocks the event loop, so --test-timeout cannot end it: an
+	// installer that waits forever is killed here, and the test fails naming
+	// the timeout (ETIMEDOUT) rather than on a null status or a partial stderr.
+	const p = spawnSync(process.execPath, [INSTALLER, "--systemctl", path.join(r.bin, "systemctl"), "--loginctl", path.join(r.bin, "loginctl"), ...args], { env, encoding: "utf8", timeout: 30_000 });
+	if (p.error) throw p.error;
 	return { status: p.status, stdout: p.stdout, stderr: p.stderr };
 }
 

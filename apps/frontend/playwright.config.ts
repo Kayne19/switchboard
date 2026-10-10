@@ -14,6 +14,11 @@ const origin = `http://127.0.0.1:${port}`;
 export default defineConfig({
   testDir: './tests/visual',
   timeout: 30_000,
+  // On CI a leg that runs past this ends with the tests that did not finish
+  // named, a little before the job's own timeout-minutes in
+  // .github/workflows/ci.yml cuts the log off. Not locally: one worker takes
+  // about 45 minutes over the whole suite.
+  globalTimeout: process.env.CI ? 30 * 60_000 : 0,
   expect: { timeout: 5_000 },
   fullyParallel: false,
   workers: 1,

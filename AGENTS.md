@@ -88,6 +88,13 @@ commit.
   ubuntu-24.04`), as the toolchain is pinned: the specs' geometry was
   measured with that release's fonts. Moving to the next release is its
   own pull request, which runs the browser suite there.
+- Every CI job has a `timeout-minutes` (`test` 20, `browser` 35, about
+  twice the slowest normal run), and on CI both Playwright configs set a
+  `globalTimeout` of 30 minutes, so a hung leg names the tests that did not
+  finish before the job is cut off. Each host-agent test has a 60-second
+  default (`node --test --test-timeout`). A hang is a failure with a name,
+  not six hours of a held runner; `browserCi.test.ts` pins the numbers'
+  order.
 - The iPad (iPadOS Safari, WebKit) is a first-class target, not a "should
   also work" one: a change that works in desktop Chromium and breaks there
   is broken. A browser runtime change (audio, capture, playback, gestures)
