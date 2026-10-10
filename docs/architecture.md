@@ -46,6 +46,7 @@ browser mic / page controls
   application coordination: app_state.rs (shared state, workers, shutdown),
   caller_input.rs (clips, streams, typed turns), turns.rs (routing, turn
   dispatch), speech.rs (the speech worker and reply voice),
+  floor_hooks.rs (the floor's gate, rewrite and release hooks),
   leg_announcer.rs (a new leg's announcement and scene reset)
           |
           +--> lifecycle.rs: the coordinator -- call identity, the current
@@ -158,10 +159,11 @@ caller.
 
 ### 2. Pi owns agent reasoning, not the call
 
-`apps/backend/src/pi_client.rs` owns the operator's process/RPC transport and
-the service's side of a project session over the host link. The agent (the
-operator's Pi process, or a project's prime-agent session) owns prompts, model
-responses, tool calls, and project work. It does not own:
+`apps/backend/src/pi_client.rs` owns the operator's process/RPC transport, and
+`apps/backend/src/project_session.rs` the service's side of a project session
+over the host link. The agent (the operator's Pi process, or a project's
+prime-agent session) owns prompts, model responses, tool calls, and project
+work. It does not own:
 
 - which leg is active
 - the project registry
@@ -179,9 +181,9 @@ The application boundary for HTTP, WebSocket, turn dispatch, audio delivery,
 generation checks, and worker coordination is a set of files in
 `apps/backend/src/`, one concern each: `api.rs` (the router), `app_state.rs`,
 `browser.rs`, `page_controls.rs`, `module_calls.rs`, `caller_input.rs`,
-`turns.rs`, `speech.rs`, and `leg_announcer.rs`. They may coordinate these
-concerns, but they must not become the owner of provider-specific speech
-protocols or Pi routing policy.
+`turns.rs`, `speech.rs`, `floor_hooks.rs`, and `leg_announcer.rs`. They may
+coordinate these concerns, but they must not become the owner of
+provider-specific speech protocols or Pi routing policy.
 
 Important application behavior must remain visible through named operations,
 events, or state transitions. Do not hide a route change, persistence action,
@@ -425,9 +427,10 @@ removes the real coupling; do not create interfaces for ceremony.
 | `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection |
 | `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |
 | `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker, host-reported turns | speech synthesis, PBX policy |
-| `speech.rs` | the one ordered speech worker, its continuity, audio slots, reply voice, and the floor release | the TTS provider's wire format, the audio queue itself |
+| `speech.rs` | the one ordered speech worker, its continuity, audio slots, and reply voice | the TTS provider's wire format, the audio queue itself, floor policy |
 | `leg_announcer.rs` | announcing a new leg to the browser and its once-per-leg scene reset | which leg is current (the coordinator's) |
 | `floor.rs` | ordered background request queue, Jev good-moment holds, stateless rewrites, announce-first release | lifecycle membership, agent-state projection, route authority, TTS provider wire format |
+| `floor_hooks.rs` | the application side of `floor.rs`'s `FloorHooks`: whether the page is connected and a request still live, the Jev good-moment gate, the utility rewrite under its timeout, and the release through the speech worker | the floor's queue and order (`floor.rs`'s), the speech worker (`speech.rs`'s) |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the status | async work or I/O |
 | `pbx.rs` | the `Switchboard`: its state, construction, callbacks, shared session guard and shutdown; the call types the other files share (`OPERATOR`, `TransferContext`, `AgentStateNotice`) | host setup, browser rendering, TTS encoding, a copy of the route |
 | `decisions.rs` | what a Jev decision does with a caller's line: continue, go to a project, split, take over, stop on confirmation, the utility's second opinion, the operator fallback; the routing trace | Jev's classification (`router.rs`), a second commit path |
@@ -440,7 +443,8 @@ removes the real coupling; do not create interfaces for ceremony.
 | `reply.rs` | `Reply` and the switchboard's reply and failure builders | routing or lifecycle policy |
 | `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions, module calls | routing decisions, leg lifecycle |
 | `prewarm.rs` | per-host setup and launch plans: catalogs, prepare | routing decisions, model policy |
-| `pi_client.rs` | the operator's Pi process/RPC transport, project sessions over the host link, process-tree cleanup | route authority or deployment registry |
+| `pi_client.rs` | the operator's and the utility's Pi process/RPC transport, process-tree cleanup, `LegSession` (the leg on the line, operator or project, as the controls see it) | project sessions, route authority or deployment registry |
+| `project_session.rs` | a project session over the host link: its commands, the caller turn it collects, the frame pump, self-woken turn reports, module-call answers, and its release on the host | the host link itself (`hosts.rs`), which leg is on the line, route authority |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
 | `display.rs` | the stage projection (`DisplayProjection`), the display gate state, and the display-precedence rule for `view` and the snapshot | generation checks, HTTP/WebSocket handling |
 | `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |
@@ -451,6 +455,8 @@ removes the real coupling; do not create interfaces for ceremony.
 | `protocol.rs` | the shape of every message sent to the browser (`ServerMessage`) and every command it sends (`ClientMessage`) | when or to whom a message is sent; what a command does |
 | `debug.rs` | bounded, in-memory observation: the event and log rings, the debug schema (`DebugEvent`), record scrubbing and clipping, and the debug listener's router and WebSocket framing | call control, routing or lifecycle decisions, awaiting on clients or doing I/O while publishing, disk history |
 | `apps/frontend/` | capture, protocol client, playback, UI | server authority or durable state |
+| `apps/host-agent/src/sessions.ts` | the sessions a host agent tracks on its daemon: provenance and the state file, each session's call, and its turn (`Tracked.turn`, written only by `#turnStep`; `docs/host-link.md`, "Session events") | the host link (`link.ts`), running prepare commands |
+| `apps/host-agent/src/prepare.ts` | `run_prepare`: the bounded `sh -c` runner and the join of a run already going in the same folder (`Prepares`) | sessions, the host link |
 | `extensions/` | the operator's Pi-side tool signal | direct route mutation |
 | homelab | deployment and secrets | application implementation |
 

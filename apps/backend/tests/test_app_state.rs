@@ -4,7 +4,7 @@ use crate::delivery::Event;
 use crate::module_calls::diagram_show;
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::AgentStateNotice;
-use crate::pi_client::AgentCall;
+use crate::project_session::AgentCall;
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
 

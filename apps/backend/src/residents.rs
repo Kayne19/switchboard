@@ -5,7 +5,7 @@
 //! shelves the previous foreground here, starts split parts here, and evicts a
 //! resident whose host reports it closed.
 use crate::pbx::{uuid_like, AgentStateNotice, Switchboard, TransferContext};
-use crate::pi_client::ProjectSession;
+use crate::project_session::ProjectSession;
 use crate::prompts::{build_intro_prompt, BACKGROUND_NOTICE};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

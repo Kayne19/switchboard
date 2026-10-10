@@ -7,7 +7,7 @@ use crate::browser::MAX_WEBSOCKET_MESSAGE_BYTES;
 use crate::delivery::Event;
 use crate::display::DISPLAY_CONFIRM_DEADLINE_MS;
 use crate::floor::FloorRequest;
-use crate::pi_client::AgentCall;
+use crate::project_session::AgentCall;
 use crate::protocol::{AgentRequest, ServerMessage};
 #[cfg(test)]
 use crate::speech::start_speech_worker_for_test;

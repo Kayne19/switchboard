@@ -298,7 +298,7 @@ registered operation that leaves running work alone. A refusal is delivered at
 the generation the decision started on; nothing is cancelled and no epoch is
 sent. Only a plan that will go ahead is followed by a rescue and then
 `Switchboard::redial`. The pickers are the planner's only callers; a project
-agent's own `set_model` is refused (`pi_client.rs`).
+agent's own `set_model` is refused (`project_session.rs`).
 
 Deciding early opens two windows in which the caller can leave the leg the plan
 was made for, and each is closed where its side effect happens:
