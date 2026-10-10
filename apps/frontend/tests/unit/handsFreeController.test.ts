@@ -265,6 +265,49 @@ describe("the hands-free controller over fakes", () => {
     expect(harness.instance.currentState).toBe("armed");
   });
 
+  // Each of these ends hands-free, or pauses it, while the caller is still
+  // speaking. The capture they retire must not outlive them: a capture left
+  // behind makes every later wake word open nothing (#256).
+  const retirements = {
+    disable: async (harness: ReturnType<typeof controller>) => {
+      harness.instance.disable();
+      await harness.instance.enable();
+    },
+    pauseForPtt: async (harness: ReturnType<typeof controller>) => {
+      harness.instance.pauseForPtt();
+      harness.instance.resumeAfterPtt();
+    },
+    epochChanged: async (harness: ReturnType<typeof controller>) => {
+      harness.instance.epochChanged();
+      await harness.instance.enable();
+    },
+    "a detector failure": async (harness: ReturnType<typeof controller>) => {
+      harness.detector.breakDown(new Error("engine gone"));
+      await harness.instance.enable();
+    },
+  };
+  for (const [how, retire] of Object.entries(retirements)) {
+    it(`captures again after ${how} during a capture`, async () => {
+      stubBrowser();
+      const harness = controller();
+      expect(await harness.instance.enable()).toBe(true);
+      harness.detector.hear();
+      harness.endpointer.speechStarts();
+      expect(harness.instance.currentState).toBe("capturing");
+
+      await retire(harness);
+      for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+      expect(harness.instance.currentState).toBe("armed");
+      expect(harness.instance.isCapturing).toBe(false);
+      expect(harness.clips).toEqual([]);
+
+      harness.detector.hear();
+      harness.endpointer.speechStarts();
+      expect(harness.instance.currentState).toBe("capturing");
+      expect(harness.recorder.startCalls).toBe(2);
+    });
+  }
+
   it("stops on a detector failure and says which one failed", async () => {
     stubBrowser();
     const harness = controller();
