@@ -7,6 +7,7 @@ use crate::pbx::{
     two_model_catalog, until_named, HOST,
 };
 use crate::router::{Action, ConversationMode, Decision};
+use crate::within;
 use serde_json::json;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::Mutex;
@@ -287,8 +288,7 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
             .await
     });
 
-    adopted
-        .recv()
+    within("adopted", adopted.recv())
         .await
         .expect("the incoming leg shows life")
         .expect("and is adopted");
@@ -781,11 +781,20 @@ async fn takeover_attaches_and_voice_briefs_then_hangup_detaches_without_kill() 
         .contains("[SWITCHBOARD VOICE BRIEF]"));
     assert!(log.names().contains(&"attach".into()));
     for expected in ["list_sessions", "attach", "join_call", "prompt"] {
-        assert_eq!(command_rx.recv().await.as_deref(), Some(expected));
+        assert_eq!(
+            within("command_rx", command_rx.recv()).await.as_deref(),
+            Some(expected)
+        );
     }
     board.force_hangup().await;
-    assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("abort")
+    );
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("detach")
+    );
     assert!(!log.names().contains(&"kill".into()));
 }
 
@@ -895,11 +904,26 @@ async fn takeover_join_error_releases_the_taken_over_session_without_kill() {
         .await;
     assert_eq!(reply.route, OPERATOR);
     assert!(reply.text.contains("join failed"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("list_sessions"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("attach"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("join_call"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("abort"));
-    assert_eq!(command_rx.recv().await.as_deref(), Some("detach"));
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("list_sessions")
+    );
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("attach")
+    );
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("join_call")
+    );
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("abort")
+    );
+    assert_eq!(
+        within("command_rx", command_rx.recv()).await.as_deref(),
+        Some("detach")
+    );
     assert!(!log.names().contains(&"kill".into()));
     board.shutdown().await;
 }

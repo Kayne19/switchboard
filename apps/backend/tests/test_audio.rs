@@ -1,4 +1,5 @@
 use super::*;
+use crate::within;
 use std::sync::Mutex as StdMutex;
 
 type FakeResponse = (StatusCode, Option<String>, Vec<u8>);
@@ -333,7 +334,7 @@ async fn tts_stream_preserves_provider_chunk_boundaries_and_request_contract() {
         .await
         .unwrap();
     let mut chunks = Vec::new();
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = within("stream", stream.next()).await {
         chunks.push(chunk.unwrap());
     }
     assert_eq!(chunks, vec![b"ab".to_vec(), b"cd".to_vec(), b"ef".to_vec()]);
@@ -349,7 +350,7 @@ async fn tts_adapter_sends_expected_request_and_surfaces_http_failure() {
     let (speaker, request) = speaker_with_response(StatusCode::OK, b"mp3");
     let mut stream = speaker.stream_until("Hello there", deadline).await.unwrap();
     let mut audio = Vec::new();
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = within("stream", stream.next()).await {
         audio.extend(chunk.unwrap());
     }
     assert_eq!(audio, b"mp3");

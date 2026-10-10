@@ -649,6 +649,7 @@ done
             if request.questions.contains_key("good_moment")
                 && gate_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
             {
+                // unbounded: the fake holds the gate until the test opens it.
                 gate_wait.notified().await;
             }
             let answers = if request.questions.contains_key("good_moment") {

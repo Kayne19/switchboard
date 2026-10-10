@@ -1,4 +1,5 @@
 use super::*;
+use crate::within;
 use serde_json::json;
 
 #[tokio::test]
@@ -9,7 +10,7 @@ async fn delivery_registration_captures_live_events_for_snapshot_barrier() {
     let Some(DeliveryFrame::Event {
         sequence,
         event: Event::Json(value),
-    }) = connection.receiver.recv().await
+    }) = within("connection.receiver", connection.receiver.recv()).await
     else {
         panic!("registered connection should receive live event");
     };

@@ -8,6 +8,7 @@ use crate::module_calls::{agent_call_json, diagram_show, post_display_in_task};
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::OPERATOR;
 use crate::protocol::{CandidateEnd, ServerMessage};
+use crate::within;
 use axum::http::StatusCode;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -145,7 +146,9 @@ async fn display_projection_snapshot_watermark() {
 
     // In delivery connection receiver:
     // The fresh event obj-3 is queued in connection.receiver with sequence > watermark
-    let frame = connection.receiver.recv().await.unwrap();
+    let frame = within("connection.receiver", connection.receiver.recv())
+        .await
+        .unwrap();
     let sequence = match frame {
         DeliveryFrame::Event { sequence, event } => {
             assert!(sequence > watermark);

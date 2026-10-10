@@ -10,6 +10,7 @@ use crate::pbx::{AgentStateNotice, OPERATOR};
 use crate::pi_client::AgentCall;
 use crate::protocol::AgentRequest;
 use crate::speech::AUDIO_SLOTS;
+use crate::within;
 use axum::http::{Method, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -55,7 +56,11 @@ async fn view_reports_requested_diagram_as_unconfirmed_until_the_browser_acks() 
     let epoch = connection.epoch;
 
     let handle = post_display_in_task(&state, diagram_show()).await;
-    let DeliveryFrame::Event { sequence, .. } = connection.receiver.recv().await.unwrap() else {
+    let DeliveryFrame::Event { sequence, .. } =
+        within("connection.receiver", connection.receiver.recv())
+            .await
+            .unwrap()
+    else {
         panic!("expected a display event")
     };
 
@@ -469,7 +474,7 @@ async fn display_protocol_validation_and_composition() {
     });
     let (code, _) = agent_call_json(&state, "/display", show).await;
     assert_eq!(code, StatusCode::OK);
-    let Event::Json(event) = events.recv().await.unwrap() else {
+    let Event::Json(event) = within("events", events.recv()).await.unwrap() else {
         panic!("expected event")
     };
     assert_eq!(event["type"], "display");
@@ -492,7 +497,10 @@ async fn display_protocol_validation_and_composition() {
         )
         .await;
         assert_eq!(code, StatusCode::OK);
-        assert!(matches!(events.recv().await.unwrap(), Event::Json(_)));
+        assert!(matches!(
+            within("events", events.recv()).await.unwrap(),
+            Event::Json(_)
+        ));
     }
     let (code, _) = agent_call_json(
         &state,
@@ -509,7 +517,10 @@ async fn display_protocol_validation_and_composition() {
     )
     .await;
     assert_eq!(code, StatusCode::OK);
-    assert!(matches!(events.recv().await.unwrap(), Event::Json(_)));
+    assert!(matches!(
+        within("events", events.recv()).await.unwrap(),
+        Event::Json(_)
+    ));
 }
 
 // A refused action comes back to the agent with the validator's error,
@@ -644,7 +655,7 @@ async fn display_projection_hide_clears_focus() {
     });
     let (code, _) = agent_call_json(&state, "/display", show_chart).await;
     assert_eq!(code, StatusCode::OK);
-    let _ = events.recv().await.unwrap();
+    let _ = within("events", events.recv()).await.unwrap();
 
     // 2. Show secondary document
     let show_doc = json!({
@@ -662,7 +673,7 @@ async fn display_projection_hide_clears_focus() {
     });
     let (code, _) = agent_call_json(&state, "/display", show_doc).await;
     assert_eq!(code, StatusCode::OK);
-    let _ = events.recv().await.unwrap();
+    let _ = within("events", events.recv()).await.unwrap();
 
     // 3. Focus chart-1
     let focus_chart = json!({
@@ -674,7 +685,7 @@ async fn display_projection_hide_clears_focus() {
     });
     let (code, _) = agent_call_json(&state, "/display", focus_chart).await;
     assert_eq!(code, StatusCode::OK);
-    let _ = events.recv().await.unwrap();
+    let _ = within("events", events.recv()).await.unwrap();
 
     // 4. Say targeting chart-1
     let say_chart = json!({
@@ -688,7 +699,7 @@ async fn display_projection_hide_clears_focus() {
     });
     let (code, _) = agent_call_json(&state, "/display", say_chart).await;
     assert_eq!(code, StatusCode::OK);
-    let _ = events.recv().await.unwrap();
+    let _ = within("events", events.recv()).await.unwrap();
 
     // Verify projection state under gate
     {
@@ -712,7 +723,7 @@ async fn display_projection_hide_clears_focus() {
     });
     let (code, _) = agent_call_json(&state, "/display", hide_chart).await;
     assert_eq!(code, StatusCode::OK);
-    let _ = events.recv().await.unwrap();
+    let _ = within("events", events.recv()).await.unwrap();
 
     {
         let gate = state.0.display_gate.lock().await;
@@ -875,7 +886,11 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
     let handle = post_display_in_task(&state, diagram_show()).await;
 
     // The delivered display frame carries a seq the browser will echo.
-    let DeliveryFrame::Event { sequence, .. } = connection.receiver.recv().await.unwrap() else {
+    let DeliveryFrame::Event { sequence, .. } =
+        within("connection.receiver", connection.receiver.recv())
+            .await
+            .unwrap()
+    else {
         panic!("expected a display event")
     };
 
@@ -921,7 +936,11 @@ async fn display_reports_rejection_from_the_browser() {
     let (mut connection, _s, _w) = state.register_connection().await;
     let epoch = connection.epoch;
     let handle = post_display_in_task(&state, diagram_show()).await;
-    let DeliveryFrame::Event { sequence, .. } = connection.receiver.recv().await.unwrap() else {
+    let DeliveryFrame::Event { sequence, .. } =
+        within("connection.receiver", connection.receiver.recv())
+            .await
+            .unwrap()
+    else {
         panic!("expected a display event")
     };
     handle_text_frame(

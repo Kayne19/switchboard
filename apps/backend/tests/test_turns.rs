@@ -15,6 +15,7 @@ use crate::pbx::{Switchboard, OPERATOR};
 use crate::pi_client::{AgentCall, LegSession, PiSession, ProjectTurn};
 use crate::registry::Registry;
 use crate::router::Decision;
+use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
@@ -160,7 +161,7 @@ async fn steer_rechecks_generation_under_the_active_session_guard() {
         )
         .await;
     });
-    responded.notified().await;
+    within("responded", responded.notified()).await;
     state.0.coordinator.begin_rescue("test rescue");
     drop(active_guard);
     dispatch.await.expect("dispatch");

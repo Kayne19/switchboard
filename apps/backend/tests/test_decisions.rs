@@ -7,6 +7,7 @@ use crate::pbx::{
 };
 use crate::pi_client::LegSession;
 use crate::router::ConversationMode;
+use crate::within;
 use serde_json::Value;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::time::Duration;
@@ -164,7 +165,7 @@ async fn multi_target_jev_retries_a_single_utility_target_then_splits() {
     assert!(board.coordinator.project_is_background("switchboard"));
     let mut saw_grape = false;
     let mut saw_switchboard = false;
-    while let Some((session, message)) = prompt_rx.recv().await {
+    while let Some((session, message)) = within("prompt_rx", prompt_rx.recv()).await {
         saw_grape |= session == "s1" && message.contains("validation low");
         saw_switchboard |= session == "s2" && message.contains("latest commit on the switchboard");
         if saw_grape && saw_switchboard {
@@ -235,7 +236,7 @@ async fn multi_target_jev_uses_a_first_utility_split_without_retry() {
     assert_eq!(std::fs::read_to_string(&calls).unwrap(), "1");
     assert!(board.coordinator.project_is_background("switchboard"));
     let mut saw_switchboard = false;
-    while let Some((session, message)) = prompt_rx.recv().await {
+    while let Some((session, message)) = within("prompt_rx", prompt_rx.recv()).await {
         saw_switchboard |= session == "s2" && message.contains("switchboard work");
         if saw_switchboard {
             break;
@@ -353,7 +354,7 @@ async fn utility_split_keeps_the_current_agent_foreground_even_without_jev_multi
     assert!(routed_prompts[before..]
         .iter()
         .any(|prompt| prompt.contains("Check alpha logs")));
-    while let Some((_session, prompt)) = prompt_rx.recv().await {
+    while let Some((_session, prompt)) = within("prompt_rx", prompt_rx.recv()).await {
         if prompt.contains("Review beta build") {
             break;
         }
@@ -444,7 +445,7 @@ async fn background_split_selects_foreground_and_hangup_keeps_residents() {
         .await;
     assert_eq!(reply.route, "alpha");
     let mut saw_beta = false;
-    while let Some((session, message)) = prompt_rx.recv().await {
+    while let Some((session, message)) = within("prompt_rx", prompt_rx.recv()).await {
         if session == "s2" && message.contains("beta part") {
             saw_beta = true;
             break;
@@ -502,7 +503,7 @@ async fn idle_background_split_part_continues_without_a_new_session() {
             ],
         )
         .await;
-    while let Some((session, message)) = prompt_rx.recv().await {
+    while let Some((session, message)) = within("prompt_rx", prompt_rx.recv()).await {
         if session == "s2" && message.contains("beta one") {
             break;
         }
@@ -524,7 +525,7 @@ async fn idle_background_split_part_continues_without_a_new_session() {
         )
         .await;
     let mut saw_second = false;
-    while let Some((session, message)) = prompt_rx.recv().await {
+    while let Some((session, message)) = within("prompt_rx", prompt_rx.recv()).await {
         if session == "s2" && message.contains("beta two") {
             saw_second = true;
             break;
@@ -997,7 +998,7 @@ async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
             ],
         )
         .await;
-    while let Some((session, message)) = prompt_rx.recv().await {
+    while let Some((session, message)) = within("prompt_rx", prompt_rx.recv()).await {
         if session == "s2" && message.contains("beta one") {
             break;
         }
@@ -1013,7 +1014,7 @@ async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
         .await
         .expect("a dead resident is replaced by a fresh session");
     let mut saw_fresh_prompt = false;
-    while let Some((session, message)) = prompt_rx.recv().await {
+    while let Some((session, message)) = within("prompt_rx", prompt_rx.recv()).await {
         if session == "s3" && message.contains("beta after host close") {
             saw_fresh_prompt = true;
             break;
@@ -1065,7 +1066,7 @@ async fn busy_background_split_part_is_refused_and_fresh_brings_the_live_agent_f
             ],
         )
         .await;
-    while let Some((session, message)) = prompt_rx.recv().await {
+    while let Some((session, message)) = within("prompt_rx", prompt_rx.recv()).await {
         if session == "s2" && message.contains("beta busy") {
             break;
         }
@@ -1243,7 +1244,7 @@ async fn go_to_project_with_fresh_brings_a_live_background_agent_forward() {
             ],
         )
         .await;
-    while let Some((_, message)) = prompt_rx.recv().await {
+    while let Some((_, message)) = within("prompt_rx", prompt_rx.recv()).await {
         if message.contains("beta chart") {
             break;
         }
@@ -1361,7 +1362,7 @@ async fn a_promoted_agent_is_told_it_is_in_the_foreground() {
         .start_background_part("beta", "beta chart")
         .await
         .expect("beta resident");
-    while let Some((_, message)) = prompt_rx.recv().await {
+    while let Some((_, message)) = within("prompt_rx", prompt_rx.recv()).await {
         if message.contains("beta chart") {
             break;
         }
@@ -1378,7 +1379,9 @@ async fn a_promoted_agent_is_told_it_is_in_the_foreground() {
 
     assert_eq!(reply.route, "beta", "{reply:?}");
     let promoted = loop {
-        let (_, message) = prompt_rx.recv().await.expect("promotion prompt");
+        let (_, message) = within("prompt_rx", prompt_rx.recv())
+            .await
+            .expect("promotion prompt");
         if message.contains("show me beta") {
             break message;
         }
