@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useLayoutEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useRef, useState, type FormEvent, type RefObject } from 'react';
 import type { MessageData } from '../controller/types';
 import { useModalFocus } from '../hooks/useModalFocus';
 import { usePinnedScroll } from '../hooks/usePinnedScroll';
@@ -32,6 +32,14 @@ export function TranscriptDrawer({ open, lines, onClose, onSend, behindFocus = f
   const live = Boolean(onSend);
   const returnButton = useRef<HTMLButtonElement>(null);
   const input = useRef<HTMLInputElement>(null);
+  // Opening the history is how a caller who will not speak reaches the
+  // line, so focus goes to the field and they can type at once. A field
+  // disabled for a line with no runtime cannot take focus: RETURN takes it
+  // then. The target follows the line while the history is open: the field
+  // takes focus in the commit that makes it live (`useModalFocus`,
+  // `retarget`). It follows the line, not `onSend` itself: the runtime
+  // registers a fresh `sendText` on every connection or recording change,
+  // and each of those must not pull focus from wherever the caller put it.
   useModalFocus(open, '.transcript', live ? input : returnButton);
   return (
     <AnimatePresence>
@@ -111,25 +119,6 @@ function useRowKeys(): (line: TranscriptLine) => number {
 function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => boolean; inputRef: RefObject<HTMLInputElement | null> }) {
   const [draft, setDraft] = useState('');
   const [notSent, setNotSent] = useState(false);
-
-  // Opening the history is how a caller who will not speak reaches the line,
-  // so the field takes focus as the drawer opens (`useModalFocus`, in the
-  // drawer) and they can type at once. A field disabled for a line with no
-  // runtime cannot take focus: RETURN takes it then. The field takes focus
-  // here when it turns live while the history is open, in the commit that
-  // makes it live. It keys on the field turning live, not on `onSend`
-  // itself: the runtime registers a fresh `sendText` on every connection or
-  // recording change, and each of those must not pull focus back from
-  // wherever the caller has moved it. Not as it mounts: the drawer has read
-  // what held focus before it, to give focus back to, and focused the field.
-  const live = Boolean(onSend);
-  const wasLive = useRef(live);
-  useLayoutEffect(() => {
-    if (live && !wasLive.current) {
-      inputRef.current?.focus({ preventScroll: true });
-    }
-    wasLive.current = live;
-  }, [live, inputRef]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
