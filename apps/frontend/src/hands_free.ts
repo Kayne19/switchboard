@@ -336,11 +336,7 @@ export class HandsFreeController {
 	 */
 	endAwaitedTurn(): void {
 		if (!this.enabled || this.state !== "awaiting_response") return;
-		this.resetListening();
-		this.publish(
-			"armed",
-			`No reply is coming; listening locally for “${WAKE_PHRASE}”.`,
-		);
+		this.rearm(`No reply is coming; listening locally for “${WAKE_PHRASE}”.`);
 	}
 
 	epochChanged(): void {
@@ -397,13 +393,10 @@ export class HandsFreeController {
 		this.clearWakeTimer();
 		this.wakeTimer = this.setTimer(() => {
 			this.wakeTimer = null;
-			if (this.state === "wake_grace") {
-				this.resetListening();
-				this.publish(
-					"armed",
+			if (this.state === "wake_grace")
+				this.rearm(
 					`Wake heard; speak within ${WAKE_SPEECH_GRACE_MS / 1000} seconds.`,
 				);
-			}
 		}, WAKE_SPEECH_GRACE_MS);
 		this.publish("wake_grace", "Wake word heard. Speak now.");
 	}
@@ -452,8 +445,7 @@ export class HandsFreeController {
 			// Nothing was sent, so no reply will come: listen for the wake
 			// word again, after a follow-up as after a wake word (#258).
 			if (capture.discard || !capture.chunks.length) {
-				this.resetListening();
-				this.publish("armed", "No utterance was retained.");
+				this.rearm("No utterance was retained.");
 				return;
 			}
 			const blob = new Blob(capture.chunks, {
@@ -461,11 +453,7 @@ export class HandsFreeController {
 			});
 			capture.chunks.length = 0;
 			if (!this.options.onClip(blob, blob.type, capture.epoch)) {
-				this.resetListening();
-				this.publish(
-					"armed",
-					"The utterance could not be sent; say the wake word again.",
-				);
+				this.rearm("The utterance could not be sent; say the wake word again.");
 				return;
 			}
 			this.publish(
@@ -612,6 +600,16 @@ export class HandsFreeController {
 			"error",
 			`Hands-free ${what} failed (${this.errorName(error)}).`,
 		);
+	}
+
+	/**
+	 * Back to waiting for the wake word after a turn, or a wake word, that
+	 * came to nothing. The detectors start from silence, so audio from before
+	 * cannot open the next turn.
+	 */
+	private rearm(message: string): void {
+		this.resetListening();
+		this.publish("armed", message);
 	}
 
 	/** Both detectors forget the audio before this moment. */
