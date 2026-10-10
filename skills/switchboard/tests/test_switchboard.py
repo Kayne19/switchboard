@@ -26,8 +26,10 @@ TOKEN = "call-token-1"
 class FakeHostAgent:
     """Serves the skill socket: JSON lines, one reply per request, in order."""
 
-    def __init__(self, home, on_call=True, reply=None, speech_deadline_ms=2000):
+    def __init__(self, home, on_call=True, reply=None, speech_deadline_ms=2000, hello_fields=None):
         self.speech_deadline_ms = speech_deadline_ms
+        # The call's fields after token and persona, when a test names them.
+        self.hello_fields = hello_fields
         self.path = os.path.join(home, ".cache", "switchboard", "host-agent.sock")
         os.makedirs(os.path.dirname(self.path), mode=0o700)
         self.on_call = on_call
@@ -63,7 +65,8 @@ class FakeHostAgent:
                 return {"on_call": False, "reason": "subagent"}
             if not self.on_call:
                 return {"on_call": False}
-            return {"on_call": True, "token": TOKEN, "persona": "Calm.", "speech_deadline_ms": self.speech_deadline_ms}
+            fields = {"speech_deadline_ms": self.speech_deadline_ms} if self.hello_fields is None else self.hello_fields
+            return {"on_call": True, "token": TOKEN, "persona": "Calm.", **fields}
         return self.reply(request)
 
     def calls(self):
@@ -237,6 +240,57 @@ class FailureTest(ModuleTestCase):
                     self.assertEqual(result.status, "refused")
                     self.assertFalse(result.ok)
                     self.assertTrue(line.startswith(f"switchboard.{fn.__name__}: "))
+            self.doCleanups()
+            self.setUp()
+
+
+class ReplyWaitTest(ModuleTestCase):
+    """How long the module waits for the host agent's answer, by call and hello.
+
+    One row per (call, the call fields of the hello reply). The hello is what
+    the host agent sends for that call state; the wait is the socket timeout
+    the module sets for the call, after the 5 s it gives the hello itself.
+    """
+
+    ROWS = (
+        # call, hello call fields, the module's wait in seconds
+        ("speak", {"speech_deadline_ms": 25000}, 35.0),
+        ("speak", {"speech_deadline_ms": 2000}, 12.0),
+        ("speak", {"speech_deadline_ms": 120000}, 130.0),
+        ("speak", {}, 35.0),
+        ("display", {"speech_deadline_ms": 2000}, 35.0),
+        ("view", {"speech_deadline_ms": 2000}, 35.0),
+        ("request_to_speak", {"speech_deadline_ms": 2000}, 35.0),
+    )
+
+    CALLS = {
+        "speak": lambda: switchboard.speak("Hi."),
+        "display": lambda: switchboard.display(op="clear"),
+        "view": lambda: switchboard.view(),
+        "request_to_speak": lambda: switchboard.request_to_speak("Done.", "finished"),
+    }
+
+    def waits(self, call, hello_fields):
+        """The timeouts the module set on its socket, in order."""
+        timeouts = []
+
+        class RecordingSocket(socket.socket):
+            def settimeout(self, value):
+                timeouts.append(value)
+                super().settimeout(value)
+
+        host = self.host(hello_fields=hello_fields)
+        wire = mock.Mock(wraps=socket, AF_UNIX=socket.AF_UNIX, SOCK_STREAM=socket.SOCK_STREAM, socket=RecordingSocket)
+        with mock.patch.object(switchboard, "_socket", wire):
+            result, line = self.run_call(self.CALLS[call])
+        self.assertTrue(result.delivered, line)
+        self.assertEqual(host.calls()[-1]["call"], call)
+        return timeouts
+
+    def test_each_row(self):
+        for call, hello_fields, wait in self.ROWS:
+            with self.subTest(call=call, hello=hello_fields):
+                self.assertEqual(self.waits(call, hello_fields), [switchboard._HELLO_TIMEOUT_S, wait])
             self.doCleanups()
             self.setUp()
 
