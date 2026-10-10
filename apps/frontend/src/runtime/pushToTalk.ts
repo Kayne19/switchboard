@@ -58,6 +58,8 @@ interface ActiveRecording {
   chunks: Blob[];
   sequence: number;
   transferEra: string | null;
+  /** Set by `stop()`; a recorder that stops without it was stopped by the browser. */
+  stopRequested: boolean;
   levelMonitor?: AudioLevelMonitor;
   levelSink?: GainNode;
   levelContext?: AudioContext;
@@ -243,6 +245,7 @@ export class PushToTalk {
       chunks,
       sequence: 0,
       transferEra: recordingTransferEra,
+      stopRequested: false,
       levelContext,
     };
     this.activeRecording = recording;
@@ -280,14 +283,23 @@ export class PushToTalk {
         recording.streaming = false;
       }
     }
+    // The one place a started recording ends for the page, whatever stopped
+    // the recorder: `stop()` only asks. A browser stops it by itself when its
+    // track ends -- the microphone is unplugged, or another app takes the
+    // iPad's audio session -- and the page went on saying it was recording
+    // (#262).
     recorder.onstop = () => {
       releaseMeter(recording);
       releaseStream();
-      this.options.resumeHandsFree();
-      if (this.activeRecording?.recorder === recorder)
-        this.activeRecording = null;
+      const current = this.activeRecording === recording;
+      // Let go of the recording before hands-free is asked to take the
+      // microphone back: it refuses while push-to-talk is still active
+      // (#257), as every other exit here already knows.
+      if (current) this.activeRecording = null;
       if (this.mediaRecorder === recorder) this.mediaRecorder = null;
+      this.options.resumeHandsFree();
       if (recorderFailed) return;
+      if (current) this.options.onRecordingChange(false);
       if (recording.discard) {
         onStatus(this.options.idleText, false);
         return;
@@ -319,6 +331,8 @@ export class PushToTalk {
         }
       }
       this.options.flush();
+      if (!recording.stopRequested)
+        onStatus("Recording stopped: the microphone was taken away.", true);
     };
     recorder.onerror = (event) => {
       if (recorderFailed) return;
@@ -406,13 +420,16 @@ export class PushToTalk {
       this.options.onRecordingChange(false);
       return;
     }
-    if (
-      this.activeRecording &&
-      this.activeRecording.recorder.state !== "inactive"
-    ) {
-      this.activeRecording.discard = !send;
-      this.activeRecording.recorder.stop();
+    const recording = this.activeRecording;
+    if (!recording) {
+      this.options.onRecordingChange(false);
+      return;
     }
-    this.options.onRecordingChange(false);
+    // The recorder's stop event tells the page the recording ended.
+    if (recording.recorder.state !== "inactive") {
+      recording.discard = !send;
+      recording.stopRequested = true;
+      recording.recorder.stop();
+    }
   }
 }

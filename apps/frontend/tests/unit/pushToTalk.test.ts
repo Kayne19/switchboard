@@ -300,6 +300,45 @@ describe("PushToTalk", () => {
     h.ptt.stop(false);
   });
 
+  // Hands-free asks whether push-to-talk still holds the microphone before it
+  // takes it back; a recording that has not let go yet makes it refuse (#257).
+  it("has let go of the recording when it hands the microphone back", async () => {
+    let activeAtResume: boolean | null = null;
+    let ptt: PushToTalk | null = null;
+    const h = harness({
+      resumeHandsFree: () => {
+        activeAtResume = ptt!.isActive;
+      },
+    });
+    ptt = h.ptt;
+    const start = h.ptt.start();
+    h.resolveMedia(fakeStream());
+    await start;
+    h.ptt.stop(true);
+    expect(activeAtResume).toBe(false);
+  });
+
+  // A browser stops the recorder itself when its track ends: the microphone
+  // is unplugged, or another app takes the iPad's audio session (#262).
+  it("says the recording ended when the recorder stops by itself", async () => {
+    const h = harness();
+    const start = h.ptt.start();
+    h.resolveMedia(fakeStream());
+    await start;
+    expect(h.recording).toEqual([true]);
+    const recorder = FakeRecorder.latest!;
+    recorder.ondataavailable!({ data: new Blob(["words"]) });
+    recorder.state = "inactive";
+    recorder.onstop!();
+    expect(h.recording).toEqual([true, false]);
+    expect(h.ptt.isActive).toBe(false);
+    expect(h.outbox.length, "what was said before it stopped is sent").toBe(1);
+    expect(h.status).toEqual({
+      text: "Recording stopped: the microphone was taken away.",
+      error: true,
+    });
+  });
+
   // `navigator.mediaDevices` is undefined on a page that is not a secure
   // origin, which reached the caller as "Microphone unavailable (TypeError)".
   it("names https when the browser offers no microphone API", async () => {

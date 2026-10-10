@@ -20,9 +20,14 @@ shell draws in every page's bottom-left corner (#180,
 the registered voice runtime and switches it by calling `toggleHandsFree()`;
 while listening it names the wake word (`MODE / HANDS-FREE · HEY JARVIS`).
 The page holds no listening state of its own, and the refusals below stay the
-runtime's: a switch while the line is down, during startup, or with
-push-to-talk active is refused there and reported in `handsFreeStatus`. The
-demo page registers no runtime, so the control is disabled there.
+runtime's. A switch while the line is down, or while the detectors are still
+loading, does nothing and says nothing (`toggleHandsFree` returns at once). The
+controller's own start is outside that wait: the controller is enabled from the
+first moment of its start, so a switch during it turns hands-free off, and a
+start that never finishes cannot hold MODE for the life of the page (#261). A
+switch with push-to-talk active is refused by the controller and reported in
+`handsFreeStatus`. The demo page registers no runtime, so the control is
+disabled there.
 
 ## Real wake-word detector
 
@@ -69,8 +74,8 @@ scores each one, and reports a speech start and a speech end. Inference is
 asynchronous and queued, as the wake detector's is, and a reset stamps a new
 generation so a window scored before a reset cannot start or end a turn after
 it. The endpointer is reset where the wake detector is: on enable, on a wake
-grace period, when an expired grace period re-arms, on a follow-up lease, on a
-PTT pause, and on disable or an epoch change.
+grace period, when an expired grace period re-arms, when a turn brings no
+reply, on a follow-up lease, on a PTT pause, and on disable or an epoch change.
 
 The two detectors share one ONNX Runtime Web instance, and its `run` is not
 re-entrant across sessions: a session that runs while another session's run
@@ -114,11 +119,28 @@ ms follow-up lease after the server barrier and playback queue have both
 settled, with a 400 ms drain debounce. The lease admits one no-wake utterance; a
 later utterance needs a wake word again.
 
+A turn that brings no successful reply opens no lease, so it re-arms the wake
+word instead (`HandsFreeController.endAwaitedTurn`): the server's `error` for
+the clip hands-free sent (Whisper heard nothing, the usual false trigger), a
+`final_response_audio_closed` with `success: false`, or `routing_unavailable`.
+So does an utterance the page could not send (`onClip` returns false: the
+snapshot is not ready, the epoch moved, or the outbox is full) and a capture
+that kept nothing. Without that exit, hands-free waited in `awaiting_response`,
+where no frame reaches the wake detector, and MODE said HANDS-FREE while
+nothing could wake it (#258).
+
 The server emits one `final_response_audio_closed` event per completed input
 turn, after a response-scoped queue marker has passed all earlier audio slots.
 Its `response_id`, generation, and production success are not used as heartbeat
 or reconnect state. Individual `speak`, `spoken`, `audio_start`, and `audio_done`
 events never open or extend the lease.
+
+A start waits at most `AUDIO_RESUME_DEADLINE_MS` (3 s) for a suspended 16-kHz
+context to run. WebKit can leave `resume()` pending while the audio session is
+interrupted (#183). A context that is still not running at the deadline fails
+the start with an `error` that the page shows. A start keeps the context,
+microphone and nodes it makes to itself until its last wait is over. A start
+that a newer one overtook releases only those, never the newer start's graph.
 
 Capture is discarded on permission failure, hidden/pagehide, disconnect,
 hangup, route/epoch change, or push-to-talk interruption. Secure contexts with

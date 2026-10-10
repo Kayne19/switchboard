@@ -15,6 +15,8 @@ export const SPEECH_END_PROBABILITY = 0.35;
 export const WAKE_SPEECH_GRACE_MS = 2_000;
 export const MAX_HANDS_FREE_UTTERANCE_MS = 30_000;
 export const FOLLOW_UP_LEASE_MS = 8_000;
+/** How long a start waits for a suspended audio context to run. */
+export const AUDIO_RESUME_DEADLINE_MS = 3_000;
 export const PLAYBACK_DRAIN_DEBOUNCE_MS = 400;
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -77,7 +79,8 @@ export interface HandsFreeControllerOptions {
 	isSnapshotReady: () => boolean;
 	currentEpoch: () => number;
 	isPttActive: () => boolean;
-	onClip: (audio: Blob, mime: string, epoch: number) => void;
+	/** Takes a finished utterance; false when the page could not send it. */
+	onClip: (audio: Blob, mime: string, epoch: number) => boolean;
 	onAudioLevel?: (level: number) => void;
 	onState: (detail: HandsFreeStateDetail) => void;
 }
@@ -87,8 +90,28 @@ interface Capture {
 	token: number;
 	epoch: number;
 	chunks: Blob[];
-	discard: boolean;
 	lease: boolean;
+}
+
+/** A start's audio context did not run by `AUDIO_RESUME_DEADLINE_MS`. */
+class AudioSuspended extends Error {
+	constructor() {
+		super("the audio context did not start");
+		this.name = "AudioSuspended";
+	}
+}
+
+function isRunning(context: AudioContext): boolean {
+	return context.state === "running";
+}
+
+/** Stops what a start made and never installed. */
+function releaseUnused(
+	context: AudioContext | null,
+	stream: MediaStream | null,
+): void {
+	stream?.getTracks().forEach((track) => track.stop());
+	if (context) void context.close().catch(() => undefined);
 }
 
 export class HandsFreeController {
@@ -192,76 +215,78 @@ export class HandsFreeController {
 	async enable(): Promise<boolean> {
 		if (this.enabled && this.state !== "error" && this.state !== "paused_ptt")
 			return true;
-		if (this.options.isPttActive() || !this.isForeground()) {
-			this.publish(
-				"error",
+		if (this.options.isPttActive() || !this.isForeground())
+			return this.refuseStart(
 				"Finish push-to-talk and keep this page visible first.",
 			);
-			return false;
-		}
-		if (!this.supported()) {
-			this.publish(
-				"error",
+		if (!this.supported())
+			return this.refuseStart(
 				"Hands-free needs a secure browser with local audio worklet support.",
 			);
-			return false;
-		}
-		if (!this.detector || !this.endpointer) {
-			this.publish(
-				"error",
+		if (!this.detector || !this.endpointer)
+			return this.refuseStart(
 				this.detector
 					? "Hands-free speech detector is unavailable."
 					: "Hands-free wake detector is unavailable.",
 			);
-			return false;
-		}
 		this.enabled = true;
 		this.publish(
 			"starting",
 			"Starting local microphone listening. Ambient audio stays on this device.",
 		);
 		const token = ++this.runtimeToken;
+		// What this start makes stays in locals until its last wait is over.
+		// A start that a newer one overtook (push-to-talk paused and resumed
+		// it, the page was hidden and shown) then releases only what it made,
+		// never the newer start's graph (#261).
+		let context: AudioContext | null = null;
+		let stream: MediaStream | null = null;
+		let installed = false;
 		try {
 			// Two models, one wait: either one failing is the same start
 			// failure, reported by the catch below.
 			await Promise.all([this.detector.load?.(), this.endpointer.load?.()]);
 			if (!this.enabled || token !== this.runtimeToken) return false;
-			this.context = this.createAudioContext();
-			if (typeof this.context.audioWorklet?.addModule !== "function")
+			context = this.createAudioContext();
+			if (typeof context.audioWorklet?.addModule !== "function")
 				throw new Error("audio worklet is unavailable");
-			this.stream = await this.getUserMedia({ audio: true });
+			stream = await this.getUserMedia({ audio: true });
 			if (
 				!this.enabled ||
 				token !== this.runtimeToken ||
 				!this.isForeground()
 			) {
-				this.releaseStream();
+				releaseUnused(context, stream);
 				return false;
 			}
-			if (this.context.state === "suspended") await this.context.resume();
-			await this.context.audioWorklet.addModule(
+			await this.resumeAudio(context);
+			await context.audioWorklet.addModule(
 				this.options.workletUrl || "/vad-worklet.js",
 			);
 			if (!this.enabled || token !== this.runtimeToken) {
-				this.releaseRuntime();
+				releaseUnused(context, stream);
 				return false;
 			}
-			this.source = this.context.createMediaStreamSource(this.stream);
-			this.worklet = this.createWorkletNode(this.context);
+			this.context = context;
+			this.stream = stream;
+			installed = true;
+			this.source = context.createMediaStreamSource(stream);
+			this.worklet = this.createWorkletNode(context);
 			const worklet = this.worklet;
 			worklet.port.onmessage = (event: MessageEvent) => {
 				if (token !== this.runtimeToken || worklet !== this.worklet) return;
 				this.onWorkletMessage(event.data);
 			};
 			this.source.connect(worklet);
-			this.sink = this.context.createGain();
+			this.sink = context.createGain();
 			this.sink.gain.value = 0;
 			worklet.connect(this.sink);
-			this.sink.connect(this.context.destination);
+			this.sink.connect(context.destination);
 			this.resetListening();
 			this.publish("armed", `Listening locally for “${WAKE_PHRASE}”.`);
 			return true;
 		} catch (error) {
+			if (!installed) releaseUnused(context, stream);
 			if (!this.enabled || token !== this.runtimeToken) return false;
 			this.enabled = false;
 			this.releaseRuntime();
@@ -272,6 +297,31 @@ export class HandsFreeController {
 			);
 			return false;
 		}
+	}
+
+	/**
+	 * Resumes a suspended context, but not forever. WebKit can leave
+	 * `resume()` pending while the audio session is interrupted (#183), and a
+	 * start that waited on it never finished (#261). A context that is not
+	 * running by the deadline fails the start, which says so.
+	 */
+	private async resumeAudio(context: AudioContext): Promise<void> {
+		if (context.state !== "suspended") return;
+		const resumed = context.resume();
+		// A rejection after the deadline has nobody waiting for it.
+		resumed.catch(() => undefined);
+		let expire: () => void = () => undefined;
+		const deadline = new Promise<void>((resolve) => {
+			expire = resolve;
+		});
+		const timer = this.setTimer(() => expire(), AUDIO_RESUME_DEADLINE_MS);
+		try {
+			await Promise.race([resumed, deadline]);
+		} finally {
+			this.clearTimer(timer);
+		}
+		// Read again: `resume()` changes the state the check above narrowed.
+		if (!isRunning(context)) throw new AudioSuspended();
 	}
 
 	disable(message = "Hands-free is off."): void {
@@ -325,6 +375,17 @@ export class HandsFreeController {
 			"lease",
 			"Follow-up listening is open for 8 seconds. No wake word needed.",
 		);
+	}
+
+	/**
+	 * The turn hands-free is waiting on will bring no reply: the server
+	 * refused the clip, or the reply could not be produced. Only a successful
+	 * reply opens the follow-up lease, so without this the controller would
+	 * wait in `awaiting_response`, where no wake word is heard (#258).
+	 */
+	endAwaitedTurn(): void {
+		if (!this.enabled || this.state !== "awaiting_response") return;
+		this.rearm(`No reply is coming; listening locally for “${WAKE_PHRASE}”.`);
 	}
 
 	epochChanged(): void {
@@ -381,13 +442,10 @@ export class HandsFreeController {
 		this.clearWakeTimer();
 		this.wakeTimer = this.setTimer(() => {
 			this.wakeTimer = null;
-			if (this.state === "wake_grace") {
-				this.resetListening();
-				this.publish(
-					"armed",
+			if (this.state === "wake_grace")
+				this.rearm(
 					`Wake heard; speak within ${WAKE_SPEECH_GRACE_MS / 1000} seconds.`,
 				);
-			}
 		}, WAKE_SPEECH_GRACE_MS);
 		this.publish("wake_grace", "Wake word heard. Speak now.");
 	}
@@ -416,35 +474,31 @@ export class HandsFreeController {
 			token,
 			epoch,
 			chunks: [],
-			discard: false,
 			lease,
 		};
 		this.capture = capture;
 		if (lease) this.leaseUsed = true;
 		recorder.ondataavailable = (event) => {
-			if (
-				this.capture !== capture ||
-				capture.discard ||
-				token !== this.runtimeToken
-			)
-				return;
+			if (this.capture !== capture || token !== this.runtimeToken) return;
 			if (event.data.size) capture.chunks.push(event.data);
 		};
 		recorder.onstop = () => {
 			if (this.capture !== capture || token !== this.runtimeToken) return;
 			this.capture = null;
-			if (capture.discard || !capture.chunks.length) {
-				this.publish(
-					capture.lease ? "awaiting_response" : "armed",
-					"No utterance was retained.",
-				);
+			// Nothing was sent, so no reply will come: listen for the wake
+			// word again, after a follow-up as after a wake word (#258).
+			if (!capture.chunks.length) {
+				this.rearm("No utterance was retained.");
 				return;
 			}
 			const blob = new Blob(capture.chunks, {
 				type: recorder.mimeType || "audio/webm",
 			});
 			capture.chunks.length = 0;
-			this.options.onClip(blob, blob.type, capture.epoch);
+			if (!this.options.onClip(blob, blob.type, capture.epoch)) {
+				this.rearm("The utterance could not be sent; say the wake word again.");
+				return;
+			}
 			this.publish(
 				"awaiting_response",
 				"Utterance sent; waiting for the response.",
@@ -452,7 +506,6 @@ export class HandsFreeController {
 		};
 		recorder.onerror = (event) => {
 			if (this.capture !== capture || token !== this.runtimeToken) return;
-			capture.discard = true;
 			this.capture = null;
 			this.publish(
 				"error",
@@ -463,7 +516,6 @@ export class HandsFreeController {
 		try {
 			recorder.start();
 		} catch (error) {
-			capture.discard = true;
 			this.capture = null;
 			this.publish(
 				"error",
@@ -483,15 +535,21 @@ export class HandsFreeController {
 		}, MAX_HANDS_FREE_UTTERANCE_MS);
 	}
 
+	/**
+	 * Ends the current capture. A discarded capture is retired here, before
+	 * the recorder is asked to stop: every caller that discards has already
+	 * moved `runtimeToken` on, so the recorder's `onstop` would see a stale
+	 * token and leave the capture in place for good (#256). A capture that is
+	 * no longer `this.capture` is retired: its recorder's events are ignored.
+	 */
 	private stopCapture(discard: boolean): void {
 		const capture = this.capture;
 		if (!capture) return;
-		capture.discard ||= discard;
+		if (discard) this.capture = null;
 		if (capture.recorder.state !== "inactive") {
 			try {
 				capture.recorder.stop();
 			} catch {
-				capture.discard = true;
 				this.capture = null;
 			}
 		} else {
@@ -575,6 +633,19 @@ export class HandsFreeController {
 		});
 	}
 
+	/**
+	 * A start that cannot begin leaves the controller off. A refused resume
+	 * after push-to-talk was still enabled, and the page shows `error` as
+	 * hands-free off: unless the controller is off too, the next MODE tap
+	 * reads `isEnabled` and turns "off" what the caller already sees as off
+	 * (#257).
+	 */
+	private refuseStart(message: string): false {
+		this.enabled = false;
+		this.publish("error", message);
+		return false;
+	}
+
 	/** A detector that failed stops hands-free and says which one it was. */
 	private failListening(what: string, error: unknown): void {
 		if (!this.enabled) return;
@@ -589,6 +660,16 @@ export class HandsFreeController {
 			"error",
 			`Hands-free ${what} failed (${this.errorName(error)}).`,
 		);
+	}
+
+	/**
+	 * Back to waiting for the wake word after a turn, or a wake word, that
+	 * came to nothing. The detectors start from silence, so audio from before
+	 * cannot open the next turn.
+	 */
+	private rearm(message: string): void {
+		this.resetListening();
+		this.publish("armed", message);
 	}
 
 	/** Both detectors forget the audio before this moment. */

@@ -16,6 +16,7 @@ import type { HelloAckMessage, ServerMessage } from "../../src/protocol";
 import { AudioPlayback } from "../../src/runtime/audioPlayback";
 import { CAPTION_WAIT_MS } from "../../src/runtime/spokenLines";
 import { helloAck, statusMessage } from "../fixtures/serverMessages";
+import { realHandsFree, stubHandsFreeBrowser } from "../fixtures/handsFreeRuntime";
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
@@ -823,7 +824,10 @@ describe("CallRuntime line controls", () => {
     runtime.selectThinking("high");
     await settle();
     expect(calls.length, "cross-control requests are serialized").toBe(1);
-    expect(calls[0]).toEqual({ url: "/connect", body: { project: "fixture-project" } });
+    expect(calls[0]).toEqual({
+      url: "/connect",
+      body: { project: "fixture-project", generation: 1 },
+    });
     expect(latestState()).toMatchObject({
       routeDisabled: true,
       modelDisabled: true,
@@ -871,9 +875,39 @@ describe("CallRuntime line controls", () => {
     const { runtime } = makeRuntime({ postJson });
     await connectAt(runtime);
     await runtime.hangup();
-    expect(postJson).toHaveBeenCalledWith("/hangup", {});
+    expect(postJson).toHaveBeenCalledWith("/hangup", { generation: 1 });
     runtime.dispose();
   });
+
+  it("stamps each control with the epoch the page held when the caller acted (#263)", async () => {
+    // A request queued behind a slow one used to go out bare, and the
+    // service applied it to whatever leg was on the line by then.
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const completions: Array<(value: Record<string, unknown>) => void> = [];
+    const { runtime } = makeRuntime({
+      postJson: (url, body) => {
+        calls.push({ url, body });
+        return new Promise((resolve) => completions.push(resolve));
+      },
+    });
+    const socket = await connectAt(runtime, 5);
+    runtime.selectModel("provider/next");
+    runtime.selectThinking("high");
+    await settle();
+    expect(calls).toEqual([
+      { url: "/model", body: { model: "provider/next", generation: 5 } },
+    ]);
+    // The line moves before the queued request goes out.
+    socket.receive({ type: "epoch", generation: 6 });
+    completions.shift()!({ error: null });
+    await settle();
+    expect(calls[1], "the queued one keeps the epoch it was asked at").toEqual({
+      url: "/thinking",
+      body: { level: "high", generation: 5 },
+    });
+    runtime.dispose();
+  });
+
 });
 
 describe("CallRuntime hands-free", () => {
@@ -937,6 +971,63 @@ describe("CallRuntime hands-free", () => {
     expect(loadWakeDetector).toHaveBeenCalledTimes(1);
     expect(loadSpeechEndpointer).toHaveBeenCalledTimes(1);
     expect(latestState().handsFree).toBe(true);
+    runtime.dispose();
+  });
+
+  // A first start that never finishes (a `resume()` WebKit leaves pending, a
+  // model that never arrives) held the runtime's startup for the life of the
+  // page, and every MODE tap after it was refused (#261).
+  it("does not lock MODE behind a first start that never finishes", async () => {
+    const enables: string[] = [];
+    let options: HandsFreeControllerOptions | null = null;
+    let enabled = false;
+    const controller = {
+      get isEnabled() {
+        return enabled;
+      },
+      enable() {
+        enabled = true;
+        enables.push("enable");
+        options!.onState({ state: "starting", message: "Starting.", leaseRemainingMs: 0 });
+        return new Promise<boolean>(() => undefined);
+      },
+      disable(message = "Hands-free is off.") {
+        enabled = false;
+        options!.onState({ state: "off", message, leaseRemainingMs: 0 });
+      },
+    };
+    const page = { visibilityState: "visible" as DocumentVisibilityState };
+    const listeners = new Map<string, () => void>();
+    const { runtime, latestState } = makeRuntime({
+      loadWakeDetector: async () => ({}) as WakeDetector,
+      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
+      createHandsFree: (created) => {
+        options = created;
+        return controller as unknown as HandsFreeController;
+      },
+      document: {
+        get visibilityState() {
+          return page.visibilityState;
+        },
+        addEventListener: (type: string, listener: () => void) =>
+          listeners.set(type, listener),
+        removeEventListener: () => undefined,
+      } as unknown as Document,
+    });
+    await connectAt(runtime);
+    runtime.toggleHandsFree();
+    await settle();
+    expect(enables).toEqual(["enable"]);
+
+    page.visibilityState = "hidden";
+    listeners.get("visibilitychange")!();
+    expect(latestState().handsFree).toBe(false);
+    page.visibilityState = "visible";
+    listeners.get("visibilitychange")!();
+
+    runtime.toggleHandsFree();
+    await settle();
+    expect(enables).toEqual(["enable", "enable"]);
     runtime.dispose();
   });
 
@@ -1028,6 +1119,56 @@ describe("CallRuntime hands-free", () => {
     runtime.dispose();
   });
 
+  // A false trigger is the normal failure of hands-free: Whisper hears
+  // nothing and the server answers the clip with an error, not a reply. The
+  // page must listen for the wake word again, not wait for a reply that is
+  // never coming (#258).
+  const noReply = {
+    "an error for the clip": (socket: FakeSocket, clip: string) =>
+      socket.receive({
+        type: "error",
+        id: clip,
+        message: "I didn't catch that — say it again.",
+      }),
+    "a reply that could not be spoken": (socket: FakeSocket) =>
+      socket.receive({
+        type: "final_response_audio_closed",
+        response_id: "r1",
+        generation: 1,
+        success: false,
+      }),
+    "routing that is unavailable": (socket: FakeSocket) =>
+      socket.receive({
+        type: "routing_unavailable",
+        message: "Routing is unavailable.",
+      }),
+  };
+  for (const [what, answer] of Object.entries(noReply)) {
+    it(`listens for the wake word again after ${what}`, async () => {
+      stubHandsFreeBrowser();
+      const handsFree = realHandsFree(
+        () => new FakeRecorder() as unknown as MediaRecorder,
+      );
+      const { runtime } = makeRuntime(handsFree.options);
+      const socket = await connectAt(runtime);
+      runtime.toggleHandsFree();
+      await handsFree.reach("armed");
+      expect(handsFree.controller().currentState).toBe("armed");
+      handsFree.hear();
+      handsFree.speechStarts();
+      handsFree.speechEnds();
+      expect(handsFree.controller().currentState).toBe("awaiting_response");
+      const clip = socket.sentJson().find((frame) => frame.type === "clip");
+      expect(clip).toBeDefined();
+
+      answer(socket, String(clip!.id));
+      expect(handsFree.controller().currentState).toBe("armed");
+      handsFree.hear();
+      expect(handsFree.controller().currentState).toBe("wake_grace");
+      runtime.dispose();
+    });
+  }
+
   it("submits a hands-free clip only for the current epoch", async () => {
     const handsFree = fakeHandsFree();
     const { runtime } = makeRuntime({
@@ -1061,6 +1202,29 @@ describe("CallRuntime hands-free", () => {
     runtime.send();
     await settle();
     expect(handsFree.calls).toEqual(["enable", "pause", "resume"]);
+    runtime.dispose();
+  });
+
+  // The fake above only records the word "resume". A real controller asks
+  // push-to-talk whether it still holds the microphone, and refused while
+  // the stopped recording had not let go of it (#257).
+  it("is still listening after a push-to-talk press", async () => {
+    stubHandsFreeBrowser();
+    const handsFree = realHandsFree(
+      () => new FakeRecorder() as unknown as MediaRecorder,
+    );
+    const { runtime, latestState } = makeRuntime(handsFree.options);
+    await connectAt(runtime);
+    runtime.toggleHandsFree();
+    await handsFree.reach("armed");
+    expect(handsFree.controller().currentState).toBe("armed");
+    runtime.talk();
+    await settle();
+    expect(handsFree.controller().currentState).toBe("paused_ptt");
+    runtime.send();
+    await handsFree.reach("armed");
+    expect(handsFree.controller().currentState).toBe("armed");
+    expect(latestState()).toMatchObject({ handsFree: true, recording: false });
     runtime.dispose();
   });
 });

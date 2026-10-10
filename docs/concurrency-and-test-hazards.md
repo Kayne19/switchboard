@@ -280,6 +280,25 @@ request restores the value that was selected before that request, unless a newer
 status snapshot has already invalidated it; this prevents late failures from
 rewriting a newer leg selection.
 
+Each control, the hangup included, carries the epoch the page held when the
+caller acted, and the service acts on that generation or not at all (#263).
+`control_generation` in `page_controls.rs` refuses one with no generation (400)
+or one the call has moved on from (409). The rescue a control starts is
+`Coordinator::begin_rescue_at`, which checks the generation and rescues under
+the one state lock, so a transfer that lands between the check and the rescue
+still refuses the control rather than letting it end the new leg; a `/model` or
+`/thinking` decision is registered at that generation and is refused the same
+way. Stamping a control when it goes out instead would not do: a request queued
+behind a slow one would pick up the epoch of a leg the caller never chose.
+
+After its rescue a control acts at the generation that rescue left, never at
+the current one read again: a newer control can rescue while this one is
+still closing the old leg (a `/connect` pressed right after a hangup, a second
+tab). `/connect` registers its dial at the rescue's generation, so
+`spawn_registered_operation` refuses it, and `/hangup` checks that generation
+under the PBX lock before `force_hangup`, so it does not drop the leg the newer
+control dials. Either answers 409 "superseded".
+
 ### A swap is decided before its rescue
 
 A rescue ends the live leg. `/model` and `/thinking` used to rescue first

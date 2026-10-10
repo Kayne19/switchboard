@@ -604,6 +604,21 @@ export async function postJson(
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
 	});
-	if (!response.ok) throw new Error(`HTTP ${response.status}`);
+	if (!response.ok) {
+		// A control the service refuses says why in `detail`
+		// (`page_controls.rs`): a stale generation, say (#263). The caller reads
+		// that, not a bare status code.
+		let detail: unknown;
+		try {
+			detail = ((await response.json()) as { detail?: unknown } | null)?.detail;
+		} catch {
+			detail = undefined;
+		}
+		throw new Error(
+			typeof detail === "string" && detail
+				? `HTTP ${response.status}: ${detail}`
+				: `HTTP ${response.status}`,
+		);
+	}
 	return (await response.json()) as Record<string, unknown>;
 }

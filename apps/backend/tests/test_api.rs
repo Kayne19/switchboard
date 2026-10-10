@@ -78,7 +78,7 @@ async fn http_contract_exposes_status_health_and_page_controls() {
         &state,
         Method::POST,
         "/connect",
-        Some(json!({"project":"operator"})),
+        Some(json!({"project":"operator", "generation":state.0.coordinator.generation()})),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
@@ -88,7 +88,7 @@ async fn http_contract_exposes_status_health_and_page_controls() {
         &state,
         Method::POST,
         "/thinking",
-        Some(json!({"level":"high"})),
+        Some(json!({"level":"high", "generation":state.0.coordinator.generation()})),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
@@ -99,7 +99,7 @@ async fn http_contract_exposes_status_health_and_page_controls() {
         &state,
         Method::POST,
         "/model",
-        Some(json!({"model":"anthropic/next"})),
+        Some(json!({"model":"anthropic/next", "generation":state.0.coordinator.generation()})),
     )
     .await;
     assert_eq!(code, StatusCode::OK);
@@ -299,17 +299,30 @@ async fn the_call_socket_accepts_only_its_own_origin() {
     }
 }
 
-/// `POST /hangup` as a page at `origin` sends it to `host`: no body and no
-/// `Content-Type`, which a cross-site `fetch(.., {mode: "no-cors"})` can
-/// send without a preflight.
-async fn hangup_from(state: &AppState, origin: &str, host: &str) -> StatusCode {
+/// `POST /hangup` as a page at `origin` sends it to `host`. With no
+/// `generation` it has no body and no `Content-Type`, which a cross-site
+/// `fetch(.., {mode: "no-cors"})` can send without a preflight; the page
+/// itself sends the generation it holds as JSON (#263).
+async fn hangup_from(
+    state: &AppState,
+    origin: &str,
+    host: &str,
+    generation: Option<u64>,
+) -> StatusCode {
     let request = Request::builder()
         .method(Method::POST)
         .uri("/hangup")
         .header("origin", origin)
-        .header("host", host)
-        .body(Body::empty())
-        .unwrap();
+        .header("host", host);
+    let request = match generation {
+        Some(generation) => request
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({ "generation": generation }).to_string(),
+            )),
+        None => request.body(Body::empty()),
+    }
+    .unwrap();
     state
         .clone()
         .router(None)
@@ -334,16 +347,18 @@ async fn a_cross_site_hangup_is_refused_and_leaves_the_leg_on_the_line() {
         .clone()
         .expect("the operator is live");
 
-    let code = hangup_from(&state, "http://evil.example", "switchboard.home.arpa").await;
+    let code = hangup_from(&state, "http://evil.example", "switchboard.home.arpa", None).await;
     assert_eq!(code, StatusCode::FORBIDDEN);
     assert!(operator.alive().await);
     assert!(state.0.active_session.lock().await.is_some());
 
     // The page itself, as caddy hands it on: the browser's Host, unchanged.
+    let generation = state.0.coordinator.generation();
     let code = hangup_from(
         &state,
         "https://switchboard.home.arpa",
         "switchboard.home.arpa",
+        Some(generation),
     )
     .await;
     assert_eq!(code, StatusCode::OK);

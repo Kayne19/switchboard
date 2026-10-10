@@ -34,24 +34,68 @@ async fn settle_if_current(state: &AppState, generation: u64) {
     }
 }
 
+/// Registers `future` at `generation`; `None` if the call has moved on from it.
 async fn spawn_active_operation<F, T>(
     state: &AppState,
+    generation: u64,
     future: F,
 ) -> Option<(JoinHandle<T>, TaskId, u64)>
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    let generation = state.0.coordinator.generation();
     let (task, id) = spawn_registered_operation(state, generation, future).await?;
     Some((task, id, generation))
+}
+
+/// The generation a page control acts at: the one the page held when the
+/// caller acted, which the control carries (#263). It is never defaulted to
+/// the current one -- that is how a request queued behind a slow one, or a
+/// stale tab, acted on a leg the caller never chose (`AGENTS.md`).
+fn control_generation(state: &AppState, held: Option<u64>) -> Result<u64, StaleControl> {
+    let held = held.ok_or(StaleControl::Missing)?;
+    let current = state.0.coordinator.generation();
+    if held != current {
+        return Err(StaleControl::Moved { held, current });
+    }
+    Ok(held)
+}
+/// Why a page control does not act: it carries no generation, or one the
+/// call has moved on from.
+enum StaleControl {
+    Missing,
+    Moved { held: u64, current: u64 },
+}
+impl StaleControl {
+    /// The answer: 400 for a control with no generation, 409 for one the call
+    /// has moved on from. `outcome` says which a control is: a picker that
+    /// would start something is "refused", a hangup that would end something
+    /// is "ignored".
+    fn refusal(self, what: &str, outcome: &str) -> Response {
+        match self {
+            StaleControl::Missing => {
+                tracing::info!("{what} {outcome}: it carries no generation");
+                page_refusal(
+                    axum::http::StatusCode::BAD_REQUEST,
+                    format!("{what} was {outcome}: it carries no generation"),
+                )
+            }
+            StaleControl::Moved { held, current } => {
+                tracing::info!(held, current, "{what} {outcome}: the line moved on");
+                page_refusal(
+                    axum::http::StatusCode::CONFLICT,
+                    format!(
+                        "{what} was {outcome}: the line moved on \
+                         (the page held generation {held}, the call is at {current})"
+                    ),
+                )
+            }
+        }
+    }
 }
 /// The status message the page is sent, `type` included.
 pub(crate) async fn status(State(state): State<AppState>) -> impl IntoResponse {
     Json(ServerMessage::Status(current_status(&state)).to_value())
-}
-pub(crate) async fn interrupt_active_turn(state: &AppState) -> Option<String> {
-    cancel_active_operations(state).await
 }
 pub(crate) async fn cancel_active_operations(state: &AppState) -> Option<String> {
     let generation = state
@@ -61,6 +105,26 @@ pub(crate) async fn cancel_active_operations(state: &AppState) -> Option<String>
         .generation;
     release_rescued_work(state, generation, false, "operation interrupted").await
 }
+/// `cancel_active_operations` for a page control, only while the call is
+/// still at `generation`, the one the control carries (`control_generation`).
+/// Returns the generation the rescue left, which is the only one the control
+/// may go on to act at, and the label of the leg it closed. `Err` rescued
+/// nothing: the call moved on after the control was checked.
+async fn cancel_active_operations_at(
+    state: &AppState,
+    generation: u64,
+) -> Result<(u64, Option<String>), LineMoved> {
+    let rescued = state
+        .0
+        .coordinator
+        .begin_rescue_at(generation, "operation interrupted")
+        .ok_or(LineMoved)?
+        .generation;
+    let closed = release_rescued_work(state, rescued, false, "operation interrupted").await;
+    Ok((rescued, closed))
+}
+/// The call moved on from the generation a page control carried.
+struct LineMoved;
 /// Cancels running work to make way for `plan`, but only while its leg is
 /// still the one on the line: a caller who has moved since the redial was
 /// decided keeps whatever they moved to, untouched. Returns the plan for the
@@ -109,16 +173,21 @@ async fn release_rescued_work(
     });
     label
 }
+/// Rescues the call at `generation` and registers `future` on the generation
+/// the rescue left; `None` if the call had moved on from either.
 async fn spawn_replacing_operation<F, T>(
     state: &AppState,
+    generation: u64,
     future: F,
 ) -> Option<(JoinHandle<T>, TaskId, u64)>
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    cancel_active_operations(state).await;
-    let generation = state.0.coordinator.generation();
+    // At the generation this rescue left, not the current one: a newer
+    // control that rescued while this one was still releasing the old leg
+    // owns the call, and this one must not run on it.
+    let (generation, _) = cancel_active_operations_at(state, generation).await.ok()?;
     let (task, id) = spawn_registered_operation(state, generation, future).await?;
     Some((task, id, generation))
 }
@@ -200,13 +269,14 @@ async fn deliver_page_control(
 async fn run_page_control<F>(
     state: &AppState,
     what: &str,
+    generation: u64,
     operation: F,
 ) -> Result<crate::reply::Reply, Response>
 where
     F: Future<Output = crate::reply::Reply> + Send + 'static,
 {
     let started = std::time::Instant::now();
-    let spawned = spawn_replacing_operation(state, operation).await;
+    let spawned = spawn_replacing_operation(state, generation, operation).await;
     let (reply, generation) = join_page_operation(state, what, started, spawned).await?;
     deliver_page_control(state, what, started, reply, generation).await
 }
@@ -226,13 +296,14 @@ where
 async fn run_redial_control<D>(
     state: &AppState,
     what: &str,
+    generation: u64,
     decide: D,
 ) -> Result<crate::reply::Reply, Response>
 where
     D: Future<Output = Redial> + Send + 'static,
 {
     let started = std::time::Instant::now();
-    let spawned = spawn_active_operation(state, decide).await;
+    let spawned = spawn_active_operation(state, generation, decide).await;
     let (decided, generation) = join_page_operation(state, what, started, spawned).await?;
     let plan = match decided {
         Redial::Answered(reply) => {
@@ -280,13 +351,49 @@ where
     }
 }
 
+#[derive(Deserialize)]
+pub(crate) struct Hangup {
+    generation: Option<u64>,
+}
+/// `/hangup` ends the call's leg, so one meant for a leg the call has left is
+/// ignored rather than ending the leg it moved to (#263). It still needs no
+/// agent: it goes straight to the PBX, past a wedged turn.
 #[tracing::instrument(name = "http", skip_all, fields(endpoint = "/hangup"))]
-pub(crate) async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
+pub(crate) async fn hangup(
+    State(state): State<AppState>,
+    body: Result<Json<Hangup>, JsonRejection>,
+) -> Response {
+    let req = match body {
+        Ok(Json(req)) => req,
+        Err(rejection) => return refuse_body(rejection),
+    };
     let started = std::time::Instant::now();
     tracing::info!(route = %state.0.coordinator.route(), "the page asked to hang up");
+    let generation = match control_generation(&state, req.generation) {
+        Ok(generation) => generation,
+        Err(stale) => return stale.refusal("hangup", "ignored"),
+    };
     // The process the rescue closed, and the leg the PBX then dropped.
-    let closed = interrupt_active_turn(&state).await;
-    let dropped = state.0.switchboard.lock().await.force_hangup().await;
+    let Ok((rescued, closed)) = cancel_active_operations_at(&state, generation).await else {
+        tracing::info!("hangup ignored: the line moved on before its rescue");
+        return page_conflict("hangup", "ignored");
+    };
+    // Checked under the PBX lock, where the hangup acts: a newer control that
+    // rescued since this rescue (a /connect pressed right after the hangup, a
+    // second tab) owns the call, and the leg it dials must not be dropped by
+    // the hangup that came before it. A rescue does not take this lock, so a
+    // newer one landing after the check only finds the leg already dropped.
+    let dropped = {
+        let mut board = state.0.switchboard.lock().await;
+        if state.0.coordinator.generation() != rescued {
+            tracing::info!(
+                elapsed = ?started.elapsed(),
+                "superseded: a newer control took the line before the hangup reached the PBX"
+            );
+            return page_conflict("hangup", "superseded");
+        }
+        board.force_hangup().await
+    };
     let hung_up = hangup_outcome(dropped, closed);
     // A hangup ends the call on the debug page; a page still connected is on
     // a new one with the operator.
@@ -322,11 +429,11 @@ pub(crate) async fn hangup(State(state): State<AppState>) -> impl IntoResponse {
     match hung_up {
         Some((left, _)) => {
             tracing::info!(%left, elapsed = ?started.elapsed(), "hung up; the caller is back on the operator");
-            Json(json!({"hungup":true, "left":left}))
+            Json(json!({"hungup":true, "left":left})).into_response()
         }
         None => {
             tracing::info!(elapsed = ?started.elapsed(), "nothing to hang up: already on the operator");
-            Json(json!({"hungup":false, "reason":"already on the operator"}))
+            Json(json!({"hungup":false, "reason":"already on the operator"})).into_response()
         }
     }
 }
@@ -361,6 +468,7 @@ pub(crate) struct Connect {
     project: String,
     #[serde(default)]
     intent: String,
+    generation: Option<u64>,
 }
 #[tracing::instrument(name = "http", skip_all, fields(endpoint = "/connect"))]
 pub(crate) async fn connect(
@@ -373,11 +481,16 @@ pub(crate) async fn connect(
     };
     let started = std::time::Instant::now();
     tracing::info!(project = %req.project, from = %state.0.coordinator.route(), "the page asked to connect");
+    let what = "connection attempt";
+    let generation = match control_generation(&state, req.generation) {
+        Ok(generation) => generation,
+        Err(stale) => return stale.refusal(what, "refused"),
+    };
     // The picker is also an escape hatch. Cancel setup or a wedged live turn
     // before taking the PBX lock; otherwise a direct connection can wait for
     // the very leg the caller is trying to leave.
     let board_state = state.clone();
-    let controlled = run_page_control(&state, "connection attempt", async move {
+    let controlled = run_page_control(&state, what, generation, async move {
         let mut board = board_state.0.switchboard.lock().await;
         board.dial(&req.project, &req.intent).await
     })
@@ -400,6 +513,7 @@ pub(crate) async fn connect(
 #[derive(Deserialize)]
 pub(crate) struct Thinking {
     level: String,
+    generation: Option<u64>,
 }
 #[tracing::instrument(name = "http", skip_all, fields(endpoint = "/thinking"))]
 pub(crate) async fn thinking(
@@ -412,8 +526,13 @@ pub(crate) async fn thinking(
     };
     let started = std::time::Instant::now();
     tracing::info!(thinking = %req.level, route = %state.0.coordinator.route(), "the page asked for a thinking level");
+    let what = "thinking change";
+    let generation = match control_generation(&state, req.generation) {
+        Ok(generation) => generation,
+        Err(stale) => return stale.refusal(what, "refused"),
+    };
     let redials = state.0.redial_planner();
-    let controlled = run_redial_control(&state, "thinking change", async move {
+    let controlled = run_redial_control(&state, what, generation, async move {
         redials.thinking_change(&req.level).await
     })
     .await;
@@ -436,6 +555,7 @@ pub(crate) async fn thinking(
 #[derive(Deserialize)]
 pub(crate) struct Model {
     model: String,
+    generation: Option<u64>,
 }
 #[tracing::instrument(name = "http", skip_all, fields(endpoint = "/model"))]
 pub(crate) async fn model(
@@ -448,8 +568,13 @@ pub(crate) async fn model(
     };
     let started = std::time::Instant::now();
     tracing::info!(model = %req.model, route = %state.0.coordinator.route(), "the page asked for a model");
+    let what = "model change";
+    let generation = match control_generation(&state, req.generation) {
+        Ok(generation) => generation,
+        Err(stale) => return stale.refusal(what, "refused"),
+    };
     let redials = state.0.redial_planner();
-    let controlled = run_redial_control(&state, "model change", async move {
+    let controlled = run_redial_control(&state, what, generation, async move {
         redials.model_change(&req.model).await
     })
     .await;

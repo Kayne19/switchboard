@@ -134,6 +134,7 @@ function controller() {
   const clips: number[] = [];
   let clock = 0;
   let ptt = false;
+  let acceptClips = true;
   const stream = { getTracks: () => [{ stop: () => undefined }] };
   const instance = new HandsFreeController({
     getUserMedia: async () => stream as unknown as MediaStream,
@@ -152,7 +153,10 @@ function controller() {
     isSnapshotReady: () => true,
     currentEpoch: () => 4,
     isPttActive: () => ptt,
-    onClip: (_audio, _mime, epoch) => clips.push(epoch),
+    onClip: (_audio, _mime, epoch) => {
+      clips.push(epoch);
+      return acceptClips;
+    },
     onState: (detail) => states.push(detail.state),
   });
   return {
@@ -165,6 +169,9 @@ function controller() {
     clips,
     pressPtt: (down: boolean) => {
       ptt = down;
+    },
+    refuseClips: () => {
+      acceptClips = false;
     },
     advance: (ms: number) => {
       clock += ms;
@@ -234,6 +241,51 @@ describe("the hands-free controller over fakes", () => {
     expect(harness.endpointer.resets).toBeGreaterThan(resets.endpointer);
   });
 
+  // Only a successful reply opens the follow-up lease, so `awaiting_response`
+  // needs a way out for a turn that brings none, or the wake word is never
+  // heard again (#258).
+  it("listens for the wake word again when the awaited turn brings no reply", async () => {
+    stubBrowser();
+    const harness = controller();
+    expect(await harness.instance.enable()).toBe(true);
+    harness.detector.hear();
+    harness.endpointer.speechStarts();
+    harness.recorder.ondataavailable?.({ data: new Blob(["cough"]) });
+    harness.endpointer.speechEnds();
+    expect(harness.instance.currentState).toBe("awaiting_response");
+
+    harness.instance.endAwaitedTurn();
+    expect(harness.instance.currentState).toBe("armed");
+    harness.detector.hear();
+    expect(harness.instance.currentState).toBe("wake_grace");
+  });
+
+  it("does not wait for a reply to an utterance the page could not send", async () => {
+    stubBrowser();
+    const harness = controller();
+    expect(await harness.instance.enable()).toBe(true);
+    harness.refuseClips();
+    harness.detector.hear();
+    harness.endpointer.speechStarts();
+    harness.recorder.ondataavailable?.({ data: new Blob(["words"]) });
+    harness.endpointer.speechEnds();
+    expect(harness.clips).toEqual([4]);
+    expect(harness.instance.currentState).toBe("armed");
+  });
+
+  it("does not wait for a reply to a follow-up that kept nothing", async () => {
+    stubBrowser();
+    const harness = controller();
+    expect(await harness.instance.enable()).toBe(true);
+    harness.instance.openFollowUpLease(4);
+    expect(harness.instance.currentState).toBe("lease");
+    harness.endpointer.speechStarts();
+    expect(harness.instance.currentState).toBe("lease_capturing");
+    harness.endpointer.speechEnds();
+    expect(harness.clips).toEqual([]);
+    expect(harness.instance.currentState).toBe("armed");
+  });
+
   it("resets both detectors when a wake grace lapses", async () => {
     stubBrowser();
     const harness = controller();
@@ -247,6 +299,87 @@ describe("the hands-free controller over fakes", () => {
     expect(harness.instance.currentState).toBe("armed");
     expect(harness.detector.resets).toBeGreaterThan(resets.detector);
     expect(harness.endpointer.resets).toBeGreaterThan(resets.endpointer);
+  });
+
+  // A start that a newer one overtook (push-to-talk paused and resumed while
+  // the first one waited) closed whatever graph the controller held when it
+  // woke up: the newer start's. Hands-free then said "armed" and heard
+  // nothing (#261).
+  it("lets an overtaken start release only what it made", async () => {
+    stubBrowser();
+    const detector = fakeDetector();
+    const endpointer = fakeEndpointer();
+    const audio = fakeAudio();
+    const closed: number[] = [];
+    const stopped: number[] = [];
+    let contexts = 0;
+    let streams = 0;
+    let releaseFirstModule: () => void = () => undefined;
+    const instance = new HandsFreeController({
+      getUserMedia: async () => {
+        const id = ++streams;
+        return {
+          getTracks: () => [{ stop: () => stopped.push(id) }],
+        } as unknown as MediaStream;
+      },
+      createAudioContext: () => {
+        const id = ++contexts;
+        return {
+          ...audio.context,
+          audioWorklet: {
+            addModule: () =>
+              id === 1
+                ? new Promise<undefined>((resolve) => {
+                    releaseFirstModule = () => resolve(undefined);
+                  })
+                : Promise.resolve(undefined),
+          },
+          close: async () => {
+            closed.push(id);
+          },
+        } as unknown as AudioContext;
+      },
+      createRecorder: () => fakeRecorder() as unknown as MediaRecorder,
+      createWorkletNode: () => audio.node as unknown as AudioWorkletNode,
+      wakeDetector: detector as unknown as WakeDetector,
+      speechEndpointer: endpointer as unknown as SpeechEndpointer,
+      isForeground: () => true,
+      isSnapshotReady: () => true,
+      currentEpoch: () => 4,
+      isPttActive: () => false,
+      onClip: () => true,
+      onState: () => undefined,
+    });
+
+    const first = instance.enable();
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    instance.pauseForPtt();
+    instance.resumeAfterPtt();
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    expect(instance.currentState).toBe("armed");
+
+    releaseFirstModule();
+    expect(await first).toBe(false);
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    expect(closed, "the overtaken start closes its own context").toEqual([1]);
+    expect(stopped, "and stops its own microphone").toEqual([1]);
+    expect(instance.currentState).toBe("armed");
+  });
+
+  // WebKit can leave `resume()` pending while the audio session is taken
+  // away (#183). Waited on without a limit, the start never finished.
+  it("fails a start whose audio never resumes, and says so", async () => {
+    stubBrowser();
+    const harness = controller();
+    harness.audio.context.state = "suspended";
+    harness.audio.context.resume = () => new Promise<undefined>(() => undefined);
+    const start = harness.instance.enable();
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    expect(harness.instance.currentState).toBe("starting");
+    harness.advance(3_000);
+    expect(await start).toBe(false);
+    expect(harness.instance.currentState).toBe("error");
+    expect(harness.instance.isEnabled).toBe(false);
   });
 
   it("pauses for push-to-talk and resumes", async () => {
@@ -264,6 +397,49 @@ describe("the hands-free controller over fakes", () => {
     for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
     expect(harness.instance.currentState).toBe("armed");
   });
+
+  // Each of these ends hands-free, or pauses it, while the caller is still
+  // speaking. The capture they retire must not outlive them: a capture left
+  // behind makes every later wake word open nothing (#256).
+  const retirements = {
+    disable: async (harness: ReturnType<typeof controller>) => {
+      harness.instance.disable();
+      await harness.instance.enable();
+    },
+    pauseForPtt: async (harness: ReturnType<typeof controller>) => {
+      harness.instance.pauseForPtt();
+      harness.instance.resumeAfterPtt();
+    },
+    epochChanged: async (harness: ReturnType<typeof controller>) => {
+      harness.instance.epochChanged();
+      await harness.instance.enable();
+    },
+    "a detector failure": async (harness: ReturnType<typeof controller>) => {
+      harness.detector.breakDown(new Error("engine gone"));
+      await harness.instance.enable();
+    },
+  };
+  for (const [how, retire] of Object.entries(retirements)) {
+    it(`captures again after ${how} during a capture`, async () => {
+      stubBrowser();
+      const harness = controller();
+      expect(await harness.instance.enable()).toBe(true);
+      harness.detector.hear();
+      harness.endpointer.speechStarts();
+      expect(harness.instance.currentState).toBe("capturing");
+
+      await retire(harness);
+      for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+      expect(harness.instance.currentState).toBe("armed");
+      expect(harness.instance.isCapturing).toBe(false);
+      expect(harness.clips).toEqual([]);
+
+      harness.detector.hear();
+      harness.endpointer.speechStarts();
+      expect(harness.instance.currentState).toBe("capturing");
+      expect(harness.recorder.startCalls).toBe(2);
+    });
+  }
 
   it("stops on a detector failure and says which one failed", async () => {
     stubBrowser();
@@ -290,5 +466,24 @@ describe("the hands-free controller over fakes", () => {
     expect(harness.instance.currentState).toBe("error");
     expect(harness.detector.resets).toBeGreaterThan(0);
     expect(harness.endpointer.resets).toBeGreaterThan(0);
+  });
+
+  // A refusal is published as an error, which the page shows as hands-free
+  // off. The controller must agree, or the next MODE tap turns it "off" and
+  // nothing visible happens (#257).
+  it("is off after a resume it refuses", async () => {
+    stubBrowser();
+    const harness = controller();
+    expect(await harness.instance.enable()).toBe(true);
+    harness.instance.pauseForPtt();
+    harness.pressPtt(true);
+    harness.instance.resumeAfterPtt();
+    for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+    expect(harness.instance.currentState).toBe("error");
+    expect(harness.instance.isEnabled).toBe(false);
+
+    harness.pressPtt(false);
+    expect(await harness.instance.enable()).toBe(true);
+    expect(harness.instance.currentState).toBe("armed");
   });
 });
