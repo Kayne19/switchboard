@@ -261,6 +261,18 @@ class CallsTest(ModuleTestCase):
                 _, line = self.run_call(switchboard.view)
                 self.assertEqual(line, f"switchboard.view: Showing {words} on the caller's screen.")
 
+    def test_display_with_no_screen_connected_is_not_on_screen(self):
+        # The service keeps the action in the scene and answers that no
+        # browser is connected (module_reply makes it `accepted`, with no
+        # `held`). The line used to read "On screen." (#290).
+        reply = {"delivered": False, "reason": "no browser connected"}
+        self.host(reply=lambda request: {"status": "accepted", "reason": "no browser connected", "result": reply})
+        result, line = self.run_call(switchboard.display, op="clear")
+        self.assertTrue(result.accepted)
+        self.assertNotIn("On screen", line)
+        self.assertIn("no screen is connected", line.lower())
+        self.assertIn("Do not say it's on screen", line)
+
     def test_display_describes_held_and_shown_results(self):
         mode = {"held": True}
         self.host(
