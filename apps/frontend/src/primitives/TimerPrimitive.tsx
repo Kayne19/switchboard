@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { Timer, TimerData } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
 import { usePageClock } from '../hooks/usePageClock';
@@ -139,12 +139,17 @@ export function TimerPrimitive({ data, marked, slot = 'primary' }: { data: Timer
 // The height an element is laid out at, to the layout's own fraction of a
 // pixel (offsetHeight rounds it). A ResizeObserver reads layout sizes, which
 // a transform leaves alone: a cell scaled while the aux row settles is
-// measured at rest.
+// measured at rest. So does the used height the computed style resolves to,
+// which is read first, in a layout effect, so the first frame painted asks
+// for the rows' height and not for none: the field asked 0 px until the
+// observer's first report, then grew, and the timers were laid out for the
+// smaller box on a frame that showed the larger (#333).
 function useLaidOutHeight<T extends Element>(ref: RefObject<T | null>): number {
   const [height, setHeight] = useState(0);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = ref.current;
     if (!element) return;
+    setHeight(parseFloat(getComputedStyle(element).height) || 0);
     const observer = new ResizeObserver(([entry]) => setHeight(entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height));
     observer.observe(element);
     return () => observer.disconnect();
