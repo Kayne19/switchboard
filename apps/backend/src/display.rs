@@ -371,7 +371,6 @@ pub(crate) struct DisplayGateState {
     /// (`module_calls.rs`), Jev's routing summary (`turns.rs`) and the floor
     /// gate (`speech.rs`) read it here.
     pub(crate) screen_state: Value,
-    pub(crate) active_epoch: Option<u64>,
     /// The leg the projection was last reset for; `None` until one is
     /// announced.
     pub(crate) scene_leg: Option<SceneLeg>,

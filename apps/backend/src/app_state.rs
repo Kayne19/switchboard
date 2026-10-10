@@ -345,7 +345,6 @@ impl AppState {
                 "stale": false,
                 "generation": 0,
             }),
-            active_epoch: None,
             scene_leg: None,
             watermark: 0,
         }));

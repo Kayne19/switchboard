@@ -24,8 +24,6 @@ impl AppState {
     pub async fn register_connection(&self) -> (DeliveryConnection, Vec<Value>, u64) {
         let mut gate = self.0.display_gate.lock().await;
         let connection = self.0.delivery.register();
-        let epoch = connection.epoch;
-        gate.active_epoch = Some(epoch);
         gate.screen_state["stale"] = json!(true);
         self.0.floor.set_page_connected(true).await;
         self.start_debug_call();
@@ -36,13 +34,16 @@ impl AppState {
 
     pub async fn retire_connection(&self, epoch: u64) {
         {
+            // Under the gate, as in `register_connection`: the screen the
+            // agent was told about is the active tab's, and it is stale once
+            // that tab has gone, until the tab taking over reports its own.
             let mut gate = self.0.display_gate.lock().await;
-            if gate.active_epoch == Some(epoch) || gate.active_epoch.is_none() {
-                gate.active_epoch = None;
+            let active = self.0.delivery.active_epoch();
+            if active == Some(epoch) || active.is_none() {
                 gate.screen_state["stale"] = json!(true);
             }
+            self.0.delivery.retire(epoch);
         }
-        self.0.delivery.retire(epoch);
         let connected = self.0.delivery.connected();
         self.0.floor.set_page_connected(connected).await;
         if !connected {

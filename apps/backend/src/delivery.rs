@@ -42,8 +42,18 @@ pub(crate) const DELIVERY_QUEUE: usize = 256;
 pub(crate) struct DeliveryState {
     next_epoch: Arc<AtomicU64>,
     next_sequence: Arc<AtomicU64>,
-    active_epoch: Arc<AtomicU64>,
-    connections: Arc<std::sync::Mutex<HashMap<u64, Peer>>>,
+    connections: Arc<std::sync::Mutex<Connections>>,
+}
+
+/// The open connections and which of them is active: the one whose screen
+/// reports count. Two tabs are two connections; the newest is active. The
+/// active one lives beside the table and changes only under its lock, in
+/// `register` and `retire`, so a retirement promotes from the table as it
+/// stands.
+#[derive(Default)]
+struct Connections {
+    peers: HashMap<u64, Peer>,
+    active: Option<u64>,
 }
 
 /// A registered connection as the table holds it. Dropping it closes the
@@ -73,8 +83,7 @@ impl DeliveryState {
         Self {
             next_epoch: Arc::new(AtomicU64::new(1)),
             next_sequence: Arc::new(AtomicU64::new(0)),
-            active_epoch: Arc::new(AtomicU64::new(0)),
-            connections: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            connections: Arc::new(std::sync::Mutex::new(Connections::default())),
         }
     }
 
@@ -82,7 +91,7 @@ impl DeliveryState {
     /// callback, so a panic cannot leave it half-updated; like every other
     /// lock in the service, a poisoned one is recovered rather than allowed to
     /// take every later delivery down with it.
-    fn connections(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Peer>> {
+    fn connections(&self) -> std::sync::MutexGuard<'_, Connections> {
         self.connections
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -90,16 +99,18 @@ impl DeliveryState {
 
     pub(crate) fn register(&self) -> DeliveryConnection {
         let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed);
-        self.active_epoch.store(epoch, Ordering::Relaxed);
         let (sender, receiver) = mpsc::channel(DELIVERY_QUEUE);
         let (dropped_sender, dropped) = oneshot::channel();
-        self.connections().insert(
+        let mut connections = self.connections();
+        connections.peers.insert(
             epoch,
             Peer {
                 sender,
                 _dropped: dropped_sender,
             },
         );
+        connections.active = Some(epoch);
+        drop(connections);
         DeliveryConnection {
             epoch,
             receiver,
@@ -107,20 +118,19 @@ impl DeliveryState {
         }
     }
 
+    /// Lets `epoch` go. When it was the active connection, the newest one
+    /// still open takes over (none when it was the last): two tabs are two
+    /// connections, and closing the newer must not leave the other unheard.
     pub(crate) fn retire(&self, epoch: u64) {
-        self.connections().remove(&epoch);
-        let _ = self
-            .active_epoch
-            .compare_exchange(epoch, 0, Ordering::Relaxed, Ordering::Relaxed);
+        let mut connections = self.connections();
+        connections.peers.remove(&epoch);
+        if connections.active == Some(epoch) {
+            connections.active = connections.peers.keys().max().copied();
+        }
     }
 
     pub(crate) fn active_epoch(&self) -> Option<u64> {
-        let ep = self.active_epoch.load(Ordering::Relaxed);
-        if ep == 0 {
-            None
-        } else {
-            Some(ep)
-        }
+        self.connections().active
     }
 
     /// Queues `event` for every connection. A connection whose queue is full
@@ -134,7 +144,7 @@ impl DeliveryState {
         let mut lagging = Vec::new();
         let mut gone = Vec::new();
         let connections = self.connections();
-        for (&epoch, peer) in connections.iter() {
+        for (&epoch, peer) in connections.peers.iter() {
             match peer.sender.try_send(DeliveryFrame::Event {
                 sequence,
                 event: event.clone(),
@@ -148,7 +158,7 @@ impl DeliveryState {
         if !lagging.is_empty() || !gone.is_empty() {
             let mut connections = self.connections();
             for &epoch in lagging.iter().chain(&gone) {
-                connections.remove(&epoch);
+                connections.peers.remove(&epoch);
             }
         }
         for connection in lagging {
@@ -170,7 +180,7 @@ impl DeliveryState {
     }
 
     pub(crate) fn send(&self, epoch: u64, message: Message) -> bool {
-        self.connections().get(&epoch).is_some_and(|peer| {
+        self.connections().peers.get(&epoch).is_some_and(|peer| {
             peer.sender
                 .try_send(DeliveryFrame::Message(message))
                 .is_ok()
@@ -178,7 +188,7 @@ impl DeliveryState {
     }
 
     pub(crate) fn connected(&self) -> bool {
-        !self.connections().is_empty()
+        !self.connections().peers.is_empty()
     }
 }
 
