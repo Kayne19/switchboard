@@ -219,7 +219,9 @@ export class SessionManager {
 		// command can land between the attach and its result.
 		const letGo = (handle: string, previous: Tracked | undefined) => previous !== undefined && this.#tracked.get(handle) !== previous;
 		const gone = (handle: string) => {
-			if (this.#tracked.delete(handle)) this.#emit(handle, { kind: "session_closed", reason: "gone" });
+			const t = this.#tracked.get(handle);
+			// The state file is written once, when the resync ends.
+			if (t) this.#untrack(t, "gone", { writeState: false });
 			closed.push(handle);
 		};
 		for (const rec of recorded.values()) {
@@ -236,7 +238,7 @@ export class SessionManager {
 				continue;
 			}
 			if (letGo(rec.handle, previous)) continue;
-			const t = this.#tracked.get(rec.handle) ?? this.#untracked(rec);
+			const t = this.#tracked.get(rec.handle) ?? this.#newRecord(rec);
 			t.last = snapshot;
 			this.#tracked.set(rec.handle, t);
 			// A busy session rebuilt from a snapshot has no reliable cause. Keep
@@ -261,7 +263,7 @@ export class SessionManager {
 					gone(rec.handle);
 					continue;
 				}
-				if (!this.#tracked.has(rec.handle)) this.#tracked.set(rec.handle, this.#untracked(rec));
+				if (!this.#tracked.has(rec.handle)) this.#tracked.set(rec.handle, this.#newRecord(rec));
 				failed.push({ session: rec.handle, error });
 			}
 		}
@@ -269,8 +271,8 @@ export class SessionManager {
 		return { live: kept, closed, failed };
 	}
 
-	/** A recorded session this process has not tracked yet, with no turn open. */
-	#untracked(rec: StateFile["sessions"][number]): Tracked {
+	/** The record of a session this process has not tracked yet: idle, off any call, no inputs sent. */
+	#newRecord(rec: StateFile["sessions"][number]): Tracked {
 		return {
 			handle: rec.handle,
 			sessionId: rec.session_id,
@@ -449,20 +451,15 @@ export class SessionManager {
 
 	async #adopt(session: DaemonSession, project: string, cwd: string, provenance: Provenance, attached?: DaemonSession): Promise<Record<string, unknown>> {
 		const snapshot = attached ?? (await this.#port.attach(session.handle));
-		const t: Tracked = {
+		const t = this.#newRecord({
 			handle: session.handle,
-			sessionId: session.sessionId || snapshot.sessionId,
+			session_id: session.sessionId || snapshot.sessionId,
 			name: session.name ?? snapshot.name,
 			project,
 			cwd: session.cwd || cwd,
 			provenance,
-			turn: null,
-			inputs: 0,
-			pending: 0,
-			call: null,
-			last: { ...session, lastText: snapshot.lastText ?? null },
-			killing: false,
-		};
+		});
+		t.last = { ...session, lastText: snapshot.lastText ?? null };
 		if (t.name) this.#usedNames.add(t.name);
 		this.#tracked.set(t.handle, t);
 		this.#writeState();
@@ -565,11 +562,16 @@ export class SessionManager {
 		return { detached: true };
 	}
 
-	#untrack(t: Tracked, reason: string): void {
+	/**
+	 * Stop tracking `t`: its turn and its call end with it, and the service
+	 * hears `session_closed` with `reason`. A resync, which rewrites the state
+	 * file once at its end, passes `writeState: false`.
+	 */
+	#untrack(t: Tracked, reason: string, { writeState = true }: { writeState?: boolean } = {}): void {
 		this.#tracked.delete(t.handle);
 		this.#turnStep(t, { kind: "untracked" });
 		t.call = null;
-		this.#writeState();
+		if (writeState) this.#writeState();
 		this.#emit(t.handle, { kind: "session_closed", reason });
 	}
 
