@@ -165,7 +165,8 @@ async fn display_projection_snapshot_watermark() {
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"auto","has_visual":true,
-               "visual_kind":"metric","applied_seq":sequence})
+               "visual_kind":"metric","applied_seq":sequence,
+               "generation":state.0.coordinator.generation()})
         .to_string(),
     )
     .await
@@ -657,6 +658,57 @@ async fn a_clip_header_without_a_generation_is_refused_and_its_audio_is_not_take
     );
     assert_still_answering(&mut browser, "after-clip-without-generation").await;
     assert!(state.0.clips.accepted_is_empty().await);
+}
+
+/// A `screen_state` report confirms display seqs and replaces the screen the
+/// agent's `view` reads. One without a generation is ignored: it is never
+/// taken as a report on the call that is current when it arrives, which a
+/// page that has not seen a transfer would otherwise confirm.
+#[tokio::test]
+async fn a_screen_state_report_without_a_generation_is_ignored() {
+    let state = state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    state.0.coordinator.begin_rescue("test rescue");
+    let screen_before = state.0.display_gate.lock().await.screen_state.clone();
+
+    handle_text_frame(
+        &state,
+        connection.epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"visual","has_visual":true,
+               "title":"Old leg chart","applied_seq":7})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    let frames = queued_frames(&mut connection);
+    assert!(
+        !types_of(&frames).contains(&"screen_state_ack"),
+        "a report without a generation is not acknowledged: {frames:?}"
+    );
+    assert_eq!(state.0.display_confirm.borrow().watermark, None);
+    assert_eq!(
+        state.0.display_gate.lock().await.screen_state,
+        screen_before
+    );
+
+    // The same report stamped with the current generation is taken.
+    let generation = state.0.coordinator.generation();
+    handle_text_frame(
+        &state,
+        connection.epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"visual","has_visual":true,
+               "title":"Old leg chart","applied_seq":7,"generation":generation})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    assert!(types_of(&queued_frames(&mut connection)).contains(&"screen_state_ack"));
+    assert_eq!(state.0.display_confirm.borrow().watermark, Some(7));
 }
 
 #[tokio::test]

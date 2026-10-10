@@ -168,11 +168,15 @@ The browser reports the state it actually rendered over the existing WebSocket:
   "has_visual": true,
   "visual_kind": "diff",
   "title": "Authentication changes",
-  "stale": false
+  "stale": false,
+  "generation": 3
 }
 ```
 
-The backend stores the latest report. The agent's `view` tool has two forms:
+The backend stores the latest report. A report carries the leg generation the
+page rendered under; one without it is ignored, and one from another
+generation is dropped, so a page that has not seen a transfer cannot describe
+the new leg's screen. The agent's `view` tool has two forms:
 
 - `view({ target, reason })` requests a composition change.
 - `view({})` inspects the current composition, visual type/title, stale status,
