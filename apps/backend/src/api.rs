@@ -71,11 +71,53 @@ async fn healthz(State(state): State<AppState>) -> impl IntoResponse {
 /// A browser names the sending page in `Origin` on both; a request from the
 /// page itself, or from a client that is not a browser (no `Origin`: curl, a
 /// host agent), passes.
+///
+/// That alone trusts `Host`, and after a DNS rebind a page on another site
+/// names its own host in both `Origin` and `Host`, so the two agree (#229).
+/// So the request's `Host` must also be a name public DNS cannot hand out
+/// (`local_host`); a rebinding page's request, with or without `Origin`, gets
+/// the same 403.
 pub(crate) async fn refuse_cross_origin(request: axum::extract::Request, next: Next) -> Response {
-    if !same_origin(request.headers()) {
+    if !local_host(request.headers()) || !same_origin(request.headers()) {
         return StatusCode::FORBIDDEN.into_response();
     }
     next.run(request).await
+}
+
+/// Names under these suffixes are never delegated by public DNS: `home.arpa`
+/// (RFC 8375, the page's own `switchboard.home.arpa`), `local` (mDNS, RFC
+/// 6762), `localhost` (RFC 6761), and `internal` (reserved by ICANN for
+/// private use). Only the local network can answer for them.
+const LOCAL_SUFFIXES: [&str; 4] = ["home.arpa", "local", "localhost", "internal"];
+
+/// True when the request names no `Host` (not a browser), or its `Host` is
+/// one an attacker's public DNS cannot point at this service: an IP literal,
+/// a single-label name (`localhost`, `damocles`), or a name under a
+/// `LOCAL_SUFFIXES` suffix. A browser always sends `Host`.
+fn local_host(headers: &HeaderMap) -> bool {
+    let Some(host) = headers.get(header::HOST) else {
+        return true;
+    };
+    let Ok(host) = host.to_str() else {
+        return false;
+    };
+    if let Some(bracketed) = host.strip_prefix('[') {
+        // An IPv6 literal, `[::1]` or `[::1]:8766`.
+        return bracketed
+            .split_once(']')
+            .is_some_and(|(address, _)| address.parse::<std::net::Ipv6Addr>().is_ok());
+    }
+    let name = host.rsplit_once(':').map_or(host, |(name, _)| name);
+    let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
+    if name.parse::<std::net::Ipv4Addr>().is_ok() || !name.contains('.') {
+        return !name.is_empty();
+    }
+    LOCAL_SUFFIXES.iter().any(|suffix| {
+        name == *suffix
+            || name
+                .strip_suffix(suffix)
+                .is_some_and(|rest| rest.ends_with('.'))
+    })
 }
 
 /// True when the request has no `Origin`, or its `Origin` names the same

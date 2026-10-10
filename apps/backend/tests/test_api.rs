@@ -372,3 +372,82 @@ fn an_origin_matches_its_host_with_or_without_the_default_port() {
         "http://damocles".parse().unwrap()
     )])));
 }
+
+/// What `router` answers a `GET` for `path` sent to `host`, from a page at
+/// `origin` when there is one.
+async fn status_for_host(
+    router: axum::Router,
+    path: &str,
+    host: &str,
+    origin: Option<&str>,
+) -> StatusCode {
+    let mut request = Request::builder().uri(path).header("host", host);
+    if let Some(origin) = origin {
+        request = request.header("origin", origin);
+    }
+    router
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn a_name_public_dns_could_rebind_is_refused_on_both_listeners() {
+    // #229: after a DNS rebind, a page at http://evil.example:8766 reaches
+    // the service with Host and Origin both naming evil.example, so they
+    // agree. A same-origin GET carries no Origin at all. The Host has to be
+    // a name public DNS cannot answer for.
+    let state = state();
+    for (router, path) in [
+        (state.clone().router(None), "/healthz"),
+        (state.debug_router(), "/"),
+    ] {
+        for host in [
+            "evil.example:8766",
+            "evil.example",
+            "evil.example.",
+            "switchboard.home.arpa.evil.example",
+            "192.168.1.217.nip.io:8765",
+            "home.arpa.evil.example",
+        ] {
+            let origin = format!("http://{host}");
+            assert_eq!(
+                status_for_host(router.clone(), path, host, Some(&origin)).await,
+                StatusCode::FORBIDDEN,
+                "{host} from {origin}"
+            );
+            assert_eq!(
+                status_for_host(router.clone(), path, host, None).await,
+                StatusCode::FORBIDDEN,
+                "{host} with no Origin"
+            );
+        }
+        for host in [
+            "switchboard.home.arpa",
+            "SWITCHBOARD.HOME.ARPA",
+            "switchboard.home.arpa.",
+            "192.168.1.217:8765",
+            "127.0.0.1",
+            "[::1]:8766",
+            "localhost:8765",
+            "damocles",
+            "damocles:8766",
+            "damocles.local",
+            "damocles.internal",
+            "debug.localhost:8766",
+        ] {
+            let origin = format!("https://{host}");
+            assert_eq!(
+                status_for_host(router.clone(), path, host, Some(&origin)).await,
+                StatusCode::OK,
+                "{host} from {origin}"
+            );
+            assert_eq!(
+                status_for_host(router.clone(), path, host, None).await,
+                StatusCode::OK,
+                "{host} with no Origin"
+            );
+        }
+    }
+}
