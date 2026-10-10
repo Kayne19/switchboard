@@ -89,6 +89,10 @@ struct SessionInner {
     stdout: Mutex<BufReader<tokio::process::ChildStdout>>,
     stderr_tail: Arc<StdMutex<Vec<String>>>,
     busy: AtomicBool,
+    /// Set when a prompt was cancelled before its turn settled. Nothing ties
+    /// an event to the prompt that caused it, so the rest of that turn would
+    /// be read as the next prompt's answer: the process is not reused.
+    abandoned: AtomicBool,
     turn_lock: Mutex<()>,
     label: String,
     leg: String,
@@ -108,6 +112,36 @@ struct SessionInner {
 #[derive(Clone)]
 pub struct PiSession {
     inner: Arc<SessionInner>,
+}
+
+/// Marks a prompt as out on the process, and ends it however the prompt
+/// ends. Settled, it clears `busy`. Dropped first (a timeout or an aborted
+/// task cancelled the prompt), it also abandons the process and closes it,
+/// so the next prompt goes to a fresh one and never reads this turn's rest.
+struct Prompting<'a> {
+    session: &'a PiSession,
+    settled: bool,
+}
+
+impl Prompting<'_> {
+    fn settle(mut self) {
+        self.settled = true;
+    }
+}
+
+impl Drop for Prompting<'_> {
+    fn drop(&mut self) {
+        let inner = &self.session.inner;
+        if !self.settled {
+            inner.abandoned.store(true, Ordering::Release);
+            tracing::warn!(label = %inner.label, "a prompt was cancelled mid-turn; dropping the leg");
+            let session = self.session.clone();
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move { session.close().await });
+            }
+        }
+        inner.busy.store(false, Ordering::Release);
+    }
 }
 
 impl PiSession {
@@ -174,6 +208,7 @@ impl PiSession {
             stdout: Mutex::new(BufReader::new(stdout)),
             stderr_tail,
             busy: AtomicBool::new(false),
+            abandoned: AtomicBool::new(false),
             turn_lock: Mutex::new(()),
             label,
             leg: leg.into(),
@@ -260,7 +295,12 @@ impl PiSession {
     pub fn same_session(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
+    /// True while the process runs and can take a prompt. A process whose
+    /// prompt was cancelled mid-turn is not: its owner restarts it.
     pub async fn alive(&self) -> bool {
+        if self.inner.abandoned.load(Ordering::Acquire) {
+            return false;
+        }
         let mut child = self.inner.child.lock().await;
         child
             .as_mut()
@@ -315,10 +355,18 @@ impl PiSession {
         if !self.alive().await {
             return Err(self.exited_error().await);
         }
+        // From the write until the turn settles, a dropped future leaves the
+        // process mid-turn.
+        let prompting = Prompting {
+            session: self,
+            settled: false,
+        };
         if let Err(error) = self
             .write(json!({"type":"prompt", "message":message}), false)
             .await
         {
+            // The prompt did not go out, so no turn is left running.
+            prompting.settle();
             // A process that stops reading has usually failed; its exit and
             // stderr say why, and the broken pipe is only the symptom.
             if self.settle_exit().await {
@@ -337,7 +385,7 @@ impl PiSession {
         });
         self.inner.busy.store(true, Ordering::Release);
         let result = self.collect(&turn_id).await;
-        self.inner.busy.store(false, Ordering::Release);
+        prompting.settle();
         result
     }
 
