@@ -5,7 +5,7 @@
 //! Both are started on first use and rebuilt after a failure.
 use crate::floor::FloorRewriteInput;
 use crate::pbx::{Switchboard, OPERATOR};
-use crate::pi_client::{local_argv, LegSession, PiSession, PiSessionError};
+use crate::pi_client::{local_argv, PiSession, PiSessionError};
 use crate::reply::Reply;
 use crate::router::{utility_decision, Decision, UtilityDecision};
 use serde_json::{json, Value};
@@ -270,13 +270,7 @@ impl Switchboard {
         if let Some(s) = self.operator.take() {
             s.close().await;
         }
-        // Only the operator's own hold on the guard goes with it; a project
-        // on the line keeps the guard while the operator answered for it.
-        let mut guard = self.active_session.lock().await;
-        if matches!(*guard, Some(LegSession::Operator(_))) {
-            *guard = None;
-        }
-        drop(guard);
+        self.release_operator_guard().await;
         tracing::error!(%error, "operator unavailable after a failed turn");
         self.routing_unavailable()
     }
