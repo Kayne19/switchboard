@@ -28,7 +28,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{broadcast, watch},
+    sync::{broadcast, watch, Semaphore},
     time::{timeout, Duration, Instant},
 };
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
@@ -46,6 +46,8 @@ struct Site {
     bus: DebugBus,
     agents: Arc<dyn Fn() -> Vec<AgentState> + Send + Sync>,
     shutdown: watch::Receiver<bool>,
+    /// One permit per open socket (`MAX_CLIENTS`).
+    clients: Arc<Semaphore>,
 }
 
 /// The debug listener's whole router: the embedded page and the read-only
@@ -60,6 +62,7 @@ pub(crate) fn router(
         bus,
         agents: Arc::new(agents),
         shutdown,
+        clients: Arc::new(Semaphore::new(MAX_CLIENTS)),
     })
 }
 
@@ -117,8 +120,13 @@ const CLIP_MARKER: &str = "…[clipped]";
 /// A debug client that does not take a frame within this time is dropped; it
 /// can reconnect and get a fresh snapshot.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
-/// The largest frame the debug socket accepts; it reads none.
+/// The largest frame the debug socket accepts; it reads none. It bounds a
+/// frame as well as a message: the frame bound is checked on the header,
+/// before the payload is buffered, and the message bound only after.
 const MAX_INCOMING_BYTES: usize = 4096;
+/// The most debug sockets open at once. Each one costs a full snapshot when
+/// it opens and when it resyncs; a socket past this gets a 503.
+const MAX_CLIENTS: usize = 8;
 /// A client that falls behind twice within this time is closed instead of
 /// resynced again: each resync is a full snapshot.
 const RESYNC_INTERVAL: Duration = Duration::from_secs(10);
@@ -1196,10 +1204,17 @@ async fn ws(State(site): State<Site>, headers: HeaderMap, upgrade: WebSocketUpgr
     if !same_origin(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let Ok(client) = site.clients.clone().try_acquire_owned() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
     // The page sends nothing; anything it sends is ignored.
     upgrade
+        .max_frame_size(MAX_INCOMING_BYTES)
         .max_message_size(MAX_INCOMING_BYTES)
-        .on_upgrade(move |socket| serve_socket(socket, site))
+        .on_upgrade(move |socket| async move {
+            serve_socket(socket, site).await;
+            drop(client);
+        })
 }
 
 /// True when the request has no `Origin`, or its `Origin` names the same
