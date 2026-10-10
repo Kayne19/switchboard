@@ -593,6 +593,104 @@ mod wire {
         }
     }
 
+    /// A listener serving the debug router on a loopback port.
+    async fn serve_debug() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let app = router(DebugBus::new(), Vec::new, shutdown_rx);
+        let server = tokio::spawn(async move {
+            let _shutdown = shutdown;
+            let _ = axum::serve(listener, app).await;
+        });
+        (address, server)
+    }
+
+    #[tokio::test]
+    async fn a_frame_over_the_incoming_bound_is_refused_from_its_header() {
+        // #231: the frame bound is checked on a frame's header, before its
+        // payload is buffered; the message bound only after. A client that
+        // announces a large frame is closed on the header alone.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (address, server) = serve_debug().await;
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET /ws HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\n\
+                     Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                     Sec-WebSocket-Version: 13\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut byte = [0u8; 1];
+            stream.read_exact(&mut byte).await.unwrap();
+            head.push(byte[0]);
+        }
+        assert!(
+            head.starts_with(b"HTTP/1.1 101"),
+            "{}",
+            String::from_utf8_lossy(&head)
+        );
+        // A masked text frame that announces 1 MiB, and none of its payload.
+        let mut header = vec![0x81, 0x80 | 127];
+        header.extend_from_slice(&(1u64 << 20).to_be_bytes());
+        header.extend_from_slice(&[1, 2, 3, 4]);
+        stream.write_all(&header).await.unwrap();
+        let closed = timeout(Duration::from_secs(1), async {
+            let mut buffer = [0u8; 4096];
+            loop {
+                match stream.read(&mut buffer).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await;
+        assert!(
+            closed.is_ok(),
+            "the listener waits for the announced payload"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn the_debug_listener_serves_a_bounded_number_of_sockets() {
+        let (address, server) = serve_debug().await;
+        let url = format!("ws://{address}/ws");
+        let mut sockets = Vec::new();
+        for _ in 0..MAX_CLIENTS {
+            let (mut socket, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+            assert_eq!(next_json(&mut socket).await["type"], "snapshot");
+            sockets.push(socket);
+        }
+        let refused = |result| match result {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                response.status().as_u16()
+            }
+            Ok(_) => 101,
+            Err(error) => panic!("upgrade failed: {error}"),
+        };
+        assert_eq!(refused(tokio_tungstenite::connect_async(&url).await), 503);
+        // A socket that closes frees its place.
+        sockets.pop().unwrap().close(None).await.unwrap();
+        let reopened = timeout(Duration::from_secs(5), async {
+            loop {
+                if refused(tokio_tungstenite::connect_async(&url).await) == 101 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(reopened.is_ok(), "a freed place is not reused");
+        server.abort();
+    }
+
     /// The status the debug socket answers an upgrade from `origin` with.
     async fn upgrade_status(origin: Option<&str>) -> u16 {
         use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error};
