@@ -43,6 +43,7 @@ npm run typecheck        # TypeScript only: the app and its unit tests, the Play
 npm test                 # every CI gate but Rust and the static diff: build, skill, node, syntax, unit, design lock, host agent, no-ssh, hygiene
 npm run test:visual      # browser specs (Playwright): the pixel goldens and the geometry checks, on their own server (port 4183, or PLAYWRIGHT_PORT)
 npm run test:browser     # the browser specs CI runs: all but the pixel goldens (@golden)
+npm run test:integration # the production build's specs (Playwright), on their own server (port 4184, or PLAYWRIGHT_INTEGRATION_PORT)
 ```
 
 ## Controls
