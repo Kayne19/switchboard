@@ -242,12 +242,7 @@ impl Floor {
                 self.drop_front(&entry.request).await;
                 continue;
             }
-            // Listening before the release, so a page that comes back while
-            // it runs is not missed.
-            let changed = self.changed.notified();
-            tokio::pin!(changed);
-            changed.as_mut().enable();
-            let outcome = (hooks.release)(entry.request.clone(), rewritten).await;
+            let outcome = self.release(&hooks, &entry.request, rewritten).await;
             match outcome {
                 ReleaseOutcome::Played | ReleaseOutcome::Drop => {
                     let how = match outcome {
@@ -258,12 +253,37 @@ impl Floor {
                     self.trace_released(&entry.request, how);
                     self.drop_front(&entry.request).await;
                 }
-                ReleaseOutcome::Retry => {
-                    // A page disconnect wakes the queue. A failed audio
-                    // reservation tries again after `RETRY_AFTER` at most,
-                    // and never spins.
-                    let _ = tokio::time::timeout(RETRY_AFTER, changed).await;
-                }
+                // The page went, or the floor changed while the release
+                // waited for its audio: `next_ready` waits for the page and
+                // asks the gate again, as the moment has changed.
+                ReleaseOutcome::Retry => {}
+            }
+        }
+    }
+
+    /// Releases `request`. A release that could not get its audio is tried
+    /// again every `RETRY_AFTER`, with the same words, while the page is there
+    /// and nothing on the floor changes: audio slots free up as clips finish,
+    /// and nothing tells the floor when. It never asks Jev or the utility
+    /// again on a timer. A floor event or a lost page ends it with `Retry`.
+    async fn release(
+        &self,
+        hooks: &FloorHooks,
+        request: &FloorRequest,
+        rewritten: String,
+    ) -> ReleaseOutcome {
+        loop {
+            // Listening before the release, so a floor event while it runs
+            // is not missed.
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let outcome = (hooks.release)(request.clone(), rewritten.clone()).await;
+            if outcome != ReleaseOutcome::Retry || !(hooks.connected)() {
+                return outcome;
+            }
+            if tokio::time::timeout(RETRY_AFTER, changed).await.is_ok() {
+                return outcome;
             }
         }
     }

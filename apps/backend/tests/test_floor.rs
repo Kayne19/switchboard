@@ -164,12 +164,8 @@ async fn a_release_that_could_not_get_audio_tries_again_unprompted() {
     let live = Arc::new(AtomicBool::new(true));
     floor.set_page_connected(true).await;
     floor.enqueue(request(1)).await;
-    let mut h = hooks(
-        connected,
-        live,
-        Arc::new(AtomicUsize::new(0)),
-        mpsc::unbounded_channel().0,
-    );
+    let gates = Arc::new(AtomicUsize::new(0));
+    let mut h = hooks(connected, live, gates.clone(), mpsc::unbounded_channel().0);
     // The first release finds every audio slot taken; nothing tells the
     // floor when one frees up.
     let (attempts, mut attempted) = mpsc::unbounded_channel();
@@ -194,6 +190,9 @@ async fn a_release_that_could_not_get_audio_tries_again_unprompted() {
     tokio::time::timeout(Duration::from_secs(3), attempted.recv())
         .await
         .expect("the release is tried again without a floor event");
+    // The timer tries the release again, not the gate: nothing changed for
+    // Jev to judge, and a timer must not keep asking it.
+    assert_eq!(gates.load(Ordering::SeqCst), 1);
     worker.abort();
 }
 
