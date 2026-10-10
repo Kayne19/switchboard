@@ -43,6 +43,26 @@ export class CommandError extends Error {
 	}
 }
 
+/** The turn a tracked session has open. A session with none is idle. */
+interface OpenTurn {
+	/**
+	 * Stable while this host-agent process tracks one daemon turn. Null for a
+	 * turn rebuilt from a reconnect snapshot, which has no reliable cause or
+	 * authority: the service refuses its self-wake side effects.
+	 */
+	id: string | null;
+	cause: TurnCause;
+}
+
+/** What moves a tracked session's turn (`SessionManager.#turnStep`). */
+type TurnEvent =
+	/** An input was sent, an agent_start nobody caused arrived, or a resync found the session busy. */
+	| { kind: "open"; cause: TurnCause }
+	/** The wait_for_idle sent after input `mark` answered; `failure` is its error, if it failed. */
+	| { kind: "settled"; mark: number; failure: string | null }
+	/** The session is no longer tracked. */
+	| { kind: "untracked" };
+
 interface Tracked {
 	handle: string;
 	sessionId: string;
@@ -50,14 +70,12 @@ interface Tracked {
 	project: string;
 	cwd: string;
 	provenance: Provenance;
-	turnOpen: boolean;
+	/** The open turn, or null when idle. Written only by `#turnStep`. */
+	turn: OpenTurn | null;
 	/** Inputs sent so far; a wait_for_idle settles only if none came after it. */
 	inputs: number;
 	/** Inputs in flight, so an agent_start they cause is not taken as autonomous. */
 	pending: number;
-	/** Stable while this host-agent process tracks one daemon turn. */
-	turnId: string | null;
-	turnCause: TurnCause | null;
 	call: CallState | null;
 	last: DaemonSession | null;
 	/** A kill of this host agent's own is in flight; it reports the close. */
@@ -170,7 +188,7 @@ export class SessionManager {
 	/** The tracked session whose persisted id is `sessionId` (the skill socket's key). */
 	bySessionId(sessionId: string): { handle: string; call: CallState | null; turnId: string | null; turnCause: TurnCause | null } | null {
 		for (const t of this.#tracked.values()) {
-			if (t.sessionId === sessionId) return { handle: t.handle, call: t.call, turnId: t.turnId, turnCause: t.turnCause };
+			if (t.sessionId === sessionId) return { handle: t.handle, call: t.call, turnId: t.turn?.id ?? null, turnCause: t.turn?.cause ?? null };
 		}
 		return null;
 	}
@@ -223,8 +241,8 @@ export class SessionManager {
 			this.#tracked.set(rec.handle, t);
 			// A busy session rebuilt from a snapshot has no reliable cause. Keep
 			// its module calls fail-closed until a fresh turn opens.
-			if (snapshot.busy && !t.turnOpen) this.#openTurn(t, "unknown");
-			if (t.turnOpen) this.#settle(t);
+			if (snapshot.busy) this.#turnStep(t, { kind: "open", cause: "unknown" });
+			if (t.turn) this.#settle(t);
 			kept.push(rec.handle);
 		}
 		const failed: { session: string; error: string }[] = [];
@@ -260,11 +278,9 @@ export class SessionManager {
 			project: rec.project,
 			cwd: rec.cwd,
 			provenance: rec.provenance,
-			turnOpen: false,
+			turn: null,
 			inputs: 0,
 			pending: 0,
-			turnId: null,
-			turnCause: null,
 			call: null,
 			last: null,
 			killing: false,
@@ -294,10 +310,10 @@ export class SessionManager {
 			project: t.project,
 			cwd: t.cwd,
 			provenance: t.provenance,
-			busy: t.turnOpen || (t.last?.busy ?? false),
-			turn_open: t.turnOpen,
-			turn_id: t.turnId,
-			cause: t.turnCause,
+			busy: t.turn !== null || (t.last?.busy ?? false),
+			turn_open: t.turn !== null,
+			turn_id: t.turn?.id ?? null,
+			cause: t.turn?.cause ?? null,
 			model: modelLabel(t.last),
 			thinking: t.last?.thinking ?? null,
 			call_mode: t.call?.mode ?? null,
@@ -440,11 +456,9 @@ export class SessionManager {
 			project,
 			cwd: session.cwd || cwd,
 			provenance,
-			turnOpen: false,
+			turn: null,
 			inputs: 0,
 			pending: 0,
-			turnId: null,
-			turnCause: null,
 			call: null,
 			last: { ...session, lastText: snapshot.lastText ?? null },
 			killing: false,
@@ -467,7 +481,7 @@ export class SessionManager {
 						session_id: s.sessionId,
 						name: s.name,
 						cwd: s.cwd,
-						busy: s.busy || (t?.turnOpen ?? false),
+						busy: s.busy || Boolean(t?.turn),
 						provenance: t?.provenance ?? null,
 						project: t?.project ?? null,
 						model: modelLabel(s),
@@ -485,7 +499,7 @@ export class SessionManager {
 
 	async prompt(handle: string, message: string): Promise<{ sent_as: string }> {
 		const t = this.#get(handle);
-		if (t.turnOpen) return this.input(handle, "follow_up", message);
+		if (t.turn) return this.input(handle, "follow_up", message);
 		try {
 			return await this.#send(t, "prompt", () => this.#port.prompt(handle, message));
 		} catch (error) {
@@ -507,7 +521,7 @@ export class SessionManager {
 		} finally {
 			t.pending--;
 		}
-		if (!t.turnOpen) this.#openTurn(t, "input");
+		this.#turnStep(t, { kind: "open", cause: "input" });
 		this.#settle(t);
 		return { sent_as: kind };
 	}
@@ -522,7 +536,7 @@ export class SessionManager {
 		} catch {
 			// ignored on purpose
 		}
-		if (t.turnOpen) this.#settle(t);
+		if (t.turn) this.#settle(t);
 		return { aborted: true };
 	}
 
@@ -553,7 +567,7 @@ export class SessionManager {
 
 	#untrack(t: Tracked, reason: string): void {
 		this.#tracked.delete(t.handle);
-		t.turnOpen = false;
+		this.#turnStep(t, { kind: "untracked" });
 		t.call = null;
 		this.#writeState();
 		this.#emit(t.handle, { kind: "session_closed", reason });
@@ -601,36 +615,47 @@ export class SessionManager {
 
 	// -- turns and events --------------------------------------------------
 
-	#openTurn(t: Tracked, cause: TurnCause): void {
-		t.turnOpen = true;
-		// A reconnect snapshot has no reliable cause or authority. Keep its
-		// turn id absent so the service can refuse self-wake side effects.
-		t.turnId = cause === "unknown" ? null : `turn-${randomBytes(8).toString("hex")}`;
-		t.turnCause = cause;
-		this.#emit(t.handle, { kind: "turn_start", cause, ...(t.turnId ? { turn_id: t.turnId } : {}) });
+	/**
+	 * The one writer of a tracked session's turn. Opening a turn announces it
+	 * with `turn_start`; settling it sends `turn_end`. A session let go ends
+	 * its turn without one: its `session_closed` stands for it. A
+	 * wait_for_idle answer carries the input mark it was sent after, and
+	 * settles the turn only if no input came after it and the session is
+	 * still this record.
+	 */
+	#turnStep(t: Tracked, event: TurnEvent): void {
+		switch (event.kind) {
+			case "open": {
+				if (t.turn) return;
+				// A reconnect snapshot has no reliable cause or authority. Keep its
+				// turn id absent so the service can refuse self-wake side effects.
+				const id = event.cause === "unknown" ? null : `turn-${randomBytes(8).toString("hex")}`;
+				t.turn = { id, cause: event.cause };
+				this.#emit(t.handle, { kind: "turn_start", cause: event.cause, ...(id ? { turn_id: id } : {}) });
+				return;
+			}
+			case "settled": {
+				if (this.#tracked.get(t.handle) !== t || t.inputs !== event.mark || !t.turn) return;
+				const { id } = t.turn;
+				t.turn = null;
+				if (event.failure === null && t.last) t.last = { ...t.last, busy: false };
+				this.#emit(t.handle, { kind: "turn_end", ...(id ? { turn_id: id } : {}), ...(event.failure === null ? {} : { error: event.failure }) });
+				return;
+			}
+			case "untracked":
+				t.turn = null;
+				return;
+			default:
+				event satisfies never;
+		}
 	}
 
 	/** Send wait_for_idle after the latest input; settle only if it is still the latest. */
 	#settle(t: Tracked): void {
 		const mark = ++t.inputs;
 		this.#port.waitForIdle(t.handle).then(
-			() => {
-				if (this.#tracked.get(t.handle) !== t || t.inputs !== mark || !t.turnOpen) return;
-				const turnId = t.turnId;
-				t.turnOpen = false;
-				t.turnId = null;
-				t.turnCause = null;
-				if (t.last) t.last = { ...t.last, busy: false };
-				this.#emit(t.handle, { kind: "turn_end", ...(turnId ? { turn_id: turnId } : {}) });
-			},
-			(error: unknown) => {
-				if (this.#tracked.get(t.handle) !== t || t.inputs !== mark || !t.turnOpen) return;
-				const turnId = t.turnId;
-				t.turnOpen = false;
-				t.turnId = null;
-				t.turnCause = null;
-				this.#emit(t.handle, { kind: "turn_end", ...(turnId ? { turn_id: turnId } : {}), error: error instanceof Error ? error.message : String(error) });
-			},
+			() => this.#turnStep(t, { kind: "settled", mark, failure: null }),
+			(error: unknown) => this.#turnStep(t, { kind: "settled", mark, failure: error instanceof Error ? error.message : String(error) }),
 		);
 	}
 
@@ -647,10 +672,10 @@ export class SessionManager {
 				if (!t.killing) this.#untrack(t, "gone");
 				return;
 			case "agent_start":
-				if (!t.turnOpen) {
-					this.#openTurn(t, t.pending > 0 ? "input" : "autonomous");
-					if (t.pending === 0) this.#settle(t);
-				}
+				// An agent_start inside an open turn is one more run of it.
+				if (t.turn) return;
+				this.#turnStep(t, { kind: "open", cause: t.pending > 0 ? "input" : "autonomous" });
+				if (t.pending === 0) this.#settle(t);
 				return;
 			// `args`, `result` and `turn_id` are optional additions for the
 			// debug page (docs/host-link.md, "Session events").
@@ -661,7 +686,7 @@ export class SessionManager {
 					tool: event.toolName ?? null,
 					call_id: event.toolCallId ?? null,
 					...(args !== undefined ? { args } : {}),
-					...(t.turnId ? { turn_id: t.turnId } : {}),
+					...(t.turn?.id ? { turn_id: t.turn.id } : {}),
 				});
 				return;
 			}
@@ -673,7 +698,7 @@ export class SessionManager {
 					call_id: event.toolCallId ?? null,
 					error: event.isError === true,
 					...(result !== undefined ? { result } : {}),
-					...(t.turnId ? { turn_id: t.turnId } : {}),
+					...(t.turn?.id ? { turn_id: t.turn.id } : {}),
 				});
 				return;
 			}
@@ -682,7 +707,7 @@ export class SessionManager {
 				if (message.role !== "assistant") return;
 				const text = textOf(message);
 				if (text) {
-					this.#emit(handle, { kind: "text", text, ...(t.turnId ? { turn_id: t.turnId } : {}) });
+					this.#emit(handle, { kind: "text", text, ...(t.turn?.id ? { turn_id: t.turn.id } : {}) });
 					if (t.last) t.last = { ...t.last, lastText: text };
 				}
 				if (message.stopReason === "error") this.#emit(handle, { kind: "error", message: String(message.errorMessage ?? "model error") });
