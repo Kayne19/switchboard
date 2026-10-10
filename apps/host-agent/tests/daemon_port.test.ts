@@ -12,8 +12,8 @@ const g = globalThis.__sbFakePrime;
 export class DaemonClient {
   constructor(socketPath) { this.socketPath = socketPath; this.listeners = []; g.log.push(["new", socketPath]); g.client = this; }
   get hello() { return g.hello; }
-  async connect() { g.log.push(["connect"]); }
-  async waitForHello() { return g.hello; }
+  async connect() { g.log.push(["connect"]); if (g.connectError) throw new Error(g.connectError); }
+  async waitForHello() { if (g.helloError) throw new Error(g.helloError); return g.hello; }
   onMessage(l) { this.listeners.push(l); return () => {}; }
   onClose(l) { this.closeListener = l; return () => {}; }
   async request(command, timeoutMs, options) {
@@ -33,6 +33,8 @@ interface FakeGlobals {
 	log: unknown[][];
 	hello: { protocol: { version: number }; appVersion: string };
 	unsupported: string[];
+	connectError?: string;
+	helloError?: string;
 	respond: (command: Record<string, unknown>) => { success: boolean; data?: unknown; error?: string };
 	client?: { listeners: ((m: unknown) => void)[] };
 }
@@ -96,4 +98,15 @@ test("adapter refuses a daemon speaking another protocol", async () => {
 	const port = new PrimeDaemonPort("/nonexistent/daemon.sock", pkg);
 	await assert.rejects(port.connect(), (e: unknown) => e instanceof DaemonProtocolError && e.version === 6);
 	assert.deepEqual(g.log.at(-1), ["close"]);
+});
+
+test("adapter closes the client when the dial or the hello fails, so a retry leaves no socket open", async () => {
+	for (const failure of ["connectError", "helloError"] as const) {
+		const pkg = fakePackage();
+		const g = globals(7, "0.9.5");
+		g[failure] = "timed out after 5000ms";
+		const port = new PrimeDaemonPort("/nonexistent/daemon.sock", pkg);
+		await assert.rejects(port.connect(), /timed out after 5000ms/);
+		assert.deepEqual(g.log.at(-1), ["close"], `${failure}: the client is closed`);
+	}
 });
