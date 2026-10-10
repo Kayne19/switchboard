@@ -318,6 +318,27 @@ describe("PushToTalk", () => {
     expect(activeAtResume).toBe(false);
   });
 
+  // A browser stops the recorder itself when its track ends: the microphone
+  // is unplugged, or another app takes the iPad's audio session (#262).
+  it("says the recording ended when the recorder stops by itself", async () => {
+    const h = harness();
+    const start = h.ptt.start();
+    h.resolveMedia(fakeStream());
+    await start;
+    expect(h.recording).toEqual([true]);
+    const recorder = FakeRecorder.latest!;
+    recorder.ondataavailable!({ data: new Blob(["words"]) });
+    recorder.state = "inactive";
+    recorder.onstop!();
+    expect(h.recording).toEqual([true, false]);
+    expect(h.ptt.isActive).toBe(false);
+    expect(h.outbox.length, "what was said before it stopped is sent").toBe(1);
+    expect(h.status).toEqual({
+      text: "Recording stopped: the microphone was taken away.",
+      error: true,
+    });
+  });
+
   // `navigator.mediaDevices` is undefined on a page that is not a secure
   // origin, which reached the caller as "Microphone unavailable (TypeError)".
   it("names https when the browser offers no microphone API", async () => {
