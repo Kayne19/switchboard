@@ -41,8 +41,24 @@ async fn call_summary_without_pbx_lock(
     let routing = &state.0.turns.routing;
     let live_desk_sessions =
         Switchboard::live_desk_sessions_from(routing.hosts(), routing.registry()).await;
-    let mut summary = routing.call_summary(entries, screen, utterance);
+    let (router, mut summary) =
+        call_summary_without_desk_sessions(state, entries, screen, utterance);
     summary.live_desk_sessions = live_desk_sessions;
+    (router, summary)
+}
+
+/// Jev's view of the call without the PBX lock and without asking the hosts
+/// for desk sessions: what the floor's good-moment gate weighs an update
+/// against. A foreground turn holds the PBX lock for its whole prompt, and
+/// that is when the caller waits on a quiet line (#245).
+pub(crate) fn call_summary_without_desk_sessions(
+    state: &AppState,
+    entries: &[crate::history::TranscriptEntry],
+    screen: Value,
+    utterance: impl Into<String>,
+) -> (crate::router::Router, CallSummary) {
+    let routing = &state.0.turns.routing;
+    let mut summary = routing.call_summary(entries, screen, utterance);
     summary.merge_live_agents(&live_agents(state));
     (routing.router(), summary)
 }
@@ -67,7 +83,7 @@ async fn prepare_takeover_lookup(
 
 /// Every agent the presentation side knows on this call, with its live
 /// state, waiting request and held display.
-pub(crate) fn live_agents(state: &AppState) -> Vec<crate::router::LiveAgent> {
+fn live_agents(state: &AppState) -> Vec<crate::router::LiveAgent> {
     state
         .0
         .projection
@@ -370,10 +386,9 @@ pub(crate) struct TurnState {
     receiver: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
     /// What routing reads about the call. Routing must never wait on the PBX
     /// lock: the turn worker holds it for a whole prompt, and an utterance
-    /// routed only after the prompt ends can no longer steer it. Read here
-    /// and by the floor's good-moment gate (`speech::spawn_floor_worker`),
-    /// which must not hold a background update for a foreground turn.
-    pub(crate) routing: RoutingView,
+    /// routed only after the prompt ends can no longer steer it. The floor's
+    /// good-moment gate reads it through `call_summary_without_desk_sessions`.
+    routing: RoutingView,
     /// Decisions made before a queued turn reaches the PBX lock. Keeping the
     /// decision with the clip prevents a second Jev request while preserving
     /// steering for a turn that was already active.

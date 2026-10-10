@@ -14,7 +14,7 @@ use crate::floor::{FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome};
 use crate::history::AGENT;
 use crate::pbx::Switchboard;
 use crate::protocol::ServerMessage;
-use crate::turns::{jev_response_event, live_agents};
+use crate::turns::{call_summary_without_desk_sessions, jev_response_event};
 use futures_util::StreamExt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -405,13 +405,8 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
                     .find(|entry| entry.role == crate::history::CALLER)
                     .map(|entry| entry.text.clone())
                     .unwrap_or_default();
-                // Without the PBX lock: the turn worker holds it for a whole
-                // prompt, and a foreground turn is when the caller waits on
-                // a quiet line (#245).
-                let routing = &state.0.turns.routing;
-                let router = routing.router();
-                let mut summary = routing.call_summary(&entries, screen, caller_last);
-                summary.merge_live_agents(&live_agents(&state));
+                let (router, mut summary) =
+                    call_summary_without_desk_sessions(&state, &entries, screen, caller_last);
                 summary.queued_update = Some(crate::router::QueuedUpdate {
                     from_agent: request.project.clone(),
                     message: request.message.clone(),
