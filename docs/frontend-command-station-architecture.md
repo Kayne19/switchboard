@@ -157,7 +157,10 @@ utterance: its turn to play comes, or it is dropped and will never play
 (`runtime/spokenLines.ts`). Queued lines wait their turn, stitched speech
 included. A line with no audio, such as the hangup notice, shows at once. A
 new leg that cuts the audio off shows the lines that were waiting. The
-transcript drawer takes every line as soon as its text arrives.
+transcript drawer takes every line as soon as its text arrives. It holds the
+last 200 lines and follows the newest one the same way the log does
+(`hooks/usePinnedScroll.ts`): scrolling up to reread unpins it, and scrolling
+back to the bottom pins it again (#267).
 
 ## Shared screen-state contract
 
@@ -167,11 +170,14 @@ The browser reports the state it actually rendered over the existing WebSocket:
 {
   "type": "screen_state",
   "view": "visual",
+  "pinned": false,
   "has_visual": true,
-  "visual_kind": "diff",
+  "visual_kind": "code",
+  "object_ids": ["auth-diff"],
   "title": "Authentication changes",
   "stale": false,
-  "generation": 3
+  "generation": 4,
+  "applied_seq": 17
 }
 ```
 
@@ -199,9 +205,9 @@ personal-assistant calendar, tasks, timer, weather and inbox (see
 Artifacts arrive during an agent turn as `display` calls from the
 `switchboard` skill module, which the host agent relays over the host link,
 and reach the page over the existing WebSocket, so they can appear while
-work is still in progress. Lifecycle
-generation changes mark the previous artifact stale rather than silently
-presenting it as current.
+work is still in progress. A generation change (a new leg, `epoch_reset`)
+deletes the previous leg's objects, so an earlier artifact is never
+presented as current.
 
 Structured payloads are rendered with client-side components; arbitrary agent
 HTML or scripts are not accepted. Structured diagrams and text are validated
@@ -240,9 +246,11 @@ The running client architecture:
 - `skills/switchboard/`: agent-facing `display` and `view` tools (the `switchboard` skill module)
 - `apps/backend/src/browser.rs`, `page_controls.rs`, `module_calls.rs`: the WebSocket, the page controls, and the handlers for the agent's module calls
 
-The compiled browser output in `static/` is committed. Do not introduce a UI
-framework, state library, shader stack, or fake instrumentation unless a real
-product need first exceeds the native DOM, CSS, Canvas, and WebSocket code.
+The compiled browser output in `static/` is committed. The page is React, with
+`motion` for layout animation and the reducer in `src/controller/` for its
+state. Do not add another UI framework, a state library, a shader stack, or
+fake instrumentation unless a real product need first exceeds what those and
+the native DOM, CSS, Canvas, and WebSocket code can do.
 
 ## Review checklist
 

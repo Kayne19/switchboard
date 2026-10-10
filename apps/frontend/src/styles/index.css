@@ -208,6 +208,21 @@ button {
   text-align: inherit;
   cursor: zoom-in;
 }
+/* The surface's own button (FocusableSurface): a tab stop with a name and
+   nothing drawn of it but the page's ring, over the surface. It stands out
+   of the surface's flow, over all of it, so focus brings the whole surface
+   and its ring into view as it did the surface itself; it takes no tap, so
+   a tap, and a screen reader's touch, reach what the surface holds. */
+.focusable-content__expand {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
 /* The page's focus ring (DESIGN_SYSTEM.md, "Focus ring"): every control the
    keyboard reaches draws one orange line, never the browser's own ring, and
    no box clips it. A control draws it a little off itself. */
@@ -260,13 +275,13 @@ button {
    own, a source's, would cover its outline); a calendar's paged days over
    their rims and the hours' own; a list's or a drawing's scroll over its
    rims and its pinned head, on the port or view it scrolls in. */
-.focusable-content:focus-visible,
+.focusable-content__expand:focus-visible,
 .calendar-pages:focus-visible,
 .list-viewport__scroll:focus-visible,
 .drawing-viewport__scroll:focus-visible {
   outline: none;
 }
-.focusable-content:focus-visible::after,
+.focusable-content:has(> .focusable-content__expand:focus-visible)::after,
 .calendar-pages:focus-visible::after,
 .list-viewport__port:has(> .list-viewport__scroll:focus-visible)::after,
 .drawing-viewport__view:has(> .drawing-viewport__scroll:focus-visible)::after {
@@ -4310,10 +4325,11 @@ button {
   display: grid;
   grid-template-rows: max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px));
 }
-.calendar-object > .focusable-content > *,
-.tasks-object > .focusable-content > *,
-.inbox-object > .focusable-content > *,
-.image-object > .focusable-content > * {
+/* What the surface holds, not its own button, which stands over all of it. */
+.calendar-object > .focusable-content > :not(.focusable-content__expand),
+.tasks-object > .focusable-content > :not(.focusable-content__expand),
+.inbox-object > .focusable-content > :not(.focusable-content__expand),
+.image-object > .focusable-content > :not(.focusable-content__expand) {
   grid-row: 2;
   min-height: 0;
 }
@@ -5182,10 +5198,14 @@ button {
   padding: 4cqh 4cqw;
   background: rgba(0, 0, 0, 0.965);
 }
+/* The focus box and everything in it are sized from the stage (cqw, cqh),
+   never from the viewport: Safari's vh is its large viewport, taller than
+   the stage while its toolbars show, and a box sized in it ran under them
+   (#271; scripts/check_hygiene.mjs refuses vh and vw here). */
 .focus-layer__content {
   position: relative;
-  width: min(92vw, 1500px);
-  height: min(88vh, 920px);
+  width: min(92cqw, 1500px);
+  height: min(88cqh, 920px);
   min-width: 0;
   min-height: 0;
   background: #000;
@@ -5194,12 +5214,12 @@ button {
 .focus-layer__content--chart {
   height: auto;
   aspect-ratio: 2 / 1;
-  max-height: 82vh;
+  max-height: 82cqh;
 }
 .focus-layer__content--note,
 .focus-layer__content--metric,
 .focus-layer__content--progress {
-  width: min(72vw, 900px);
+  width: min(72cqw, 900px);
   height: auto;
   min-height: 240px;
   padding: 7cqh 5cqw 5cqh;
@@ -5219,6 +5239,21 @@ button {
   background: transparent;
   color: inherit;
   cursor: pointer;
+}
+/* RETURN is the way out of focus and of the history, and on a touch screen,
+   with no Esc key, the only one but a tap on the focus layer's thin margin.
+   Its words are a micro line, 12-15px tall: it takes a tap 44px tall round
+   them, and 12px past each end, drawn nowhere, so the words and the ring
+   stay where they were (#276). */
+.focus-layer__return,
+.transcript__return {
+  position: relative;
+}
+.focus-layer__return::before,
+.transcript__return::before {
+  content: "";
+  position: absolute;
+  inset: calc(50% - 22px) -12px;
 }
 /* A primitive fills the focus panel as it fills any box; timers, a
    forecast, a figure and a calendar keep a margin inside it (a to-do
@@ -5261,7 +5296,7 @@ button {
 .focus-layer__content--note .annotation-card {
   height: auto;
   min-height: 220px;
-  max-height: 76vh;
+  max-height: 76cqh;
   padding: 3cqh 0;
   overflow: visible;
 }
@@ -5275,8 +5310,8 @@ button {
    its card rather than push the box, and RETURN with it, off the screen. */
 .focus-layer__content--metric.focus-layer__content--noted,
 .focus-layer__content--progress.focus-layer__content--noted {
-  width: min(92vw, 1240px);
-  max-height: min(88vh, 920px);
+  width: min(92cqw, 1240px);
+  max-height: min(88cqh, 920px);
 }
 .focus-layer__content--metric .metrics {
   display: grid;
@@ -5290,7 +5325,7 @@ button {
 }
 /* Focus lists every step; a plan longer than the screen scrolls inside. */
 .focus-layer__content--progress .progress-primitive__steps {
-  max-height: 52vh;
+  max-height: 52cqh;
   font-size: clamp(11px, 0.85cqw, 15px);
 }
 /* A progress holding the primary slot is framed to its own height and
@@ -5348,7 +5383,7 @@ button {
   z-index: 100;
   top: 0;
   bottom: 0;
-  width: min(460px, 92vw);
+  width: min(460px, 92dvw);
   padding: 24px;
   background: rgba(3, 3, 3, 0.985);
   border-left: 1px solid rgba(var(--orange-rgb), 0.46);
@@ -5637,7 +5672,7 @@ button {
     grid-template-rows: minmax(0, 1fr) max(8px, var(--panel-inset));
     padding: 14px 8px 0;
   }
-  .chart-object > .focusable-content > * {
+  .chart-object > .focusable-content > :not(.focusable-content__expand) {
     grid-row: 1;
     min-height: 0;
   }
@@ -5792,15 +5827,15 @@ button {
     padding: 5cqh 3cqw;
   }
   .focus-layer__content {
-    width: 94vw;
-    height: 86vh;
+    width: 94cqw;
+    height: 86cqh;
   }
   /* The chart's frame follows its box (chartFrame), so a portrait focus
      gives it a square to read in rather than a 2:1 strip. */
   .focus-layer__content--chart {
-    width: 94vw;
+    width: 94cqw;
     height: auto;
-    max-height: 70vh;
+    max-height: 70cqh;
     aspect-ratio: 1 / 1;
   }
   .focus-layer__content--note,
@@ -5808,7 +5843,7 @@ button {
   .focus-layer__content--progress,
   .focus-layer__content--metric.focus-layer__content--noted,
   .focus-layer__content--progress.focus-layer__content--noted {
-    width: 90vw;
+    width: 90cqw;
     min-height: 220px;
   }
   .focus-layer__content--noted {
@@ -5830,7 +5865,7 @@ button {
   /* A chart with its notes under it takes the focus box's height, not a
      square: the notes come out of the box, not out of the chart's room. */
   .focus-layer__content--chart.focus-layer__content--noted {
-    height: 86vh;
+    height: 86cqh;
     max-height: none;
     aspect-ratio: auto;
   }

@@ -29,8 +29,6 @@ npm install
 npm run dev
 ```
 
-The first connected install should create `package-lock.json`. Commit that lockfile before integration so later agents and CI resolve the same dependency graph.
-
 Open the URL printed by Vite. The configured development and preview port is `4173`.
 
 ## Commands
@@ -108,21 +106,21 @@ window.SwitchboardController.load("training")
 window.SwitchboardController.state()
 ```
 
-Damocles only needs six protocol operations:
+`dispatch` and `run` take the five operations of the agent's `display`
+channel, which `window.SwitchboardController.protocol` lists:
 
 ```text
-show  hide  say  focus  listen  clear
+show  hide  focus  say  clear
 ```
 
-See [PROTOCOL.md](./PROTOCOL.md).
+`listen` is the page's own: its voice runtime and controls set it, and the
+guarded boundary refuses it. See [PROTOCOL.md](./PROTOCOL.md).
 
-## Integration cutoff
-
-This package is intended to enter the real Switchboard repository as a parallel frontend route first, for example `/new`. Connect the current backend transport to the controller, validate parity, then replace the old root route. Do not redesign the primitives during transport integration.
+## Before you change it
 
 Read these files before modifying the implementation:
 
 1. [AGENTS.md](./AGENTS.md)
 2. [DESIGN_SYSTEM.md](./DESIGN_SYSTEM.md)
 3. [ARCHITECTURE.md](./ARCHITECTURE.md)
-4. [INTEGRATION.md](./INTEGRATION.md)
+4. [PROTOCOL.md](./PROTOCOL.md)

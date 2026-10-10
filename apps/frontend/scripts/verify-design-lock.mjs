@@ -10,6 +10,7 @@ const assert = (condition, message) => { if (!condition) failures.push(message);
 const packageJson = JSON.parse(fs.readFileSync(path.resolve(root, '../../package.json'), 'utf8'));
 const glyph = read('src/primitives/DamoclesGlyph.tsx');
 const reducer = read('src/controller/reducer.ts');
+const validation = read('src/controller/validation.ts');
 const styles = read('src/styles/index.css');
 const designSources = ['App.tsx', 'main.tsx', 'app', 'components', 'controller', 'design', 'fixtures', 'hooks', 'integration', 'primitives', 'styles'];
 const collectSource = (relative) => {
@@ -31,7 +32,10 @@ const requiredGlyphPolygons = [
 ];
 for (const points of requiredGlyphPolygons) assert(glyph.includes(points), `Damocles glyph geometry changed: ${points}`);
 
-assert(reducer.includes("['show', 'hide', 'say', 'focus', 'listen', 'clear']"), 'Six-operation protocol changed.');
+// Six operations: the five the guarded boundary takes, which
+// window.SwitchboardController.protocol publishes, and the page's own listen.
+assert(validation.includes("export const OPERATIONS = ['show', 'hide', 'focus', 'say', 'clear'] as const;"), 'Six-operation protocol changed: the display operations (validation.ts OPERATIONS).');
+assert(reducer.includes("case 'listen':"), 'Six-operation protocol changed: listen is gone from the reducer.');
 assert(allSource.includes('model-controlled layout field is forbidden'), 'Runtime protocol boundary validation is missing.');
 assert(styles.includes('@container stage (max-aspect-ratio: 1/1)'), 'Portrait must be selected through stage geometry.');
 assert(styles.includes('@container stage (min-aspect-ratio: 2/1)'), 'Very-wide composition rule is missing.');

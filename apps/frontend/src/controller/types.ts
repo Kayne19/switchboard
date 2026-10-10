@@ -153,8 +153,10 @@ export interface DocumentData {
 }
 
 export interface CodeSourceData {
+  /** Chooses the line-comment marker (`primitives/CodeViewport.tsx`). */
   language?: string;
   text: string;
+  /** Line numbers to light, counted from 1. */
   highlight?: number[];
 }
 
@@ -496,14 +498,14 @@ export interface SpeechState {
 }
 
 export const RUNTIME_ID_PREFIX = '__runtime/';
-export const RUNTIME_CONVERSATION_ID = '__runtime/conversation';
+export const RUNTIME_CONVERSATION_ID = `${RUNTIME_ID_PREFIX}conversation` as const;
 /**
  * What the runtime says to this target is a failure of the line -- no
  * microphone, audio the browser blocked, an error from the server -- and is
  * drawn as one, never as Damocles's explanation. It is withdrawn
  * (`runtime_unsay`) when the failure clears.
  */
-export const RUNTIME_LINE_ERROR_ID = '__runtime/line-error';
+export const RUNTIME_LINE_ERROR_ID = `${RUNTIME_ID_PREFIX}line-error` as const;
 
 /**
  * A tool the agent on the line is running, from the backend's `activity`
@@ -622,7 +624,6 @@ export type RuntimeAction =
   | { op: 'runtime_activity'; activity: ActivityState | null; at?: number }
   /** One call of `tool` ended. */
   | { op: 'runtime_activity_end'; tool: string; at?: number }
-  | { op: 'runtime_reset' }
   | { op: 'epoch_reset' }
   | { op: 'set_view'; view: string | null }
   | { op: 'pin_view'; view: string }

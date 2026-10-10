@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest';
 import type { ControllerAction, SceneObjectRole, SceneObjectType } from '../../src/controller/types';
 import { validateControllerAction } from '../../src/controller/validation';
 import { fixtures } from '../../src/fixtures/scenes';
-import { lastScene, renderScene, runActions, stubResizeObserver } from './sceneHarness';
+import { deriveScreenState } from '../../src/app/sceneModel';
+import { controllerState, lastScene, renderScene, runActions, stubResizeObserver } from './sceneHarness';
 
 // A 1x1 PNG: the smallest picture both validators accept.
 const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
@@ -101,6 +102,23 @@ describe('a visual beside the primary', () => {
     const page = render([show('loss', 'chart', 'primary'), show('context', 'chart', 'ambient')]);
     expect(page.querySelectorAll('.training-charts [data-testid="chart"]')).toHaveLength(2);
     expect(page.querySelector('.composed-aux')).toBeNull();
+  });
+
+  it('an ambient chart shown first does not take the heading from the chart the composition makes primary', () => {
+    // No chart holds the primary role: the composition, the service and
+    // view() take the first chart that is not ambient, and so does the scene.
+    const ambient = { ...samples.chart.data, title: 'AMBIENT CHART' };
+    const main = { ...samples.chart.data, title: 'MAIN CHART' };
+    const page = render([
+      { op: 'show', id: 'spark', type: 'chart', role: 'ambient', data: ambient },
+      { op: 'show', id: 'main', type: 'chart', data: main },
+    ]);
+    expect(page.getAttribute('data-scene')).toBe('training');
+    expect(deriveScreenState(controllerState(), 1).title).toBe('MAIN CHART');
+    expect(page.querySelector('.scene-heading__title')?.textContent).toBe('MAIN CHART');
+    expect(page.querySelectorAll('.training-charts [data-testid="chart"]')).toHaveLength(2);
+    // The primary leads the row, as it leads the composition.
+    expect([...page.querySelectorAll('.training-charts [data-chart-id]')].map((panel) => panel.getAttribute('data-chart-id'))).toEqual(['main', 'spark']);
   });
 
   it('a chart primary keeps its progress under the charts until a visual stands beside it', () => {

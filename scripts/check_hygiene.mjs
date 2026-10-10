@@ -283,9 +283,50 @@ for (const dir of ["apps/frontend/tests", "apps/host-agent/tests"]) {
 	}
 }
 
+// 16. The page lays out from the stage's own box (docs/ipad.md). With
+//     `viewport-fit=cover` Safari lays the page under the notch and the
+//     home indicator, and only `env(safe-area-inset-*)` keeps it out; the
+//     page had the one with none of the other (#275).
+{
+	const shell = readFileSync(path.join(root, "apps/frontend/index.html"), "utf8");
+	const styles = readFileSync(path.join(root, "apps/frontend/src/styles/index.css"), "utf8");
+	if (/viewport-fit\s*=\s*cover/.test(shell) && !styles.includes("env(safe-area-inset-")) findings.push("apps/frontend/index.html: viewport-fit=cover with no env(safe-area-inset-*) in index.css: the page draws under the notch");
+}
+
+// 17. The runtime's ID namespace is one prefix, RUNTIME_ID_PREFIX
+//     (apps/frontend/src/controller/types.ts). The reducer routes an ID with
+//     it to runtime state and the validator refuses it from an agent; a
+//     second copy of the literal lets the two drift, and an agent ID then
+//     writes into the runtime's objects.
+{
+	const copies = [];
+	for (const file of files(path.join(root, "apps/frontend/src"), new Set([".ts", ".tsx"]))) {
+		lines(file).forEach((line, index) => {
+			if (/['"`]__runtime\//.test(line)) copies.push(`${rel(file)}:${index + 1}`);
+		});
+	}
+	if (copies.length !== 1) findings.push(`the '__runtime/' prefix is written ${copies.length} times (${copies.join(", ")}); import RUNTIME_ID_PREFIX from controller/types.ts`);
+}
+
+// 18. The layout reads only the stage's own geometry (docs/ipad.md): a
+//     size in the stylesheet is in container units, not the viewport's.
+//     Safari's `vh` is its large viewport, taller than what shows with
+//     its toolbars out, and a focus box sized in it ran under them (#271);
+//     `lvh` names that viewport outright and `svh` is no stage either.
+//     The stage sizes itself (`100vw`, and `100vh` before `100dvh`).
+{
+	const stylesheet = path.join(root, "apps/frontend/src/styles/index.css");
+	let inStage = false;
+	lines(stylesheet).forEach((line, index) => {
+		if (/^\.stage \{$/.test(line)) inStage = true;
+		else if (inStage && /^\}$/.test(line)) inStage = false;
+		else if (!inStage && /\d[ls]?v(?:h|w|i|b|min|max)\b/.test(line)) findings.push(`${rel(stylesheet)}:${index + 1}: a viewport unit (size it in cqw/cqh from the stage)`);
+	});
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes");

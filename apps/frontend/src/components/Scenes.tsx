@@ -59,8 +59,8 @@ export interface SceneProps {
   handsFree: boolean;
   /** Switches the mode through the voice runtime; absent in demo mode, where there is no transport to switch. */
   onToggleMode?: () => void;
-  /** The focus layer is open over the scene: the scene is inert behind it (FocusLayer `useModalFocus`). */
-  behindFocus?: boolean;
+  /** The focus layer or the history, a modal, is open over the scene: the scene is inert behind it (`useModalFocus`). */
+  behindModal?: boolean;
 }
 
 // The conversation's corner accents, from #conversation .corner-a / .corner-b
@@ -425,16 +425,23 @@ function trainingContent(
   onRailNote: (chartId: string, key: string, away: boolean) => void,
   band: ChartRailNote | null,
 ): SceneContent | null {
-  const charts = objectsOfType<ChartData>(state, 'chart');
   const [firstProgress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
-  const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
-  if (!primary) return null;
+  // The primary is the composition's, the one the screen state and view()
+  // name: an ambient chart shown first is not it (sceneKind made it a chart).
+  const composition = buildCompositionModel(state);
+  if (composition.primary?.type !== 'chart') return null;
+  const primary = cast.chart(composition.primary);
+  // The row is in the composition's order too: the primary leads, then its
+  // compare, secondary and ambient charts, so a sparkline shown first does
+  // not take the first panel (the top one on a portrait stage).
+  const beside = besideVisuals(composition);
+  const charts = [primary, ...beside.filter((object) => object.type === 'chart').map(cast.chart)];
   // Every chart is drawn here, the primary's neighbours beside it; any other
   // visual goes in the aux row under them. With visuals there, the progress
   // that sits under the charts joins them in the row, as progress does in
   // the composed workspace, so the charts keep the main slot's share of a
   // short stage instead of giving it to the bar and its steps.
-  const besideCharts = besideVisuals(buildCompositionModel(state)).filter((object) => object.type !== 'chart');
+  const besideCharts = beside.filter((object) => object.type !== 'chart');
   const progress = besideCharts.length > 0 ? undefined : firstProgress;
   // The notes lie over the panel of the chart they annotate rather than in a
   // band that shrinks it; the layer keeps them clear of one another, of the
@@ -954,7 +961,7 @@ function sceneContent(
  * primary object; a content kind with nothing to show draws the idle page.
  */
 export function SceneShell(props: SceneProps) {
-  const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, behindFocus = false } = props;
+  const { kind, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, behindModal = false } = props;
   const isPresent = useIsPresent();
   // A diagram can place its note as a callout beside the node it names; the
   // rail then leaves it out. A chart hands the rail the one note it leaves
@@ -1015,7 +1022,10 @@ export function SceneShell(props: SceneProps) {
     <motion.section
       className={`scene scene--${layout}${content ? ` scene--${kind}` : ''}`}
       data-scene={content ? kind : layout}
-      inert={behindFocus}
+      // A scene that is leaving is inert too: it is drawn until its exit
+      // ends, and the copy AnimatePresence keeps has the props it had before
+      // a modal opened, so its MODE was a tab stop behind the history (#268).
+      inert={behindModal || !isPresent}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}

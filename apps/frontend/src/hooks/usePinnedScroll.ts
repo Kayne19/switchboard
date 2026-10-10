@@ -11,7 +11,8 @@ const PIN_SLACK_PX = 8;
  * (`.spoken-log-box` in the stylesheet), which is what lets that start reach
  * the top; where it is shorter than that, as in a log the stylesheet does not
  * size, the log rests at the bottom. The section is the element marked
- * `aria-current="true"`.
+ * `aria-current="true"`; a log that marks none (the debug page's panes and
+ * raw log) rests at the bottom.
  */
 function pinTop(element: HTMLElement): number {
   const bottom = Math.max(0, element.scrollHeight - element.clientHeight);
@@ -27,7 +28,12 @@ function pinTop(element: HTMLElement): number {
  * content and a resize keep it there. Scrolling up unpins it, so earlier
  * lines can be read while new ones arrive, and scrolling back down pins it
  * again. `content` is what the log renders; a change to it is new content.
- * A surface that is not a log (`enabled` false) is left where it is.
+ * With `enabled` false the surface is left where it is and its scrolling is
+ * not read: a surface that is not a log, or a log the reader paused.
+ * Every pin-to-bottom scroller in the tree, the page's and the debug
+ * page's, is this hook (`apps/frontend/AGENTS.md`).
+ * The live response's log (`SpokenLog`) and the history drawer
+ * (`TranscriptDrawer`) both follow their newest line through it.
  */
 export function usePinnedScroll<T extends HTMLElement>(content: unknown, enabled = true) {
   const ref = useRef<T>(null);

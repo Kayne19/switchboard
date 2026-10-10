@@ -121,7 +121,6 @@ export function buildCompositionModel(state: ControllerState): CompositionModel 
   // the id `message`: the fallback is a conversation only when it holds one.
   const runtimeConv =
     messageObject(state.runtimeObjects[RUNTIME_CONVERSATION_ID]) ??
-    messageObject(state.runtimeObjects['conversation']) ??
     messageObject(state.objects['message']);
 
   let visualKind: AgentObjectType | null = null;

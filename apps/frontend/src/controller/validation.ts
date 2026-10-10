@@ -41,6 +41,7 @@ import type {
   InboxData,
   InboxMessage,
 } from './types';
+import { RUNTIME_ID_PREFIX } from './types';
 
 /**
  * Progress values arrive as a percentage (0–100). Values outside
@@ -52,8 +53,9 @@ export function normalizeProgressValue(value: number): number {
 }
 
 // The names a field takes from a fixed set, each in the schema's order. A
-// refused name is `invalidName`'s text, which lists them.
-const OPERATIONS = ['show', 'hide', 'focus', 'say', 'clear'] as const;
+// refused name is `invalidName`'s text, which lists them. `OPERATIONS` is
+// also what `window.SwitchboardController.protocol` publishes (App.tsx).
+export const OPERATIONS = ['show', 'hide', 'focus', 'say', 'clear'] as const;
 const OBJECT_TYPES = [
   'chart',
   'metric',
@@ -91,7 +93,6 @@ const MAX_ACTION_BYTES = 48_000;
  */
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_IMAGE_ACTION_BYTES = 12 * 1024 * 1024;
-const RESERVED_ID_PREFIX = '__runtime/';
 const MAX_PROGRESS_STEPS = 30;
 const MAX_METRIC_DELTA_UTF16 = 32;
 const METRIC_TRENDS: readonly MetricTrend[] = ['up', 'down', 'flat'];
@@ -185,7 +186,7 @@ function checkIdentifier(val: unknown, fieldName: string): { ok: true; id: strin
   if (val.length > MAX_ID_UTF16) {
     return { ok: false, error: `${fieldName} exceeds maximum length of ${MAX_ID_UTF16} UTF-16 code units` };
   }
-  if (val.startsWith(RESERVED_ID_PREFIX)) {
+  if (val.startsWith(RUNTIME_ID_PREFIX)) {
     return { ok: false, error: `reserved identifier namespace: ${val}` };
   }
   return { ok: true, id: val };

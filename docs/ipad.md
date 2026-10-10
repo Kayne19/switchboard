@@ -38,6 +38,13 @@ a third of the width). The layout reads only the stage's own geometry
 (`apps/frontend/ARCHITECTURE.md`, "Layout"), so these are sizes to test at,
 never breakpoints.
 
+The page does not ask to be drawn under the display's cut-outs: its viewport
+tag has no `viewport-fit=cover`. Safari then lays it out inside the safe
+area, clear of an iPhone's notch on its side and a Face ID iPad's home
+indicator, and the stage's box is still all the layout reads. A change that
+wants the page full-bleed pads it by `env(safe-area-inset-*)` in the same
+change; `scripts/check_hygiene.mjs` refuses the one without the other.
+
 ## Rules
 
 - One implementation for both engines. No user-agent checks, no WebKit-only
@@ -57,6 +64,7 @@ never breakpoints.
 |---|---|---|
 | `apps/frontend/src/styles/index.css`, `.calendar-event__title` | `display: -webkit-box` with `-webkit-line-clamp` | the prefixed form is the one both engines support for clamping lines |
 | `apps/frontend/src/styles/index.css`, `::-webkit-scrollbar` beside `scrollbar-width: none` | prefixed scrollbar hiding | Safari before 18.2 has no `scrollbar-width` |
+| `apps/frontend/src/debug/debug.css`, `summary::-webkit-details-marker` beside `list-style: none` (debug page only) | prefixed disclosure-marker hiding | WebKit draws a `<summary>`'s triangle through this pseudo-element, which `list-style: none` does not reach in every Safari the iPad may run |
 
 ## Before a pin bump
 
@@ -83,3 +91,8 @@ Note the iPadOS version in the pull request.
    touch sequence in the page and only the scroller's computed
    `touch-action: pan-y` is asserted. Whether the browser hands the pan
    over is the device's answer.
+9. Edges: in landscape and portrait, the corner marks, the scene heading
+   and the foot of the stage are clear of the home indicator, and nothing
+   but black lies outside them. CI cannot check this: Playwright has no
+   safe-area insets, so the hygiene check only holds the viewport tag
+   (see "Sizes worth checking").

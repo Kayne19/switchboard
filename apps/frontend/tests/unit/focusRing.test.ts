@@ -54,7 +54,7 @@ function tagged(pattern: RegExp): { classes: string[]; tags: number; where: stri
 describe('the focus ring', () => {
   const control = ruleNaming('.damocles-presence__button:focus-visible');
   const region = ruleNaming('.annotation-card__text:focus-visible');
-  const over = ruleNaming('.focusable-content:focus-visible::after');
+  const over = ruleNaming('.calendar-pages:focus-visible::after');
   // A region drawn over: its own ::after, or the one of the box it scrolls in.
   const drawnOver = (name: string) => over.selectors.some((selector) => selector === `.${name}:focus-visible::after` || selector.endsWith(`:has(> .${name}:focus-visible)::after`));
   const ringed = (name: string) => region.selectors.includes(`.${name}:focus-visible`) || drawnOver(name);
@@ -65,11 +65,12 @@ describe('the focus ring', () => {
     expect(control.body).toMatch(/outline:\s*var\(--focus-ring\);\s*outline-offset:\s*var\(--focus-ring-offset\);/);
     expect(css).toMatch(/--focus-ring-inset:\s*1px;/);
     expect(region.body).toMatch(/outline:\s*var\(--focus-ring\);\s*outline-offset:\s*calc\(-1px - var\(--focus-ring-inset\)\);/);
-    // An object's surface, a list's and a drawing's scroll draw it over
-    // what lies on their edges, on the box that holds them still.
+    // An object's surface (for its own button, #269), a list's and a
+    // drawing's scroll draw it over what lies on their edges, on the box
+    // that holds them still.
     expect(over.body).toMatch(/position:\s*absolute;[\s\S]*inset:\s*var\(--focus-ring-inset\);[\s\S]*border:\s*var\(--focus-ring\);/);
     expect(over.selectors).toEqual([
-      '.focusable-content:focus-visible::after',
+      '.focusable-content:has(> .focusable-content__expand:focus-visible)::after',
       '.calendar-pages:focus-visible::after',
       '.list-viewport__port:has(> .list-viewport__scroll:focus-visible)::after',
       '.drawing-viewport__view:has(> .drawing-viewport__scroll:focus-visible)::after',
@@ -83,7 +84,9 @@ describe('the focus ring', () => {
     expect(where).toEqual([]);
     expect(classes).toHaveLength(tags);
     expect(classes).toEqual(expect.arrayContaining(['focus-layer__return', 'transcript__return', 'transcript__send', 'annotation-card__history', 'live-chat-card__history', 'damocles-presence__button', 'transcript-toggle', 'channel-stack__mode']));
-    expect(classes.filter((name) => !control.selectors.includes(`.${name}:focus-visible`))).toEqual([]);
+    // An object's surface's button draws it over the surface (#269).
+    expect(classes.filter((name) => !control.selectors.includes(`.${name}:focus-visible`) && !drawnOver(name))).toEqual([]);
+    expect(classes).toContain('focusable-content__expand');
   });
 
   it('is drawn by every element the page puts in the tab order', () => {
@@ -91,7 +94,9 @@ describe('the focus ring', () => {
     expect(where).toEqual([]);
     const lit = (name: string) => rules().some((rule) => rule.selectors.some((selector) => selector.includes(`.${name}[`) && selector.endsWith(':focus-visible')) && /background:\s*var\(--orange\)/.test(rule.body));
     const reached = (name: string) => ringed(name) || lit(name) || control.selectors.some((selector) => selector.includes(`.${name}[`) || selector.includes(`.${name}:`));
-    expect(classes.sort()).toEqual(['calendar-grid', 'drawing-viewport__scroll', 'focusable-content', 'list-viewport__scroll', 'metric-row']);
+    // An object's surface is not a tab stop: its own button is (#269), with
+    // tabIndex={0}, which Safari needs to put a <button> in its Tab order.
+    expect(classes.sort()).toEqual(['calendar-grid', 'drawing-viewport__scroll', 'focusable-content__expand', 'list-viewport__scroll', 'metric-row']);
     // The paged days carry the grid's class first; the ring names the pages.
     expect(ringed('calendar-pages')).toBe(true);
     expect(classes.filter((name) => name !== 'calendar-grid' && !reached(name))).toEqual([]);
@@ -118,7 +123,7 @@ describe('the focus ring', () => {
       .flatMap((rule) => rule.selectors)
       .filter((selector) => /:focus/.test(selector));
     const cluster = '.metrics--primary.metrics--cluster .metric-row[role="button"]:focus-visible';
-    expect(removed).toEqual([cluster, '.focusable-content:focus-visible', '.calendar-pages:focus-visible', '.list-viewport__scroll:focus-visible', '.drawing-viewport__scroll:focus-visible']);
+    expect(removed).toEqual([cluster, '.focusable-content__expand:focus-visible', '.calendar-pages:focus-visible', '.list-viewport__scroll:focus-visible', '.drawing-viewport__scroll:focus-visible']);
     expect(removed.slice(1).every((selector) => drawnOver(selector.slice(1, -':focus-visible'.length)))).toBe(true);
     // A metric card in a cluster is clipped to its chamfer, which would clip an
     // outline away whole: its edge (its ground round its black face) takes the

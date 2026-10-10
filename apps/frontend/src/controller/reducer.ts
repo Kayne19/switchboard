@@ -9,8 +9,6 @@ import type {
 } from './types';
 import { RUNTIME_ID_PREFIX } from './types';
 
-export const PROTOCOL_OPERATIONS = ['show', 'hide', 'say', 'focus', 'listen', 'clear'] as const;
-
 export function normalizeViewTarget(target: string | null | undefined): string | null {
   if (!target) return null;
   const t = target.trim().toLowerCase();
@@ -415,23 +413,6 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
         toolRun: { running, burst: run.burst, endedAt: settled ? (action.at ?? null) : null },
         revision,
       };
-    }
-    case 'runtime_reset': {
-      // Runtime reset removes runtime state, activity included; agent state is preserved
-      const reset = syncCombinedState(
-        state,
-        state.agentObjects,
-        state.agentOrder,
-        state.agentSpeech,
-        {},
-        [],
-        null,
-        state.workspace,
-        state.focusId,
-        state.listening,
-        revision,
-      );
-      return { ...reset, activity: null, toolRun: createInitialToolRun() };
     }
     case 'epoch_reset': {
       // A new epoch is a new leg. What the old leg's agent put on screen,

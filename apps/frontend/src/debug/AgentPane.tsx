@@ -1,4 +1,5 @@
-import { memo, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useState } from 'react';
+import { usePinnedScroll } from '../hooks/usePinnedScroll';
 import { RichText } from '../primitives/RichText';
 import { clockTime, decisionSummary, formatMs, preview } from './explain';
 import { JsonView } from './Json';
@@ -251,15 +252,10 @@ export const AgentPane = memo(function AgentPane({
   select: PaneSelect;
   lit: ReadonlySet<string>;
 }) {
-  const body = useRef<HTMLDivElement>(null);
-  const pinned = useRef(true);
   const [limit, setLimit] = useState(PAGE);
   const items = pane.items.length > limit ? pane.items.slice(pane.items.length - limit) : pane.items;
 
-  useLayoutEffect(() => {
-    const element = body.current;
-    if (element && pinned.current) element.scrollTop = element.scrollHeight;
-  }, [pane.items]);
+  const { ref: body, onScroll } = usePinnedScroll<HTMLDivElement>(pane.items);
 
   return (
     <section className="card pane" data-anchor={`pane-${pane.agent}`}>
@@ -275,10 +271,7 @@ export const AgentPane = memo(function AgentPane({
         className="card-body pane-body"
         ref={body}
         data-clip={`pane-${pane.agent}`}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          pinned.current = element.scrollTop + element.clientHeight >= element.scrollHeight - 48;
-        }}
+        onScroll={onScroll}
       >
         {pane.items.length > items.length && (
           <button type="button" className="earlier tech micro" onClick={() => setLimit(limit + PAGE)}>

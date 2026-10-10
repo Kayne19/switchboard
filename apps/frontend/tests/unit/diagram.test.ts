@@ -1,15 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { createLayers } from '../../src/primitives/diagramLayout';
+import { layoutDiagram } from '../../src/primitives/diagramLayout';
 import type { DiagramEdge, DiagramNode } from '../../src/controller/types';
 import { leastCpuMs } from './cpuTime';
 
-// Layering a graph of a few nodes is quick whatever its cycles: a cycle
-// that sent the layering round until some cap would show here as time
-// (CPU time, the least of three runs: cpuTime.ts says why).
+// The layers the page draws a graph in: each laid-out node's `layer`, from
+// the layout the diagram is drawn with. Laying out a graph of a few nodes is
+// quick whatever its cycles: a cycle that sent the layering round until some
+// cap would show here as time (CPU time, the least of three runs: cpuTime.ts
+// says why).
 function layerIds(nodes: DiagramNode[], edges: DiagramEdge[]) {
-  let layers: DiagramNode[][] = [];
-  expect(leastCpuMs(() => (layers = createLayers(nodes, edges)))).toBeLessThan(10);
-  return layers.map((layer) => layer.map((node) => node.id));
+  let layers: string[][] = [];
+  expect(leastCpuMs(() => (layers = drawnLayers(nodes, edges)))).toBeLessThan(50);
+  return layers;
+}
+
+function drawnLayers(nodes: DiagramNode[], edges: DiagramEdge[]): string[][] {
+  const layers: string[][] = [];
+  for (const laid of layoutDiagram({ mode: 'graph', nodes, edges }, 'landscape').nodes) (layers[laid.layer] ??= []).push(laid.node.id);
+  return layers;
 }
 
 describe('diagram layering', () => {

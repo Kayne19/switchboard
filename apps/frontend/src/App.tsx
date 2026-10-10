@@ -4,8 +4,7 @@ import { ControllerPanel } from './components/ControllerPanel';
 import { IRDrawer } from './components/IRDrawer';
 import { useController } from './controller/context';
 import type { FixtureName } from './controller/types';
-import { PROTOCOL_OPERATIONS } from './controller/reducer';
-import { assertControllerAction } from './controller/validation';
+import { OPERATIONS, assertControllerAction } from './controller/validation';
 import { sceneOrder } from './design/tokens';
 import { RuntimeIntegration } from './integration/runtime';
 
@@ -51,7 +50,7 @@ export default function App() {
       run: (actions: unknown[]) => run(actions.map(assertControllerAction)),
       load: loadFixture,
       state: () => stateRef.current,
-      protocol: PROTOCOL_OPERATIONS,
+      protocol: OPERATIONS,
     };
   }, [dispatch, run, loadFixture]);
 
@@ -69,7 +68,7 @@ export default function App() {
       }
 
       if (!demoMode) return;
-      // The focus layer is modal: the scene keys wait behind it (FocusLayer `useModalFocus`).
+      // The focus layer is modal: the scene keys wait behind it (`useModalFocus`).
       if (state.focusId) return;
 
       const index = Number(event.key) - 1;
@@ -117,7 +116,7 @@ export default function App() {
     <div className="app-shell">
       <SceneRenderer />
       {demoMode ? <>
-        {/* Behind the focus layer, a modal, the demo page's controls are inert too (FocusLayer `useModalFocus`): CTRL and both panels. */}
+        {/* Behind the focus layer, a modal, the demo page's controls are inert too (`useModalFocus`): CTRL and both panels. */}
         <button className="dev-toggle tech micro" type="button" onClick={() => setControllerOpen(true)} inert={Boolean(state.focusId)}>CTRL</button>
         <ControllerPanel open={controllerOpen} onClose={() => setControllerOpen(false)} behindFocus={Boolean(state.focusId)} />
         <IRDrawer open={irOpen} onClose={() => setIrOpen(false)} behindFocus={Boolean(state.focusId)} />
