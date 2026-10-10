@@ -34,15 +34,12 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         on_closed: None,
         debug: None,
         turn_lock: Mutex::new(()),
-        busy: AtomicBool::new(true),
+        turn: StdMutex::new(TurnState::new()),
         lifecycle: StdMutex::new(Lifecycle::Open {
             _subscription: subscription,
         }),
         brief: String::new(),
         brief_due: AtomicBool::new(false),
-        turn: StdMutex::new(None),
-        autonomous_turn: StdMutex::new(None),
-        ignored_autonomous: StdMutex::new(None),
     });
     inner.lose(LifecycleEvent::CommandFailed).await;
     ProjectSession { inner }.close();
@@ -866,4 +863,594 @@ async fn a_session_whose_host_link_closed_reads_no_more_frames() {
         0,
         "the closed handle answered"
     );
+}
+
+/// Where a project session's turn is when a row of the turn table's event
+/// arrives. The self-woken run the session holds is `auto-1`; a self-woken
+/// start it refused because it held one is `auto-2`; the caller's turn,
+/// collected by a prompt, is `t-in`.
+#[derive(Clone, Copy, Debug)]
+enum TurnAt {
+    /// No turn.
+    Idle,
+    /// A caller's prompt is being collected.
+    Caller,
+    /// A self-woken run is held, with text collected.
+    SelfWoken,
+    /// The application admitted a self-woken run while the caller's prompt
+    /// was still being collected.
+    CallerAndSelfWoken,
+    /// That run ended before the caller's prompt let go of its collector.
+    CallerSettled,
+    /// A second self-woken start came while a run was held, and was refused.
+    Ignoring,
+    /// The held run ended; the refused one is still remembered.
+    IdleIgnoring,
+    /// A caller's prompt went out while the refused run is remembered.
+    CallerIgnoring,
+}
+
+impl TurnAt {
+    const ALL: [Self; 8] = [
+        Self::Idle,
+        Self::Caller,
+        Self::SelfWoken,
+        Self::CallerAndSelfWoken,
+        Self::CallerSettled,
+        Self::Ignoring,
+        Self::IdleIgnoring,
+        Self::CallerIgnoring,
+    ];
+
+    /// Whether a caller's prompt is being collected: only then can it be
+    /// cancelled, and only otherwise can one start (prompts take the turn
+    /// lock one at a time).
+    fn collecting(self) -> bool {
+        matches!(
+            self,
+            Self::Caller | Self::CallerAndSelfWoken | Self::CallerSettled | Self::CallerIgnoring
+        )
+    }
+}
+
+/// What reaches a project session's turn in a row of the turn table.
+#[derive(Clone, Copy, Debug)]
+enum TurnHappens {
+    /// `turn_start` of a self-woken run `auto-3`; the application does not
+    /// admit it.
+    StartsSelfWoken,
+    /// The same, and the application admits it.
+    StartsSelfWokenAdmitted,
+    /// `turn_start` of an input `t-2`.
+    StartsInput,
+    /// Text of the held run, `auto-1`.
+    RunText,
+    /// Text of the refused run, `auto-2`.
+    IgnoredText,
+    /// Text of the caller's turn, `t-in`.
+    CallerText,
+    /// `turn_end` of `auto-1`.
+    RunEnds,
+    /// `turn_end` of `auto-2`.
+    IgnoredEnds,
+    /// `turn_end` of `t-in`.
+    CallerEnds,
+    /// A snapshot of an idle session whose last turn was `auto-1`.
+    SnapshotIdle,
+    /// A snapshot of a session with a self-woken turn `snap-1` open.
+    SnapshotOpen,
+    /// `session_closed`.
+    SessionCloses,
+    /// A caller's prompt goes out.
+    PromptStarts,
+    /// The caller's prompt is cancelled.
+    PromptCancelled,
+}
+
+impl TurnHappens {
+    const ALL: [Self; 14] = [
+        Self::StartsSelfWoken,
+        Self::StartsSelfWokenAdmitted,
+        Self::StartsInput,
+        Self::RunText,
+        Self::IgnoredText,
+        Self::CallerText,
+        Self::RunEnds,
+        Self::IgnoredEnds,
+        Self::CallerEnds,
+        Self::SnapshotIdle,
+        Self::SnapshotOpen,
+        Self::SessionCloses,
+        Self::PromptStarts,
+        Self::PromptCancelled,
+    ];
+
+    /// Whether it can happen at `at`.
+    fn possible_at(self, at: TurnAt) -> bool {
+        match self {
+            Self::PromptStarts => !at.collecting(),
+            Self::PromptCancelled => at.collecting(),
+            _ => true,
+        }
+    }
+}
+
+/// A project session on a fake host link the test drives frame by frame,
+/// with the turn reports and module-call causes the application saw.
+struct TurnRig {
+    link: crate::hosts::FakeLink,
+    session: ProjectSession,
+    bus: crate::debug::DebugBus,
+    admit: Arc<AtomicBool>,
+    reports: Arc<StdMutex<Vec<String>>>,
+    causes: Arc<StdMutex<Vec<Option<String>>>>,
+    prompting: Option<tokio::task::JoinHandle<Result<Turn, PiSessionError>>>,
+    cursor: u64,
+    probes: u64,
+    debug_seen: usize,
+}
+
+impl TurnRig {
+    async fn new() -> Self {
+        let hosts = debug_hosts();
+        let mut link = hosts.connect_fake("scriptorium");
+        let bus = crate::debug::DebugBus::new();
+        let admit = Arc::new(AtomicBool::new(false));
+        let reports = Arc::new(StdMutex::new(Vec::new()));
+        let causes = Arc::new(StdMutex::new(Vec::new()));
+        let on_turn: TurnCallback = {
+            let admit = Arc::clone(&admit);
+            let reports = Arc::clone(&reports);
+            Arc::new(move |turn: ProjectTurn| {
+                let text = if turn.text.is_empty() {
+                    String::new()
+                } else {
+                    format!(" «{}»", turn.text)
+                };
+                reports.lock().unwrap().push(format!(
+                    "{} {} {}{text}",
+                    if turn.ended { "end" } else { "start" },
+                    turn.cause,
+                    turn.turn_id.as_deref().unwrap_or("-"),
+                ));
+                let admitted = admit.load(Ordering::Acquire);
+                Box::pin(async move { admitted }) as Pin<Box<dyn Future<Output = bool> + Send>>
+            })
+        };
+        let on_module: ModuleCallback = {
+            let causes = Arc::clone(&causes);
+            Arc::new(move |call: AgentCall| {
+                causes.lock().unwrap().push(call.cause);
+                Box::pin(async { json!({"status": "delivered"}) })
+                    as Pin<Box<dyn Future<Output = Value> + Send>>
+            })
+        };
+        let launch = ProjectLaunch {
+            on_turn: Some(on_turn),
+            turn_timeout: Duration::from_secs(60),
+            ..debug_launch(&bus, Some(on_module))
+        };
+        let creating = tokio::spawn({
+            let hosts = hosts.clone();
+            async move { ProjectSession::create(&hosts, launch).await }
+        });
+        Self::answer(&mut link, "create_session", json!({"session": "s1"})).await;
+        let (session, _) = within("the session to open", creating)
+            .await
+            .expect("the create task")
+            .expect("the session opens");
+        let joining = tokio::spawn({
+            let session = session.clone();
+            async move { session.join_call("call-token", "", 1000).await }
+        });
+        Self::answer(&mut link, "join_call", json!({})).await;
+        within("the session to join", joining)
+            .await
+            .expect("the join task")
+            .expect("the session joins");
+        Self {
+            link,
+            session,
+            bus,
+            admit,
+            reports,
+            causes,
+            prompting: None,
+            cursor: 0,
+            probes: 0,
+            debug_seen: 0,
+        }
+    }
+
+    /// Answers the next command named `name` the service sends.
+    async fn answer(link: &mut crate::hosts::FakeLink, name: &str, result: Value) {
+        loop {
+            let frame = within("a command", link.recv())
+                .await
+                .expect("the link is up");
+            if frame["type"] == "command" && frame["name"] == name {
+                link.send(json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": result}));
+                return;
+            }
+        }
+    }
+
+    fn event(&mut self, event: Value) {
+        self.cursor += 1;
+        self.link.send(json!({"type": "event", "session": "s1", "cursor": format!("b:{}", self.cursor), "event": event}));
+    }
+
+    fn snapshot(&mut self, info: Value) {
+        self.cursor += 1;
+        self.link.send(json!({"type": "snapshot", "session": "s1", "cursor": format!("b:{}", self.cursor), "info": info}));
+    }
+
+    /// A module call that names no turn and no cause. The pump reads the
+    /// session's frames in order, so its answer also means every frame
+    /// sent before it has been read. The cause it was given: `-` for none,
+    /// `gone` when the session no longer reads its frames.
+    async fn probe(&mut self) -> String {
+        self.probes += 1;
+        let id = format!("probe-{}", self.probes);
+        self.causes.lock().unwrap().clear();
+        self.link.send(json!({"type": "module_call", "id": id, "session": "s1", "token": "call-token", "call": "view", "args": {}}));
+        loop {
+            let frame = within("the probe's answer", self.link.recv())
+                .await
+                .expect("the link is up");
+            if frame["type"] == "module_reply" && frame["id"] == id {
+                if frame["status"] == "refused" {
+                    return "gone".into();
+                }
+                let causes = self.causes.lock().unwrap();
+                return causes
+                    .last()
+                    .cloned()
+                    .flatten()
+                    .unwrap_or_else(|| "-".into());
+            }
+        }
+    }
+
+    /// Waits until the pump has read every frame sent so far, and a prompt
+    /// a frame ended has returned; the probe's cause.
+    async fn settle(&mut self) -> String {
+        let cause = self.probe().await;
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+        cause
+    }
+
+    async fn prompt(&mut self, message: &'static str) {
+        let session = self.session.clone();
+        self.prompting = Some(tokio::spawn(async move { session.prompt(message).await }));
+        Self::answer(&mut self.link, "prompt", json!({"sent_as": "prompt"})).await;
+    }
+
+    async fn reach(&mut self, at: TurnAt) {
+        let start = |turn_id: &str, cause: &str| json!({"kind": "turn_start", "cause": cause, "turn_id": turn_id});
+        let run_words = json!({"kind": "text", "text": "run words", "turn_id": "auto-1"});
+        let run_ends = json!({"kind": "turn_end", "turn_id": "auto-1"});
+        match at {
+            TurnAt::Idle => {}
+            TurnAt::Caller => {
+                self.prompt("hello").await;
+                self.event(start("t-in", "input"));
+            }
+            TurnAt::SelfWoken => {
+                self.event(start("auto-1", "autonomous"));
+                self.event(run_words);
+            }
+            TurnAt::CallerAndSelfWoken => {
+                Box::pin(self.reach(TurnAt::Caller)).await;
+                self.admit.store(true, Ordering::Release);
+                self.event(start("auto-1", "autonomous"));
+                self.settle().await;
+                self.admit.store(false, Ordering::Release);
+                self.event(run_words);
+            }
+            TurnAt::CallerSettled => {
+                Box::pin(self.reach(TurnAt::CallerAndSelfWoken)).await;
+                self.event(run_ends);
+            }
+            TurnAt::Ignoring => {
+                Box::pin(self.reach(TurnAt::SelfWoken)).await;
+                self.event(start("auto-2", "autonomous"));
+            }
+            TurnAt::IdleIgnoring => {
+                Box::pin(self.reach(TurnAt::Ignoring)).await;
+                self.event(run_ends);
+            }
+            TurnAt::CallerIgnoring => {
+                Box::pin(self.reach(TurnAt::IdleIgnoring)).await;
+                self.prompt("hello").await;
+            }
+        }
+        self.settle().await;
+        self.reports.lock().unwrap().clear();
+        self.debug_seen = self.bus.events_for_test().len();
+    }
+
+    async fn apply(&mut self, happens: TurnHappens) {
+        let text =
+            |text: &str, turn_id: &str| json!({"kind": "text", "text": text, "turn_id": turn_id});
+        let end = |turn_id: &str| json!({"kind": "turn_end", "turn_id": turn_id});
+        let self_woken = json!({"kind": "turn_start", "cause": "autonomous", "turn_id": "auto-3"});
+        match happens {
+            TurnHappens::StartsSelfWoken => self.event(self_woken),
+            TurnHappens::StartsSelfWokenAdmitted => {
+                self.admit.store(true, Ordering::Release);
+                self.event(self_woken);
+                self.settle().await;
+                self.admit.store(false, Ordering::Release);
+            }
+            TurnHappens::StartsInput => {
+                self.event(json!({"kind": "turn_start", "cause": "input", "turn_id": "t-2"}));
+            }
+            TurnHappens::RunText => self.event(text("more run words", "auto-1")),
+            TurnHappens::IgnoredText => self.event(text("ignored words", "auto-2")),
+            TurnHappens::CallerText => self.event(text("caller words", "t-in")),
+            TurnHappens::RunEnds => self.event(end("auto-1")),
+            TurnHappens::IgnoredEnds => self.event(end("auto-2")),
+            TurnHappens::CallerEnds => self.event(end("t-in")),
+            TurnHappens::SnapshotIdle => self.snapshot(json!({"session": "s1", "busy": false, "turn_open": false, "turn_id": "auto-1", "last_text": "last words"})),
+            TurnHappens::SnapshotOpen => self.snapshot(json!({"session": "s1", "busy": true, "turn_open": true, "cause": "autonomous", "turn_id": "snap-1"})),
+            TurnHappens::SessionCloses => {
+                self.event(json!({"kind": "session_closed", "reason": "killed"}));
+                // The pump holds a weak reference to the session for as long
+                // as it reads frames, and it stops after this one.
+                let inner = Arc::clone(&self.session.inner);
+                within("the pump to stop", async move {
+                    while Arc::weak_count(&inner) > 0 {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
+                    }
+                })
+                .await;
+            }
+            TurnHappens::PromptStarts => self.prompt("next").await,
+            TurnHappens::PromptCancelled => {
+                let prompting = self.prompting.take().expect("a prompt is running");
+                prompting.abort();
+                let _ = prompting.await;
+            }
+        }
+    }
+
+    /// What the row sees, in the table's columns after the event.
+    async fn seen(&mut self) -> Vec<String> {
+        let cause = self.settle().await;
+        let joined = |items: Vec<String>| {
+            if items.is_empty() {
+                "-".to_owned()
+            } else {
+                items.join("; ")
+            }
+        };
+        let reports = joined(std::mem::take(&mut *self.reports.lock().unwrap()));
+        let busy = if self.session.busy() { "busy" } else { "-" };
+        let finals = joined(
+            self.bus.events_for_test()[self.debug_seen..]
+                .iter()
+                .filter_map(|event| match event {
+                    DebugEvent::AgentText {
+                        turn_id,
+                        text,
+                        final_: true,
+                        ..
+                    } => Some(format!("{}: {text}", turn_id.as_deref().unwrap_or("-"))),
+                    _ => None,
+                })
+                .collect(),
+        );
+        let caller = match self.prompting.take() {
+            None => "-".to_owned(),
+            Some(prompting) if prompting.is_finished() => {
+                Self::returned(within("the prompt", prompting).await)
+            }
+            Some(mut prompting) => {
+                // An idle snapshot with no turn id settles a caller's turn
+                // with the text it collected, if the snapshot reaches it.
+                self.snapshot(json!({"session": "s1", "busy": false, "turn_open": false}));
+                match tokio::time::timeout(Duration::from_secs(1), &mut prompting).await {
+                    Ok(Ok(Ok(turn))) if !turn.failed => format!("running «{}»", turn.text),
+                    Ok(turn) => format!("running, then {}", Self::returned(turn)),
+                    Err(_) => {
+                        prompting.abort();
+                        "running, then stuck".to_owned()
+                    }
+                }
+            }
+        };
+        vec![reports, busy.to_owned(), cause, caller, finals]
+    }
+
+    fn returned(turn: Result<Result<Turn, PiSessionError>, tokio::task::JoinError>) -> String {
+        match turn {
+            Ok(Ok(turn)) if turn.failed => format!("failed «{}» «{}»", turn.error, turn.text),
+            Ok(Ok(turn)) => format!("returned «{}»", turn.text),
+            Ok(Err(error)) => format!("refused «{error}»"),
+            Err(_) => "cancelled".to_owned(),
+        }
+    }
+}
+
+/// A project session's turn (`docs/host-link.md`, "A project session's
+/// turn"), every phase against every event that can happen in it. After the
+/// phase and the event: the turn reports the application got (`start|end
+/// <cause> <turn id> «text»`), whether the session is busy, the cause a
+/// module call that names none is given (the held run's), the caller's
+/// prompt (`returned`, `failed «error»`, or `running` with the text an idle
+/// snapshot then settles it with), and the final texts published to the
+/// debug page (`<turn id>: <text>`). `-` is none; `#` starts a comment.
+const TURN_TABLE: &str = "
+phase              | event                   | reports                           | busy | cause      | caller                                | finals
+
+# Idle: a self-woken start opens a run; every other turn frame has nobody to reach, but a `turn_end`
+# with an id is reported as the end of an input turn.
+Idle               | StartsSelfWoken         | start autonomous auto-3           | busy | autonomous | -                                     | -
+Idle               | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | -                                     | -
+Idle               | StartsInput             | start input t-2                   | -    | -          | -                                     | -
+Idle               | RunText                 | -                                 | -    | -          | -                                     | -
+Idle               | IgnoredText             | -                                 | -    | -          | -                                     | -
+Idle               | CallerText              | -                                 | -    | -          | -                                     | -
+Idle               | RunEnds                 | end input auto-1                  | -    | -          | -                                     | -
+Idle               | IgnoredEnds             | end input auto-2                  | -    | -          | -                                     | -
+Idle               | CallerEnds              | end input t-in                    | -    | -          | -                                     | -
+Idle               | SnapshotIdle            | -                                 | -    | -          | -                                     | -
+Idle               | SnapshotOpen            | start autonomous snap-1           | busy | autonomous | -                                     | -
+Idle               | SessionCloses           | -                                 | -    | gone       | -                                     | -
+Idle               | PromptStarts            | -                                 | busy | -          | running «»                            | -
+
+# A caller's turn: its frames go to its collector, and any `turn_end` settles it.
+Caller             | StartsSelfWoken         | start autonomous auto-3           | busy | -          | running «»                            | -
+Caller             | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | running «»                            | -
+Caller             | StartsInput             | start input t-2                   | busy | -          | running «»                            | -
+Caller             | RunText                 | -                                 | busy | -          | running «more run words»              | -
+Caller             | IgnoredText             | -                                 | busy | -          | running «ignored words»               | -
+Caller             | CallerText              | -                                 | busy | -          | running «caller words»                | -
+Caller             | RunEnds                 | end input auto-1                  | -    | -          | returned «»                           | -
+Caller             | IgnoredEnds             | end input auto-2                  | -    | -          | returned «»                           | -
+Caller             | CallerEnds              | end input t-in                    | -    | -          | returned «»                           | -
+Caller             | SnapshotIdle            | -                                 | -    | -          | returned «last words»                 | -: last words
+Caller             | SnapshotOpen            | -                                 | busy | -          | running «»                            | -
+Caller             | SessionCloses           | -                                 | -    | gone       | failed «the project session ended» «» | -
+Caller             | PromptCancelled         | -                                 | -    | -          | -                                     | -
+
+# A self-woken run: it keeps its own text, and swallows every frame that is not its end.
+SelfWoken          | StartsSelfWoken         | -                                 | busy | autonomous | -                                     | -
+SelfWoken          | StartsSelfWokenAdmitted | -                                 | busy | autonomous | -                                     | -
+SelfWoken          | StartsInput             | start input t-2                   | busy | autonomous | -                                     | -
+SelfWoken          | RunText                 | -                                 | busy | autonomous | -                                     | -
+SelfWoken          | IgnoredText             | -                                 | busy | autonomous | -                                     | -
+SelfWoken          | CallerText              | -                                 | busy | autonomous | -                                     | -
+SelfWoken          | RunEnds                 | end autonomous auto-1 «run words» | -    | -          | -                                     | auto-1: run words
+SelfWoken          | IgnoredEnds             | -                                 | busy | autonomous | -                                     | -
+SelfWoken          | CallerEnds              | -                                 | busy | autonomous | -                                     | -
+SelfWoken          | SnapshotIdle            | end autonomous auto-1 «run words» | -    | -          | -                                     | auto-1: run words
+SelfWoken          | SnapshotOpen            | -                                 | busy | autonomous | -                                     | -
+SelfWoken          | SessionCloses           | end autonomous auto-1             | -    | gone       | -                                     | auto-1: run words
+SelfWoken          | PromptStarts            | -                                 | busy | autonomous | running «»                            | -
+
+# Both: the run swallows the caller's frames too.
+CallerAndSelfWoken | StartsSelfWoken         | -                                 | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | StartsSelfWokenAdmitted | -                                 | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | StartsInput             | start input t-2                   | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | RunText                 | -                                 | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | IgnoredText             | -                                 | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | CallerText              | -                                 | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | RunEnds                 | end autonomous auto-1 «run words» | -    | -          | running «»                            | auto-1: run words
+CallerAndSelfWoken | IgnoredEnds             | -                                 | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | CallerEnds              | -                                 | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | SnapshotIdle            | end autonomous auto-1 «run words» | -    | -          | running «»                            | auto-1: run words
+CallerAndSelfWoken | SnapshotOpen            | -                                 | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | SessionCloses           | end autonomous auto-1             | -    | gone       | failed «the project session ended» «» | auto-1: run words
+CallerAndSelfWoken | PromptCancelled         | -                                 | busy | autonomous | -                                     | -
+
+# The run behind the caller's turn ended before its collector let go: not busy, frames reach the
+# collector.
+CallerSettled      | StartsSelfWoken         | start autonomous auto-3           | -    | -          | running «»                            | -
+CallerSettled      | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | running «»                            | -
+CallerSettled      | StartsInput             | start input t-2                   | -    | -          | running «»                            | -
+CallerSettled      | RunText                 | -                                 | -    | -          | running «more run words»              | -
+CallerSettled      | IgnoredText             | -                                 | -    | -          | running «ignored words»               | -
+CallerSettled      | CallerText              | -                                 | -    | -          | running «caller words»                | -
+CallerSettled      | RunEnds                 | end input auto-1                  | -    | -          | returned «»                           | -
+CallerSettled      | IgnoredEnds             | end input auto-2                  | -    | -          | returned «»                           | -
+CallerSettled      | CallerEnds              | end input t-in                    | -    | -          | returned «»                           | -
+CallerSettled      | SnapshotIdle            | -                                 | -    | -          | returned «last words»                 | -: last words
+CallerSettled      | SnapshotOpen            | -                                 | -    | -          | running «»                            | -
+CallerSettled      | SessionCloses           | -                                 | -    | gone       | failed «the project session ended» «» | -
+CallerSettled      | PromptCancelled         | -                                 | -    | -          | -                                     | -
+
+# A refused second start is remembered while the held run goes on.
+Ignoring           | StartsSelfWoken         | -                                 | busy | autonomous | -                                     | -
+Ignoring           | StartsSelfWokenAdmitted | -                                 | busy | autonomous | -                                     | -
+Ignoring           | StartsInput             | start input t-2                   | busy | autonomous | -                                     | -
+Ignoring           | RunText                 | -                                 | busy | autonomous | -                                     | -
+Ignoring           | IgnoredText             | -                                 | busy | autonomous | -                                     | -
+Ignoring           | CallerText              | -                                 | busy | autonomous | -                                     | -
+Ignoring           | RunEnds                 | end autonomous auto-1 «run words» | -    | -          | -                                     | auto-1: run words
+Ignoring           | IgnoredEnds             | -                                 | busy | autonomous | -                                     | -
+Ignoring           | CallerEnds              | -                                 | busy | autonomous | -                                     | -
+Ignoring           | SnapshotIdle            | end autonomous auto-1 «run words» | -    | -          | -                                     | auto-1: run words
+Ignoring           | SnapshotOpen            | -                                 | busy | autonomous | -                                     | -
+Ignoring           | SessionCloses           | end autonomous auto-1             | -    | gone       | -                                     | auto-1: run words
+Ignoring           | PromptStarts            | -                                 | busy | autonomous | running «»                            | -
+
+# The refused run is remembered after the held one ended: its frames are dropped, and its `turn_end`
+# only forgets it.
+IdleIgnoring       | StartsSelfWoken         | start autonomous auto-3           | busy | autonomous | -                                     | -
+IdleIgnoring       | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | -                                     | -
+IdleIgnoring       | StartsInput             | start input t-2                   | -    | -          | -                                     | -
+IdleIgnoring       | RunText                 | -                                 | -    | -          | -                                     | -
+IdleIgnoring       | IgnoredText             | -                                 | -    | -          | -                                     | -
+IdleIgnoring       | CallerText              | -                                 | -    | -          | -                                     | -
+IdleIgnoring       | RunEnds                 | end input auto-1                  | -    | -          | -                                     | -
+IdleIgnoring       | IgnoredEnds             | -                                 | -    | -          | -                                     | -
+IdleIgnoring       | CallerEnds              | end input t-in                    | -    | -          | -                                     | -
+IdleIgnoring       | SnapshotIdle            | -                                 | -    | -          | -                                     | -
+IdleIgnoring       | SnapshotOpen            | start autonomous snap-1           | busy | autonomous | -                                     | -
+IdleIgnoring       | SessionCloses           | -                                 | -    | gone       | -                                     | -
+IdleIgnoring       | PromptStarts            | -                                 | busy | -          | running «»                            | -
+
+# A caller's prompt while the refused run is remembered: the refused run's frames do not reach the
+# collector.
+CallerIgnoring     | StartsSelfWoken         | start autonomous auto-3           | busy | -          | running «»                            | -
+CallerIgnoring     | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | running «»                            | -
+CallerIgnoring     | StartsInput             | start input t-2                   | busy | -          | running «»                            | -
+CallerIgnoring     | RunText                 | -                                 | busy | -          | running «more run words»              | -
+CallerIgnoring     | IgnoredText             | -                                 | busy | -          | running «»                            | -
+CallerIgnoring     | CallerText              | -                                 | busy | -          | running «caller words»                | -
+CallerIgnoring     | RunEnds                 | end input auto-1                  | -    | -          | returned «»                           | -
+CallerIgnoring     | IgnoredEnds             | -                                 | busy | -          | running «»                            | -
+CallerIgnoring     | CallerEnds              | end input t-in                    | -    | -          | returned «»                           | -
+CallerIgnoring     | SnapshotIdle            | -                                 | -    | -          | returned «last words»                 | -: last words
+CallerIgnoring     | SnapshotOpen            | -                                 | busy | -          | running «»                            | -
+CallerIgnoring     | SessionCloses           | -                                 | -    | gone       | failed «the project session ended» «» | -
+CallerIgnoring     | PromptCancelled         | -                                 | -    | -          | -                                     | -
+";
+
+#[tokio::test]
+async fn a_project_session_turn_moves_by_its_table() {
+    let rows: Vec<Vec<&str>> = TURN_TABLE
+        .lines()
+        .skip(2)
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .map(|line| line.split('|').map(str::trim).collect())
+        .collect();
+    let named = |row: &[&str]| {
+        let at = TurnAt::ALL
+            .into_iter()
+            .find(|at| format!("{at:?}") == row[0]);
+        let happens = TurnHappens::ALL
+            .into_iter()
+            .find(|happens| format!("{happens:?}") == row[1]);
+        (at.expect(row[0]), happens.expect(row[1]))
+    };
+    let every: Vec<String> = TurnAt::ALL
+        .into_iter()
+        .flat_map(|at| {
+            TurnHappens::ALL
+                .into_iter()
+                .filter(move |happens| happens.possible_at(at))
+                .map(move |happens| format!("{at:?} {happens:?}"))
+        })
+        .collect();
+    let listed: Vec<String> = rows
+        .iter()
+        .map(|row| format!("{} {}", row[0], row[1]))
+        .collect();
+    assert_eq!(
+        listed, every,
+        "the table lists every phase against every event, once"
+    );
+    for row in rows {
+        let (at, happens) = named(&row);
+        let mut rig = TurnRig::new().await;
+        rig.reach(at).await;
+        rig.apply(happens).await;
+        assert_eq!(rig.seen().await, row[2..], "{at:?} on {happens:?}");
+        rig.session.close();
+    }
 }

@@ -381,6 +381,50 @@ per message (`text`), not as streamed deltas: one delta per token would fill
 the per-session replay buffer of 1000 events and make a reconnect lose its
 replay.
 
+### A project session's turn
+
+The service keeps one turn state per project session: `TurnState` in
+`apps/backend/src/session_turn.rs`. `TurnState::step` is its only writer.
+It runs under the turn's lock and returns what is left to do (hand a frame
+to the caller's prompt, report a turn boundary to the application, ask the
+application to admit a self-woken start, or end a self-woken run), which
+the session's pump does once the lock is released. The application's
+answer to an admission comes back as an event of its own, so nothing
+waits under the lock.
+
+| Phase | Busy | A frame of no turn the session holds | A module call that names no turn |
+|---|---|---|---|
+| idle | no | reaches nobody | has no cause |
+| caller (a prompt is collecting its turn) | yes | goes to the prompt | has no cause |
+| self-woken (a run no prompt collects is held) | yes | is dropped | gets the run's cause |
+| caller and self-woken (the application admitted a run behind the caller's settled turn before the prompt returned) | yes | is dropped | gets the run's cause |
+| caller settled (that run ended; the prompt has not returned yet) | no | goes to the prompt | has no cause |
+
+| From | Event | Next | Done |
+|---|---|---|---|
+| idle | a prompt starts | caller | |
+| self-woken | a prompt starts | caller and self-woken | |
+| caller, caller settled | the prompt returns or is cancelled | idle | |
+| caller and self-woken | the prompt returns or is cancelled | self-woken | |
+| idle | `turn_start`, `autonomous` or `unknown` | self-woken | start reported; the answer is not used |
+| caller, caller settled | `turn_start`, `autonomous` or `unknown` | admitted: caller and self-woken; refused: unchanged | start reported; refused, it goes to the prompt |
+| caller and self-woken | `turn_start`, `autonomous` or `unknown` | unchanged | goes to the prompt; nothing reported |
+| self-woken | `turn_start`, `autonomous` or `unknown` | unchanged | its turn id is remembered as refused |
+| any | `turn_start`, `input` | unchanged | start reported; the refused id is forgotten |
+| self-woken, caller and self-woken | `text` of the run | unchanged | the run keeps it |
+| self-woken, caller and self-woken | `turn_end` of the run, or an idle snapshot naming it | idle, caller settled | final text published; end reported with it (a snapshot's `last_text` stands in for none) |
+| self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it; goes to the prompt |
+| caller, caller settled | `turn_end` | unchanged | goes to the prompt, which it ends; with a turn id, reported as an `input` turn's end |
+| idle | `turn_end` with a turn id | idle | reported as an `input` turn's end |
+| idle | a snapshot with a turn open | self-woken | start reported, with the snapshot's cause |
+| any | another snapshot | unchanged | goes to the prompt |
+| any | `text` or `turn_end` of the refused turn id | unchanged | dropped; its `turn_end` forgets it |
+
+The session's end of life (below) is a state of its own: `session_closed`
+moves both. The table test `a_project_session_turn_moves_by_its_table`
+(`apps/backend/tests/test_project_session.rs`) holds every phase against
+every event.
+
 ### A project session's end
 
 The service keeps one end-of-life state per project session:

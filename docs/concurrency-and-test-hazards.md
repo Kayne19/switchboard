@@ -379,7 +379,7 @@ Two rules close the window:
   that settle report is the case. Otherwise the collector keeps it, as
   before: that is a prompt the host turned into part of a run the session
   had just started itself. The collector's end leaves `busy` set while an
-  autonomous turn runs.
+  autonomous turn runs (`docs/host-link.md`, "A project session's turn").
 
 A host that sends no turn ids gets the old behavior. Without an id the
 caller's operation is never bound to a host turn, so no settle report can

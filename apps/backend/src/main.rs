@@ -31,6 +31,7 @@ mod reply;
 mod residents;
 mod router;
 mod routing_view;
+mod session_turn;
 mod speech;
 mod turns;
 mod visual_protocol;

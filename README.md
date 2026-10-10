@@ -352,6 +352,7 @@ container, and the post-deploy checklist.
 | `apps/backend/src/prewarm.rs` | setup per host and project as each host links, and launch plans |
 | `apps/backend/src/pi_client.rs` | the operator's and the utility's pi RPC process — one turn in, text and signals out |
 | `apps/backend/src/project_session.rs` | a project session over the host link: its turns, its frame pump and its module calls |
+| `apps/backend/src/session_turn.rs` | a project session's turn: which prompt or self-woken run its frames belong to |
 | `apps/backend/src/models.rs` | model catalogs and spoken model/thinking resolution |
 | `apps/backend/src/registry.rs` | the project registry and spoken-name resolution |
 | `apps/backend/src/audio.rs` | speech-to-text sidecar, ElevenLabs, and reply-length shaping |
