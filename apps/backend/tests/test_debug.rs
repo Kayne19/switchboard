@@ -1170,6 +1170,53 @@ fn a_record_size_estimate_counts_what_it_keeps() {
     const { assert!(LOG_BUDGET_BYTES > 256 * (MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES)) };
 }
 
+#[test]
+fn a_clipped_array_does_not_keep_its_input_buffer() {
+    // A producer moves its value into the record. The kept array must be a
+    // new buffer of the kept items, not the input's buffer cut short.
+    let bus = DebugBus::new();
+    bus.publish(DebugEvent::ModuleCall {
+        agent: "alpha".into(),
+        call_id: "m1".into(),
+        name: "display".into(),
+        args: Value::Array(vec![Value::Null; 1_000_000]),
+        turn_id: None,
+    });
+    let snapshot = bus.snapshot();
+    let DebugEvent::ModuleCall { args, .. } = &snapshot.events[0].event else {
+        panic!("module call")
+    };
+    let items = args.as_array().unwrap();
+    assert_eq!(items.len(), MAX_JSON_ITEMS + 1);
+    assert!(
+        items.capacity() <= MAX_JSON_ITEMS + 1,
+        "the kept array holds {} slots",
+        items.capacity()
+    );
+}
+
+#[test]
+fn a_record_size_estimate_counts_every_json_node() {
+    fn nodes(value: &Value) -> usize {
+        1 + match value {
+            Value::Array(items) => items.iter().map(nodes).sum(),
+            Value::Object(map) => map.values().map(nodes).sum(),
+            _ => 0,
+        }
+    }
+    // Empty strings and arrays have almost no text, but each node is a
+    // `Value` in memory all the same.
+    let mut value = json!(vec![vec![""; 64]; 64]);
+    let mut clip = Clip::new();
+    clip.json(&mut value);
+    let kept = nodes(&value);
+    assert!(
+        clip.bytes() >= kept * std::mem::size_of::<Value>(),
+        "{kept} nodes kept, estimated at {} bytes",
+        clip.bytes()
+    );
+}
+
 #[tokio::test]
 async fn a_feed_that_lags_twice_within_the_interval_is_closed() {
     let bus = DebugBus::new();
