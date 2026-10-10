@@ -215,9 +215,26 @@ for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set(["
 	scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
 }
 
+// 13. A backend test waits on a channel, a Notify, a watch or a stream
+//     through within() (apps/backend/src/main.rs), which fails the test by
+//     name after a generous deadline. libtest has no per-test timeout, so a
+//     bare await whose wake-up is lost hangs cargo test forever with no
+//     output (#338). A fake that is meant to wait as long as its test says
+//     so on the line before: `// unbounded: <why>`.
+for (const file of files(path.join(root, "apps/backend/tests"), new Set([".rs"]))) {
+	const text = lines(file);
+	text.forEach((line, index) => {
+		const wait = /\.(?:recv|next|notified|changed)\(\)/;
+		const bare = new RegExp(`${wait.source}\\.await`).test(line) || (new RegExp(`${wait.source}$`).test(line.trimEnd()) && /^\s*\.await\b/.test(text[index + 1] ?? ""));
+		// Inside a timeout(..., async { loop { ... } }) the wait is bounded.
+		const bounded = text.slice(Math.max(0, index - 3), index + 1).some((near) => /\b(?:within|timeout)\(/.test(near));
+		if (bare && !bounded && !/\/\/ unbounded: \S/.test(text[index - 1] ?? "")) findings.push(`${rel(file)}:${index + 1}: a test await with no deadline (wrap it in within(), or mark a fake \`// unbounded: <why>\`)`);
+	});
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, bounded test awaits");

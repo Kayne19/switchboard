@@ -442,6 +442,30 @@ test about the page clock uses vitest's fake timers
 the fake time with `vi.getMockedSystemTime()` or `new Date()`, since the gate
 refuses `Date.now` whatever clock it reads.
 
+## A test await with no deadline
+
+Many backend tests wait on a channel the code under test feeds: a floor
+result, a command a fake host saw, a debug event. The worker holding the
+sender lives as long as the test, so the channel never closes. If the code
+never sends, a bare `rx.recv().await` never returns, and libtest has no
+per-test timeout. That is exactly how the bugs this file is about show up: the
+floor wakes its worker with `Notify::notify_waiters`, which stores no permit,
+and a change that loses that wake-up did not make
+`queue_order_and_one_speaker_at_a_time` fail. It made `cargo test` stop in
+that test, printing nothing, until it was killed (#338).
+
+So a test waits through `within(what, future)` (`apps/backend/src/main.rs`):
+it awaits the future for up to 10 seconds, then fails the test with the
+caller's line and `what`. Ten seconds is a hang detector, not a timing
+assertion; a test that checks how soon something happens uses its own
+`tokio::time::timeout` with the number it means.
+
+The rule: in `apps/backend/tests`, `.recv()`, `.next()`, `.notified()` and
+`.changed()` are not awaited bare. `scripts/check_hygiene.mjs` refuses one
+unless `within(` or `timeout(` opens on that line or within the three before
+it. A fake that is meant to wait as long as its test (a responder holding a
+gate the test opens) says so on the line before, `// unbounded: <why>`.
+
 ## A test that takes the first screen-state report
 
 The page reports its screen state whenever that state changes, and the first
