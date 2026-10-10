@@ -8,7 +8,7 @@
 // ignored and the line moves on. A display the page declines is reported once,
 // on the next report that goes out. `ScreenReporter` is the one owner of
 // that line; its phase x event table is in apps/frontend/ARCHITECTURE.md
-// ("Screen reports") and pinned by tests/unit/screenReporter.test.tsx.
+// ("Transport boundary") and pinned by tests/unit/screenReporter.test.tsx.
 
 import type { ControllerState, ScreenStateReport } from "../controller/types";
 import { deriveScreenState } from "./sceneModel";

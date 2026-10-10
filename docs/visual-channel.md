@@ -772,7 +772,15 @@ the page applies or declines a frame) carries two more fields:
 - `rejected` (optional): `{ seq, reason }` for a frame the page could not
   apply. It stays queued — not dropped — until the report that carries it is
   the one actually transmitted, so an intervening, rejection-less report
-  can't silently swallow it.
+  can't silently swallow it. The page holds one: a second declined before a
+  report goes replaces the first (#378).
+
+The page sends with stop-and-wait (`ScreenReporter`,
+`apps/frontend/src/app/screenReporter.ts`; its phase table is in
+`apps/frontend/ARCHITECTURE.md`): one report waits for its
+`screen_state_ack`, and the newest scene waits behind it. A report the
+service ignores gets no ack, so the page waits at most `ACK_DEADLINE_MS`
+(2 s) and then takes it as ignored.
 
 **The backend's gate.** `AppInner.display_gate` holds a `DisplayGateState`
 (`apps/backend/src/display.rs`), the one owner of the caller's stage. Its
