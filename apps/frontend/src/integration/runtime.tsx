@@ -4,11 +4,10 @@
 // screen-state reports.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { deriveScreenState } from "../app/sceneModel";
 import { interpretDisplayMessage } from "../app/displayMessage";
-import { planReportDispatch, shouldClearRejectionOnSend } from "../app/reportDispatch";
+import { ScreenReporter } from "../app/screenReporter";
 import { useController } from "../controller/context";
-import type { MessageData, ScreenStateReport, SpokenLine } from "../controller/types";
+import type { MessageData, SpokenLine } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID, RUNTIME_LINE_ERROR_ID } from "../controller/types";
 import { two } from "../primitives/timeLabels";
 import type { ServerMessage, TranscriptEntry } from "../protocol";
@@ -68,12 +67,13 @@ export function RuntimeIntegration() {
   const [callRuntime, setCallRuntime] = useState<CallRuntime | null>(null);
   const transcriptRef = useRef<TranscriptLine[]>([]);
   const currentResponseRef = useRef("");
-  const transportReadyRef = useRef(false);
-  const generationRef = useRef(0);
-  const pendingReportRef = useRef<ScreenStateReport | null>(null);
-  const inFlightReportRef = useRef<ScreenStateReport | null>(null);
-  const appliedSeqRef = useRef(0);
-  const pendingRejectionRef = useRef<{ seq: number; reason: string } | null>(null);
+  // The rendered scene goes to the backend through the runtime the page
+  // holds now; with none, the report waits.
+  const callRuntimeRef = useRef<CallRuntime | null>(null);
+  const [screenReporter] = useState(
+    () =>
+      new ScreenReporter((report) => callRuntimeRef.current?.sendScreenState(report) ?? false),
+  );
   const handleServerRef = useRef<(message: ServerMessage) => void>(() => {});
   const handleStateRef = useRef<(runtimeState: RuntimeState) => void>(() => {});
   const handleHeardRef = useRef<(line: HeardLine) => void>(() => {});
@@ -85,34 +85,6 @@ export function RuntimeIntegration() {
   const shownStatusRef = useRef("");
   const [reportNonce, setReportNonce] = useState(0);
   const [runtime, setRuntime] = useState<RuntimeState>(INITIAL_RUNTIME_STATE);
-
-  // A report the socket could not carry waits as the pending one, and the
-  // rejection it carries stays pending with it.
-  const sendReport = useCallback(
-    (report: ScreenStateReport) => {
-      if (!callRuntime?.sendScreenState(report)) {
-        pendingReportRef.current = report;
-        return;
-      }
-      inFlightReportRef.current = report;
-      if (shouldClearRejectionOnSend(report, pendingRejectionRef.current)) {
-        pendingRejectionRef.current = null;
-      }
-    },
-    [callRuntime],
-  );
-
-  // An ack answers a report this connection sent after its epoch; one before
-  // the epoch (or after the line went down) answers nothing.
-  const handleScreenStateAck = useCallback(() => {
-    if (!transportReadyRef.current) return;
-    inFlightReportRef.current = null;
-    if (pendingReportRef.current) {
-      const next = pendingReportRef.current;
-      pendingReportRef.current = null;
-      sendReport(next);
-    }
-  }, [sendReport]);
 
   const showConversation = useCallback(
     (response?: string) => {
@@ -166,10 +138,7 @@ export function RuntimeIntegration() {
           // handoff keeps them on screen; `epoch_reset` drops only what the
           // old leg put there. A reconnect is followed by `history`, which
           // replaces the transcript with the server's.
-          generationRef.current = message.generation;
-          transportReadyRef.current = true;
-          inFlightReportRef.current = null;
-          pendingReportRef.current = null;
+          screenReporter.epoch(message.generation);
           dispatch({ op: "epoch_reset" });
           break;
         }
@@ -266,13 +235,9 @@ export function RuntimeIntegration() {
           const { result, seq } = interpretDisplayMessage(message);
           if (result.ok) {
             dispatch(result.action);
-            if (seq !== undefined) {
-              appliedSeqRef.current = Math.max(appliedSeqRef.current, seq);
-            }
+            if (seq !== undefined) screenReporter.displayApplied(seq);
           } else {
-            if (seq !== undefined) {
-              pendingRejectionRef.current = { seq, reason: result.error };
-            }
+            if (seq !== undefined) screenReporter.displayRejected(seq, result.error);
             setReportNonce((n) => n + 1);
           }
           break;
@@ -286,7 +251,7 @@ export function RuntimeIntegration() {
           break;
         }
         case "screen_state_ack": {
-          handleScreenStateAck();
+          screenReporter.acknowledged();
           break;
         }
         case "error": {
@@ -332,7 +297,7 @@ export function RuntimeIntegration() {
     };
 
     handleStateRef.current = (runtimeState: RuntimeState) => {
-      if (!runtimeState.connected) transportReadyRef.current = false;
+      if (!runtimeState.connected) screenReporter.lineDown();
       setRuntime(runtimeState);
       // The runtime reports a failure it cannot recover from -- no
       // microphone, a browser that cannot record, a recorder that stopped --
@@ -359,7 +324,7 @@ export function RuntimeIntegration() {
         ),
       });
     };
-  }, [dispatch, handleScreenStateAck, showConversation]);
+  }, [dispatch, screenReporter, showConversation]);
 
   // The conversation names the leg it is on and stays mounted through a
   // handoff, so a new route relabels it at once instead of leaving the old
@@ -382,42 +347,20 @@ export function RuntimeIntegration() {
       window,
     });
     runtimeForPage.start();
+    callRuntimeRef.current = runtimeForPage;
     setCallRuntime(runtimeForPage);
     return () => {
       runtimeForPage.dispose();
+      callRuntimeRef.current = null;
       setCallRuntime(null);
     };
   }, []);
 
-  // Derive screen state and queue/send it over the socket.
-  //
-  // The rejection carried on `pendingRejectionRef` is merged into the
-  // report by `planReportDispatch` but never cleared here -- only
-  // `sendReport` clears it, and only when the report actually being sent
-  // is the one that carries it (see `shouldClearRejectionOnSend`). That is
-  // what lets the rejection survive any number of intervening effect runs
-  // (unrelated state changes) while an earlier report is still in flight,
-  // instead of being silently dropped by a later, rejection-less rebuild
-  // that would otherwise overwrite the queue.
+  // Every scene the page renders is reported. A declined display bumps
+  // `reportNonce`, so the same scene is reported again with the rejection.
   useEffect(() => {
-    const baseReport = deriveScreenState(state, generationRef.current);
-    baseReport.applied_seq = appliedSeqRef.current;
-
-    const action = planReportDispatch(baseReport, {
-      inFlightReport: inFlightReportRef.current,
-      transportReady: transportReadyRef.current,
-      pendingRejection: pendingRejectionRef.current,
-    });
-
-    if (action.kind === "skip") {
-      return;
-    }
-    if (action.kind === "queue") {
-      pendingReportRef.current = action.report;
-      return;
-    }
-    sendReport(action.report);
-  }, [state, sendReport, reportNonce]);
+    screenReporter.sceneChanged(state);
+  }, [screenReporter, state, reportNonce]);
 
   // The page's controls on the call: the Damocles presence starts a turn,
   // sends the one being recorded, or forces a reconnect when the line is
