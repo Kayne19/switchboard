@@ -137,6 +137,13 @@ export class AudioPlayback {
   private mseActive: MseUtterance | null = null;
   private msePending: MseUtterance | null = null;
   private mseReplayBytes = 0;
+  /**
+   * Set while a pause or a blocked `play()` is on screen as an error the
+   * caller has to act on. The clip sounding again takes it down
+   * (`reportResumed`): nothing else would until the next turn's status, and
+   * a stream that recovered left the red card over the conversation (#260).
+   */
+  private awaitingTap = false;
   /** The pause before the next message; nothing starts while it runs. */
   private gapTimer: ReturnType<typeof setTimeout> | null = null;
   /** Watches an accepted clip for sound; see `NO_PROGRESS_MS`. */
@@ -242,12 +249,40 @@ export class AudioPlayback {
    * an error the caller has to act on, so it is reported as one.
    */
   private reportPaused(finishing: boolean): void {
-    this.options.onStatus(
+    this.say(
       finishing
         ? "Audio finishing — tap or click anywhere on this page to continue."
         : "Audio paused — tap or click anywhere on this page to resume.",
       true,
     );
+    this.awaitingTap = true;
+  }
+
+  /** Every status playback reports goes through here. */
+  private say(text: string, error: boolean): void {
+    // Whatever is said now replaces the pause or block on screen.
+    this.awaitingTap = false;
+    this.options.onStatus(text, error);
+  }
+
+  /** Playback was blocked: the next gesture plays it (`handleGesture`). */
+  private reportBlocked(error: unknown): void {
+    this.say(
+      "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (" +
+        errorName(error) +
+        ").",
+      true,
+    );
+    this.awaitingTap = true;
+  }
+
+  /**
+   * A clip sounds again after a pause or a block was reported: the one
+   * place either path withdraws that error.
+   */
+  private reportResumed(): void {
+    if (!this.awaitingTap) return;
+    this.say("Audio resumed.", false);
   }
 
   private clearGap(): void {
@@ -293,6 +328,7 @@ export class AudioPlayback {
   resetForGeneration(generation: number): void {
     this.clearGap();
     this.audioEpoch = generation;
+    this.awaitingTap = false;
     this.audioQueue.length = 0;
     this.clearMsePlayback();
     if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
@@ -409,7 +445,7 @@ export class AudioPlayback {
     const blob = this.audioQueue.shift();
     if (!blob) {
       this.playing = false;
-      this.options.onStatus(this.options.idleText, false);
+      this.say(this.options.idleText, false);
       this.notifyPlaybackChange();
       return;
     }
@@ -462,7 +498,7 @@ export class AudioPlayback {
       // The element refused the clip. Say so: a browser that cannot decode
       // what was sent used to drop every utterance in silence, with nothing
       // on screen for the caller to report (#189).
-      this.options.onStatus(
+      this.say(
         "Audio failed to play (" + mediaErrorName(player.error) + ").",
         true,
       );
@@ -646,12 +682,7 @@ export class AudioPlayback {
     // Autoplay rejection is recoverable: keep this clip at the front so the
     // next user gesture retries it instead of silently losing it.
     this.audioQueue.unshift(owner.blob);
-    this.options.onStatus(
-      "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (" +
-        errorName(error) +
-        ").",
-      true,
-    );
+    this.reportBlocked(error);
   }
 
   /**
@@ -660,7 +691,7 @@ export class AudioPlayback {
    */
   private replayStalled(owner: PlaybackOwner, heard: boolean): void {
     if (this.playbackOwner !== owner || owner.consumed) return;
-    if (!this.playedOut()) this.options.onStatus(this.silentText(heard), true);
+    if (!this.playedOut()) this.say(this.silentText(heard), true);
     this.consumeOwner(owner);
   }
 
@@ -700,6 +731,7 @@ export class AudioPlayback {
         owner.pendingAttempt = null;
         this.playing = !owner.paused;
         if (!this.playing) this.clearProgressWatch();
+        else this.reportResumed();
         this.notifyPlaybackChange();
       },
       (error) => this.playFailed(owner, attempt, error),
@@ -720,7 +752,7 @@ export class AudioPlayback {
     if (utterance.fallbackQueued) return;
     utterance.fallbackQueued = true;
     if (utterance.bytes > MAX_AUDIO_UTTERANCE) {
-      this.options.onStatus(
+      this.say(
         "Audio exceeded the replay limit and was stopped.",
         true,
       );
@@ -757,7 +789,10 @@ export class AudioPlayback {
       },
     );
     Promise.resolve(this.player.play()).then(
-      () => undefined,
+      () => {
+        if (this.mseActive === utterance && !utterance.failed && this.playing)
+          this.reportResumed();
+      },
       (error) => {
         // A rejection that arrives after this utterance was replaced or
         // failed belongs to a clip that is already gone: `mseFail` aborts
@@ -769,12 +804,7 @@ export class AudioPlayback {
         this.stopMeter();
         this.playing = false;
         this.notifyPlaybackChange();
-        this.options.onStatus(
-          "Audio blocked by the browser — tap or click anywhere on this page once, then it will play (" +
-            errorName(error) +
-            ").",
-          true,
-        );
+        this.reportBlocked(error);
       },
     );
   }
@@ -843,6 +873,10 @@ export class AudioPlayback {
     this.playing = false;
     if (utterance.url) URL.revokeObjectURL(utterance.url);
     if (this.mseQueue.length) this.afterGap(() => this.mseStartNext());
+    // The last one ended: the idle line, as a replay's end gives it
+    // (`playNext`), so no error a stream reported outlives it (#260).
+    else if (!this.audioQueue.length && !this.playbackOwner)
+      this.say(this.options.idleText, false);
     this.notifyPlaybackChange();
   }
 
@@ -862,7 +896,7 @@ export class AudioPlayback {
       if (utterance.url) URL.revokeObjectURL(utterance.url);
       utterance.url = null;
     }
-    this.options.onStatus(
+    this.say(
       "Streaming audio failed; using the complete replay (" +
         mediaErrorName(error) +
         ").",
