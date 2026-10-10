@@ -90,16 +90,20 @@ impl DeliveryState {
 
     pub(crate) fn register(&self) -> DeliveryConnection {
         let epoch = self.next_epoch.fetch_add(1, Ordering::Relaxed);
-        self.active_epoch.store(epoch, Ordering::Relaxed);
         let (sender, receiver) = mpsc::channel(DELIVERY_QUEUE);
         let (dropped_sender, dropped) = oneshot::channel();
-        self.connections().insert(
+        // The active connection changes only under the table's lock, so a
+        // retirement promotes from the table as it stands.
+        let mut connections = self.connections();
+        connections.insert(
             epoch,
             Peer {
                 sender,
                 _dropped: dropped_sender,
             },
         );
+        self.active_epoch.store(epoch, Ordering::Relaxed);
+        drop(connections);
         DeliveryConnection {
             epoch,
             receiver,
@@ -107,11 +111,16 @@ impl DeliveryState {
         }
     }
 
+    /// Lets `epoch` go. When it was the active connection, the newest one
+    /// still open takes over (none when it was the last): two tabs are two
+    /// connections, and closing the newer must not leave the other unheard.
     pub(crate) fn retire(&self, epoch: u64) {
-        self.connections().remove(&epoch);
-        let _ = self
-            .active_epoch
-            .compare_exchange(epoch, 0, Ordering::Relaxed, Ordering::Relaxed);
+        let mut connections = self.connections();
+        connections.remove(&epoch);
+        let next = connections.keys().max().copied().unwrap_or(0);
+        let _ =
+            self.active_epoch
+                .compare_exchange(epoch, next, Ordering::Relaxed, Ordering::Relaxed);
     }
 
     pub(crate) fn active_epoch(&self) -> Option<u64> {

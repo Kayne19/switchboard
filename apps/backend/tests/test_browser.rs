@@ -328,6 +328,45 @@ async fn display_projection_screen_state_retirement() {
     assert_eq!(resp["screen"]["stale"], false);
 }
 
+/// Two tabs are two connections, and the newest is the one whose screen
+/// reports count. When it closes, the tab still open takes over: its reports
+/// confirm what the agent displays, and each is acknowledged.
+#[tokio::test]
+async fn the_tab_left_open_is_active_again_when_the_newest_closes() {
+    let state = state();
+    let (mut desktop, _, _) = state.register_connection().await;
+    let (ipad, _, _) = state.register_connection().await;
+    state.retire_connection(ipad.epoch).await;
+    while desktop.receiver.try_recv().is_ok() {}
+
+    let generation = state.0.coordinator.generation();
+    handle_text_frame(
+        &state,
+        desktop.epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state", "view":"visual", "has_visual":true,
+                "generation":generation, "applied_seq":7})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        state.0.display_confirm.borrow().watermark,
+        Some(7),
+        "the open tab's confirmation was ignored"
+    );
+    let mut acknowledged = false;
+    while let Ok(frame) = desktop.receiver.try_recv() {
+        if let DeliveryFrame::Message(Message::Text(text)) = frame {
+            acknowledged |= text.contains("screen_state_ack");
+        }
+    }
+    assert!(acknowledged, "the open tab's report was not acknowledged");
+    assert_eq!(state.0.delivery.active_epoch(), Some(desktop.epoch));
+}
+
 #[tokio::test]
 async fn a_connection_gets_epoch_status_history_and_scene_before_any_live_event() {
     let state = state();
