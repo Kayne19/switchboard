@@ -87,7 +87,6 @@ interface Capture {
 	token: number;
 	epoch: number;
 	chunks: Blob[];
-	discard: boolean;
 	lease: boolean;
 }
 
@@ -416,24 +415,18 @@ export class HandsFreeController {
 			token,
 			epoch,
 			chunks: [],
-			discard: false,
 			lease,
 		};
 		this.capture = capture;
 		if (lease) this.leaseUsed = true;
 		recorder.ondataavailable = (event) => {
-			if (
-				this.capture !== capture ||
-				capture.discard ||
-				token !== this.runtimeToken
-			)
-				return;
+			if (this.capture !== capture || token !== this.runtimeToken) return;
 			if (event.data.size) capture.chunks.push(event.data);
 		};
 		recorder.onstop = () => {
 			if (this.capture !== capture || token !== this.runtimeToken) return;
 			this.capture = null;
-			if (capture.discard || !capture.chunks.length) {
+			if (!capture.chunks.length) {
 				this.publish(
 					capture.lease ? "awaiting_response" : "armed",
 					"No utterance was retained.",
@@ -452,7 +445,6 @@ export class HandsFreeController {
 		};
 		recorder.onerror = (event) => {
 			if (this.capture !== capture || token !== this.runtimeToken) return;
-			capture.discard = true;
 			this.capture = null;
 			this.publish(
 				"error",
@@ -463,7 +455,6 @@ export class HandsFreeController {
 		try {
 			recorder.start();
 		} catch (error) {
-			capture.discard = true;
 			this.capture = null;
 			this.publish(
 				"error",
@@ -487,18 +478,17 @@ export class HandsFreeController {
 	 * Ends the current capture. A discarded capture is retired here, before
 	 * the recorder is asked to stop: every caller that discards has already
 	 * moved `runtimeToken` on, so the recorder's `onstop` would see a stale
-	 * token and leave the capture in place for good (#256).
+	 * token and leave the capture in place for good (#256). A capture that is
+	 * no longer `this.capture` is retired: its recorder's events are ignored.
 	 */
 	private stopCapture(discard: boolean): void {
 		const capture = this.capture;
 		if (!capture) return;
-		capture.discard ||= discard;
-		if (capture.discard) this.capture = null;
+		if (discard) this.capture = null;
 		if (capture.recorder.state !== "inactive") {
 			try {
 				capture.recorder.stop();
 			} catch {
-				capture.discard = true;
 				this.capture = null;
 			}
 		} else {
