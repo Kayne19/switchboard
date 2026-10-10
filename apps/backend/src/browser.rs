@@ -275,15 +275,16 @@ async fn apply_screen_state(
     });
     state.0.display_confirm.send_modify(|c| {
         if c.generation != current_gen {
-            c.generation = current_gen;
-            c.watermark = None;
+            c.begin_generation(current_gen);
         }
         if let Some(seq) = applied_seq {
             if c.watermark.is_none_or(|w| seq > w) {
                 c.watermark = Some(seq);
             }
         }
-        c.rejection = rejected.clone();
+        if let Some((seq, reason)) = rejected {
+            c.reject(seq, reason);
+        }
     });
 
     send_message(state, epoch, ServerMessage::ScreenStateAck).await

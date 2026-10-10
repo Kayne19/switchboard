@@ -520,21 +520,19 @@ async fn display(
         {
             let c = confirm_rx.borrow_and_update();
             if c.generation == permit_generation {
-                if let Some((rseq, reason)) = &c.rejection {
-                    if *rseq == sequence {
-                        tracing::info!(
-                            generation = permit_generation,
-                            sequence,
-                            %reason,
-                            elapsed = ?started.elapsed(),
-                            "the browser could not render it"
-                        );
-                        return Json(json!({
-                            "delivered": true, "rendered": false,
-                            "rejected": true, "reason": reason
-                        }))
-                        .into_response();
-                    }
+                if let Some(reason) = c.rejection(sequence) {
+                    tracing::info!(
+                        generation = permit_generation,
+                        sequence,
+                        %reason,
+                        elapsed = ?started.elapsed(),
+                        "the browser could not render it"
+                    );
+                    return Json(json!({
+                        "delivered": true, "rendered": false,
+                        "rejected": true, "reason": reason
+                    }))
+                    .into_response();
                 }
                 if c.watermark.is_some_and(|w| w >= sequence) {
                     tracing::info!(

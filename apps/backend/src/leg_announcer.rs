@@ -132,11 +132,8 @@ impl LegAnnouncer {
         gate.report_epoch = None;
         gate.report_generation = None;
         *self.last_display.lock().await = None;
-        self.display_confirm.send_modify(|confirm| {
-            confirm.generation = leg.generation;
-            confirm.watermark = None;
-            confirm.rejection = None;
-        });
+        self.display_confirm
+            .send_modify(|confirm| confirm.begin_generation(leg.generation));
         self.publish(ServerMessage::Epoch {
             generation: leg.generation,
         });

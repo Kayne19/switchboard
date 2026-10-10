@@ -965,6 +965,40 @@ async fn display_reports_rejection_from_the_browser() {
     );
 }
 
+/// The page sends a rejection once. A later report without one, here the
+/// confirmation of the next action, must not hide it from the call still
+/// waiting on the rejected `seq` (#255).
+#[tokio::test]
+async fn display_reports_a_rejection_that_a_later_report_followed() {
+    let state = state();
+    let (mut connection, _s, _w) = state.register_connection().await;
+    let epoch = connection.epoch;
+    let handle = post_display_in_task(&state, diagram_show()).await;
+    let DeliveryFrame::Event { sequence, .. } = connection.receiver.recv().await.unwrap() else {
+        panic!("expected a display event")
+    };
+    for report in [
+        json!({"type":"screen_state","view":"auto","has_visual":false,
+               "rejected":{"seq":sequence,"reason":"unknown field in chart data: zeta"}}),
+        json!({"type":"screen_state","view":"auto","has_visual":true,
+               "visual_kind":"metric","applied_seq":sequence + 1}),
+    ] {
+        handle_text_frame(&state, epoch, &mut None, &mut None, &report.to_string())
+            .await
+            .unwrap();
+    }
+    let (_code, body) = timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(body["rejected"], true, "{body}");
+    assert_eq!(body["rendered"], false, "{body}");
+    assert_eq!(
+        body["reason"], "unknown field in chart data: zeta",
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn module_calls_are_answered_by_the_callback_logic_with_a_reply_status() {
     let state = state();
