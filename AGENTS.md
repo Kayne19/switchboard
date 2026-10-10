@@ -176,6 +176,14 @@ commit.
 - One implementation per lifecycle. A fallback is an adapter or an explicit
   refusal, not a second copy of the path kept for "when the real one is
   absent" (see rule 9 in `docs/architecture.md`).
+- A lifecycle is one state type with one transition function. A change that
+  adds a flag, a nullable slot, a timer or a token to a lifecycle owner, or a
+  third copy of its end, extracts the machine first, in its own PR
+  (`docs/architecture.md` rule 9; `codebase-hardening` doctrine 2a). The
+  October 2026 audit traced 32 lifecycle bugs to a field left set in the
+  wrong phase or an end missed on one exit, and each fix had added a flag.
+  `scripts/check_hygiene.mjs` holds each machine to one writer and holds
+  the owners that are not machines yet to the phase fields they have.
 - Tests never touch the network, ElevenLabs, a whisper model, or the real `pi`
   or `ssh`. Fake executables go through `write_executable_script`; PBX tests
   drive transfers through `Prewarm::settled`, which exercises the production
