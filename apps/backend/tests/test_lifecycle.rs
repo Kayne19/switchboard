@@ -199,7 +199,8 @@ fn a_rescue_at_a_generation_the_call_has_left_rescues_nothing() {
     coordinator.begin_candidate(alpha_candidate()).unwrap();
     let held = coordinator.generation();
     let moved = coordinator.begin_rescue("transfer");
-    assert_eq!(moved.generation, held + 1);
+    // Past the abandoned candidate's generation too (#280).
+    assert!(moved.generation > held, "{moved:?} after {held}");
     let told = notices.lock().unwrap().len();
 
     assert!(coordinator.begin_rescue_at(held, "page connect").is_none());
