@@ -40,7 +40,9 @@ type Phase =
   | "awaiting_response"
   | "lease"
   /** A follow-up capture, nothing recorded yet. */
-  | "lease_capturing";
+  | "lease_capturing"
+  /** A follow-up capture with a chunk recorded, the recorder asked to stop. */
+  | "lease_finishing";
 
 type Event =
   | "enable"
@@ -58,6 +60,7 @@ type Event =
   | "speech start, no recorder"
   | "speech start, start throws"
   | "speech end"
+  | "speech end, stop throws"
   | "detector fails"
   | "grace lapses"
   | "capped"
@@ -74,9 +77,6 @@ type Event =
 
 type Then =
   | Phase
-  | "lease_finishing"
-  /** Says `capturing`, holds no capture, and nothing feeds the wake detector. */
-  | "deaf"
   /** Says `lease` while a capture runs. */
   | "lease over a capture";
 
@@ -336,8 +336,13 @@ async function reach(phase: Phase): Promise<Harness> {
         h.speechEnds();
       }
       if (phase === "awaiting_response") h.latest().onstop!();
-      if (phase === "lease" || phase === "lease_capturing") h.instance.openFollowUpLease(4);
-      if (phase === "lease_capturing") h.speechStarts();
+      if (phase === "lease" || phase === "lease_capturing" || phase === "lease_finishing")
+        h.instance.openFollowUpLease(4);
+      if (phase === "lease_capturing" || phase === "lease_finishing") h.speechStarts();
+      if (phase === "lease_finishing") {
+        h.latest().ondataavailable!({ data: new Blob(["words"]) });
+        h.speechEnds();
+      }
     }
   }
   h.reset();
@@ -384,6 +389,11 @@ async function apply(h: Harness, event: Event): Promise<void> {
       h.nextRecorder("start throws");
       return h.speechStarts();
     case "speech end":
+      return h.speechEnds();
+    case "speech end, stop throws":
+      h.latest().stop = () => {
+        throw new Error("stop refused");
+      };
       return h.speechEnds();
     case "detector fails":
       return h.failDetector();
@@ -436,7 +446,6 @@ function expectPhase(h: Harness, then: Then): void {
     lease: ["lease", true, false, null],
     lease_capturing: ["lease_capturing", true, true, "recording"],
     lease_finishing: ["lease_capturing", true, true, "inactive"],
-    deaf: ["capturing", true, false, null],
     "lease over a capture": ["lease", true, true, null],
   };
   const [state, enabled, capturing, recording] = looks[then];
@@ -519,6 +528,8 @@ const rows: Row[] = [
 
   { from: "capturing", event: "speech end", seen: { stops: 1 }, then: "finishing" },
   { from: "capturing", event: "capped", seen: { stops: 1 }, then: "finishing" },
+  // A recorder that cannot stop has failed, as one that reports an error has.
+  { from: "capturing", event: "speech end, stop throws", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
   { from: "capturing", event: "data", seen: {}, then: "capturing" },
   // The recorder stopped by itself before anything was recorded.
   { from: "capturing", event: "recorder stops", seen: { published: ["armed"], said: NOTHING_KEPT, ...QUIET }, then: "armed" },
@@ -538,10 +549,10 @@ const rows: Row[] = [
   { from: "finishing", event: "recorder stops, clip refused", seen: { published: ["armed"], said: NOT_SENT, clips: 1, ...QUIET }, then: "armed" },
   { from: "finishing", event: "recorder error", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
   { from: "finishing", event: "disable", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
-  // Today a second stop before the recorder's `stop` event drops the
-  // capture: its clip is lost and hands-free stays `capturing`, deaf.
-  { from: "finishing", event: "speech end", seen: {}, then: "deaf" },
-  { from: "finishing", event: "capped", seen: {}, then: "deaf" },
+  // A second stop before the recorder's `stop` event changes nothing: that
+  // event ends the capture and sends its clip.
+  { from: "finishing", event: "speech end", seen: {}, then: "finishing" },
+  { from: "finishing", event: "capped", seen: {}, then: "finishing" },
   { from: "finishing", event: "follow-up", seen: { published: ["lease"], said: LEASE, resets: [0, 1] }, then: "lease over a capture" },
   { from: "finishing", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...LET_GO }, then: "paused_ptt" },
 
@@ -573,6 +584,8 @@ const rows: Row[] = [
   { from: "lease_capturing", event: "lease tick", seen: {}, then: "lease_capturing" },
   { from: "lease_capturing", event: "speech end", seen: { stops: 1 }, then: "lease_finishing" },
   { from: "lease_capturing", event: "capped", seen: { stops: 1 }, then: "lease_finishing" },
+  { from: "lease_finishing", event: "speech end", seen: {}, then: "lease_finishing" },
+  { from: "lease_finishing", event: "recorder stops", seen: { published: ["awaiting_response"], said: SENT, clips: 1 }, then: "awaiting_response" },
   { from: "lease_capturing", event: "recorder stops", seen: { published: ["armed"], said: NOTHING_KEPT, ...QUIET }, then: "armed" },
   { from: "lease_capturing", event: "recorder error", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
   { from: "lease_capturing", event: "follow-up", seen: { published: ["lease"], said: LEASE, resets: [0, 1] }, then: "lease over a capture" },

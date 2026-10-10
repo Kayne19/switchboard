@@ -541,19 +541,28 @@ export class HandsFreeController {
 	 * moved `runtimeToken` on, so the recorder's `onstop` would see a stale
 	 * token and leave the capture in place for good (#256). A capture that is
 	 * no longer `this.capture` is retired: its recorder's events are ignored.
+	 *
+	 * A capture that is kept ends in the recorder's `stop` event, never here.
+	 * A recorder already asked to stop has that event on the way; retiring its
+	 * capture now (a speech end and the 30 s cap a moment apart) dropped the
+	 * clip and left hands-free saying `capturing`, where nothing feeds the
+	 * wake detector. A recorder that cannot stop has failed.
 	 */
 	private stopCapture(discard: boolean): void {
 		const capture = this.capture;
 		if (!capture) return;
 		if (discard) this.capture = null;
-		if (capture.recorder.state !== "inactive") {
-			try {
-				capture.recorder.stop();
-			} catch {
-				this.capture = null;
-			}
-		} else {
+		if (capture.recorder.state === "inactive") return;
+		try {
+			capture.recorder.stop();
+		} catch (error) {
+			if (discard) return;
 			this.capture = null;
+			this.publish(
+				"error",
+				`Hands-free recording failed (${this.errorName(error)}).`,
+			);
+			this.disable();
 		}
 	}
 
