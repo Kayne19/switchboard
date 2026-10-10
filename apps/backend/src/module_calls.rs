@@ -1,8 +1,8 @@
 //! A project session's module calls over the host link: the `/host`
 //! upgrade, the admission every acting call passes, and `speak`,
 //! `request_to_speak`, `display` and `view`.
-use crate::app_state::emit_message;
 use crate::app_state::AppState;
+use crate::app_state::{emit_message, publish_agents};
 use crate::browser::MAX_WEBSOCKET_MESSAGE_BYTES;
 use crate::delivery::Event;
 use crate::display::DISPLAY_CONFIRM_DEADLINE_MS;
@@ -348,7 +348,7 @@ pub(crate) async fn request_to_speak(state: AppState, token: &str, raw: Value) -
         )
             .into_response();
     };
-    emit_message(&state, ServerMessage::AgentsState { agents });
+    publish_agents(&state, agents);
     state
         .0
         .floor

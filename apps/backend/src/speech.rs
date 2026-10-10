@@ -3,8 +3,8 @@
 //! release reserves before it speaks, and the floor worker's hooks.
 use crate::app_state::AppState;
 use crate::app_state::{
-    clear_active_operation, emit, emit_message, publish_status, spawn_registered_operation,
-    AppInner,
+    clear_active_operation, emit, emit_message, publish_agents, publish_status,
+    spawn_registered_operation, AppInner,
 };
 use crate::audio::TtsContinuity;
 use crate::debug::DebugEvent;
@@ -938,10 +938,7 @@ async fn release_floor(
                     state.0.projection.floor_released(project)
                 })
             {
-                state.0.debug.publish(DebugEvent::AgentsState {
-                    agents: agents.clone(),
-                });
-                emit_message(state, ServerMessage::AgentsState { agents });
+                publish_agents(state, agents);
                 ReleaseOutcome::Played
             } else {
                 ReleaseOutcome::Drop

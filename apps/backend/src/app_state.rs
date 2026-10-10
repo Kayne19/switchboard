@@ -583,6 +583,12 @@ pub(crate) async fn clear_active_operation(state: &AppState, id: TaskId) {
 /// lifecycle notices; waiting requests are kept until promotion or stop.
 pub(crate) async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
     let agents = state.0.projection.notice(&notice);
+    publish_agents(state, agents);
+}
+
+/// Sends the agent projection after a change to the caller's page and to the
+/// debug bus. Every change goes through here, so the two cannot disagree.
+pub(crate) fn publish_agents(state: &AppState, agents: Vec<AgentState>) {
     state.0.debug.publish(DebugEvent::AgentsState {
         agents: agents.clone(),
     });
@@ -604,10 +610,7 @@ pub(crate) async fn update_agent_state_if_current(
     else {
         return false;
     };
-    state.0.debug.publish(DebugEvent::AgentsState {
-        agents: agents.clone(),
-    });
-    emit_message(state, ServerMessage::AgentsState { agents });
+    publish_agents(state, agents);
     true
 }
 

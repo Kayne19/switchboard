@@ -232,6 +232,32 @@ async fn a_refused_reason_or_target_lists_the_names_it_takes() {
     );
 }
 
+// A background agent's request is shown on the debug page as it is on the
+// caller's: the projection's every change goes to both.
+#[tokio::test]
+async fn a_request_to_speak_reaches_the_debug_bus() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "alpha-token");
+    let response = request_to_speak(
+        state.clone(),
+        "alpha-token",
+        json!({"message": "the update is ready", "reason": "finished"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    crate::app_state::until_debug(&state, |event| {
+        matches!(
+            event,
+            crate::debug::DebugEvent::AgentsState { agents }
+                if agents.iter().any(|agent| agent.project == "alpha" && agent.state == "waiting")
+        )
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
     let (code, body) =
