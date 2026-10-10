@@ -858,6 +858,66 @@ async fn a_page_control_for_a_generation_the_call_has_left_changes_nothing() {
     call.hang_up().await;
 }
 
+// #263: a hangup acts on the PBX only while the call is still at the
+// generation its own rescue left. A newer control that rescued since (a
+// /connect pressed right after it, a second tab) owns the call; the hangup
+// that came before it must not drop the leg that control dials.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_hangup_overtaken_before_it_reaches_the_pbx_drops_nothing() {
+    let call = call_on_alpha(&[]).await;
+    let state = &call.state;
+    let generation = state.0.coordinator.generation();
+    // The hangup's rescue goes through; the PBX is busy, so its drop waits.
+    let board = state.0.switchboard.lock().await;
+    let request_state = state.clone();
+    let hangup = tokio::spawn(async move {
+        request_json(
+            &request_state,
+            Method::POST,
+            "/hangup",
+            Some(json!({"generation": generation})),
+        )
+        .await
+    });
+    timeout(Duration::from_secs(5), async {
+        while state.0.coordinator.generation() == generation {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the hangup's rescue moves the generation");
+    state.0.coordinator.begin_rescue("a newer control");
+    drop(board);
+
+    let (code, answer) = timeout(Duration::from_secs(5), hangup)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (code, answer),
+        (
+            StatusCode::CONFLICT,
+            json!({"detail": "hangup was superseded"})
+        )
+    );
+    assert_ne!(
+        last_transcript_line(state).await,
+        Some((
+            "You hung up the line to alpha. You're back with the operator.".to_owned(),
+            "alpha".to_owned()
+        )),
+        "the hangup dropped the leg the newer control owns"
+    );
+    let still_held = state.0.switchboard.lock().await.force_hangup().await;
+    assert_eq!(
+        still_held.as_deref(),
+        Some("alpha"),
+        "the PBX still holds the leg the hangup left to the newer control"
+    );
+    call.hang_up().await;
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_page_control_without_a_generation_changes_nothing() {

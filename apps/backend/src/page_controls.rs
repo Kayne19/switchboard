@@ -382,11 +382,26 @@ pub(crate) async fn hangup(
         Err(stale) => return stale.refusal("hangup", "ignored"),
     };
     // The process the rescue closed, and the leg the PBX then dropped.
-    let Ok((_, closed)) = cancel_active_operations_at(&state, generation).await else {
+    let Ok((rescued, closed)) = cancel_active_operations_at(&state, generation).await else {
         tracing::info!("hangup ignored: the line moved on before its rescue");
         return page_conflict("hangup", "ignored");
     };
-    let dropped = state.0.switchboard.lock().await.force_hangup().await;
+    // Checked under the PBX lock, where the hangup acts: a newer control that
+    // rescued since this rescue (a /connect pressed right after the hangup, a
+    // second tab) owns the call, and the leg it dials must not be dropped by
+    // the hangup that came before it. A rescue does not take this lock, so a
+    // newer one landing after the check only finds the leg already dropped.
+    let dropped = {
+        let mut board = state.0.switchboard.lock().await;
+        if state.0.coordinator.generation() != rescued {
+            tracing::info!(
+                elapsed = ?started.elapsed(),
+                "superseded: a newer control took the line before the hangup reached the PBX"
+            );
+            return page_conflict("hangup", "superseded");
+        }
+        board.force_hangup().await
+    };
     let hung_up = hangup_outcome(dropped, closed);
     // A hangup ends the call on the debug page; a page still connected is on
     // a new one with the operator.
