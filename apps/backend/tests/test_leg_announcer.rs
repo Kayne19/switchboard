@@ -36,8 +36,8 @@ async fn display_projection_route_reset() {
     // Check that projection is populated
     {
         let gate = state.0.display_gate.lock().await;
-        assert_eq!(gate.projection.order.len(), 1);
-        assert_eq!(gate.projection.focus_id.as_deref(), Some("scene-obj"));
+        assert_eq!(gate.projection().order.len(), 1);
+        assert_eq!(gate.projection().focus_id.as_deref(), Some("scene-obj"));
     }
 
     // Trigger route reset by invoking announce_route on switchboard
@@ -46,12 +46,12 @@ async fn display_projection_route_reset() {
     // Verify projection is empty and snapshot returns empty
     {
         let gate = state.0.display_gate.lock().await;
-        assert!(gate.projection.objects.is_empty());
-        assert!(gate.projection.order.is_empty());
-        assert_eq!(gate.projection.focus_id, None);
-        assert!(gate.projection.speech.is_none());
-        assert_eq!(gate.screen_state["stale"], true);
-        assert!(gate.projection.snapshot_actions().is_empty());
+        assert!(gate.projection().objects.is_empty());
+        assert!(gate.projection().order.is_empty());
+        assert_eq!(gate.projection().focus_id, None);
+        assert!(gate.projection().speech.is_none());
+        assert_eq!(gate.screen().to_value()["stale"], true);
+        assert!(gate.projection().snapshot_actions().is_empty());
     }
 }
 
@@ -120,7 +120,7 @@ async fn a_first_display_from_the_incoming_leg_survives_the_transfer_settling() 
         .display_gate
         .lock()
         .await
-        .projection
+        .projection()
         .objects
         .contains_key("d1"));
     let (_code, view) = agent_call_json(&state, "/view", json!({"token":"alpha-leg"})).await;
@@ -177,7 +177,7 @@ async fn returning_to_the_operator_still_clears_the_project_scene() {
         .display_gate
         .lock()
         .await
-        .projection
+        .projection()
         .objects
         .is_empty());
 }

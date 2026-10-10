@@ -7,7 +7,7 @@ use crate::audio::{Speaker, SttAdapter, SttStreamAdapter};
 use crate::caller_input::{process_clips, process_stream_results, ClipState};
 use crate::debug::{DebugBus, DebugEvent};
 use crate::delivery::{AudioQueue, DeliveryState, Event};
-use crate::display::{ConfirmState, DisplayGateState, DisplayProjection};
+use crate::display::{DisplayGateState, DisplayProjection};
 use crate::floor::Floor;
 use crate::floor_hooks::spawn_floor_worker;
 use crate::history::TranscriptLog;
@@ -224,8 +224,9 @@ pub struct AppInner {
     pub(crate) speech: SpeechQueue,
     /// Caller audio clips and the state only `caller_input.rs` reads.
     pub(crate) clips: ClipState,
+    /// The caller's stage, the screen the page reported and what it has
+    /// confirmed; `DisplayGateState`'s methods are its only writers.
     pub display_gate: Arc<Mutex<DisplayGateState>>,
-    pub display_confirm: watch::Sender<ConfirmState>,
     pub active_session: Arc<Mutex<Option<LegSession>>>,
     /// Last known state for resident project agents, including pending speak requests.
     pub(crate) projection: AgentProjection,
@@ -331,22 +332,7 @@ impl AppState {
         let delivery = DeliveryState::new();
         let speech_deadline = speaker.speech_deadline;
         let mut coordinator = switchboard.coordinator();
-        let display_gate = Arc::new(Mutex::new(DisplayGateState {
-            projection: DisplayProjection::default(),
-            screen_state: json!({
-                "view": "auto",
-                "pinned": false,
-                "has_visual": false,
-                "visual_kind": Value::Null,
-                "object_ids": [],
-                "title": "",
-                "stale": false,
-                "generation": 0,
-            }),
-            scene_leg: None,
-            watermark: 0,
-        }));
-        let (display_confirm_tx, _) = watch::channel(ConfirmState::default());
+        let display_gate = Arc::new(Mutex::new(DisplayGateState::new()));
         let continuity = Arc::new(StdMutex::new(SpeechContinuity {
             generation: coordinator.generation(),
             model: coordinator.status().model.clone(),
@@ -359,7 +345,6 @@ impl AppState {
             events: events.clone(),
             delivery: delivery.clone(),
             display_gate: display_gate.clone(),
-            display_confirm: display_confirm_tx.clone(),
             projection: projection.clone(),
             continuity: continuity.clone(),
             active_speech_group: active_speech_group.clone(),
@@ -489,7 +474,6 @@ impl AppState {
                 clips,
                 turns,
                 display_gate,
-                display_confirm: display_confirm_tx,
                 active_session,
                 projection,
                 floor,

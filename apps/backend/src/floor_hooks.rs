@@ -38,7 +38,7 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
             let request = request.clone();
             Box::pin(async move {
                 let entries = state.0.transcript_log.lock().await.entries();
-                let screen = state.0.display_gate.lock().await.screen_state.clone();
+                let screen = state.0.display_gate.lock().await.screen().to_value();
                 // Floor admission only asks whether a background agent may
                 // speak. Desk discovery is for caller routing and would make
                 // this gate wait on every host link for no decision benefit.

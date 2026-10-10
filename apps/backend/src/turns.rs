@@ -119,7 +119,7 @@ impl From<Decision> for RoutedDecision {
 /// the only fallback for a timeout, malformed response, or missing key.
 async fn route_transcript(state: &AppState, id: &str, transcript: &str) -> RoutedDecision {
     let entries = state.0.transcript_log.lock().await.entries();
-    let screen = state.0.display_gate.lock().await.screen_state.clone();
+    let screen = state.0.display_gate.lock().await.screen().to_value();
     let (router, summary) =
         call_summary_without_pbx_lock(state, &entries, screen, transcript.to_owned()).await;
     let request = router.build_request(&summary);

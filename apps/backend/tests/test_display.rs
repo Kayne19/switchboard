@@ -397,7 +397,7 @@ struct Seen {
 
 async fn seen(state: &AppState) -> Seen {
     let gate = state.0.display_gate.lock().await;
-    let confirm = state.0.display_confirm.borrow().clone();
+    let confirm = gate.confirmations.borrow().clone();
     Seen {
         leg: gate
             .scene_leg
@@ -405,15 +405,15 @@ async fn seen(state: &AppState) -> Seen {
             .map(|leg| (leg.route.clone(), leg.generation)),
         objects: gate.projection.order.clone(),
         watermark: gate.watermark,
-        view: gate.screen_state["view"].as_str().unwrap().to_owned(),
-        stale: gate.screen_state["stale"] == true,
+        view: gate.screen.view.clone(),
+        stale: gate.screen.stale,
         confirmed: (confirm.generation, confirm.watermark),
     }
 }
 
 /// The screen as Jev's routing summary and the floor gate are given it.
 async fn screen_json(state: &AppState) -> Value {
-    state.0.display_gate.lock().await.screen_state.clone()
+    state.0.display_gate.lock().await.screen.to_value()
 }
 
 /// The page on `epoch` reports its screen.

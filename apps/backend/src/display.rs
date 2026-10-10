@@ -1,15 +1,18 @@
 //! The stage projection and its gate.
 //!
 //! `DisplayProjection` folds the agent's `display` actions into the objects,
-//! order, focus, and speech a reconnecting browser replays; `DisplayGateState`
-//! is what `AppInner` holds the projection behind, alongside the confirmation
-//! channel (`ConfirmState`) and the leg a scene belongs to (`SceneLeg`). None
-//! of it is async or generation-aware on its own -- the application files
-//! check the coordinator's generation at the boundary and hold the gate's lock
-//! around each apply.
-use crate::delivery::Event;
+//! order, focus, and speech a reconnecting browser replays.
+//! `DisplayGateState` owns the stage of the leg on the line: the projection,
+//! the screen the page last reported (`ScreenReport`), what the page has
+//! confirmed (`ConfirmState`) and the leg the stage belongs to (`SceneLeg`).
+//! Its methods are their only writers. None of it is generation-aware on its
+//! own -- the application files check the coordinator's generation at the
+//! boundary and hold the gate's lock around each call.
+use crate::delivery::{DeliveryState, Event};
+use crate::protocol::{ScreenState, ServerMessage};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
+use tokio::sync::{broadcast, watch};
 
 /// The most metrics the primary cluster holds; `MAX_PRIMARY_METRICS` in
 /// apps/frontend/src/controller/reducer.ts. Keep the two equal.
@@ -364,17 +367,210 @@ pub(crate) struct SceneLeg {
     pub(crate) generation: u64,
 }
 
+/// The views a page reports being in (`screen_state.view`).
+const SCREEN_VIEWS: [&str; 5] = ["auto", "system", "visual", "comms", "theater"];
+
+/// The most characters of a reported title the gate keeps.
+const MAX_SCREEN_TITLE_CHARS: usize = 200;
+
+/// The caller's screen as the page last reported it (`screen_state`). Its
+/// readers take it at their edge: `view` (`module_calls.rs`) reads its view,
+/// and Jev's routing summary (`turns.rs`) and the floor gate (`speech.rs`) are
+/// given `to_value()`, whose fields and names are theirs to read: a field is
+/// never omitted, and `visual_kind` is `null` when the page named none it
+/// may.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub(crate) struct ScreenReport {
+    view: String,
+    pinned: bool,
+    has_visual: bool,
+    visual_kind: Option<String>,
+    /// The ids of the objects on the stage, kept as the page sent them.
+    object_ids: Vec<Value>,
+    title: String,
+    stale: bool,
+    generation: u64,
+}
+
+impl ScreenReport {
+    /// The screen before any page has reported one.
+    fn initial() -> Self {
+        Self {
+            view: "auto".into(),
+            pinned: false,
+            has_visual: false,
+            visual_kind: None,
+            object_ids: Vec::new(),
+            title: String::new(),
+            stale: false,
+            generation: 0,
+        }
+    }
+
+    /// The page's report, taken as made in `generation`; `None` when its view
+    /// is not one the page has. A content type the stage does not know is
+    /// read as none, and the title is cut to `MAX_SCREEN_TITLE_CHARS`.
+    pub(crate) fn from_page(command: &ScreenState, generation: u64) -> Option<Self> {
+        let view = command
+            .view
+            .as_deref()
+            .filter(|view| SCREEN_VIEWS.contains(view))?;
+        Some(Self {
+            view: view.to_owned(),
+            pinned: command.pinned.unwrap_or(false),
+            has_visual: command.has_visual.unwrap_or(false),
+            visual_kind: command
+                .visual_kind
+                .clone()
+                .filter(|kind| crate::visual_protocol::CONTENT_TYPES.contains(&kind.as_str())),
+            object_ids: command.object_ids.clone().unwrap_or_default(),
+            title: command
+                .title
+                .as_deref()
+                .unwrap_or_default()
+                .chars()
+                .take(MAX_SCREEN_TITLE_CHARS)
+                .collect(),
+            stale: command.stale.unwrap_or(false),
+            generation,
+        })
+    }
+
+    pub(crate) fn view(&self) -> &str {
+        &self.view
+    }
+
+    pub(crate) fn to_value(&self) -> Value {
+        serde_json::to_value(self)
+            .expect("a screen report holds only strings, flags, numbers and ids, so it serializes")
+    }
+}
+
+/// The caller's stage for the leg on the line, and the page's word on it.
+///
+/// The one owner: its fields are private and these methods are their only
+/// writers, so the stage's rules hold here and nowhere else. A display is
+/// published, applied at its sequence, and raises the watermark together
+/// (`publish`); a new leg clears the stage, marks the screen stale and starts
+/// the leg's confirmations together (`begin_leg`); a page's report replaces
+/// the screen and is folded into the confirmations together (`report`).
+/// Callers hold `AppInner::display_gate`'s lock around each call, which is
+/// what keeps a display from landing between a leg's reset and its epoch, or
+/// between the stage's room check and the apply.
 pub(crate) struct DisplayGateState {
-    pub(crate) projection: DisplayProjection,
-    /// The caller's screen as the page last reported it, marked stale when a
-    /// page connects or retires or a new leg begins. The one copy: `view`
-    /// (`module_calls.rs`), Jev's routing summary (`turns.rs`) and the floor
-    /// gate (`speech.rs`) read it here.
-    pub(crate) screen_state: Value,
+    projection: DisplayProjection,
+    /// The screen as the page last reported it, marked stale when a page
+    /// connects or the active one retires or a new leg begins.
+    screen: ScreenReport,
     /// The leg the projection was last reset for; `None` until one is
     /// announced.
-    pub(crate) scene_leg: Option<SceneLeg>,
-    pub(crate) watermark: u64,
+    scene_leg: Option<SceneLeg>,
+    /// The delivery sequence of the newest display applied to the stage. A
+    /// new leg leaves it: sequences are the delivery's, not the leg's.
+    watermark: u64,
+    /// What the page has confirmed or rejected in the current generation. A
+    /// display call waits on it (`confirmations`); a new leg or a report
+    /// from a newer generation starts it again.
+    confirmations: watch::Sender<ConfirmState>,
+}
+
+impl DisplayGateState {
+    pub(crate) fn new() -> Self {
+        Self {
+            projection: DisplayProjection::default(),
+            screen: ScreenReport::initial(),
+            scene_leg: None,
+            watermark: 0,
+            confirmations: watch::Sender::new(ConfirmState::default()),
+        }
+    }
+
+    pub(crate) fn projection(&self) -> &DisplayProjection {
+        &self.projection
+    }
+
+    pub(crate) fn screen(&self) -> &ScreenReport {
+        &self.screen
+    }
+
+    /// Sends `action` to every page and applies it to the stage at the
+    /// sequence it was sent with. Whether a page took it, and that sequence.
+    pub(crate) fn publish(
+        &mut self,
+        action: &Value,
+        delivery: &DeliveryState,
+        events: &broadcast::Sender<Event>,
+    ) -> (bool, u64) {
+        let event = Event::Json(
+            ServerMessage::Display {
+                action: action.clone(),
+                seq: None,
+            }
+            .to_value(),
+        );
+        let _ = events.send(event.clone());
+        let (delivered, sequence) = delivery.publish_sequenced(event);
+        self.projection.apply(action, sequence);
+        self.watermark = sequence;
+        (delivered, sequence)
+    }
+
+    /// Resets the stage for `leg`: cleared, the screen stale until the page
+    /// reports on it, nothing confirmed in its generation. False, and
+    /// nothing changed, when the stage already belongs to `leg`.
+    pub(crate) fn begin_leg(&mut self, leg: SceneLeg) -> bool {
+        if self.scene_leg.as_ref() == Some(&leg) {
+            return false;
+        }
+        self.projection.clear();
+        self.mark_stale();
+        self.confirmations
+            .send_modify(|confirm| confirm.begin_generation(leg.generation));
+        self.scene_leg = Some(leg);
+        true
+    }
+
+    /// The screen the agent was told about may no longer be what the caller
+    /// sees, until a page reports again.
+    pub(crate) fn mark_stale(&mut self) {
+        self.screen.stale = true;
+    }
+
+    /// The active page's `report`, with the newest display sequence it has
+    /// applied and the one it could not render, if any.
+    pub(crate) fn report(
+        &mut self,
+        report: ScreenReport,
+        applied_seq: Option<u64>,
+        rejected: Option<(u64, String)>,
+    ) {
+        let generation = report.generation;
+        self.screen = report;
+        self.confirmations
+            .send_modify(|confirm| confirm.fold_report(generation, applied_seq, rejected));
+    }
+
+    /// What a page that connects is sent to rebuild the stage, and the
+    /// sequence it stands for.
+    pub(crate) fn reconnect_snapshot(&self) -> (Vec<Value>, u64) {
+        (self.projection.snapshot_actions(), self.watermark)
+    }
+
+    /// What the page has confirmed or rejected, as it changes; a display call
+    /// waits on it for its sequence.
+    pub(crate) fn confirmations(&self) -> watch::Receiver<ConfirmState> {
+        self.confirmations.subscribe()
+    }
+
+    /// Whether the page has confirmed, in `generation`, everything on the
+    /// stage. An empty stage has nothing outstanding, so a fresh call or an
+    /// emptied stage is confirmed without the page having said anything.
+    pub(crate) fn stage_confirmed(&self, generation: u64) -> bool {
+        let confirm = self.confirmations.borrow();
+        self.projection.order.is_empty()
+            || (confirm.generation == generation
+                && confirm.watermark.is_some_and(|w| w >= self.watermark))
+    }
 }
 
 /// The most rejections `ConfirmState` keeps per generation. A display call

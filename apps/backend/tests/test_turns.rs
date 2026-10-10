@@ -382,7 +382,7 @@ async fn routing_after_a_new_leg_sees_the_screen_the_gate_marked_stale() {
     .unwrap();
     state.0.switchboard.lock().await.announce_route().await;
     assert_eq!(
-        state.0.display_gate.lock().await.screen_state["stale"],
+        state.0.display_gate.lock().await.screen().to_value()["stale"],
         true
     );
 

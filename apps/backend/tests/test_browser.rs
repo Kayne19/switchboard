@@ -425,7 +425,7 @@ async fn the_tab_left_open_is_active_again_when_the_newest_closes() {
     .unwrap();
 
     assert_eq!(
-        state.0.display_confirm.borrow().watermark,
+        confirmed_watermark(&state).await,
         Some(7),
         "the open tab's confirmation was ignored"
     );
@@ -457,7 +457,7 @@ async fn a_connection_gets_epoch_status_history_and_scene_before_any_live_event(
     show["token"] = json!(state.0.coordinator.current_identity().token);
     let (code, _) = agent_call_json(&state, "/display", show).await;
     assert_eq!(code, StatusCode::OK);
-    let watermark = state.0.display_gate.lock().await.watermark;
+    let watermark = state.0.display_gate.lock().await.reconnect_snapshot().1;
 
     // Hold the transcript so the connection is registered but cannot finish
     // reading its snapshot, and publish a live event in that window.
@@ -779,7 +779,7 @@ async fn a_screen_state_report_without_a_generation_is_ignored() {
     let state = state();
     let (mut connection, _snapshot, _watermark) = state.register_connection().await;
     state.0.coordinator.begin_rescue("test rescue");
-    let screen_before = state.0.display_gate.lock().await.screen_state.clone();
+    let screen_before = state.0.display_gate.lock().await.screen().clone();
 
     handle_text_frame(
         &state,
@@ -798,9 +798,9 @@ async fn a_screen_state_report_without_a_generation_is_ignored() {
         !types_of(&frames).contains(&"screen_state_ack"),
         "a report without a generation is not acknowledged: {frames:?}"
     );
-    assert_eq!(state.0.display_confirm.borrow().watermark, None);
+    assert_eq!(confirmed_watermark(&state).await, None);
     assert_eq!(
-        state.0.display_gate.lock().await.screen_state,
+        state.0.display_gate.lock().await.screen().clone(),
         screen_before
     );
 
@@ -818,7 +818,7 @@ async fn a_screen_state_report_without_a_generation_is_ignored() {
     .await
     .unwrap();
     assert!(types_of(&queued_frames(&mut connection)).contains(&"screen_state_ack"));
-    assert_eq!(state.0.display_confirm.borrow().watermark, Some(7));
+    assert_eq!(confirmed_watermark(&state).await, Some(7));
 }
 
 #[tokio::test]
@@ -1075,4 +1075,16 @@ fn snapshot_types(messages: &[ServerMessage]) -> Vec<String> {
         .iter()
         .map(|message| message.to_value()["type"].as_str().unwrap().to_owned())
         .collect()
+}
+
+/// The newest display `seq` the page has confirmed in this generation.
+async fn confirmed_watermark(state: &AppState) -> Option<u64> {
+    state
+        .0
+        .display_gate
+        .lock()
+        .await
+        .confirmations()
+        .borrow()
+        .watermark
 }
