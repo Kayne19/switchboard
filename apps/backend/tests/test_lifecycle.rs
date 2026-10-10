@@ -990,6 +990,41 @@ fn a_shutdown_ends_the_startup_in_flight_and_nothing_reopens_the_call() {
     );
 }
 
+/// Every candidate notice is sent under the state lock, so the browser hears
+/// of a candidate's end before anything a later transition announces. A
+/// rescue's clear used to be sent after the lock was released: a `/connect`
+/// right behind a hangup could stage its candidate and announce it in that
+/// gap, and the browser then took the late clear (same route) as the end of
+/// the new candidate.
+#[test]
+fn every_candidate_notice_is_sent_under_the_state_lock() {
+    let mut call = coordinator();
+    let shared = Arc::clone(&call.state);
+    let sent = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = Arc::clone(&sent);
+    call.set_candidate_callback(Arc::new(move |notice| {
+        let locked = shared.try_lock().is_err();
+        recorded.lock().unwrap().push((notice.ended, locked));
+    }));
+    call.begin_candidate(alpha_candidate()).unwrap();
+    call.adopt_candidate("cand").unwrap();
+    call.begin_candidate(beta_candidate()).unwrap();
+    assert!(call.rollback_startup("startup failed"));
+    call.begin_candidate(beta_candidate()).unwrap();
+    call.begin_rescue("hangup");
+    assert_eq!(
+        *sent.lock().unwrap(),
+        vec![
+            (None, true),
+            (Some(CandidateEnd::Adopted), true),
+            (None, true),
+            (Some(CandidateEnd::RolledBack), true),
+            (None, true),
+            (Some(CandidateEnd::Rescued), true),
+        ]
+    );
+}
+
 // The call line, phase by event. Each phase is reached the way a call reaches
 // it, from a fresh coordinator, and is then given one event. A row reads:
 //

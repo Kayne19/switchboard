@@ -180,7 +180,7 @@ impl fmt::Display for LifecycleError {
 }
 impl std::error::Error for LifecycleError {}
 
-/// What a rescue retired, for the notice sent once the state lock is released.
+/// What a rescue retired, for the log written once the state lock is released.
 struct Rescue {
     /// The route of the candidate the rescue abandoned, if one was starting.
     abandoned_candidate: Option<String>,
@@ -714,6 +714,16 @@ impl Coordinator {
             state.operation = None;
             state.terminal_reason = Some(reason);
         }
+        // The clear notice carries the post-rescue generation, and is sent
+        // under the state lock like every candidate notice, so it reaches
+        // the browser before anything a later transition announces.
+        if let Some(route) = &abandoned_candidate {
+            self.notify_candidate(&CandidateNotice {
+                route: route.clone(),
+                generation: state.leg.generation,
+                ended: Some(CandidateEnd::Rescued),
+            });
+        }
         self.refresh_locked(state);
         self.operation_changed.notify_waiters();
         Rescue {
@@ -722,16 +732,8 @@ impl Coordinator {
         }
     }
 
-    /// Tells the presentation layer what a rescue ended. The clear notice
-    /// carries the post-rescue generation.
+    /// Logs what a rescue retired, once the state lock is released.
     fn announce_rescue(&self, rescue: &Rescue) {
-        if let Some(route) = &rescue.abandoned_candidate {
-            self.notify_candidate(&CandidateNotice {
-                route: route.clone(),
-                generation: rescue.next.generation,
-                ended: Some(CandidateEnd::Rescued),
-            });
-        }
         tracing::info!(
             generation = rescue.next.generation,
             abandoned_candidate = rescue.abandoned_candidate.as_deref(),
