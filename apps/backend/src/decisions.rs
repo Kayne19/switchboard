@@ -679,7 +679,7 @@ impl Switchboard {
     }
 
     async fn handle_agent_ctx(&mut self, context: &TransferContext) -> Reply {
-        let Some(session) = self.agent.clone() else {
+        let Some(session) = self.agent_on_the_line() else {
             tracing::warn!(route = %self.coordinator.route(), "the project leg is gone; returning to the operator");
             let note = stopped_note(&self.route_label(), "it is no longer running");
             return self.return_operator_ctx(context, &note).await;

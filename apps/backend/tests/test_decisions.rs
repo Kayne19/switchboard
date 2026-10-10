@@ -1832,3 +1832,30 @@ async fn a_route_to_a_project_id_another_project_uses_as_an_alias_goes_to_that_i
     assert_eq!(reply.route, "web", "{reply:?}");
     board.shutdown().await;
 }
+
+/// The coordinator names alpha while the PBX still holds beta (an adopted
+/// transfer whose task was cancelled before it committed). The caller's
+/// words must not go to beta under alpha's name (#236).
+#[tokio::test]
+async fn a_caller_turn_never_goes_to_another_projects_session() {
+    let mut board = board_on(
+        vec![project("alpha", ""), project("beta", "")],
+        &[],
+        two_model_catalog(),
+    );
+    let log = serve(&board, Box::new(|_, _| says("On it.")));
+    let reply = board
+        .transfer_ctx(&transcript("look at beta"), "beta", "", "")
+        .await;
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    crate::pbx::put_on(&board, "alpha", "anthropic/current", two_model_catalog());
+
+    board.handle_agent_ctx(&transcript("carry on")).await;
+
+    assert!(
+        !prompts(&log).iter().any(|prompt| prompt == "carry on"),
+        "{:?}",
+        prompts(&log)
+    );
+    board.shutdown().await;
+}
