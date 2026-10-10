@@ -46,6 +46,7 @@ browser mic / page controls
   application coordination: app_state.rs (shared state, workers, shutdown),
   caller_input.rs (clips, streams, typed turns), turns.rs (routing, turn
   dispatch), speech.rs (the speech worker and reply voice),
+  floor_hooks.rs (the floor's gate, rewrite and release hooks),
   leg_announcer.rs (a new leg's announcement and scene reset)
           |
           +--> lifecycle.rs: the coordinator -- call identity, the current
@@ -179,9 +180,9 @@ The application boundary for HTTP, WebSocket, turn dispatch, audio delivery,
 generation checks, and worker coordination is a set of files in
 `apps/backend/src/`, one concern each: `api.rs` (the router), `app_state.rs`,
 `browser.rs`, `page_controls.rs`, `module_calls.rs`, `caller_input.rs`,
-`turns.rs`, `speech.rs`, and `leg_announcer.rs`. They may coordinate these
-concerns, but they must not become the owner of provider-specific speech
-protocols or Pi routing policy.
+`turns.rs`, `speech.rs`, `floor_hooks.rs`, and `leg_announcer.rs`. They may
+coordinate these concerns, but they must not become the owner of
+provider-specific speech protocols or Pi routing policy.
 
 Important application behavior must remain visible through named operations,
 events, or state transitions. Do not hide a route change, persistence action,
@@ -425,9 +426,10 @@ removes the real coupling; do not create interfaces for ceremony.
 | `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection |
 | `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |
 | `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker, host-reported turns | speech synthesis, PBX policy |
-| `speech.rs` | the one ordered speech worker, its continuity, audio slots, reply voice, and the floor release | the TTS provider's wire format, the audio queue itself |
+| `speech.rs` | the one ordered speech worker, its continuity, audio slots, and reply voice | the TTS provider's wire format, the audio queue itself, floor policy |
 | `leg_announcer.rs` | announcing a new leg to the browser and its once-per-leg scene reset | which leg is current (the coordinator's) |
 | `floor.rs` | ordered background request queue, Jev good-moment holds, stateless rewrites, announce-first release | lifecycle membership, agent-state projection, route authority, TTS provider wire format |
+| `floor_hooks.rs` | the application side of `floor.rs`'s `FloorHooks`: whether the page is connected and a request still live, the Jev good-moment gate, the utility rewrite under its timeout, and the release through the speech worker | the floor's queue and order (`floor.rs`'s), the speech worker (`speech.rs`'s) |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the status | async work or I/O |
 | `pbx.rs` | the `Switchboard`: its state, construction, callbacks, shared session guard and shutdown; the call types the other files share (`OPERATOR`, `TransferContext`, `AgentStateNotice`) | host setup, browser rendering, TTS encoding, a copy of the route |
 | `decisions.rs` | what a Jev decision does with a caller's line: continue, go to a project, split, take over, stop on confirmation, the utility's second opinion, the operator fallback; the routing trace | Jev's classification (`router.rs`), a second commit path |

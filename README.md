@@ -318,10 +318,11 @@ container, and the post-deploy checklist.
 | `apps/backend/src/module_calls.rs` | a project session's `speak`, `request_to_speak`, `display` and `view`, and their admission |
 | `apps/backend/src/caller_input.rs` | clips, streamed clips, typed turns, and transcription |
 | `apps/backend/src/turns.rs` | routing a transcript, the turn worker, host-reported turns |
-| `apps/backend/src/speech.rs` | the speech worker, continuity, reply voice, and the floor release |
+| `apps/backend/src/speech.rs` | the speech worker, continuity, and reply voice |
 | `apps/backend/src/delivery.rs` | ordered browser delivery: the event envelope, per-connection framing, and the audio queue |
 | `apps/backend/src/display.rs` | the stage projection a reconnecting browser replays, and the gate it sits behind |
 | `apps/backend/src/floor.rs` | the speech floor: the one owner of background agents' requests to speak and their release order |
+| `apps/backend/src/floor_hooks.rs` | the floor's hooks into the call: the page, Jev's good moment, the utility rewrite, the release through the speech worker |
 | `apps/backend/src/leg_announcer.rs` | announcing a new leg to the browser |
 | `apps/backend/src/lifecycle.rs` | the coordinator: call identity, the current route and leg, phases, candidate legs, status |
 | `apps/backend/src/pbx.rs` | the switchboard: its state, construction and callbacks, and the types its files share |
