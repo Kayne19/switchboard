@@ -1388,6 +1388,305 @@ async fn an_autonomous_project_turn_is_traced_with_its_host_turn_id() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+// A caller turn, phase by event (#383).
+//
+// A caller turn is routed, queued, admitted, registered and run, and it can
+// end in each of those phases. Each row below drives one turn to its phase,
+// lands the event, and records how the turn ended: what the page is told
+// about it, the branch its routing trace ends on, and whether it was traced
+// as a turn. Every row must also leave the worker at rest
+// (`assert_turn_at_rest`).
+//
+// | phase              | event                                   | page                  | trace branch  | turn traced |
+// |--------------------|-----------------------------------------|-----------------------|---------------|-------------|
+// | routing            | the line changed before it was routed   | stale_epoch           | dropped_stale | no          |
+// | queued             | a rescue before the worker takes it     | stale_epoch           | dropped_stale | no          |
+// | awaiting admission | the lifecycle refuses it (quiescing)    | stale_epoch           | dropped_stale | no          |
+// | awaiting admission | a rescue ends the operation it waits on | stale_epoch           | dropped_stale | no          |
+// | admitted           | a rescue before its task is registered  | thinking, stale_epoch | dropped_stale | yes         |
+// | running            | a rescue cancels its task               | thinking              | dropped_stale | yes         |
+// | running            | the leg replies                         | thinking, reply       | operator      | yes         |
+//
+// A turn whose task panics ends as `failed`. Nothing on the call path can
+// make one panic, so the table cannot drive that row.
+
+#[derive(Clone, Copy, Debug)]
+enum TurnPhase {
+    Routing,
+    Queued,
+    AwaitingAdmission,
+    Admitted,
+    Running,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum TurnEvent {
+    Rescue,
+    LifecycleRefuses,
+    Reply,
+}
+
+/// How one caller turn ended, as the page and the debug trace saw it.
+#[derive(Debug, PartialEq)]
+struct TurnEnding {
+    /// The frames that name the clip, and the turn's `thinking`, in order.
+    page: Vec<String>,
+    /// The last branch the clip's routing trace recorded.
+    branch: String,
+    /// Whether the clip was traced as a turn, from `turn_start` to `turn_end`.
+    traced_as_turn: bool,
+}
+
+fn ending(page: &[&str], branch: &str, traced_as_turn: bool) -> TurnEnding {
+    TurnEnding {
+        page: page.iter().map(|frame| (*frame).to_owned()).collect(),
+        branch: branch.to_owned(),
+        traced_as_turn,
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caller_turn_ends_once_in_every_phase() {
+    use TurnEvent::*;
+    use TurnPhase::*;
+    let table = [
+        (
+            Routing,
+            Rescue,
+            ending(&["stale_epoch"], "dropped_stale", false),
+        ),
+        (
+            Queued,
+            Rescue,
+            ending(&["stale_epoch"], "dropped_stale", false),
+        ),
+        (
+            AwaitingAdmission,
+            LifecycleRefuses,
+            ending(&["stale_epoch"], "dropped_stale", false),
+        ),
+        (
+            AwaitingAdmission,
+            Rescue,
+            ending(&["stale_epoch"], "dropped_stale", false),
+        ),
+        (
+            Admitted,
+            Rescue,
+            ending(&["thinking", "stale_epoch"], "dropped_stale", true),
+        ),
+        (
+            Running,
+            Rescue,
+            ending(&["thinking"], "dropped_stale", true),
+        ),
+        (
+            Running,
+            Reply,
+            ending(&["thinking", "reply"], "operator", true),
+        ),
+    ];
+    for (phase, event, want) in table {
+        let got = drive_caller_turn(phase, event).await;
+        assert_eq!(got, want, "{phase:?} x {event:?}");
+    }
+}
+
+/// Drives one caller turn on the operator to `phase`, lands `event`, waits
+/// for the turn to end, checks the worker is at rest, and says how it ended.
+#[cfg(unix)]
+async fn drive_caller_turn(phase: TurnPhase, event: TurnEvent) -> TurnEnding {
+    use TurnEvent::*;
+    use TurnPhase::*;
+    let root = scratch_root("caller-turn-table");
+    // The operator answers each prompt, or, for a turn that must still be
+    // running when its event lands, never does.
+    let script = if matches!((phase, event), (Running, Rescue)) {
+        "while IFS= read -r line; do :; done"
+    } else {
+        r#"while IFS= read -r line; do
+  printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator here."}}'
+  printf '%s\n' '{"type":"agent_settled"}'
+done"#
+    };
+    let operator = root.join("operator");
+    crate::pi_client::write_executable_script(&operator, script);
+    let config =
+        crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = state_on(Switchboard::new(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+    ));
+    let mut events = state.0.events.subscribe();
+    let id = "table-turn";
+    let worker = tokio::spawn(process_turns(state.clone()));
+    let queue = |generation: u64| {
+        let state = state.clone();
+        async move {
+            state
+                .0
+                .turns
+                .routed_decisions
+                .lock()
+                .await
+                .insert(id.into(), Decision::fallback("test").into());
+            state.0.queued_turns.fetch_add(1, Ordering::AcqRel);
+            state
+                .0
+                .turns
+                .enqueue_for_test((id.into(), "hello".into(), generation))
+                .await
+                .expect("queued turn");
+        }
+    };
+    match (phase, event) {
+        (Routing, Rescue) => {
+            let stamped = state.0.coordinator.generation();
+            state.0.coordinator.begin_rescue("test rescue");
+            dispatch_routed_transcript(&state, id, stamped, "hello".into()).await;
+        }
+        (Queued, Rescue) => {
+            let stamped = state.0.coordinator.generation();
+            state.0.coordinator.begin_rescue("test rescue");
+            queue(stamped).await;
+        }
+        (AwaitingAdmission, LifecycleRefuses) => {
+            // Stamped after the rescue, so only the quiescing call refuses it.
+            state.0.coordinator.begin_rescue("test rescue");
+            queue(state.0.coordinator.generation()).await;
+        }
+        (AwaitingAdmission, Rescue) => {
+            let running = state
+                .0
+                .coordinator
+                .begin_prompt(&state.0.coordinator.current_identity())
+                .expect("an operation the turn waits behind");
+            queue(state.0.coordinator.generation()).await;
+            for _ in 0..20 {
+                tokio::task::yield_now().await;
+            }
+            assert!(debug_events(&state)
+                .iter()
+                .all(|event| !matches!(event, crate::debug::DebugEvent::TurnStart { .. })));
+            state.0.coordinator.begin_rescue("test rescue");
+            assert!(!state.0.coordinator.finish_operation(&running));
+        }
+        (Admitted, Rescue) => {
+            let registry = state.0.active_operations.lock().await;
+            queue(state.0.coordinator.generation()).await;
+            until_debug(&state, |event| {
+                matches!(event, crate::debug::DebugEvent::TurnStart { .. })
+            })
+            .await;
+            state.0.coordinator.begin_rescue("test rescue");
+            drop(registry);
+        }
+        (Running, Rescue) => {
+            queue(state.0.coordinator.generation()).await;
+            until_debug(&state, |event| {
+                matches!(event, crate::debug::DebugEvent::PbxBranch { utterance_id, .. } if utterance_id == id)
+            })
+            .await;
+            cancel_active_operations(&state).await;
+        }
+        (Running, Reply) => queue(state.0.coordinator.generation()).await,
+        other => panic!("no such row: {other:?}"),
+    }
+    let ended = until_turn_ended(&state, &mut events, id).await;
+    assert_turn_at_rest(&state, id).await;
+    worker.abort();
+    let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+    ended
+}
+
+/// Waits until the clip's turn has ended: its routing trace has a branch, a
+/// turn that was started has been traced to its end, and no turn is in
+/// flight. Then reads what the page was told.
+async fn until_turn_ended(
+    state: &AppState,
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    id: &str,
+) -> TurnEnding {
+    use crate::debug::DebugEvent;
+    let ended = |state: &AppState| {
+        let trace = debug_events(state);
+        let branch = trace.iter().rev().find_map(|event| match event {
+            DebugEvent::PbxBranch {
+                utterance_id,
+                branch,
+                ..
+            } if utterance_id == id => Some(branch.clone()),
+            _ => None,
+        });
+        let started = trace.iter().any(|event| {
+            matches!(event, DebugEvent::TurnStart { utterance_id: Some(clip), .. } if clip == id)
+        });
+        let finished = trace.iter().any(|event| {
+            matches!(event, DebugEvent::TurnEnd { utterance_id: Some(clip), .. } if clip == id)
+        });
+        branch
+            .filter(|_| started == finished)
+            .map(|branch| (branch, started))
+    };
+    let (branch, traced_as_turn) = within("the turn ends", async {
+        loop {
+            if let Some(ended) = ended(state) {
+                if !state.0.turn_in_flight.load(Ordering::Acquire) {
+                    return ended;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    let mut page = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        let Event::Json(frame) = event else { continue };
+        let kind = frame["type"].as_str().unwrap_or_default();
+        if frame["code"] == "stale_epoch" && frame["id"] == id {
+            page.push("stale_epoch".to_owned());
+        } else if frame["id"] == id || matches!(kind, "thinking" | "reply") {
+            page.push(kind.to_owned());
+        }
+    }
+    TurnEnding {
+        page,
+        branch,
+        traced_as_turn,
+    }
+}
+
+/// The worker after a turn has ended, whichever way: no turn in flight,
+/// nothing queued, no registered task, no speech group, no decision held
+/// for the clip, and the turn's operation closed, so a new prompt begins.
+async fn assert_turn_at_rest(state: &AppState, id: &str) {
+    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert_eq!(state.0.queued_turns.load(Ordering::Acquire), 0);
+    assert!(state.0.active_operations.lock().await.is_empty());
+    assert!(state.0.active_speech_group().is_none());
+    assert!(!state.0.turns.routed_decisions.lock().await.contains_key(id));
+    state.0.coordinator.settle();
+    let probe = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("the turn's operation is closed");
+    assert!(state.0.coordinator.finish_operation(&probe));
+}
+
 fn state_with_jev(client: crate::jev::JevClient, registry: Registry) -> AppState {
     let config = crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", "/bin/sh")]);
     let prewarm = crate::prewarm::Prewarm::settled(
