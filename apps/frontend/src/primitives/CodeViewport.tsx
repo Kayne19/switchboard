@@ -28,15 +28,16 @@ const LINE_COMMENT:ReadonlyArray<readonly [string,readonly string[]]>=[
   ['--',['ada','elm','haskell','hs','lua','mysql','plsql','postgres','postgresql','psql','sql','sqlite']],
 ];
 const commentMarkers=new Map(LINE_COMMENT.flatMap(([marker,names])=>names.map((name)=>[name,marker] as const)));
-// A string, or a comment that starts outside every string: one left-to-right
-// pass, so `"a//b"` stays a string and the `//` after it is still a comment.
+// A string, or a comment (the `comment` group) that starts outside every
+// string: one left-to-right pass, so `"a//b"` stays a string and the `//`
+// after it is still a comment.
 function linePattern(language:string|undefined):RegExp{
   const marker=language===undefined?'//':commentMarkers.get(language.trim().toLowerCase());
-  return marker===undefined?new RegExp(stringPattern.source,'g'):new RegExp(`${stringPattern.source}|(${marker.replace(/[/#-]/g,'\\$&')}.*$)`,'g');
+  return marker===undefined?new RegExp(stringPattern.source,'g'):new RegExp(`${stringPattern.source}|(?<comment>${marker.replace(/[\\^$.*+?()[\]{}|/#-]/g,'\\$&')}.*$)`,'g');
 }
 function highlightLine(line:string,lineIndex:number,pattern:RegExp):ReactNode[]{
   const nodes:ReactNode[]=[];let cursor=0;
-  for(const match of line.matchAll(pattern)){const start=match.index;if(start>cursor)nodes.push(...highlightPlainSegment(line.slice(cursor,start),`${lineIndex}-${cursor}`));nodes.push(match[2]===undefined?<span className="tok-string" key={`${lineIndex}-str-${start}`}>{match[0]}</span>:<span className="tok-comment" key={`${lineIndex}-comment`}>{match[0]}</span>);cursor=start+match[0].length;}
+  for(const match of line.matchAll(pattern)){const start=match.index;if(start>cursor)nodes.push(...highlightPlainSegment(line.slice(cursor,start),`${lineIndex}-${cursor}`));nodes.push(match.groups?.comment===undefined?<span className="tok-string" key={`${lineIndex}-str-${start}`}>{match[0]}</span>:<span className="tok-comment" key={`${lineIndex}-comment`}>{match[0]}</span>);cursor=start+match[0].length;}
   if(cursor<line.length)nodes.push(...highlightPlainSegment(line.slice(cursor),`${lineIndex}-${cursor}`));return nodes;
 }
 
