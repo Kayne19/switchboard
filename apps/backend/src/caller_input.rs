@@ -185,6 +185,11 @@ pub(crate) async fn process_stream_results(state: AppState) {
     }
 }
 
+/// A clip's final transcript, from every path that makes one (a complete
+/// clip, a streamed clip, a typed turn), up to a logged line on its way to
+/// routing. Empty words are answered "say it again"; words stamped before
+/// the line changed are refused as stale before they are logged; the rest
+/// are logged, echoed to the page, and routed.
 pub(crate) async fn route_final_transcript(
     state: &AppState,
     id: &str,
@@ -203,6 +208,7 @@ pub(crate) async fn route_final_transcript(
     state.0.floor.caller_spoke().await;
     let _transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
+        tracing::info!(clip = %id, "discarding stale transcript before persistence");
         emit_stale_clip(state, id);
         return;
     }
@@ -339,38 +345,16 @@ pub(crate) async fn process_clips(state: AppState) {
         };
         if transcript.trim().is_empty() {
             tracing::info!(clip = %clip.id, elapsed = ?started.elapsed(), "transcription returned nothing");
-            emit_clip_verdict(
-                &state,
-                &clip.id,
-                ServerMessage::error_for(clip.id.clone(), "I didn't catch that — say it again."),
+        } else {
+            tracing::info!(
+                clip = %clip.id,
+                route = %state.0.coordinator.route(),
+                chars = transcript.chars().count(),
+                elapsed = ?started.elapsed(),
+                "transcribed clip"
             );
-            continue;
         }
-        state.0.clear_continuity_if_current(clip.generation);
-        state.0.floor.caller_spoke().await;
-        let _transition = state.0.operation_transition.lock().await;
-        if clip.generation != state.0.coordinator.generation() {
-            tracing::info!(clip = %clip.id, "discarding stale transcript before persistence");
-            emit_stale_clip(&state, &clip.id);
-            continue;
-        }
-        let route = state.0.coordinator.route();
-        tracing::info!(
-            clip = %clip.id,
-            %route,
-            chars = transcript.chars().count(),
-            elapsed = ?started.elapsed(),
-            "transcribed clip"
-        );
-        state.0.transcript_log.lock().await.add_with_id(
-            CALLER,
-            &transcript,
-            route.clone(),
-            Some(clip.id.clone()),
-        );
-        drop(_transition);
-        emit_transcript_verdict(&state, &clip.id, &transcript);
-        dispatch_routed_transcript(&state, &clip.id, clip.generation, transcript).await;
+        route_final_transcript(&state, &clip.id, clip.generation, transcript).await;
     }
     tracing::warn!("the clip worker stopped; no further speech will be transcribed");
 }
