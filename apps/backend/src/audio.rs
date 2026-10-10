@@ -1074,7 +1074,7 @@ impl Speaker {
             // Consume the refusal body before retrying.  This keeps the
             // transport lifecycle deterministic and prevents a response task
             // from retaining the connection while the fallback is admitted.
-            let _ = collect_error_body(&mut response.stream).await?;
+            let _ = collect_error_body(&mut response.stream, deadline).await?;
             let mut retry_body = base_body();
             retry_body
                 .as_object_mut()
@@ -1104,7 +1104,7 @@ impl Speaker {
                 ?elapsed,
                 "ElevenLabs refused the request"
             );
-            let body = collect_error_body(&mut response.stream).await?;
+            let body = collect_error_body(&mut response.stream, deadline).await?;
             return Err(AudioError::Tts(format!(
                 "ElevenLabs TTS failed ({}): {}",
                 response.status,
@@ -1138,16 +1138,28 @@ impl Speaker {
     }
 }
 
-async fn collect_error_body(stream: &mut TtsByteStream) -> Result<Vec<u8>, AudioError> {
-    let mut body = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        if body.len().saturating_add(chunk.len()) > 4096 {
-            break;
+/// Reads the start of a refusal's body, by the request's deadline. The
+/// transport's own deadline ends when the headers arrive, and a body that
+/// stalls after them would otherwise hold the speech worker, and every reply
+/// behind it, for ever.
+async fn collect_error_body(
+    stream: &mut TtsByteStream,
+    deadline: Instant,
+) -> Result<Vec<u8>, AudioError> {
+    let read = async {
+        let mut body = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            if body.len().saturating_add(chunk.len()) > 4096 {
+                break;
+            }
+            body.extend_from_slice(&chunk);
         }
-        body.extend_from_slice(&chunk);
-    }
-    Ok(body)
+        Ok(body)
+    };
+    tokio::time::timeout_at(TokioInstant::from_std(deadline), read)
+        .await
+        .map_err(|_| AudioError::Deadline)?
 }
 
 /// Refuses every request without leaving the process, the way ElevenLabs

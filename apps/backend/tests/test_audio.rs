@@ -452,3 +452,64 @@ async fn tts_retry_is_not_used_for_server_failure_and_v3_is_fresh_only() {
     assert!(body.get("previous_request_ids").is_none());
     assert!(body.get("previous_text").is_none());
 }
+
+/// Answers every request with `status` and a body that never ends: the
+/// headers arrive, then the connection stays open with no bytes.
+type OpenBody = mpsc::Sender<Result<Vec<u8>, AudioError>>;
+
+#[derive(Debug)]
+struct StalledBodyTransport {
+    status: StatusCode,
+    open: StdMutex<Vec<OpenBody>>,
+}
+impl TtsTransport for StalledBodyTransport {
+    fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
+        let (sender, receiver) = mpsc::channel(1);
+        // Held, not dropped: a dropped sender would end the body.
+        self.open.lock().unwrap().push(sender);
+        let status = self.status;
+        Box::pin(async move {
+            Ok(TtsResponse {
+                status,
+                content_length: None,
+                request_id: None,
+                stream: Box::pin(ChunkReceiverStream {
+                    receiver,
+                    task: None,
+                }) as TtsByteStream,
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_refusal_whose_body_stalls_ends_at_the_speech_deadline() {
+    // A server failure, and an id refusal read before the retry.
+    let cases = [
+        (StatusCode::INTERNAL_SERVER_ERROR, TtsContinuity::Fresh),
+        (
+            StatusCode::BAD_REQUEST,
+            TtsContinuity::previous_request_ids(["old-id"], Some("old words".into())),
+        ),
+    ];
+    for (status, continuity) in cases {
+        let mut speaker = Speaker::new(100, Duration::from_millis(25_000), test_settings());
+        speaker.transport = Arc::new(StalledBodyTransport {
+            status,
+            open: StdMutex::new(Vec::new()),
+        });
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            speaker.stream_until_with_continuity("Hello", deadline, continuity),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!("a {status} body that stalls held the speech request past its deadline")
+        });
+        assert!(
+            matches!(result, Err(AudioError::Deadline)),
+            "{status}: a stalled refusal must end as the deadline"
+        );
+    }
+}
