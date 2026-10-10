@@ -857,11 +857,6 @@ export class AudioPlayback {
   private queueReplay(utterance: Utterance, first = false): void {
     if (utterance.fallbackQueued) return;
     utterance.fallbackQueued = true;
-    if (utterance.bytes > MAX_AUDIO_UTTERANCE) {
-      this.status.replayTooLong();
-      this.options.onUtterance?.(utterance.sequence);
-      return;
-    }
     const replay = new Blob(utterance.parts, { type: utterance.mime });
     this.replaySequences.set(replay, utterance.sequence);
     if (first) this.audioQueue.unshift(replay);

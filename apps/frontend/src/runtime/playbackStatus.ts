@@ -99,10 +99,6 @@ export class PlaybackStatus {
     );
   }
 
-  replayTooLong(): void {
-    this.say("Audio exceeded the replay limit and was stopped.", true);
-  }
-
   /** A new leg: no pause or block on screen is waiting for a tap any more. */
   newLeg(): void {
     this.awaitingTap = false;
