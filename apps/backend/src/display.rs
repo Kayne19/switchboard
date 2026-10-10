@@ -364,7 +364,6 @@ pub(crate) struct SceneLeg {
 pub(crate) struct DisplayGateState {
     pub(crate) projection: DisplayProjection,
     pub(crate) screen_state: Value,
-    pub(crate) active_epoch: Option<u64>,
     pub(crate) report_epoch: Option<u64>,
     pub(crate) report_generation: Option<u64>,
     /// The leg the projection was last reset for; `None` until one is
