@@ -1,4 +1,11 @@
 use super::*;
+use crate::app_state::{begin_alpha_candidate, state, AppState};
+use crate::browser::{frames_until, handle_text_frame};
+use crate::delivery::DeliveryConnection;
+use crate::module_calls::{agent_call_json, post_display_in_task};
+use crate::pbx::OPERATOR;
+use crate::within;
+use axum::http::StatusCode;
 
 #[test]
 fn a_later_primary_claim_takes_the_role_and_demotes_the_earlier_one() {
@@ -368,4 +375,286 @@ fn confirm_state_keeps_the_newest_rejections_until_the_generation_moves() {
     confirm.begin_generation(4);
     assert_eq!((confirm.generation, confirm.watermark), (4, None));
     assert_eq!(confirm.rejection(newest), None);
+}
+
+// The gate's phase x event table (#376, #377). The gate holds, per leg, the
+// stage (its objects and the watermark of the newest display applied to it),
+// the screen the page last reported (fresh or stale) and what the page has
+// confirmed in the current generation. Each step below is one event and the
+// change it makes to what the gate's readers see; a field a step does not
+// set is unchanged by it.
+
+/// What the gate holds, as its readers see it.
+#[derive(Clone, Debug, PartialEq)]
+struct Seen {
+    leg: Option<(String, u64)>,
+    objects: Vec<String>,
+    watermark: u64,
+    view: String,
+    stale: bool,
+    confirmed: (u64, Option<u64>),
+}
+
+async fn seen(state: &AppState) -> Seen {
+    let gate = state.0.display_gate.lock().await;
+    let confirm = state.0.display_confirm.borrow().clone();
+    Seen {
+        leg: gate
+            .scene_leg
+            .as_ref()
+            .map(|leg| (leg.route.clone(), leg.generation)),
+        objects: gate.projection.order.clone(),
+        watermark: gate.watermark,
+        view: gate.screen_state["view"].as_str().unwrap().to_owned(),
+        stale: gate.screen_state["stale"] == true,
+        confirmed: (confirm.generation, confirm.watermark),
+    }
+}
+
+/// The screen as Jev's routing summary and the floor gate are given it.
+async fn screen_json(state: &AppState) -> Value {
+    state.0.display_gate.lock().await.screen_state.clone()
+}
+
+/// The page on `epoch` reports its screen.
+async fn report(state: &AppState, epoch: u64, report: Value) {
+    let mut frame = report;
+    frame["type"] = json!("screen_state");
+    handle_text_frame(state, epoch, &mut None, &mut None, &frame.to_string())
+        .await
+        .unwrap();
+}
+
+/// An agent shows a metric while a page is connected: the call waits for the
+/// page to confirm it. Returns the call and the display's `seq`.
+async fn show_metric(
+    state: &AppState,
+    page: &mut DeliveryConnection,
+    token: &str,
+    id: &str,
+) -> (tokio::task::JoinHandle<(StatusCode, Value)>, u64) {
+    let call = post_display_in_task(
+        state,
+        json!({"token": token, "action": {"op": "show", "id": id, "type": "metric",
+               "data": {"label": id, "value": "1"}}}),
+    )
+    .await;
+    let frames = frames_until(page, "display").await;
+    let seq = frames.last().unwrap()["seq"].as_u64().unwrap();
+    (call, seq)
+}
+
+async fn assert_rendered(call: tokio::task::JoinHandle<(StatusCode, Value)>) {
+    let (code, body) = within("the display call", call).await.unwrap();
+    assert_eq!((code, &body["rendered"]), (StatusCode::OK, &json!(true)));
+}
+
+#[tokio::test]
+async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
+    let state = state();
+    let mut want = Seen {
+        leg: None,
+        objects: vec![],
+        watermark: 0,
+        view: "auto".into(),
+        stale: false,
+        confirmed: (0, None),
+    };
+    assert_eq!(seen(&state).await, want, "the gate a call starts with");
+    assert_eq!(
+        screen_json(&state).await,
+        json!({"view": "auto", "pinned": false, "has_visual": false, "visual_kind": null,
+               "object_ids": [], "title": "", "stale": false, "generation": 0}),
+        "the screen before any page reports"
+    );
+
+    // No leg announced yet: the operator's stage at generation 0.
+    let (mut first, _, _) = state.register_connection().await;
+    want.stale = true;
+    assert_eq!(seen(&state).await, want, "a page connects");
+
+    let (call, seq) = show_metric(&state, &mut first, OPERATOR, "m1").await;
+    want.objects = vec!["m1".into()];
+    want.watermark = seq;
+    assert_eq!(seen(&state).await, want, "a display is applied");
+
+    report(
+        &state,
+        first.epoch,
+        json!({"view": "visual", "has_visual": true, "visual_kind": "metric",
+               "object_ids": ["m1"], "title": "m1", "generation": 0, "applied_seq": seq}),
+    )
+    .await;
+    assert_rendered(call).await;
+    want.view = "visual".into();
+    want.stale = false;
+    want.confirmed = (0, Some(seq));
+    assert_eq!(seen(&state).await, want, "the active page reports");
+    assert_eq!(
+        screen_json(&state).await,
+        json!({"view": "visual", "pinned": false, "has_visual": true, "visual_kind": "metric",
+               "object_ids": ["m1"], "title": "m1", "stale": false, "generation": 0}),
+        "the screen as the page reported it"
+    );
+
+    for ignored in [
+        json!({"view": "theater", "generation": 999, "applied_seq": seq + 5}),
+        json!({"view": "theater", "applied_seq": seq + 5}),
+    ] {
+        report(&state, first.epoch, ignored.clone()).await;
+        assert_eq!(seen(&state).await, want, "ignored: {ignored}");
+    }
+
+    let (mut second, _, _) = state.register_connection().await;
+    want.stale = true;
+    assert_eq!(seen(&state).await, want, "a second page connects");
+
+    report(
+        &state,
+        first.epoch,
+        json!({"view": "comms", "generation": 0}),
+    )
+    .await;
+    assert_eq!(
+        seen(&state).await,
+        want,
+        "the page that is not active reports"
+    );
+
+    report(
+        &state,
+        second.epoch,
+        json!({"view": "theater", "generation": 0}),
+    )
+    .await;
+    want.view = "theater".into();
+    want.stale = false;
+    assert_eq!(
+        seen(&state).await,
+        want,
+        "the active page reports, confirming nothing"
+    );
+
+    state.retire_connection(first.epoch).await;
+    assert_eq!(
+        seen(&state).await,
+        want,
+        "the page that is not active retires"
+    );
+
+    // The first announcement of the leg on the line resets the stage. The
+    // watermark stays: sequences are the delivery's, not the leg's.
+    state.0.leg_announcer.announce_route().await;
+    want.leg = Some((OPERATOR.into(), 0));
+    want.objects = vec![];
+    want.stale = true;
+    want.confirmed = (0, None);
+    assert_eq!(seen(&state).await, want, "the leg on the line is announced");
+
+    let (call, seq) = show_metric(&state, &mut second, OPERATOR, "m2").await;
+    report(
+        &state,
+        second.epoch,
+        json!({"view": "visual", "generation": 0, "applied_seq": seq}),
+    )
+    .await;
+    assert_rendered(call).await;
+    want.objects = vec!["m2".into()];
+    want.watermark = seq;
+    want.view = "visual".into();
+    want.stale = false;
+    want.confirmed = (0, Some(seq));
+    assert_eq!(seen(&state).await, want, "a display on the announced leg");
+
+    state.0.leg_announcer.announce_route().await;
+    assert_eq!(seen(&state).await, want, "the same leg is announced again");
+
+    // A rescue moves the generation without announcing a leg: the gate is
+    // left alone until the page reports at the new generation, which starts
+    // that generation's confirmations.
+    state.0.coordinator.begin_rescue("a table row");
+    state.0.coordinator.settle();
+    let rescued = state.0.coordinator.generation();
+    assert_eq!(seen(&state).await, want, "a rescue");
+    report(
+        &state,
+        second.epoch,
+        json!({"view": "visual", "generation": rescued}),
+    )
+    .await;
+    want.confirmed = (rescued, None);
+    assert_eq!(
+        seen(&state).await,
+        want,
+        "the page reports at the rescued generation"
+    );
+
+    // A background agent's held scene is replayed into the stage of the leg
+    // that brings it forward, each action sequenced like a live show.
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let (code, held) = agent_call_json(
+        &state,
+        "/display",
+        json!({"token": "background-token", "action": {"op": "show", "id": "h1",
+               "type": "metric", "data": {"label": "h1", "value": "1"}}}),
+    )
+    .await;
+    assert_eq!((code, &held["held"]), (StatusCode::OK, &json!(true)));
+    assert_eq!(
+        seen(&state).await,
+        want,
+        "a background agent's display is held"
+    );
+
+    begin_alpha_candidate(&state, "alpha-leg");
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
+    let replayed = frames_until(&mut second, "display").await;
+    let alpha = state.0.coordinator.generation();
+    want.leg = Some(("alpha".into(), alpha));
+    want.objects = vec!["h1".into()];
+    want.watermark = replayed.last().unwrap()["seq"].as_u64().unwrap();
+    want.stale = true;
+    want.confirmed = (alpha, None);
+    assert_eq!(seen(&state).await, want, "a transfer's leg is announced");
+
+    state.retire_connection(second.epoch).await;
+    assert_eq!(
+        seen(&state).await,
+        want,
+        "the active page retires, already stale"
+    );
+    let (third, _, _) = state.register_connection().await;
+    report(
+        &state,
+        third.epoch,
+        json!({"view": "visual", "generation": alpha}),
+    )
+    .await;
+    want.stale = false;
+    assert_eq!(seen(&state).await, want, "a new page reports");
+    state.retire_connection(third.epoch).await;
+    want.stale = true;
+    assert_eq!(seen(&state).await, want, "the active page retires");
+
+    // Returning to the operator keeps the generation and changes the route.
+    state.0.leg_announcer.announce_route().await;
+    assert_eq!(
+        seen(&state).await,
+        want,
+        "the transfer settles on the leg already announced"
+    );
+    assert_eq!(
+        state.0.switchboard.lock().await.force_hangup().await,
+        Some("alpha".to_owned())
+    );
+    want.leg = Some((OPERATOR.into(), alpha));
+    want.objects = vec![];
+    assert_eq!(
+        seen(&state).await,
+        want,
+        "the caller returns to the operator"
+    );
 }
