@@ -4,8 +4,10 @@
 // hello {session_id, depth}           -> {on_call: false} | {on_call: true, token, persona, speech_deadline_ms}
 // call  {session_id, depth, token, call, args} -> {status, reason, result?}
 //
-// Delivery is decided here from the session's call state, so the module's
-// surface never changes within a session. See docs/host-link.md.
+// The calls the session's call state settles (speak in the background,
+// request_to_speak in front) are refused here; display and view are relayed,
+// and the service decides them. The module's surface never changes within a
+// session. See docs/host-link.md, "Delivery".
 
 import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import net from "node:net";

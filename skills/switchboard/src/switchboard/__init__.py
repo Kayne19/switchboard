@@ -296,7 +296,8 @@ def _common(result):
 
 
 def _refused(result, what):
-    reason = f": {result.reason}" if result.reason else ""
+    # A reason that is a sentence brings its own full stop.
+    reason = f": {str(result.reason).rstrip('.')}" if result.reason else ""
     return f"The switchboard refused that {what}{reason}."
 
 

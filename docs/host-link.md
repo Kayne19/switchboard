@@ -265,7 +265,7 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   refuses plain prompts on a busy session.
 - **`abort`** is always followed by `resume_queue` (the daemon suspends
   queued input after an abort; `resume_queue`'s "No queued work" error is
-  ignored), then by `wait_for_idle`.
+  ignored), then, when a turn is open, by `wait_for_idle`, which settles it.
 - **`kill`** is only for sessions with provenance `created`. It is refused
   for `taken_over` sessions and for sessions the host agent does not track.
   The transcript stays and can be reopened with `open_session`.
@@ -309,8 +309,9 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   `cwd`, without creating or reopening it. It records provenance
   `taken_over`, subscribes to its events, and persists that provenance. The
   session remains inert to the skill module until `join_call`; `detach` is the
-  only release path and never kills it. A tracked session, a non-top-level
-  session, or a folder mismatch is refused.
+  only release path and never kills it. A tracked session or a folder
+  mismatch is refused; a session that is not live or not top-level is
+  `not_found`.
 
 ### Session events
 
@@ -531,6 +532,14 @@ deeper than the service reads (above).
 | `display` | relayed | held until the caller brings the agent forward |
 | `view` (no target) | relayed | relayed |
 | `view` (target) | relayed | `refused`, `caller_away` |
+
+The host agent refuses what this table refuses for `speak` and
+`request_to_speak` itself (`decide()` in `skill_socket.ts`), from the
+session's call state. It relays `display` and `view` in every mode, and the
+service decides those: it holds a background display (`accepted`, with
+`held: true` in the result) and refuses a background `view` with a target.
+A refusal reaches the module with its code as `reason` (`caller_away`); the
+service's explanation stays in `result.detail`.
 
 `active` currently delivers like `foreground`. A background agent may ask
 what the caller sees, not change it: the screen belongs to whoever the caller
