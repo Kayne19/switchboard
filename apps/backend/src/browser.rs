@@ -5,7 +5,7 @@
 use crate::app_state::AppState;
 use crate::caller_input::{
     cancel_stream_clip, end_stream_clip, handle_audio_frame, is_clip_id, parse_clip_header,
-    parse_typed_turn, route_final_transcript, start_stream_clip, ClipHeader, StreamChunkHeader,
+    parse_typed_turn, route_typed_turn, start_stream_clip, ClipHeader, StreamChunkHeader,
 };
 use crate::delivery::{DeliveryConnection, DeliveryFrame, Event};
 use crate::display::{is_display_event, stamp_display_seq};
@@ -401,14 +401,8 @@ pub(crate) async fn handle_text_frame(
             tracing::info!(turn = %turn, generation, chars = text.chars().count(), "typed turn");
             // A typed turn is a transcript that needs no transcription, so it
             // takes the same path as a streamed one: epoch check, log, echo,
-            // then steer or queue. It runs off this reader because that path
-            // waits on `operation_transition`, which a transfer can hold for
-            // seconds, and the reader must keep answering pings meanwhile.
-            let state = state.clone();
-            tokio::spawn(
-                async move { route_final_transcript(&state, &turn, generation, text).await }
-                    .in_current_span(),
-            );
+            // then steer or queue, off this reader and in typed order.
+            route_typed_turn(state, turn, generation, text);
             Ok(())
         }
         ClientMessage::Clip {

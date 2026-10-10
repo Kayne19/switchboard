@@ -218,6 +218,33 @@ pub(crate) async fn route_final_transcript(
     dispatch_routed_transcript(state, id, generation, transcript).await;
 }
 
+/// Routes a typed turn off the WebSocket reader, in the order turns were
+/// typed. Routing asks Jev and can take seconds, and a later line can come
+/// back first, so each typed turn waits until the one typed before it is
+/// queued or steered (#248). The reader only starts the task: it waits on
+/// `operation_transition`, which a transfer can hold for seconds, and the
+/// reader must keep answering pings meanwhile.
+pub(crate) fn route_typed_turn(state: &AppState, id: String, generation: u64, text: String) {
+    let mut tail = state
+        .0
+        .clips
+        .typed_tail
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let ahead = tail.take();
+    let routing = state.clone();
+    *tail = Some(tokio::spawn(
+        async move {
+            if let Some(ahead) = ahead {
+                // A turn ahead that failed has still left the line.
+                let _ = ahead.await;
+            }
+            route_final_transcript(&routing, &id, generation, text).await;
+        }
+        .in_current_span(),
+    ));
+}
+
 fn emit_transcript_verdict(state: &AppState, id: &str, transcript: &str) {
     emit_clip_verdict(
         state,
@@ -232,7 +259,8 @@ fn emit_transcript_verdict(state: &AppState, id: &str, transcript: &str) {
 /// Caller audio clips and the state only this module reads: the clip channel
 /// to the transcription worker, the receiver that worker takes once, the ids
 /// already accepted (so a retransmit is answered, not transcribed twice), the
-/// last word sent on each recent clip, and every streaming clip's state.
+/// last word sent on each recent clip, every streaming clip's state, and the
+/// newest typed turn still being routed (`route_typed_turn`).
 /// `AppInner` holds one so the fields are the caller-input module's own.
 pub(crate) struct ClipState {
     sender: mpsc::Sender<Clip>,
@@ -240,6 +268,7 @@ pub(crate) struct ClipState {
     accepted: Mutex<(HashSet<String>, VecDeque<String>)>,
     verdicts: std::sync::Mutex<ClipVerdicts>,
     streams: Mutex<HashMap<String, StreamClipState>>,
+    typed_tail: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl ClipState {
@@ -255,6 +284,7 @@ impl ClipState {
             accepted: Mutex::new((HashSet::new(), VecDeque::new())),
             verdicts: std::sync::Mutex::new(ClipVerdicts::default()),
             streams: Mutex::new(HashMap::new()),
+            typed_tail: std::sync::Mutex::new(None),
         }
     }
 
