@@ -488,3 +488,35 @@ async fn an_unavailable_catalog_admits_a_qualified_model_and_refuses_a_bare_one(
         board.shutdown().await;
     }
 }
+
+/// A model change is refused while the leg on the line is still coming up:
+/// adopted on its first sign of life, its intro not yet over.
+#[tokio::test]
+async fn a_model_change_waits_for_the_leg_to_finish_coming_up() {
+    let (board, log) = on_alpha(&[], Box::new(|_, _| says("On it."))).await;
+    board
+        .coordinator
+        .begin_candidate(
+            CandidateLeg::new(
+                "alpha",
+                "alpha",
+                "next-session",
+                "next-leg",
+                "anthropic/current",
+                "",
+            )
+            .with_catalog(two_model_catalog()),
+        )
+        .unwrap();
+    board.coordinator.adopt_candidate("next-leg").unwrap();
+
+    let decided = board.planner.model_change("anthropic/next").await;
+
+    let Redial::Answered(reply) = decided else {
+        panic!("a leg still coming up is not redialed");
+    };
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert!(log.named("set_model").is_empty());
+    let mut board = board;
+    board.shutdown().await;
+}

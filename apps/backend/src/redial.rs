@@ -155,6 +155,15 @@ impl RedialPlanner {
         let Some((leg, project)) = on_the_line else {
             return self.answer(["We're not on a project right now."], None);
         };
+        // A leg still coming up is not the PBX's yet: its startup commits it
+        // when its intro ends. `begin_rescue_of` refuses it too, in case one
+        // begins after this check.
+        if self.coordinator.startup_in_flight() {
+            return self.answer(
+                ["I'm still connecting. Change the model once they answer."],
+                Some("The leg on the line is still starting.".into()),
+            );
+        }
         if !self.model_swaps {
             return self.answer(["Model changes are turned off."], None);
         }
