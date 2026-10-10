@@ -4,8 +4,7 @@ import { ControllerPanel } from './components/ControllerPanel';
 import { IRDrawer } from './components/IRDrawer';
 import { useController } from './controller/context';
 import type { FixtureName } from './controller/types';
-import { PROTOCOL_OPERATIONS } from './controller/reducer';
-import { assertControllerAction } from './controller/validation';
+import { OPERATIONS, assertControllerAction } from './controller/validation';
 import { sceneOrder } from './design/tokens';
 import { RuntimeIntegration } from './integration/runtime';
 
@@ -51,7 +50,7 @@ export default function App() {
       run: (actions: unknown[]) => run(actions.map(assertControllerAction)),
       load: loadFixture,
       state: () => stateRef.current,
-      protocol: PROTOCOL_OPERATIONS,
+      protocol: OPERATIONS,
     };
   }, [dispatch, run, loadFixture]);
 
