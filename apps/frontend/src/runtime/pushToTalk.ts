@@ -42,27 +42,13 @@ export interface PushToTalkOptions {
   enqueue: (clip: Clip) => boolean;
   flush: () => void;
   onRecordingChange: (recording: boolean) => void;
-  /** `error` undefined leaves the current error flag as it is. */
   /** Every status says whether it is an error (`CallRuntime.setStatus`). */
   onStatus: (text: string, error: boolean) => void;
-  pauseHandsFree: () => void;
-  resumeHandsFree: () => void;
-}
-
-interface ActiveRecording {
-  recorder: MediaRecorder;
-  discard: boolean;
-  id: string;
-  epoch: number;
-  streaming: boolean;
-  chunks: Blob[];
-  sequence: number;
-  transferEra: string | null;
-  /** Set by `stop()`; a recorder that stops without it was stopped by the browser. */
-  stopRequested: boolean;
-  levelMonitor?: AudioLevelMonitor;
-  levelSink?: GainNode;
-  levelContext?: AudioContext;
+  /**
+   * Push-to-talk took the microphone (a press) or let go of it (the press
+   * ended, `isActive` already false). Hands-free pauses and resumes on it.
+   */
+  onActive: (active: boolean) => void;
 }
 
 function defaultCreateRecorder(stream: MediaStream): MediaRecorder {
@@ -92,15 +78,115 @@ function defaultGetUserMedia(
   return devices.getUserMedia(constraints);
 }
 
-/** Takes the level meter off a recording and gives its context back. */
-function releaseMeter(recording: ActiveRecording): void {
-  recording.levelMonitor?.disconnect();
-  recording.levelSink?.disconnect();
-  recording.levelMonitor = undefined;
-  recording.levelSink = undefined;
-  if (recording.levelContext)
-    void recording.levelContext.close().catch(() => undefined);
-  recording.levelContext = undefined;
+/**
+ * The level meter of one press. Its context is made inside the press, where a
+ * browser still gives it an audio session; its graph is built once the
+ * recorder runs.
+ */
+interface Meter {
+  context: AudioContext | null;
+  monitor: AudioLevelMonitor | null;
+  sink: GainNode | null;
+}
+
+/** One press waiting for the microphone; its permission prompt's answer names it. */
+interface Press {
+  meter: Meter;
+}
+
+/** One recording: the recorder, what it holds, and what its clip is stamped with. */
+interface Take {
+  recorder: MediaRecorder;
+  stream: MediaStream;
+  meter: Meter;
+  id: string;
+  epoch: number;
+  /** The route a transfer was connecting to as the recording began. */
+  transferEra: string | null;
+  /** Whether chunks go out as they are recorded; the backend may abandon the stream. */
+  streaming: boolean;
+  chunks: Blob[];
+  sequence: number;
+}
+
+/**
+ * Where push-to-talk is. Each phase holds what exists only in it: a press
+ * waiting for the microphone holds its meter, a recording holds its take.
+ */
+type Phase =
+  | { kind: "idle" }
+  /** The permission prompt is open. `cancelled`: Send or Discard came first. */
+  | { kind: "acquiring"; press: Press; cancelled: boolean; answered: Promise<void> }
+  | { kind: "recording"; take: Take }
+  /** `stop()` was called; the recorder's `stop` event has not fired yet. */
+  | { kind: "stopping"; take: Take; send: boolean };
+
+/**
+ * What moves push-to-talk. An event from a permission prompt or a recorder
+ * names its press or take, so one that outlives its phase is dropped.
+ */
+type PttEvent =
+  | { kind: "press" }
+  | { kind: "release"; send: boolean }
+  | { kind: "abandonStreaming"; id: unknown }
+  | { kind: "granted"; press: Press; stream: MediaStream }
+  | { kind: "refused"; press: Press; error: unknown }
+  | { kind: "startFailed"; take: Take; error: unknown }
+  | { kind: "data"; take: Take; blob: Blob }
+  | { kind: "stopped"; take: Take }
+  | { kind: "recorderError"; take: Take; error: unknown };
+
+/** How a press ended. Each says what the caller hears about it. */
+type Outcome =
+  | { kind: "refused"; error: unknown }
+  | { kind: "cancelled" }
+  | { kind: "cannotRecord"; error: unknown }
+  | { kind: "failed"; error: unknown }
+  | { kind: "discarded" }
+  | { kind: "sent"; take: Take }
+  /** The browser stopped the recorder: what was said is sent. */
+  | { kind: "taken"; take: Take };
+
+/** A step into `idle`, with how the press ended. */
+interface Ended {
+  kind: "ended";
+  outcome: Outcome;
+}
+
+const IDLE: Phase = { kind: "idle" };
+
+function ended(outcome: Outcome): Ended {
+  return { kind: "ended", outcome };
+}
+
+function takeOf(phase: Phase): Take | null {
+  return "take" in phase ? phase.take : null;
+}
+
+function meterOf(phase: Phase): Meter | null {
+  return phase.kind === "acquiring" ? phase.press.meter : (takeOf(phase)?.meter ?? null);
+}
+
+/** Takes the meter's graph down and gives its context back. */
+function releaseMeter(meter: Meter): void {
+  meter.monitor?.disconnect();
+  meter.sink?.disconnect();
+  meter.monitor = null;
+  meter.sink = null;
+  if (meter.context) void meter.context.close().catch(() => undefined);
+  meter.context = null;
+}
+
+function stopTracks(stream: MediaStream): void {
+  for (const track of stream.getTracks()) track.stop();
+}
+
+/** The one teardown: release what `from` holds and `to` does not. */
+function leave(from: Phase, to: Phase): void {
+  const meter = meterOf(from);
+  if (meter && meter !== meterOf(to)) releaseMeter(meter);
+  const stream = takeOf(from)?.stream;
+  if (stream && stream !== takeOf(to)?.stream) stopTracks(stream);
 }
 
 export class PushToTalk {
@@ -112,15 +198,7 @@ export class PushToTalk {
   private readonly createAudioContext: NonNullable<
     PushToTalkOptions["createAudioContext"]
   >;
-  private mediaRecorder: MediaRecorder | null = null;
-  private activeRecording: ActiveRecording | null = null;
-  // True from the moment getUserMedia is asked for until the recorder is
-  // actually running. Without it a second press lands inside the permission
-  // await, spawns a second stream and recorder, orphans the first one with
-  // its mic light stuck on, and garbles the clip because both write into the
-  // same chunks array.
-  private starting = false;
-  private startCancelled = false;
+  private phase: Phase = IDLE;
 
   constructor(options: PushToTalkOptions) {
     this.options = options;
@@ -131,73 +209,171 @@ export class PushToTalk {
   }
 
   isRecording(): boolean {
-    return this.mediaRecorder?.state === "recording";
+    return this.phase.kind === "recording";
   }
 
   get isStarting(): boolean {
-    return this.starting;
+    return this.phase.kind === "acquiring";
   }
 
   /** Whether push-to-talk owns the microphone in any phase. */
   get isActive(): boolean {
-    return this.starting || this.isRecording() || this.activeRecording !== null;
+    return this.phase.kind !== "idle";
   }
 
   /** The backend could not stream this clip; the complete clip goes instead. */
   abandonStreaming(id: unknown): void {
-    if (this.activeRecording && this.activeRecording.id === id)
-      this.activeRecording.streaming = false;
+    this.transition({ kind: "abandonStreaming", id });
   }
 
-  async start(): Promise<void> {
-    if (this.starting || this.activeRecording || this.isRecording()) return;
-    const { onStatus } = this.options;
-    this.options.pauseHandsFree();
-    this.starting = true;
-    this.startCancelled = false;
-    // Create the meter's context inside the press handler: that is where a
-    // browser still gives it an audio session. Resuming it is never waited
-    // for -- a WebKit `resume()` that an audio session interruption leaves
-    // pending would otherwise hold `starting` true for the rest of the page's
-    // life, and every later press returns at the guard above with the
-    // microphone light on and nothing said. Nothing about the level meter may
-    // stand between the press and the recorder.
-    let levelContext: AudioContext | undefined;
-    if (this.options.onAudioLevel && typeof AudioContext !== "undefined") {
-      try {
-        levelContext = this.createAudioContext();
-        if (levelContext.state === "suspended")
-          void levelContext.resume().catch(() => undefined);
-      } catch {
-        levelContext = undefined;
+  /** Settles once this press's permission prompt is answered. */
+  start(): Promise<void> {
+    this.transition({ kind: "press" });
+    return this.phase.kind === "acquiring"
+      ? this.phase.answered
+      : Promise.resolve();
+  }
+
+  stop(send: boolean): void {
+    this.transition({ kind: "release", send });
+  }
+
+  /** The only writer of `phase`. */
+  private transition(event: PttEvent): void {
+    const from = this.phase;
+    const step = this.next(from, event);
+    if (step === from) return;
+    const to = step.kind === "ended" ? IDLE : step;
+    leave(from, to);
+    this.phase = to;
+    if (step.kind === "ended") this.end(step.outcome);
+    else if (to.kind !== from.kind) this.enter(to);
+  }
+
+  /**
+   * The phase x event table (pinned by `pushToTalk.test.ts`): the phase
+   * `event` moves push-to-talk to, or `phase` itself when the event changes
+   * nothing. It may act on the way (ask for the microphone, send a chunk),
+   * but never in a way that calls back into the machine at once: what can
+   * (starting or stopping the recorder) runs in `enter`, after the phase is
+   * written.
+   */
+  private next(phase: Phase, event: PttEvent): Phase | Ended {
+    switch (event.kind) {
+      case "press":
+        // A second tap while the permission prompt is open is swallowed.
+        return phase.kind === "idle" ? this.ask() : phase;
+      case "release":
+        return this.release(phase, event.send);
+      case "abandonStreaming": {
+        const take = takeOf(phase);
+        if (take && take.id === event.id) take.streaming = false;
+        return phase;
+      }
+      case "granted":
+        if (phase.kind !== "acquiring" || phase.press !== event.press)
+          return phase;
+        if (phase.cancelled) return this.unused(event.stream, { kind: "cancelled" });
+        return this.record(phase.press.meter, event.stream);
+      case "refused":
+        if (phase.kind !== "acquiring" || phase.press !== event.press)
+          return phase;
+        return ended({ kind: "refused", error: event.error });
+      case "startFailed":
+        if (takeOf(phase) !== event.take) return phase;
+        return ended({ kind: "cannotRecord", error: event.error });
+      case "data":
+        if (takeOf(phase) === event.take) this.keep(event.take, event.blob);
+        return phase;
+      case "stopped":
+        if (takeOf(phase) !== event.take) return phase;
+        if (phase.kind === "recording")
+          return ended({ kind: "taken", take: event.take });
+        if (phase.kind === "stopping")
+          return ended(
+            phase.send
+              ? { kind: "sent", take: event.take }
+              : { kind: "discarded" },
+          );
+        return phase;
+      case "recorderError":
+        if (takeOf(phase) !== event.take) return phase;
+        return ended({ kind: "failed", error: event.error });
+      default: {
+        const exhaustive: never = event;
+        return exhaustive;
       }
     }
-    let stream: MediaStream;
+  }
+
+  /** Enter `acquiring`: push-to-talk takes the microphone, makes the meter's context, and asks for it. */
+  private ask(): Phase {
+    this.options.onActive(true);
+    const press: Press = { meter: this.openMeter() };
+    // A `getUserMedia` that throws instead of rejecting is a refusal too.
+    const answered = new Promise<MediaStream>((resolve) =>
+      resolve(this.getUserMedia({ audio: true })),
+    ).then(
+      (stream) => this.transition({ kind: "granted", press, stream }),
+      (error: unknown) => this.transition({ kind: "refused", press, error }),
+    );
+    return { kind: "acquiring", press, cancelled: false, answered };
+  }
+
+  /**
+   * Makes the meter's context inside the press handler: that is where a
+   * browser still gives it an audio session. Resuming it is never waited for
+   * -- a WebKit `resume()` that an audio session interruption leaves pending
+   * would otherwise hold the press in `acquiring` for the rest of the page's
+   * life, with the microphone light on and nothing said. Nothing about the
+   * level meter may stand between the press and the recorder.
+   */
+  private openMeter(): Meter {
+    const meter: Meter = { context: null, monitor: null, sink: null };
+    if (!this.options.onAudioLevel || typeof AudioContext === "undefined")
+      return meter;
     try {
-      stream = await this.getUserMedia({ audio: true });
-    } catch (err) {
-      this.starting = false;
-      if (levelContext) void levelContext.close().catch(() => undefined);
-      this.options.resumeHandsFree();
-      onStatus(
-        err instanceof NoCaptureApi
-          ? "No microphone on this page: open it over https, not by address."
-          : "Microphone unavailable (" + errorName(err) + ").",
-        true,
-      );
-      return;
+      meter.context = this.createAudioContext();
+      if (meter.context.state === "suspended")
+        void meter.context.resume().catch(() => undefined);
+    } catch {
+      meter.context = null;
     }
-    // Discard/Send pressed during the permission await: honour it instead of
-    // starting a recording the caller already cancelled.
-    if (this.startCancelled) {
-      this.starting = false;
-      if (levelContext) void levelContext.close().catch(() => undefined);
-      stream.getTracks().forEach((t) => t.stop());
-      this.options.resumeHandsFree();
-      onStatus(this.options.idleText, false);
-      this.options.onRecordingChange(false);
-      return;
+    return meter;
+  }
+
+  private release(phase: Phase, send: boolean): Phase {
+    switch (phase.kind) {
+      case "idle":
+        this.options.onRecordingChange(false);
+        return phase;
+      case "acquiring":
+        // Send or Discard during the permission prompt: the answer is
+        // honoured by not starting a recording the caller already cancelled.
+        this.options.onRecordingChange(false);
+        return phase.cancelled ? phase : { ...phase, cancelled: true };
+      case "recording":
+        // A recorder that stopped by itself has its `stop` event on the way,
+        // and that event ends the take.
+        if (phase.take.recorder.state === "inactive") return phase;
+        return { kind: "stopping", take: phase.take, send };
+      case "stopping":
+        return phase;
+      default: {
+        const exhaustive: never = phase;
+        return exhaustive;
+      }
     }
+  }
+
+  /** A granted stream that no take will hold. */
+  private unused(stream: MediaStream, outcome: Outcome): Ended {
+    stopTracks(stream);
+    return ended(outcome);
+  }
+
+  /** Enter `recording`: a recorder on the granted stream, stamped as it begins. */
+  private record(meter: Meter, stream: MediaStream): Phase | Ended {
     let recorder: MediaRecorder;
     try {
       // Safari does not support the opus mimeType and the constructor throws
@@ -205,231 +381,215 @@ export class PushToTalk {
       // appeared, and the mic light stayed on because the tracks never
       // stopped.
       recorder = this.createRecorder(stream);
-      this.mediaRecorder = recorder;
-    } catch (err) {
-      this.starting = false;
-      if (levelContext) void levelContext.close().catch(() => undefined);
-      stream.getTracks().forEach((t) => t.stop());
-      this.options.resumeHandsFree();
-      this.options.onRecordingChange(false);
-      onStatus(
-        "This browser cannot record audio (" + errorName(err) + ").",
-        true,
-      );
+    } catch (error) {
+      return this.unused(stream, { kind: "cannotRecord", error });
+    }
+    const context = this.options.context();
+    const take: Take = {
+      recorder,
+      stream,
+      meter,
+      id: this.options.newClipId(),
+      epoch: context.epoch,
+      // Set when a transfer was already in flight as this recording began.
+      // The clip is re-stamped to the new epoch when the transfer lands, so
+      // the caller's words reach the leg they were speaking to.
+      transferEra: context.transferEra,
+      streaming:
+        context.streamingSelected &&
+        (recorder.mimeType || "") === STREAMING_MIME,
+      chunks: [],
+      sequence: 0,
+    };
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0)
+        this.transition({ kind: "data", take, blob: event.data });
+    };
+    // The one place a started recording ends, whatever stopped the recorder:
+    // `stop()` only asks. A browser stops it by itself when its track ends --
+    // the microphone is unplugged, or another app takes the iPad's audio
+    // session -- and the page went on saying it was recording (#262).
+    recorder.onstop = () => this.transition({ kind: "stopped", take });
+    recorder.onerror = (event) =>
+      this.transition({
+        kind: "recorderError",
+        take,
+        error: (event as Event & { error?: unknown }).error,
+      });
+    return { kind: "recording", take };
+  }
+
+  /** What entering a phase does once it is written. `idle` is entered through `end`. */
+  private enter(phase: Phase): void {
+    switch (phase.kind) {
+      case "recording":
+        return this.startRecorder(phase.take);
+      case "stopping":
+        return phase.take.recorder.stop();
+      case "idle":
+      case "acquiring":
+        return;
+      default: {
+        const exhaustive: never = phase;
+        return exhaustive;
+      }
+    }
+  }
+
+  private startRecorder(take: Take): void {
+    try {
+      take.recorder.start(take.streaming ? STREAMING_TIMESLICE_MS : undefined);
+    } catch (error) {
+      this.transition({ kind: "startFailed", take, error });
       return;
     }
-    const chunks: Blob[] = [];
-    const context = this.options.context();
-    const recordingId = this.options.newClipId();
-    const recordingEpoch = context.epoch;
-    const recordingStreaming =
-      context.streamingSelected &&
-      (recorder.mimeType || "") === STREAMING_MIME;
-    // Set when a transfer was already in flight as this recording began. The
-    // clip is re-stamped to the new epoch when the transfer lands, so the
-    // caller's words reach the leg they were speaking to.
-    const recordingTransferEra = context.transferEra;
-    let streamReleased = false;
-    const releaseStream = () => {
-      if (streamReleased) return;
-      streamReleased = true;
-      stream.getTracks().forEach((t) => t.stop());
-    };
-    let recorderFailed = false;
-    const recording: ActiveRecording = {
-      recorder,
-      discard: false,
-      id: recordingId,
-      epoch: recordingEpoch,
-      streaming: recordingStreaming,
-      chunks,
-      sequence: 0,
-      transferEra: recordingTransferEra,
-      stopRequested: false,
-      levelContext,
-    };
-    this.activeRecording = recording;
-    recorder.ondataavailable = (e) => {
-      if (e.data.size === 0) return;
-      chunks.push(e.data);
-      const active = this.activeRecording;
-      if (active?.recorder !== recorder || !active.streaming) return;
-      const ws = this.options.openSocket();
-      if (!ws) return;
-      const sequence = active.sequence++;
+    // The stream opens once the recorder runs, so a recorder that cannot
+    // start leaves no stream open on the server. Its first chunk comes later.
+    const socket = take.streaming ? this.options.openSocket() : null;
+    if (socket) {
       try {
-        ws.send(sttChunkHeader({ id: active.id, epoch: active.epoch }, sequence));
-        ws.send(e.data);
-      } catch {
-        try {
-          ws.send(sttCancelHeader({ id: active.id, epoch: active.epoch }));
-        } catch {
-          /* socket is already closed */
-        }
-        active.streaming = false;
-      }
-    };
-    const startSocket = recording.streaming ? this.options.openSocket() : null;
-    if (startSocket) {
-      try {
-        startSocket.send(
+        socket.send(
           sttStartHeader({
-            id: recording.id,
-            mime: recorder.mimeType,
-            epoch: recording.epoch,
+            id: take.id,
+            mime: take.recorder.mimeType,
+            epoch: take.epoch,
           }),
         );
       } catch {
-        recording.streaming = false;
+        take.streaming = false;
       }
     }
-    // The one place a started recording ends for the page, whatever stopped
-    // the recorder: `stop()` only asks. A browser stops it by itself when its
-    // track ends -- the microphone is unplugged, or another app takes the
-    // iPad's audio session -- and the page went on saying it was recording
-    // (#262).
-    recorder.onstop = () => {
-      releaseMeter(recording);
-      releaseStream();
-      const current = this.activeRecording === recording;
-      // Let go of the recording before hands-free is asked to take the
-      // microphone back: it refuses while push-to-talk is still active
-      // (#257), as every other exit here already knows.
-      if (current) this.activeRecording = null;
-      if (this.mediaRecorder === recorder) this.mediaRecorder = null;
-      this.options.resumeHandsFree();
-      if (recorderFailed) return;
-      if (current) this.options.onRecordingChange(false);
-      if (recording.discard) {
-        onStatus(this.options.idleText, false);
-        return;
-      }
-      const blob = new Blob(chunks, {
-        type: recorder.mimeType || "audio/webm",
-      });
-      const clip: Clip = {
-        id: recordingId,
-        audio: blob,
-        mime: blob.type,
-        created: Date.now(),
-        epoch: recordingEpoch,
-        transferEra: recordingTransferEra ?? undefined,
-        sent: false,
-        streaming: recording.streaming,
-        chunks: recording.streaming ? chunks : undefined,
-      };
-      if (!this.options.enqueue(clip)) return;
-      const endSocket = recording.streaming ? this.options.openSocket() : null;
-      if (endSocket) {
-        try {
-          endSocket.send(sttStartHeader(clip));
-          endSocket.send(sttEndHeader(clip));
-          clip.sent = true;
-          clip.transmitted = true;
-        } catch {
-          clip.sent = false;
-        }
-      }
-      this.options.flush();
-      if (!recording.stopRequested)
-        onStatus("Recording stopped: the microphone was taken away.", true);
-    };
-    recorder.onerror = (event) => {
-      if (recorderFailed) return;
-      recorderFailed = true;
-      if (this.activeRecording?.recorder === recorder)
-        this.activeRecording = null;
-      if (this.mediaRecorder === recorder) this.mediaRecorder = null;
-      this.starting = false;
-      releaseMeter(recording);
-      releaseStream();
-      this.options.resumeHandsFree();
-      this.options.onRecordingChange(false);
-      onStatus(
-        "Recording failed (" +
-          errorName((event as Event & { error?: unknown }).error) +
-          ").",
-        true,
-      );
-    };
-    try {
-      recorder.start(recordingStreaming ? STREAMING_TIMESLICE_MS : undefined);
-    } catch (err) {
-      recorderFailed = true;
-      if (this.activeRecording?.recorder === recorder)
-        this.activeRecording = null;
-      releaseMeter(recording);
-      releaseStream();
-      this.mediaRecorder = null;
-      this.starting = false;
-      this.options.resumeHandsFree();
-      this.options.onRecordingChange(false);
-      onStatus(
-        "This browser cannot record audio (" + errorName(err) + ").",
-        true,
-      );
-      return;
-    }
-    this.starting = false;
     this.options.onRecordingChange(true);
-    onStatus(
+    this.options.onStatus(
       "Recording... Send when you are done, Discard to throw it away.",
       false,
     );
     // The meter is the last thing built, after the recorder is running: it is
     // a picture of the caller's voice, and a browser that cannot draw it
     // still has to record.
-    this.attachMeter(recording, stream);
+    this.attachMeter(take);
   }
 
   /**
    * Puts the level meter on a running recording. A failure here costs the
    * caller the moving bars and nothing else.
    */
-  private attachMeter(recording: ActiveRecording, stream: MediaStream): void {
-    const levelContext = recording.levelContext;
+  private attachMeter(take: Take): void {
+    const { meter, stream } = take;
     const onAudioLevel = this.options.onAudioLevel;
-    if (!levelContext || !onAudioLevel) return;
-    if (this.activeRecording !== recording) {
-      releaseMeter(recording);
-      return;
-    }
+    // A take that has already ended had its meter released on the way out.
+    if (!meter.context || !onAudioLevel || takeOf(this.phase) !== take) return;
     try {
-      const source = levelContext.createMediaStreamSource(stream);
-      const levelSink = levelContext.createGain();
-      levelSink.gain.value = 0;
-      levelSink.connect(levelContext.destination);
-      recording.levelSink = levelSink;
-      recording.levelMonitor = new AudioLevelMonitor(
-        levelContext,
+      const source = meter.context.createMediaStreamSource(stream);
+      const sink = meter.context.createGain();
+      sink.gain.value = 0;
+      sink.connect(meter.context.destination);
+      meter.sink = sink;
+      meter.monitor = new AudioLevelMonitor(
+        meter.context,
         source,
         onAudioLevel,
-        levelSink,
+        sink,
       );
-      recording.levelMonitor.start();
+      meter.monitor.start();
     } catch {
-      releaseMeter(recording);
+      releaseMeter(meter);
     }
   }
 
-  stop(send: boolean): void {
-    // Set before the state check so a press landing inside the getUserMedia
-    // await is still honoured once the permission resolves.
-    if (this.starting) {
-      this.startCancelled = true;
-      this.options.onRecordingChange(false);
-      return;
+  /** Keeps a recorded chunk, and streams it when the take still streams. */
+  private keep(take: Take, blob: Blob): void {
+    take.chunks.push(blob);
+    if (!take.streaming) return;
+    const socket = this.options.openSocket();
+    if (!socket) return;
+    const sequence = take.sequence++;
+    try {
+      socket.send(sttChunkHeader({ id: take.id, epoch: take.epoch }, sequence));
+      socket.send(blob);
+    } catch {
+      try {
+        socket.send(sttCancelHeader({ id: take.id, epoch: take.epoch }));
+      } catch {
+        /* socket is already closed */
+      }
+      take.streaming = false;
     }
-    const recording = this.activeRecording;
-    if (!recording) {
-      this.options.onRecordingChange(false);
-      return;
+  }
+
+  /**
+   * `idle`'s entry, whatever ended the press. Push-to-talk has already let go
+   * of the microphone when hands-free is asked to take it back: hands-free
+   * refuses while push-to-talk is still active (#257).
+   */
+  private end(outcome: Outcome): void {
+    const { onStatus } = this.options;
+    this.options.onActive(false);
+    this.options.onRecordingChange(false);
+    switch (outcome.kind) {
+      case "refused":
+        return onStatus(
+          outcome.error instanceof NoCaptureApi
+            ? "No microphone on this page: open it over https, not by address."
+            : "Microphone unavailable (" + errorName(outcome.error) + ").",
+          true,
+        );
+      case "cancelled":
+      case "discarded":
+        return onStatus(this.options.idleText, false);
+      case "cannotRecord":
+        return onStatus(
+          "This browser cannot record audio (" + errorName(outcome.error) + ").",
+          true,
+        );
+      case "failed":
+        return onStatus(
+          "Recording failed (" + errorName(outcome.error) + ").",
+          true,
+        );
+      case "sent":
+        this.deliver(outcome.take);
+        return;
+      case "taken":
+        if (this.deliver(outcome.take))
+          onStatus("Recording stopped: the microphone was taken away.", true);
+        return;
+      default: {
+        const exhaustive: never = outcome;
+        return exhaustive;
+      }
     }
-    // The recorder's stop event tells the page the recording ended.
-    if (recording.recorder.state !== "inactive") {
-      recording.discard = !send;
-      recording.stopRequested = true;
-      recording.recorder.stop();
+  }
+
+  /** Hands the take's clip to the outbox; false when the outbox is full. */
+  private deliver(take: Take): boolean {
+    const blob = new Blob(take.chunks, {
+      type: take.recorder.mimeType || "audio/webm",
+    });
+    const clip: Clip = {
+      id: take.id,
+      audio: blob,
+      mime: blob.type,
+      created: Date.now(),
+      epoch: take.epoch,
+      transferEra: take.transferEra ?? undefined,
+      sent: false,
+      streaming: take.streaming,
+      chunks: take.streaming ? take.chunks : undefined,
+    };
+    if (!this.options.enqueue(clip)) return false;
+    const socket = take.streaming ? this.options.openSocket() : null;
+    if (socket) {
+      try {
+        socket.send(sttStartHeader(clip));
+        socket.send(sttEndHeader(clip));
+        clip.sent = true;
+        clip.transmitted = true;
+      } catch {
+        clip.sent = false;
+      }
     }
+    this.options.flush();
+    return true;
   }
 }

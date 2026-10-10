@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Clip } from "../../src/runtime/outbox";
-import { PushToTalk, type PushToTalkOptions } from "../../src/runtime/pushToTalk";
+import { NoCaptureApi, PushToTalk, type PushToTalkOptions } from "../../src/runtime/pushToTalk";
 
 // Ported from the legacy runtime's recorder lifecycle regressions: one
 // permission request per press, the microphone is always released, and a
@@ -104,8 +104,7 @@ function harness(overrides: Partial<PushToTalkOptions> = {}) {
       status.text = text;
       if (error !== undefined) status.error = error;
     },
-    pauseHandsFree: () => {},
-    resumeHandsFree: () => {},
+    onActive: () => {},
     ...overrides,
   });
   return {
@@ -306,8 +305,8 @@ describe("PushToTalk", () => {
     let activeAtResume: boolean | null = null;
     let ptt: PushToTalk | null = null;
     const h = harness({
-      resumeHandsFree: () => {
-        activeAtResume = ptt!.isActive;
+      onActive: (active) => {
+        if (!active) activeAtResume = ptt!.isActive;
       },
     });
     ptt = h.ptt;
@@ -356,8 +355,7 @@ describe("PushToTalk", () => {
         status.text = text;
         if (error !== undefined) status.error = error;
       },
-      pauseHandsFree: () => {},
-      resumeHandsFree: () => {},
+      onActive: () => {},
     });
     expect(navigator.mediaDevices, "the test page is not a secure origin").toBe(
       undefined,
@@ -366,5 +364,432 @@ describe("PushToTalk", () => {
     expect(status.text).toMatch(/https/);
     expect(status.error).toBe(true);
     expect(ptt.isActive, "and the next press is free to try again").toBe(false);
+  });
+});
+
+/**
+ * Push-to-talk's lifecycle, phase by event (#365). Each row puts a fresh
+ * push-to-talk in a phase, applies one event, and checks what the event did
+ * as the page and hands-free see it: the page's `recording` flag (published
+ * values applied in order, as `CallRuntime.update` does), the status it set,
+ * how often hands-free was paused and resumed, the microphone asked for and
+ * released, the meter's audio context closed, the socket frames sent and the
+ * clips queued. Then it checks which phase the row left push-to-talk in. A
+ * phase is not visible from outside, so `expectPhase` recognises it by what
+ * the next event does.
+ *
+ * The recorder streams (the backend selected streaming and the codec is
+ * opus), so the rows also pin what goes on the wire. Its `stop()` never fires
+ * `stop` by itself, so the `stopping` phase can be seen.
+ */
+describe("push-to-talk lifecycle: phase x event", () => {
+  type Phase =
+    | "idle"
+    | "acquiring"
+    /** A Send or Discard arrived while the permission prompt was open. */
+    | "cancelled"
+    | "recording"
+    /** Recording, and the recorder has stopped by itself; its `stop` event has not fired yet. */
+    | "self-stopped"
+    | "stopping, send"
+    | "stopping, discard"
+    /** Idle after the recorder failed; the failed recorder's own events may still arrive. */
+    | "failed";
+  type Event =
+    | "press"
+    | "send"
+    | "discard"
+    | "granted"
+    | "granted, no recorder"
+    | "granted, start throws"
+    | "refused"
+    | "refused, no capture API"
+    | "data"
+    | "stopped"
+    | "stopped, outbox full"
+    | "recorder error"
+    | "abandoned"
+    | "abandoned, another clip"
+    | "late data"
+    | "late stop";
+  type Then = "idle" | "acquiring" | "cancelled" | "recording" | "self-stopped" | "stopping";
+  interface Seen {
+    /** The page's `recording` after the event. */
+    recording: boolean;
+    /** The status the event set, or null when it set none. */
+    status: [string, boolean] | null;
+    /** `onActive(true)`, which pauses hands-free, and `onActive(false)`, which resumes it. */
+    paused: number;
+    resumed: number;
+    /** `getUserMedia` calls. */
+    asked: number;
+    /** Microphone tracks stopped. */
+    released: number;
+    /** Meter contexts closed. */
+    closed: number;
+    frames: string[];
+    /** Clips queued, as `id size streaming sent`. */
+    clips: string[];
+  }
+  interface Row {
+    from: Phase;
+    event: Event;
+    seen: Partial<Seen>;
+    then: Then;
+  }
+
+  const RECORDING_STATUS = "Recording... Send when you are done, Discard to throw it away.";
+  const NOTHING: Seen = {
+    recording: false,
+    status: null,
+    paused: 0,
+    resumed: 0,
+    asked: 0,
+    released: 0,
+    closed: 0,
+    frames: [],
+    clips: [],
+  };
+
+  class TableRecorder {
+    state: RecordingState = "inactive";
+    mimeType = "audio/webm;codecs=opus";
+    startThrows = false;
+    stopCalls = 0;
+    ondataavailable: ((event: { data: Blob }) => void) | null = null;
+    onstop: (() => void) | null = null;
+    onerror: ((event: { error: unknown }) => void) | null = null;
+    start() {
+      if (this.startThrows) throw new Error("start refused");
+      this.state = "recording";
+    }
+    stop() {
+      this.stopCalls += 1;
+      this.state = "inactive";
+    }
+  }
+
+  class CountingContext extends FakeMeterContext {
+    static closed = 0;
+    close() {
+      CountingContext.closed += 1;
+      return Promise.resolve();
+    }
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("AudioContext", CountingContext);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+  });
+
+  function harness() {
+    const recorders: TableRecorder[] = [];
+    const streams: Array<ReturnType<typeof fakeStream>> = [];
+    const frames: string[] = [];
+    const clips: Clip[] = [];
+    const counts = { paused: 0, resumed: 0, asked: 0 };
+    let recording = false;
+    let status: [string, boolean] | null = null;
+    let outboxFull = false;
+    let nextRecorderThrows: "create" | "start" | null = null;
+    let answer: { resolve: (stream: unknown) => void; reject: (error: unknown) => void } | null = null;
+    const socket = {
+      send: (data: unknown) =>
+        frames.push(typeof data === "string" ? JSON.parse(data).type : "blob"),
+    } as unknown as WebSocket;
+    const ptt = new PushToTalk({
+      idleText: "idle",
+      getUserMedia: () => {
+        counts.asked += 1;
+        return new Promise((resolve, reject) => {
+          answer = { resolve: resolve as (stream: unknown) => void, reject };
+        });
+      },
+      createRecorder: () => {
+        if (nextRecorderThrows === "create") throw new Error("codec unavailable");
+        const recorder = new TableRecorder();
+        recorder.startThrows = nextRecorderThrows === "start";
+        recorders.push(recorder);
+        return recorder as unknown as MediaRecorder;
+      },
+      createAudioContext: () => new CountingContext() as unknown as AudioContext,
+      onAudioLevel: () => {},
+      newClipId: () => `clip-${recorders.length}`,
+      context: () => ({ epoch: 1, transferEra: null, streamingSelected: true }),
+      openSocket: () => socket,
+      enqueue: (clip) => {
+        if (outboxFull) return false;
+        clips.push(clip);
+        return true;
+      },
+      flush: () => frames.push("flush"),
+      onRecordingChange: (on) => (recording = on),
+      onStatus: (text, error) => (status = [text, error]),
+      onActive: (active) => (active ? (counts.paused += 1) : (counts.resumed += 1)),
+    });
+    const released = () => streams.reduce((sum, stream) => sum + stream.stops(), 0);
+    let mark = { released: 0, closed: 0, frames: 0, clips: 0 };
+    return {
+      ptt,
+      recorders,
+      latest: () => recorders[recorders.length - 1],
+      grant: async (throws: "create" | "start" | null = null) => {
+        nextRecorderThrows = throws;
+        const stream = fakeStream();
+        streams.push(stream);
+        answer!.resolve(stream);
+        await settle();
+        nextRecorderThrows = null;
+      },
+      refuse: async (error: unknown) => {
+        answer!.reject(error);
+        await settle();
+      },
+      fillOutbox: () => (outboxFull = true),
+      /** Starts counting this row's effects from here. */
+      reset: () => {
+        counts.paused = counts.resumed = counts.asked = 0;
+        status = null;
+        mark = { released: released(), closed: CountingContext.closed, frames: frames.length, clips: clips.length };
+      },
+      seen: (): Seen => ({
+        recording,
+        status,
+        ...counts,
+        released: released() - mark.released,
+        closed: CountingContext.closed - mark.closed,
+        frames: frames.slice(mark.frames),
+        clips: clips
+          .slice(mark.clips)
+          .map((clip) => `${clip.id} ${clip.audio.size} ${clip.streaming} ${clip.sent}`),
+      }),
+    };
+  }
+  type Harness = ReturnType<typeof harness>;
+
+  function settle(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  async function reach(phase: Phase): Promise<{ h: Harness; earlier: TableRecorder | null }> {
+    const h = harness();
+    let earlier: TableRecorder | null = null;
+    if (phase !== "idle") void h.ptt.start();
+    if (phase === "cancelled") h.ptt.stop(true);
+    if (phase !== "idle" && phase !== "acquiring" && phase !== "cancelled") {
+      await h.grant();
+      h.latest().ondataavailable!({ data: new Blob(["abc"]) });
+    }
+    if (phase === "self-stopped") h.latest().state = "inactive";
+    if (phase === "stopping, send") h.ptt.stop(true);
+    if (phase === "stopping, discard") h.ptt.stop(false);
+    if (phase === "failed") {
+      earlier = h.latest();
+      earlier.state = "inactive";
+      earlier.onerror!({ error: new Error("encoder failed") });
+    }
+    h.reset();
+    return { h, earlier };
+  }
+
+  async function apply(h: Harness, earlier: TableRecorder | null, event: Event): Promise<void> {
+    switch (event) {
+      case "press":
+        void h.ptt.start();
+        return settle();
+      case "send":
+        return h.ptt.stop(true);
+      case "discard":
+        return h.ptt.stop(false);
+      case "granted":
+        return h.grant();
+      case "granted, no recorder":
+        return h.grant("create");
+      case "granted, start throws":
+        return h.grant("start");
+      case "refused":
+        return h.refuse(Object.assign(new Error("denied"), { name: "NotAllowedError" }));
+      case "refused, no capture API":
+        return h.refuse(new NoCaptureApi());
+      case "data":
+        return h.latest().ondataavailable!({ data: new Blob(["defg"]) });
+      case "stopped":
+        h.latest().state = "inactive";
+        return h.latest().onstop!();
+      case "stopped, outbox full":
+        h.fillOutbox();
+        h.latest().state = "inactive";
+        return h.latest().onstop!();
+      case "recorder error":
+        h.latest().state = "inactive";
+        return h.latest().onerror!({ error: new Error("encoder failed") });
+      case "abandoned":
+        return h.ptt.abandonStreaming("clip-1");
+      case "abandoned, another clip":
+        return h.ptt.abandonStreaming("clip-9");
+      case "late data":
+        return earlier!.ondataavailable!({ data: new Blob(["late"]) });
+      case "late stop":
+        return earlier!.onstop!();
+    }
+  }
+
+  /** Recognises the phase by what the next event does. */
+  async function expectPhase(h: Harness, then: Then): Promise<void> {
+    const recorders = h.recorders.length;
+    switch (then) {
+      case "idle": {
+        expect([h.ptt.isActive, h.ptt.isStarting, h.ptt.isRecording()]).toEqual([false, false, false]);
+        h.reset();
+        void h.ptt.start();
+        expect(h.seen().asked, "a press asks for the microphone").toBe(1);
+        return;
+      }
+      case "acquiring":
+      case "cancelled": {
+        expect([h.ptt.isActive, h.ptt.isStarting, h.ptt.isRecording()]).toEqual([true, true, false]);
+        await h.grant();
+        expect(h.recorders.length - recorders, "the grant records unless cancelled").toBe(then === "acquiring" ? 1 : 0);
+        expect(h.ptt.isRecording()).toBe(then === "acquiring");
+        return;
+      }
+      case "recording": {
+        expect([h.ptt.isActive, h.ptt.isStarting, h.ptt.isRecording()]).toEqual([true, false, true]);
+        const recorder = h.latest();
+        h.ptt.stop(true);
+        expect(recorder.stopCalls, "a send stops this recorder").toBe(1);
+        return;
+      }
+      case "self-stopped": {
+        // `isRecording()` is not pinned here: today it reads the recorder,
+        // which has stopped, while push-to-talk still holds the take.
+        expect([h.ptt.isActive, h.ptt.isStarting]).toEqual([true, false]);
+        const recorder = h.latest();
+        h.ptt.stop(true);
+        expect(recorder.stopCalls, "a send leaves a stopped recorder alone").toBe(0);
+        recorder.onstop!();
+        expect(h.seen().status?.[0]).toMatch(/taken away/);
+        return;
+      }
+      case "stopping": {
+        expect([h.ptt.isActive, h.ptt.isStarting, h.ptt.isRecording()]).toEqual([true, false, false]);
+        h.reset();
+        void h.ptt.start();
+        expect(h.seen().asked, "a press waits for the stop").toBe(0);
+        h.latest().onstop!();
+        expect(h.ptt.isActive, "the recorder's stop ends it").toBe(false);
+        return;
+      }
+    }
+  }
+
+  const TAKEN = ["Recording stopped: the microphone was taken away.", true] as [string, boolean];
+  const FAILED = ["Recording failed (encoder failed).", true] as [string, boolean];
+  const NO_HTTPS = ["No microphone on this page: open it over https, not by address.", true] as [string, boolean];
+  const REFUSED = ["Microphone unavailable (NotAllowedError).", true] as [string, boolean];
+  const IDLE = ["idle", false] as [string, boolean];
+  const ENDED = { recording: false, released: 1, closed: 1, resumed: 1 };
+  const rows: Row[] = [
+    { from: "idle", event: "press", seen: { asked: 1, paused: 1 }, then: "acquiring" },
+    { from: "idle", event: "send", seen: {}, then: "idle" },
+    { from: "idle", event: "discard", seen: {}, then: "idle" },
+    { from: "idle", event: "abandoned", seen: {}, then: "idle" },
+
+    // A second tap while the permission prompt is open is swallowed (#365).
+    { from: "acquiring", event: "press", seen: {}, then: "acquiring" },
+    { from: "acquiring", event: "send", seen: {}, then: "cancelled" },
+    { from: "acquiring", event: "discard", seen: {}, then: "cancelled" },
+    {
+      from: "acquiring",
+      event: "granted",
+      seen: { recording: true, status: [RECORDING_STATUS, false], frames: ["stt_start"] },
+      then: "recording",
+    },
+    {
+      from: "acquiring",
+      event: "granted, no recorder",
+      seen: { ...ENDED, status: ["This browser cannot record audio (codec unavailable).", true] },
+      then: "idle",
+    },
+    {
+      from: "acquiring",
+      event: "granted, start throws",
+      // No stream is opened for a recorder that never ran.
+      seen: { ...ENDED, status: ["This browser cannot record audio (start refused).", true] },
+      then: "idle",
+    },
+    { from: "acquiring", event: "refused", seen: { resumed: 1, closed: 1, status: REFUSED }, then: "idle" },
+    { from: "acquiring", event: "refused, no capture API", seen: { resumed: 1, closed: 1, status: NO_HTTPS }, then: "idle" },
+
+    { from: "cancelled", event: "press", seen: {}, then: "cancelled" },
+    { from: "cancelled", event: "send", seen: {}, then: "cancelled" },
+    { from: "cancelled", event: "granted", seen: { ...ENDED, status: IDLE }, then: "idle" },
+    { from: "cancelled", event: "refused", seen: { resumed: 1, closed: 1, status: REFUSED }, then: "idle" },
+
+    { from: "recording", event: "press", seen: { recording: true }, then: "recording" },
+    { from: "recording", event: "send", seen: { recording: true }, then: "stopping" },
+    { from: "recording", event: "discard", seen: { recording: true }, then: "stopping" },
+    { from: "recording", event: "data", seen: { recording: true, frames: ["stt_chunk", "blob"] }, then: "recording" },
+    // The browser stopped the recorder: what was said is sent (#262).
+    {
+      from: "recording",
+      event: "stopped",
+      seen: { ...ENDED, status: TAKEN, clips: ["clip-1 3 true true"], frames: ["stt_start", "stt_end", "flush"] },
+      then: "idle",
+    },
+    { from: "recording", event: "stopped, outbox full", seen: ENDED, then: "idle" },
+    { from: "recording", event: "recorder error", seen: { ...ENDED, status: FAILED }, then: "idle" },
+    { from: "recording", event: "abandoned", seen: { recording: true }, then: "recording" },
+    { from: "recording", event: "abandoned, another clip", seen: { recording: true }, then: "recording" },
+
+    { from: "self-stopped", event: "send", seen: { recording: true }, then: "self-stopped" },
+    {
+      from: "self-stopped",
+      event: "stopped",
+      seen: { ...ENDED, status: TAKEN, clips: ["clip-1 3 true true"], frames: ["stt_start", "stt_end", "flush"] },
+      then: "idle",
+    },
+
+    { from: "stopping, send", event: "press", seen: { recording: true }, then: "stopping" },
+    { from: "stopping, send", event: "send", seen: { recording: true }, then: "stopping" },
+    { from: "stopping, send", event: "discard", seen: { recording: true }, then: "stopping" },
+    { from: "stopping, send", event: "data", seen: { recording: true, frames: ["stt_chunk", "blob"] }, then: "stopping" },
+    {
+      from: "stopping, send",
+      event: "stopped",
+      seen: { ...ENDED, clips: ["clip-1 3 true true"], frames: ["stt_start", "stt_end", "flush"] },
+      then: "idle",
+    },
+    { from: "stopping, send", event: "stopped, outbox full", seen: ENDED, then: "idle" },
+    { from: "stopping, send", event: "recorder error", seen: { ...ENDED, status: FAILED }, then: "idle" },
+    { from: "stopping, send", event: "abandoned", seen: { recording: true }, then: "stopping" },
+    { from: "stopping, discard", event: "data", seen: { recording: true, frames: ["stt_chunk", "blob"] }, then: "stopping" },
+    { from: "stopping, discard", event: "stopped", seen: { ...ENDED, status: IDLE }, then: "idle" },
+    { from: "stopping, discard", event: "recorder error", seen: { ...ENDED, status: FAILED }, then: "idle" },
+
+    // A recorder fires `dataavailable` and `stop` after its `error`; the
+    // error already handed the microphone back.
+    { from: "failed", event: "late data", seen: {}, then: "idle" },
+    { from: "failed", event: "late stop", seen: {}, then: "idle" },
+    { from: "failed", event: "press", seen: { asked: 1, paused: 1 }, then: "acquiring" },
+  ];
+
+  it.each(rows)("$from | $event -> $then", async ({ from, event, seen, then }) => {
+    const { h, earlier } = await reach(from);
+    await apply(h, earlier, event);
+    expect(h.seen()).toEqual({ ...NOTHING, ...seen });
+    await expectPhase(h, then);
+  });
+
+  // The streaming half of `abandoned`: the clip goes whole, not as a stream.
+  it("sends a clip whole once the backend abandoned its stream", async () => {
+    const { h } = await reach("recording");
+    h.ptt.abandonStreaming("clip-1");
+    h.latest().ondataavailable!({ data: new Blob(["defg"]) });
+    h.ptt.stop(true);
+    h.latest().onstop!();
+    expect(h.seen().frames, "no chunk or end goes out on the stream").toEqual(["flush"]);
+    expect(h.seen().clips).toEqual(["clip-1 7 false false"]);
   });
 });
