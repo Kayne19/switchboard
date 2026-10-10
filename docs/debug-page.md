@@ -76,7 +76,25 @@ The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`
   starts again from 0.5 s only once a socket has received its snapshot and
   stayed open 10 s more; opening is not enough, since the listener closes a
   client that lags or cannot take a frame after the open, and each reconnect
-  costs it a full snapshot.
+  costs it a full snapshot. `SocketFeed` is one machine: `FeedPhase` names the
+  phase, and each phase holds the socket or timer that exists only in it.
+  `transition` is the only writer of the phase, `leave` the one teardown
+  (it releases what the old phase holds and the new one does not), and a
+  socket or timer event names its socket or timer, so one from a phase the
+  feed has left is dropped. `debugFeed.test.ts` pins the table:
+
+  | phase | holds | status on entry | `closed` | other moves |
+  |---|---|---|---|---|
+  | `stopped` | nothing | none | — | `start` → `connecting` (attempt 0) |
+  | `connecting` | socket, attempt | `connecting` (attempt 0) or `reconnecting` | `waiting` | `opened` → `open` |
+  | `open` | socket, attempt | `live` | `waiting` | first `snapshot` → `settling` |
+  | `settling` | socket, attempt, hold timer | none | `waiting` | hold ends → `live` |
+  | `live` | socket | none | `waiting`, from attempt 0 | — |
+  | `waiting` | retry timer, next attempt | `reconnecting`, with the reason and delay | — | timer → `connecting` |
+
+  `stop` from any phase goes to `stopped`; `resync` from any phase but
+  `stopped` goes to `connecting` at attempt 0; `start` on a running feed does
+  nothing. A socket that cannot be made goes straight to `waiting`.
 - The page looks like the main page because it is drawn with it: it loads
   `src/styles/index.css` before its own `debug.css`, and takes the tokens,
   type and frames from there. Agent text goes through `RichText`, latencies
