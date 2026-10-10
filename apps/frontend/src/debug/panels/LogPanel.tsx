@@ -1,4 +1,5 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
+import { usePinnedScroll } from '../../hooks/usePinnedScroll';
 import { clockTime } from '../explain';
 import type { DebugLog } from '../protocol';
 import type { DebugState } from '../reducer';
@@ -55,15 +56,14 @@ export function LogPanel({ state }: { state: DebugState }) {
   const [text, setText] = useState('');
   const [paused, setPaused] = useState(false);
   const [frozen, setFrozen] = useState<readonly DebugLog[]>(state.logs);
-  const body = useRef<HTMLDivElement>(null);
   const source = paused ? frozen : state.logs;
   const shown = useMemo(() => filterLogs(source, { levels, target, text }), [source, levels, target, text]);
   const tail = shown.length > SHOWN ? shown.slice(shown.length - SHOWN) : shown;
   const targets = useMemo(() => [...new Set(state.logs.map((log) => log.target))].sort(), [state.logs]);
 
-  useLayoutEffect(() => {
-    if (!paused && body.current) body.current.scrollTop = body.current.scrollHeight;
-  }, [tail, paused]);
+  // Pinned to the newest line until scrolled up or paused; a paused log
+  // stays where it is.
+  const { ref: body, onScroll } = usePinnedScroll<HTMLDivElement>(tail, !paused);
 
   return (
     <div className="panel panel-log">
@@ -109,7 +109,7 @@ export function LogPanel({ state }: { state: DebugState }) {
           {shown.length} / {state.logs.length} lines{state.unknown.length ? ` / ${state.unknown.length} unknown events` : ''}
         </span>
       </div>
-      <div className="log-body" ref={body}>
+      <div className="log-body" ref={body} onScroll={onScroll}>
         {tail.map((log) => (
           <LogRow key={log.seq} log={log} />
         ))}

@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { usePinnedScroll } from '../hooks/usePinnedScroll';
 import { LABEL_ADVANCE } from '../primitives/drawingKit';
 import { TechFrame } from '../primitives/TechFrame';
 import { AgentPane, type PaneSelect } from './AgentPane';
@@ -116,15 +117,11 @@ const CallerEntry = memo(function CallerEntry({
 });
 
 function CallerLane({ state, selection, select }: { state: DebugState; selection: Selection; select: PaneSelect }) {
-  const body = useRef<HTMLDivElement>(null);
-  const pinned = useRef(true);
   const [limit, setLimit] = useState(CALLER_PAGE);
   const items = state.callerLane.length > limit ? state.callerLane.slice(state.callerLane.length - limit) : state.callerLane;
   const newest = newestTraceId(state);
   const talkingTo = newest ? state.traces[newest]?.talkingTo : undefined;
-  useLayoutEffect(() => {
-    if (body.current && pinned.current) body.current.scrollTop = body.current.scrollHeight;
-  }, [state.callerLane]);
+  const { ref: body, onScroll } = usePinnedScroll<HTMLDivElement>(state.callerLane);
   return (
     <section className="card lane">
       <header className="card-head">
@@ -135,10 +132,7 @@ function CallerLane({ state, selection, select }: { state: DebugState; selection
         className="card-body lane-body"
         ref={body}
         data-clip="caller"
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          pinned.current = element.scrollTop + element.clientHeight >= element.scrollHeight - 48;
-        }}
+        onScroll={onScroll}
       >
         {state.callerLane.length > items.length && (
           <button type="button" className="earlier tech micro" onClick={() => setLimit(limit + CALLER_PAGE)}>

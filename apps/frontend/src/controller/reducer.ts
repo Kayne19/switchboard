@@ -414,23 +414,6 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
         revision,
       };
     }
-    case 'runtime_reset': {
-      // Runtime reset removes runtime state, activity included; agent state is preserved
-      const reset = syncCombinedState(
-        state,
-        state.agentObjects,
-        state.agentOrder,
-        state.agentSpeech,
-        {},
-        [],
-        null,
-        state.workspace,
-        state.focusId,
-        state.listening,
-        revision,
-      );
-      return { ...reset, activity: null, toolRun: createInitialToolRun() };
-    }
     case 'epoch_reset': {
       // A new epoch is a new leg. What the old leg's agent put on screen,
       // said, focused, or asked to see goes with it. The conversation is

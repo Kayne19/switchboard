@@ -483,15 +483,6 @@ function assignLayers(nodes: DiagramNode[], edges: DirectedEdge[]): Map<string, 
   return layer;
 }
 
-export function createLayers(nodes: DiagramNode[], edges: DiagramEdge[]): DiagramNode[][] {
-  if (nodes.length === 0) return [];
-  const layer = assignLayers(nodes, breakCycles(nodes, edges));
-  const count = Math.max(...layer.values()) + 1;
-  const layers = Array.from({ length: count }, () => [] as DiagramNode[]);
-  for (const node of nodes) layers[layer.get(node.id) ?? 0].push(node);
-  return layers;
-}
-
 // --- Wrapping a layer too wide for its frame --------------------------------
 
 /** One edge of the layered graph, by the ids of what it joins: a node, or a stub's terminal. */
