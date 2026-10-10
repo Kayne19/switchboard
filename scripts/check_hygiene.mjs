@@ -283,9 +283,21 @@ for (const dir of ["apps/frontend/tests", "apps/host-agent/tests"]) {
 	}
 }
 
+// 16. A relayed speak waits the speech deadline and one margin more for the
+//     service's answer, on both sides: the host agent's SPEAK_REPLY_MARGIN_MS
+//     and the skill module's _SPEAK_REPLY_MARGIN_S, which waits that and its
+//     own margin. If the module's were shorter it would give up while the host
+//     agent was still waiting for the answer that decides.
+{
+	const ts = readFileSync(path.join(root, "apps/host-agent/src/skill_socket.ts"), "utf8").match(/^export const SPEAK_REPLY_MARGIN_MS = ([\d_]+);$/m)?.[1];
+	const py = readFileSync(path.join(root, "skills/switchboard/src/switchboard/__init__.py"), "utf8").match(/^_SPEAK_REPLY_MARGIN_S = ([\d.]+)$/m)?.[1];
+	if (!ts || !py) findings.push("speak margin: could not read it from skill_socket.ts or __init__.py (the check needs updating)");
+	else if (Number(ts.replaceAll("_", "")) !== Number(py) * 1000) findings.push(`speak margin differs: host agent SPEAK_REPLY_MARGIN_MS ${ts}, skill _SPEAK_REPLY_MARGIN_S ${py}`);
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one speak margin, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits");

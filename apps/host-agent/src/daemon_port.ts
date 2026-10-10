@@ -224,11 +224,16 @@ export class PrimeDaemonPort implements DaemonPort {
 	async connect(): Promise<DaemonInfo> {
 		this.#module ??= (await import(pathToFileURL(path.join(this.#packageDir, "dist", "index.js")).href)) as PrimeAgentModule;
 		const client = new this.#module.DaemonClient(this.#socketPath);
-		// DaemonClient.connect only dials the socket; it never starts a daemon.
-		await client.connect(5_000);
-		const hello = await client.waitForHello(5_000);
-		const version = typeof hello.protocol?.version === "number" ? hello.protocol.version : null;
+		// A client that fails to come up is closed here: its waitForHello
+		// leaves the socket open on a timeout, and connectDaemon retries for
+		// ever, so each failure would leave one more client on the daemon.
+		let version: number | null;
+		let hello: { protocol?: { version?: number }; appVersion?: string };
 		try {
+			// DaemonClient.connect only dials the socket; it never starts a daemon.
+			await client.connect(5_000);
+			hello = await client.waitForHello(5_000);
+			version = typeof hello.protocol?.version === "number" ? hello.protocol.version : null;
 			checkDaemonProtocol(version);
 		} catch (error) {
 			client.close();

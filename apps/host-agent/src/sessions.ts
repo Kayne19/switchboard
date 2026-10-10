@@ -147,6 +147,8 @@ export class SessionManager {
 	readonly #shortId: () => string;
 	readonly #tracked = new Map<string, Tracked>();
 	readonly #usedNames = new Set<string>();
+	/** The prepare commands still running, by folder and command. */
+	readonly #prepares = new Map<string, Promise<PrepareResult>>();
 
 	constructor(options: SessionManagerOptions) {
 		this.#port = options.port;
@@ -177,9 +179,16 @@ export class SessionManager {
 	/**
 	 * Load provenance from the state file and reattach to every recorded
 	 * session the daemon still has. Used at start and after the daemon
-	 * connection was replaced. Returns the sessions kept and the ones gone.
+	 * connection was replaced. Returns the sessions kept, the ones gone, and
+	 * the ones the daemon still lists but would not attach.
+	 *
+	 * Each session is reattached on its own: one whose attach fails does not
+	 * stop the rest, and the state file is written either way. An attach that
+	 * fails because the session ended after the list is a close (`gone`); one
+	 * the daemon still lists stays tracked, so its provenance is kept and the
+	 * caller's next resync tries it again.
 	 */
-	async resync(): Promise<{ live: string[]; closed: string[] }> {
+	async resync(): Promise<{ live: string[]; closed: string[]; failed: { session: string; error: string }[] }> {
 		const state = this.#readState();
 		for (const n of state.used_names) this.#usedNames.add(n);
 		const recorded = new Map(state.sessions.map((s) => [s.handle, s]));
@@ -187,30 +196,30 @@ export class SessionManager {
 		const live = new Set((await this.#port.list()).map((s) => s.handle));
 		const kept: string[] = [];
 		const closed: string[] = [];
+		const refused: { rec: StateFile["sessions"][number]; previous: Tracked | undefined; error: string }[] = [];
+		// A session detached or killed while its attach was in flight stays
+		// let go: the keeper runs this again while the link is up, so a
+		// command can land between the attach and its result.
+		const letGo = (handle: string, previous: Tracked | undefined) => previous !== undefined && this.#tracked.get(handle) !== previous;
+		const gone = (handle: string) => {
+			if (this.#tracked.delete(handle)) this.#emit(handle, { kind: "session_closed", reason: "gone" });
+			closed.push(handle);
+		};
 		for (const rec of recorded.values()) {
 			if (!live.has(rec.handle)) {
-				if (this.#tracked.delete(rec.handle)) this.#emit(rec.handle, { kind: "session_closed", reason: "gone" });
-				closed.push(rec.handle);
+				gone(rec.handle);
 				continue;
 			}
-			const snapshot = await this.#port.attach(rec.handle);
 			const previous = this.#tracked.get(rec.handle);
-			const t: Tracked = previous ?? {
-				handle: rec.handle,
-				sessionId: rec.session_id,
-				name: rec.name,
-				project: rec.project,
-				cwd: rec.cwd,
-				provenance: rec.provenance,
-				turnOpen: false,
-				inputs: 0,
-				pending: 0,
-				turnId: null,
-				turnCause: null,
-				call: null,
-				last: null,
-				killing: false,
-			};
+			let snapshot: DaemonSession;
+			try {
+				snapshot = await this.#port.attach(rec.handle);
+			} catch (error) {
+				refused.push({ rec, previous, error: error instanceof Error ? error.message : String(error) });
+				continue;
+			}
+			if (letGo(rec.handle, previous)) continue;
+			const t = this.#tracked.get(rec.handle) ?? this.#untracked(rec);
 			t.last = snapshot;
 			this.#tracked.set(rec.handle, t);
 			// A busy session rebuilt from a snapshot has no reliable cause. Keep
@@ -219,8 +228,48 @@ export class SessionManager {
 			if (t.turnOpen) this.#settle(t);
 			kept.push(rec.handle);
 		}
+		const failed: { session: string; error: string }[] = [];
+		if (refused.length > 0) {
+			// Ask once more which of them the daemon still runs. If it cannot
+			// say, keep them all: a later resync decides.
+			let still: Set<string> | null = null;
+			try {
+				still = new Set((await this.#port.list()).map((s) => s.handle));
+			} catch {
+				still = null;
+			}
+			for (const { rec, previous, error } of refused) {
+				if (letGo(rec.handle, previous)) continue;
+				if (still && !still.has(rec.handle)) {
+					gone(rec.handle);
+					continue;
+				}
+				if (!this.#tracked.has(rec.handle)) this.#tracked.set(rec.handle, this.#untracked(rec));
+				failed.push({ session: rec.handle, error });
+			}
+		}
 		this.#writeState();
-		return { live: kept, closed };
+		return { live: kept, closed, failed };
+	}
+
+	/** A recorded session this process has not tracked yet, with no turn open. */
+	#untracked(rec: StateFile["sessions"][number]): Tracked {
+		return {
+			handle: rec.handle,
+			sessionId: rec.session_id,
+			name: rec.name,
+			project: rec.project,
+			cwd: rec.cwd,
+			provenance: rec.provenance,
+			turnOpen: false,
+			inputs: 0,
+			pending: 0,
+			turnId: null,
+			turnCause: null,
+			call: null,
+			last: null,
+			killing: false,
+		};
 	}
 
 	/** Wire-level description of a tracked session, used in snapshots and replies. */
@@ -259,6 +308,21 @@ export class SessionManager {
 
 	// -- commands ----------------------------------------------------------
 
+	/**
+	 * Run a prepare command, or join the same command already running in the
+	 * same folder and answer with its result. The service sends run_prepare
+	 * again when its link drops mid-prepare; a second copy would race the
+	 * first in the same tree, and the first run's report would be lost (#292).
+	 */
+	#prepare(options: { cwd: string; command: string; timeoutMs?: number }): Promise<PrepareResult> {
+		const key = JSON.stringify([options.cwd, options.command]);
+		const running = this.#prepares.get(key);
+		if (running) return running;
+		const run = runPrepare(options).finally(() => this.#prepares.delete(key));
+		this.#prepares.set(key, run);
+		return run;
+	}
+
 	/** Dispatch one host-link command. Throws CommandError or DaemonCommandError. */
 	async handle(name: string, args: Record<string, unknown>): Promise<unknown> {
 		switch (name) {
@@ -270,14 +334,10 @@ export class SessionManager {
 				return this.attach(requireString(args, "session"), requireString(args, "project"), requireString(args, "cwd"));
 			case "list_sessions":
 				return this.listSessions();
-			case "list_saved_sessions":
-				return this.listSavedSessions(requireString(args, "cwd"), optionalString(args, "project"));
 			case "prompt":
 				return this.prompt(requireString(args, "session"), requireString(args, "message"));
 			case "steer":
 				return this.input(requireString(args, "session"), "steer", requireString(args, "message"));
-			case "follow_up":
-				return this.input(requireString(args, "session"), "follow_up", requireString(args, "message"));
 			case "abort":
 				return this.abort(requireString(args, "session"));
 			case "kill":
@@ -286,8 +346,6 @@ export class SessionManager {
 				return this.detach(requireString(args, "session"));
 			case "join_call":
 				return this.joinCall(requireString(args, "session"), args);
-			case "leave_call":
-				return this.leaveCall(requireString(args, "session"));
 			case "set_mode":
 				return this.setMode(requireString(args, "session"), requireString(args, "mode"));
 			case "set_model":
@@ -297,7 +355,7 @@ export class SessionManager {
 			case "list_models":
 				return { models: await this.#port.listModels() };
 			case "run_prepare":
-				return runPrepare({
+				return this.#prepare({
 					cwd: requireString(args, "cwd"),
 					command: requireString(args, "command"),
 					timeoutMs: typeof args.timeout_ms === "number" ? args.timeout_ms : undefined,
@@ -348,9 +406,17 @@ export class SessionManager {
 	}
 
 	async openSession(sessionId: string, cwd: string, project: string | undefined): Promise<Record<string, unknown>> {
-		for (const t of this.#tracked.values()) if (t.sessionId === sessionId) return this.#info(t);
 		const expected = project ? `${SESSION_NAME_PREFIX}${project}-` : SESSION_NAME_PREFIX;
 		const refuse = (name: string | null) => new CommandError("refused", `session ${sessionId} (${name || "unnamed"}) was not created by the switchboard`);
+		// A session already tracked is returned only on the terms a reopen
+		// would be held to: one the switchboard made, under this project's
+		// name, in this folder.
+		for (const t of this.#tracked.values()) {
+			if (t.sessionId !== sessionId) continue;
+			if (t.provenance !== "created" || !(t.name ?? "").startsWith(expected) || (project && t.project !== project)) throw refuse(t.name);
+			if (t.cwd !== cwd) throw new CommandError("refused", `session ${sessionId} runs in ${t.cwd}, not ${cwd}`);
+			return this.#info(t);
+		}
 		// The name is checked on the saved record before anything is made
 		// live: a daemon `create` with a session path reopens the session (or
 		// returns it, if someone else has it open), and a desk session the
@@ -424,24 +490,6 @@ export class SessionManager {
 						thinking: s.thinking,
 					};
 				}),
-		};
-	}
-
-	async listSavedSessions(cwd: string, project: string | undefined): Promise<{ sessions: Record<string, unknown>[] }> {
-		const prefix = project ? `${SESSION_NAME_PREFIX}${project}-` : null;
-		const saved = await this.#port.listSaved(cwd);
-		return {
-			sessions: saved
-				.filter((s) => prefix === null || (s.name ?? "").startsWith(prefix))
-				.map((s) => ({
-					session_id: s.sessionId,
-					path: s.path,
-					name: s.name,
-					cwd: s.cwd,
-					modified: s.modified,
-					message_count: s.messageCount,
-					first_message: s.firstMessage,
-				})),
 		};
 	}
 
@@ -535,11 +583,6 @@ export class SessionManager {
 		if (typeof deadline !== "number" || !(deadline > 0)) throw new CommandError("bad_request", "speech_deadline_ms must be a positive number");
 		t.call = { token: requireString(args, "token"), persona: optionalString(args, "persona") ?? "", speechDeadlineMs: deadline, mode };
 		return { on_call: true, mode };
-	}
-
-	leaveCall(handle: string): { on_call: false } {
-		this.#get(handle).call = null;
-		return { on_call: false };
 	}
 
 	setMode(handle: string, mode: string): { mode: CallMode } {
@@ -741,7 +784,22 @@ class Tail {
 	}
 }
 
-/** Run a project's prepare command with `sh -c` in its folder, bounded in output and time. */
+/**
+ * How long output is still read after the shell exits. A process the command
+ * left running (`server &`) inherits the output pipes and can hold them open
+ * for as long as it runs; waiting for them would hold the prepare until its
+ * timeout. Output the shell wrote is already in the pipes, so a short wait
+ * reads it. Then our ends are closed: a process left behind that writes to
+ * them later gets SIGPIPE, which ends it unless it ignores the signal.
+ */
+export const PREPARE_DRAIN_MS = 500;
+
+/**
+ * Run a project's prepare command with `sh -c` in its folder, bounded in
+ * output and time. It settles on the shell's exit, after PREPARE_DRAIN_MS
+ * at most for the output pipes, not when every process holding them is gone.
+ * A shell that overruns `timeoutMs` is killed with its process group.
+ */
 export function runPrepare(options: { cwd: string; command: string; timeoutMs?: number }): Promise<PrepareResult> {
 	const timeoutMs = options.timeoutMs ?? PREPARE_DEFAULT_TIMEOUT_MS;
 	const started = Date.now();
@@ -749,6 +807,9 @@ export function runPrepare(options: { cwd: string; command: string; timeoutMs?: 
 		const stdout = new Tail();
 		const stderr = new Tail();
 		let timedOut = false;
+		let settled = false;
+		let exit: { code: number | null; signal: string | null } = { code: null, signal: null };
+		let drain: NodeJS.Timeout | undefined;
 		const child = spawn("sh", ["-c", options.command], { cwd: options.cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
 		child.stdout.on("data", (c: Buffer) => stdout.push(c));
 		child.stderr.on("data", (c: Buffer) => stderr.push(c));
@@ -761,19 +822,33 @@ export function runPrepare(options: { cwd: string; command: string; timeoutMs?: 
 				child.kill("SIGKILL");
 			}
 		}, timeoutMs);
-		const finish = (code: number | null, signal: string | null, spawnError?: Error) => {
+		const finish = (spawnError?: Error) => {
+			if (settled) return;
+			settled = true;
 			clearTimeout(timer);
+			clearTimeout(drain);
 			resolve({
-				outcome: timedOut ? "timed_out" : code === 0 ? "succeeded" : "failed",
-				exit_code: code,
-				signal,
+				outcome: timedOut ? "timed_out" : exit.code === 0 ? "succeeded" : "failed",
+				exit_code: exit.code,
+				signal: exit.signal,
 				stdout: stdout.text(),
 				stderr: spawnError ? spawnError.message : stderr.text(),
 				truncated: stdout.truncated || stderr.truncated,
 				duration_ms: Date.now() - started,
 			});
 		};
-		child.on("error", (error) => finish(null, null, error));
-		child.on("close", (code, signal) => finish(code, signal));
+		child.on("error", (error) => finish(error));
+		child.on("exit", (code, signal) => {
+			exit = { code, signal };
+			clearTimeout(timer);
+			drain = setTimeout(() => {
+				// Stop reading: a process left behind keeps the pipes open.
+				child.stdout.destroy();
+				child.stderr.destroy();
+				finish();
+			}, PREPARE_DRAIN_MS);
+		});
+		// Every pipe closed after the exit: all the output is in.
+		child.on("close", () => finish());
 	});
 }

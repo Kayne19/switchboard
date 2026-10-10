@@ -154,11 +154,6 @@ test("resume: open_session reopens a saved sb- session; a desk session is refuse
 	const { daemon, manager } = setup();
 	daemon.saved.set("old1", { handle: "", sessionId: "old1", name: "sb-homelab-1234abcd", cwd: "/srv/homelab", busy: false, model: null, thinking: "low", depth: 0 });
 	daemon.saved.set("desk", { handle: "", sessionId: "desk", name: "my-notes", cwd: "/srv/homelab", busy: false, model: null, thinking: "low", depth: 0 });
-	const saved = (await manager.handle("list_saved_sessions", { cwd: "/srv/homelab", project: "homelab" })) as { sessions: Message[] };
-	assert.deepEqual(
-		saved.sessions.map((s) => s.session_id),
-		["old1"],
-	);
 	await assert.rejects(manager.handle("open_session", { session_id: "old1", project: "homelab" }), (e: Error & { code?: string }) => e.code === "bad_request");
 	const info = (await manager.handle("open_session", { session_id: "old1", cwd: "/srv/homelab", project: "homelab" })) as Message;
 	assert.equal(info.session_id, "old1");
@@ -174,6 +169,24 @@ test("resume: open_session reopens a saved sb- session; a desk session is refuse
 	// made live, where a refused-but-opened session would run unseen.
 	assert.equal(daemon.calls.filter((c) => c.op === "open").length, opensBefore);
 	assert.equal([...daemon.live.values()].some((s) => s.sessionId === "desk"), false);
+});
+
+test("open_session holds a session it already tracks to the same name, project and folder", async () => {
+	// A tracked session used to be returned before any check, so an
+	// open_session for project B returned project A's session (#294).
+	const { daemon, manager } = setup();
+	daemon.saved.set("old1", { handle: "", sessionId: "old1", name: "sb-homelab-1234abcd", cwd: "/srv/homelab", busy: false, model: null, thinking: "low", depth: 0 });
+	const info = (await manager.handle("open_session", { session_id: "old1", cwd: "/srv/homelab", project: "homelab" })) as Message;
+	const refused = (e: Error & { code?: string }) => e.code === "refused";
+	await assert.rejects(manager.handle("open_session", { session_id: "old1", cwd: "/srv/other", project: "other" }), refused);
+	await assert.rejects(manager.handle("open_session", { session_id: "old1", cwd: "/srv/other" }), refused);
+	// The same project and folder still get the tracked session back.
+	assert.deepEqual(await manager.handle("open_session", { session_id: "old1", cwd: "/srv/homelab", project: "homelab" }), info);
+	assert.deepEqual(await manager.handle("open_session", { session_id: "old1", cwd: "/srv/homelab" }), info);
+	// A desk session taken over is not reopened as the switchboard's.
+	daemon.addLive({ handle: "desk", cwd: "/srv/homelab" });
+	const desk = (await manager.handle("attach", { session: "desk", project: "homelab", cwd: "/srv/homelab" })) as Message;
+	await assert.rejects(manager.handle("open_session", { session_id: String(desk.session_id), cwd: "/srv/homelab", project: "homelab" }), refused);
 });
 
 test("a turn settles on wait_for_idle after the last input, not on agent_end", async () => {
@@ -341,9 +354,38 @@ test("a daemon that reports one command unsupported fails that command cleanly; 
 	assert.ok(((await manager.handle("list_sessions", {})) as { sessions: unknown[] }).sessions.length === 1);
 });
 
+test("prepare: a second run_prepare of the same command in the same folder joins the running one", async () => {
+	// The service sends run_prepare again when its link drops mid-prepare;
+	// a second copy must not race the first in the same tree (#292).
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "sb-prep-"));
+	const { manager } = setup();
+	const command = "echo x >> runs.txt; sleep 1; echo done";
+	const [first, second] = (await Promise.all([manager.handle("run_prepare", { cwd, command }), manager.handle("run_prepare", { cwd, command })])) as Message[];
+	assert.equal(readFileSync(path.join(cwd, "runs.txt"), "utf8"), "x\n", "the command ran once");
+	assert.deepEqual(second, first);
+	assert.equal(first.outcome, "succeeded");
+	// Once it has finished, the same command runs again.
+	await manager.handle("run_prepare", { cwd, command: "echo x >> runs.txt" });
+	assert.equal(readFileSync(path.join(cwd, "runs.txt"), "utf8"), "x\nx\n");
+});
+
 test("catalog: list_models returns the daemon host's models", async () => {
 	const { manager } = setup();
 	assert.deepEqual(await manager.handle("list_models", {}), { models: [{ provider: "anthropic", id: "claude-x", name: "Claude X", reasoning: true }] });
+});
+
+test("commands the service never sends are unknown: leave_call, follow_up, list_saved_sessions", async () => {
+	// The service puts a session off a call with detach or kill, queues input
+	// with prompt or steer, and reopens a session by id (#294).
+	const { manager } = setup();
+	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	for (const [name, args] of [
+		["leave_call", { session: s }],
+		["follow_up", { session: s, message: "more" }],
+		["list_saved_sessions", { cwd: "/srv/homelab" }],
+	] as const) {
+		await assert.rejects(manager.handle(name, args), (e: Error & { code?: string }) => e.code === "unknown_command", name);
+	}
 });
 
 test("prepare: output, failure, bounded output and timeout reports", async () => {
@@ -366,6 +408,21 @@ test("prepare: output, failure, bounded output and timeout reports", async () =>
 	assert.ok(slow.duration_ms < 4000);
 	const viaCommand = (await setup().manager.handle("run_prepare", { cwd, command: "true" })) as Message;
 	assert.equal(viaCommand.outcome, "succeeded");
+});
+
+test("prepare: a shell that exits while a process it started holds the output pipes settles on the shell's exit", async () => {
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "sb-prep-"));
+	// The backgrounded sleep inherits stdout and stderr; the shell exits 0 at once.
+	const background = await runPrepare({ cwd, command: "sleep 6 & echo started", timeoutMs: 5000 });
+	assert.equal(background.outcome, "succeeded", JSON.stringify(background));
+	assert.equal(background.exit_code, 0);
+	assert.equal(background.stdout, "started\n");
+	// A shell that does overrun is killed with its group, and the reply still
+	// comes when a process in another session (setsid) keeps the pipes open.
+	const overrun = await runPrepare({ cwd, command: "setsid sleep 8 & echo started; sleep 5", timeoutMs: 200 });
+	assert.equal(overrun.outcome, "timed_out", JSON.stringify(overrun));
+	assert.equal(overrun.stdout, "started\n");
+	assert.ok(overrun.duration_ms < 6000, `settled after ${overrun.duration_ms} ms, not when the setsid process let go`);
 });
 
 test("a host-agent restart reattaches from the daemon and sends each session a snapshot", async () => {
@@ -440,6 +497,91 @@ test("the host agent never starts a daemon: DaemonPort has no start, and a lost 
 	assert.deepEqual(closed, [s]);
 	assert.equal(kinds(s).at(-1), "session_closed");
 	assert.ok(daemon.ops().every((op) => !/start|launch|spawn|ensure/i.test(op)));
+});
+
+test("resync: a session that ends before its attach is closed, and the others are still reattached", async () => {
+	const { daemon, manager, kinds, stateFile } = setup();
+	const a = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	const b = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	daemon.calls.length = 0;
+	// The daemon lists both, then `a` exits (killed from a desk) before its attach.
+	const attach = daemon.attach.bind(daemon);
+	daemon.attach = async (handle: string) => {
+		if (handle === a) daemon.live.delete(a);
+		return attach(handle);
+	};
+	const { live, closed, failed } = await manager.resync();
+	assert.deepEqual(live, [b]);
+	assert.deepEqual(closed, [a]);
+	assert.deepEqual(failed, []);
+	assert.ok(daemon.calls.some((c) => c.op === "attach" && c.args[0] === b), "the session after the failed one is reattached");
+	assert.equal(kinds(a).at(-1), "session_closed");
+	assert.deepEqual(manager.handles(), [b]);
+	const saved = JSON.parse(readFileSync(stateFile, "utf8")) as { sessions: { handle: string }[] };
+	assert.deepEqual(saved.sessions.map((s) => s.handle), [b], "the state file is rewritten");
+});
+
+test("resync: a session the daemon still lists but will not attach stays tracked and is reported, and the rest go on", async () => {
+	const { daemon, manager, kinds, stateFile } = setup();
+	const a = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	const b = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	const attach = daemon.attach.bind(daemon);
+	let refuse = true;
+	daemon.attach = async (handle: string) => {
+		if (handle === a && refuse) throw new DaemonCommandError("attach", "timed out after 60000ms");
+		return attach(handle);
+	};
+	const first = await manager.resync();
+	assert.deepEqual(first.live, [b]);
+	assert.deepEqual(first.closed, []);
+	assert.deepEqual(first.failed, [{ session: a, error: "attach: timed out after 60000ms" }]);
+	assert.ok(!kinds(a).includes("session_closed"), "a session the daemon still runs is not reported closed");
+	const saved = JSON.parse(readFileSync(stateFile, "utf8")) as { sessions: { handle: string; provenance: string }[] };
+	assert.deepEqual(saved.sessions.map((s) => [s.handle, s.provenance]), [[a, "created"], [b, "created"]], "its provenance is kept");
+	// The next resync reattaches it.
+	refuse = false;
+	const second = await manager.resync();
+	assert.deepEqual(second.live, [a, b]);
+	assert.deepEqual(second.failed, []);
+});
+
+test("resync: a session detached while its reattach is in flight stays detached", async () => {
+	// The keeper runs resync again while the link is up, so a detach can
+	// land between a session's attach and its result; the result must not
+	// track the session again.
+	for (const outcome of ["attaches", "fails"] as const) {
+		const { daemon, manager, kinds, stateFile } = setup();
+		const a = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+		const b = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+		const attach = daemon.attach.bind(daemon);
+		let attaching!: () => void;
+		const started = new Promise<void>((resolve) => {
+			attaching = resolve;
+		});
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		daemon.attach = async (handle: string) => {
+			if (handle === a) {
+				attaching();
+				await gate;
+				if (outcome === "fails") throw new DaemonCommandError("attach", "timed out after 60000ms");
+			}
+			return attach(handle);
+		};
+		const resync = manager.resync();
+		await started;
+		await manager.handle("detach", { session: a });
+		release();
+		const { live, failed } = await resync;
+		assert.deepEqual(live, [b], outcome);
+		assert.deepEqual(failed, [], outcome);
+		assert.deepEqual(manager.handles(), [b], `${outcome}: the detached session is not tracked again`);
+		assert.deepEqual(kinds(a).filter((k) => k === "session_closed"), ["session_closed"], outcome);
+		const saved = JSON.parse(readFileSync(stateFile, "utf8")) as { sessions: { handle: string }[] };
+		assert.deepEqual(saved.sessions.map((s) => s.handle), [b], outcome);
+	}
 });
 
 test("rediscovery restores service-created and taken-over provenance", async () => {

@@ -30,9 +30,14 @@ _MAX_FRAME_DEPTH = 127
 # The service and the page read every number as a double, which holds each
 # integer exactly only up to 2**53.
 _MAX_EXACT_INT = 2**53
-# The host agent answers `failed` at its own deadline (the speech deadline for
-# speak, 30 s otherwise); wait a little longer than that for its reply.
+# The host agent answers `failed` at its own deadline (30 s, or for speak the
+# speech deadline and its margin over it); wait a little longer than that for
+# its reply. The speak margin is the host agent's SPEAK_REPLY_MARGIN_MS
+# (apps/host-agent/src/skill_socket.ts): the service starts the speech deadline
+# only when it admits the call, so its answer, not the host agent's, decides.
+# scripts/check_hygiene.mjs keeps the two equal.
 _RELAY_TIMEOUT_S = 30.0
+_SPEAK_REPLY_MARGIN_S = 5.0
 _MARGIN_S = 5.0
 
 _VIEW_TARGETS = ("visual", "comms", "system", "theater", "auto")
@@ -262,7 +267,7 @@ def _call_host_agent(call, args, session_id, depth):
                 token = hello.get("token")
                 deadline_ms = hello.get("speech_deadline_ms")
                 if call == "speak" and isinstance(deadline_ms, (int, float)) and deadline_ms > 0:
-                    sock.settimeout(deadline_ms / 1000 + _MARGIN_S)
+                    sock.settimeout(deadline_ms / 1000 + _SPEAK_REPLY_MARGIN_S + _MARGIN_S)
                 else:
                     sock.settimeout(_RELAY_TIMEOUT_S + _MARGIN_S)
                 request = {"op": "call", "session_id": session_id, "depth": depth, "token": token, "call": call, "args": args}
@@ -296,7 +301,8 @@ def _common(result):
 
 
 def _refused(result, what):
-    reason = f": {result.reason}" if result.reason else ""
+    # A reason that is a sentence brings its own full stop.
+    reason = f": {str(result.reason).rstrip('.')}" if result.reason else ""
     return f"The switchboard refused that {what}{reason}."
 
 
@@ -590,6 +596,12 @@ def display(action=None, **fields):
 
     def describe(result):
         data = result.data if isinstance(result.data, dict) else {}
+        if result.accepted and data.get("delivered") is False and data.get("held") is not True:
+            # The scene kept it, but no caller's page is connected to draw it.
+            return (
+                "Kept, but no screen is connected; it appears when the caller's page reconnects. "
+                "Do not say it's on screen."
+            )
         if result.delivered or result.accepted:
             if data.get("held") is True:
                 return "Held until the caller comes back to you. Say it's ready, not that it's on screen."

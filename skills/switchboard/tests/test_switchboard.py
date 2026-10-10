@@ -10,6 +10,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -25,7 +26,8 @@ TOKEN = "call-token-1"
 class FakeHostAgent:
     """Serves the skill socket: JSON lines, one reply per request, in order."""
 
-    def __init__(self, home, on_call=True, reply=None):
+    def __init__(self, home, on_call=True, reply=None, speech_deadline_ms=2000):
+        self.speech_deadline_ms = speech_deadline_ms
         self.path = os.path.join(home, ".cache", "switchboard", "host-agent.sock")
         os.makedirs(os.path.dirname(self.path), mode=0o700)
         self.on_call = on_call
@@ -61,7 +63,7 @@ class FakeHostAgent:
                 return {"on_call": False, "reason": "subagent"}
             if not self.on_call:
                 return {"on_call": False}
-            return {"on_call": True, "token": TOKEN, "persona": "Calm.", "speech_deadline_ms": 2000}
+            return {"on_call": True, "token": TOKEN, "persona": "Calm.", "speech_deadline_ms": self.speech_deadline_ms}
         return self.reply(request)
 
     def calls(self):
@@ -196,11 +198,30 @@ class FailureTest(ModuleTestCase):
         result, _ = self.run_call(switchboard.speak, "Hi.")
         self.assertEqual(result.status, "failed")
 
+    def test_speak_waits_for_the_host_agent_past_its_margin_over_the_deadline(self):
+        # The host agent waits the speech deadline and SPEAK_REPLY_MARGIN_MS
+        # for the service's answer (skill_socket.ts); the module waits that
+        # and its own margin. Scaled down: a 0.1 s deadline, a 0.4 s host
+        # margin, and an answer that comes after 0.35 s.
+        def late(request):
+            time.sleep(0.35)
+            return {"status": "delivered", "reason": None}
+
+        self.host(reply=late, speech_deadline_ms=100)
+        with mock.patch.object(switchboard, "_SPEAK_REPLY_MARGIN_S", 0.4, create=True), mock.patch.object(switchboard, "_MARGIN_S", 0.1):
+            result, line = self.run_call(switchboard.speak, "A long line.")
+        self.assertEqual(result.status, "delivered", line)
+
     def test_host_agent_failure_reason_is_reported(self):
         self.host(reply=lambda request: {"status": "failed", "reason": "link_down"})
         result, line = self.run_call(switchboard.speak, "Hi.")
         self.assertEqual((result.status, result.reason), ("failed", "link_down"))
         self.assertIn("link_down", line)
+
+    def test_a_refusal_sentence_is_not_given_a_second_period(self):
+        self.host(reply=lambda request: {"status": "refused", "reason": "the caller's screen moved to a new leg."})
+        _, line = self.run_call(switchboard.view, "visual")
+        self.assertEqual(line, "switchboard.view: The switchboard refused that view request: the caller's screen moved to a new leg.")
 
     def test_refusals_never_raise(self):
         for reason in ("caller_away", "not_on_call", "subagent", "unknown_call", "bad_request", None):
@@ -260,6 +281,18 @@ class CallsTest(ModuleTestCase):
                 screen["visual_kind"] = kind
                 _, line = self.run_call(switchboard.view)
                 self.assertEqual(line, f"switchboard.view: Showing {words} on the caller's screen.")
+
+    def test_display_with_no_screen_connected_is_not_on_screen(self):
+        # The service keeps the action in the scene and answers that no
+        # browser is connected (module_reply makes it `accepted`, with no
+        # `held`). The line used to read "On screen." (#290).
+        reply = {"delivered": False, "reason": "no browser connected"}
+        self.host(reply=lambda request: {"status": "accepted", "reason": "no browser connected", "result": reply})
+        result, line = self.run_call(switchboard.display, op="clear")
+        self.assertTrue(result.accepted)
+        self.assertNotIn("On screen", line)
+        self.assertIn("no screen is connected", line.lower())
+        self.assertIn("Do not say it's on screen", line)
 
     def test_display_describes_held_and_shown_results(self):
         mode = {"held": True}

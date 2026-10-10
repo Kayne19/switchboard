@@ -807,7 +807,9 @@ call's `result` and turns into the line it prints:
   generation the agent is no longer on.
 - `{"delivered": false, "reason": "no browser connected"}` — nothing to wait
   on; the action is still recorded in the projection and greets the next
-  connection.
+  connection. The module reply makes it `accepted` with no `held`, and the
+  skill prints that no screen is connected and that the agent must not say
+  it is on screen.
 
 **`view` with no `target`.** Rather than ask the browser what is on
 screen right now, the `view` call reports the backend's *own* record of what it
@@ -947,8 +949,9 @@ documented above:
    exactly the gap the confirm/reject round trip above closes: it now waits
    for the browser's own `applied_seq` to reach the action's `seq` before
    calling it rendered, and the `display` tool's result text distinguishes
-   "On screen." from "Sent, but the caller's screen has not confirmed it" and
-   from an outright rejection carrying its reason.
+   "On screen." from "Sent, but the caller's screen has not confirmed it",
+   from "no screen is connected", and from an outright rejection carrying
+   its reason.
 3. **`view` contradicting what the caller actually saw.** The `view` tool
    used to report whatever the agent had last requested, independent of
    whether the browser ever confirmed it — so "Screen is in auto view with

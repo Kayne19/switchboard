@@ -188,6 +188,12 @@ Error codes:
 | `daemon_error` | The daemon ran the command and it failed; `message` has the daemon's text. |
 | `failed` | Anything else. |
 
+The service stops using a session after any failed command to it (any code
+above, or no reply within its 30 s wait), but it still releases the
+session: it sends `kill` for one it created and `abort` then `detach` for
+one it took over. Only a `session_closed` event tells it the session is
+already gone, and then it sends nothing.
+
 ### Commands
 
 A session description (`info`) as returned by `create_session`,
@@ -221,15 +227,12 @@ model does not have). `call_mode` is `null` when the session is not on a call.
 | `open_session` | `session_id`, `cwd`, `project?` | `info` |
 | `attach` | `session`, `project`, `cwd` | `info` |
 | `list_sessions` | — | `{sessions: [...]}` |
-| `list_saved_sessions` | `cwd`, `project?` | `{sessions: [...]}` |
 | `prompt` | `session`, `message` | `{sent_as: "prompt" \| "follow_up"}` |
 | `steer` | `session`, `message` | `{sent_as: "steer"}` |
-| `follow_up` | `session`, `message` | `{sent_as: "follow_up"}` |
 | `abort` | `session` | `{aborted: true}` |
 | `kill` | `session` | `{killed: true}` |
 | `detach` | `session` | `{detached: true}` |
 | `join_call` | `session`, `token`, `persona`, `speech_deadline_ms`, `mode?` | `{on_call: true, mode}` |
-| `leave_call` | `session` | `{on_call: false}` |
 | `set_mode` | `session`, `mode` | `{mode}` |
 | `set_model` | `session`, `provider`, `model` | `{model, thinking}` |
 | `set_thinking` | `session`, `level` | `{model, thinking}` |
@@ -255,19 +258,20 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   it, if another client has it open), so a refusal after that step would
   leave a stranger's session running unseen, and killing it would be wrong
   in the already-open case (#162). Reopening a live session returns it.
+  A session this host agent already tracks is returned only if it was
+  created by the switchboard (provenance `created`), carries the expected
+  name (and `project`, when given), and runs in `cwd`; otherwise the command
+  is refused.
 - **`list_sessions`** lists live top-level daemon sessions (subagents are
   left out): `{session, session_id, name, cwd, busy, provenance, project,
   model, thinking}`. `provenance` is `"created"`, `"taken_over"`, or `null`
   for a session the service has nothing to do with.
-- **`list_saved_sessions`** lists saved sessions in `cwd`, filtered to names
-  starting `sb-<project>-` when `project` is given: `{session_id, path, name,
-  cwd, modified, message_count, first_message}`.
 - **`prompt`** on a session with an open turn is sent as `follow_up`, and a
   prompt the daemon refuses as busy is resent as `follow_up`; the daemon
   refuses plain prompts on a busy session.
 - **`abort`** is always followed by `resume_queue` (the daemon suspends
   queued input after an abort; `resume_queue`'s "No queued work" error is
-  ignored), then by `wait_for_idle`.
+  ignored), then, when a turn is open, by `wait_for_idle`, which settles it.
 - **`kill`** is only for sessions with provenance `created`. It is refused
   for `taken_over` sessions and for sessions the host agent does not track.
   The transcript stays and can be reopened with `open_session`.
@@ -276,8 +280,8 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   a call".
 - **`join_call`** puts a tracked session on a call: the skill module's hello
   then returns the token, persona and speech deadline given here. `mode`
-  defaults to `foreground`. `leave_call` takes it off; `detach` and `kill` do
-  too. The service sends a new token for every call.
+  defaults to `foreground`. `detach` and `kill` take it off. The service
+  sends a new token for every call.
 - **`set_mode`** changes the mode of a session on a call: `foreground`,
   `background` or `active`. See "Delivery" below.
 - **`set_model`** and **`set_thinking`** read the state back and return the
@@ -287,7 +291,13 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   daemon reads).
 - **`run_prepare`** runs `sh -c <command>` in `cwd`. Output is bounded: the
   last 16 KiB of each stream is kept. The default timeout is 10 minutes; on
-  timeout the process group is killed.
+  timeout the process group is killed. It answers when the shell exits, with
+  the shell's status: output is read for 500 ms more at most
+  (`PREPARE_DRAIN_MS`), then the host agent closes its ends of the pipes. A
+  process the command left running (`server &`) is not waited for and not
+  killed, but the next time it writes to the inherited stdout or stderr it
+  gets SIGPIPE, which ends it unless it ignores the signal; give it its own
+  output (`server >server.log 2>&1 &`).
 
   ```json
   { "outcome": "timed_out", "exit_code": null, "signal": "SIGKILL", "stdout": "...", "stderr": "", "truncated": false, "duration_ms": 600004 }
@@ -295,12 +305,19 @@ model does not have). `call_mode` is `null` when the session is not on a call.
 
   `outcome` is `succeeded`, `failed` or `timed_out`.
 
+  A `run_prepare` for the same `cwd` and `command` as one still running
+  starts nothing: it waits for that run and answers with its result (its
+  `timeout_ms` is the first run's). The service sends a prepare again when
+  the link it was sent on drops, and the host agent keeps running the first;
+  two copies in one folder would race each other.
+
 - **`attach`** adopts one live top-level desk session in the exact registered
   `cwd`, without creating or reopening it. It records provenance
   `taken_over`, subscribes to its events, and persists that provenance. The
   session remains inert to the skill module until `join_call`; `detach` is the
-  only release path and never kills it. A tracked session, a non-top-level
-  session, or a folder mismatch is refused.
+  only release path and never kills it. A tracked session or a folder
+  mismatch is refused; a session that is not live or not top-level is
+  `not_found`.
 
 ### Session events
 
@@ -356,6 +373,18 @@ daemon still has are reattached (a busy one gets an open turn, settled by
 `wait_for_idle`); sessions it no longer has get `session_closed`. The
 snapshot carries the state, not the transcript.
 
+Each session is reattached on its own, at start and after a reconnect. A
+session whose `attach` fails and that the daemon no longer lists gets
+`session_closed` `gone`; the others are reattached and snapshotted anyway.
+One the daemon still lists stays tracked (its provenance is kept) and gets
+no events until it attaches: the host agent runs the resync again with the
+connect backoff (1 s, doubling to 30 s) until every listed session is
+attached. A session detached or killed while its reattach is in flight
+stays released; the reattach does not track it again. A resync that fails
+as a whole (the daemon cannot `list`) is
+retried the same way, at start too: the host agent starts its link without
+those sessions rather than exit.
+
 ### Module calls
 
 When the skill module makes a call that needs the service (see "Delivery"),
@@ -377,8 +406,13 @@ The service answers:
 may omit them. The service checks the token against the session's current call
 and, when present, the turn authority. A self-woken call without an authority
 is refused, while an old host's ordinary caller turn keeps the existing token
-behavior. If no reply arrives in time (the speech deadline for `speak`, 30 s
-otherwise), or the link is down, the module gets `failed`. A call that cannot
+behavior. If no reply arrives in time, or the link is down, the module gets
+`failed`. In time is 30 s, or for `speak` the speech deadline and 5 s more
+(`SPEAK_REPLY_MARGIN_MS` in `skill_socket.ts`). The service starts its own
+speech deadline only when it admits the call, after the frame has crossed the
+link, and answers `delivered` once the whole line has played; the margin lets
+that answer, not the host agent's clock, decide. The skill module waits one
+margin longer again. A call that cannot
 go out because the link's socket is already closing gets `failed` at once.
 
 ### Frames the service cannot read
@@ -509,6 +543,14 @@ deeper than the service reads (above).
 | `display` | relayed | held until the caller brings the agent forward |
 | `view` (no target) | relayed | relayed |
 | `view` (target) | relayed | `refused`, `caller_away` |
+
+The host agent refuses what this table refuses for `speak` and
+`request_to_speak` itself (`decide()` in `skill_socket.ts`), from the
+session's call state. It relays `display` and `view` in every mode, and the
+service decides those: it holds a background display (`accepted`, with
+`held: true` in the result) and refuses a background `view` with a target.
+A refusal reaches the module with its code as `reason` (`caller_away`); the
+service's explanation stays in `result.detail`.
 
 `active` currently delivers like `foreground`. A background agent may ask
 what the caller sees, not change it: the screen belongs to whoever the caller

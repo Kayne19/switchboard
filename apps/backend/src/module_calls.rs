@@ -800,8 +800,10 @@ async fn agent_call(state: &AppState, call: &AgentCall) -> Response {
 /// A module reply from a call's response. Delivered when the body says
 /// `delivered: true`; a display the scene took with no browser to show it is
 /// accepted; a call answered `delivered: false`, or refused as invalid (4xx),
-/// is refused with the detail as its reason; anything else failed. The body
-/// goes back as the `result`.
+/// is refused; anything else failed. The reason is the body's `reason` when
+/// it has one, so a code such as `caller_away` reaches the module bare (the
+/// module and SKILL.md branch on it), and its `detail` otherwise. The body,
+/// detail included, goes back as the `result`.
 async fn module_reply(call: &str, response: Response) -> Value {
     let status = response.status();
     let body = axum::body::to_bytes(response.into_body(), MAX_WEBSOCKET_MESSAGE_BYTES)
@@ -809,21 +811,21 @@ async fn module_reply(call: &str, response: Response) -> Value {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .unwrap_or_else(|| json!({}));
-    let detail = body
-        .get("detail")
-        .or_else(|| body.get("reason"))
+    let stated = body
+        .get("reason")
         .and_then(Value::as_str)
+        .or_else(|| body.get("detail").and_then(Value::as_str))
         .map(str::to_owned);
     let (outcome, reason) = if status.is_success() && body["delivered"] == true {
         ("delivered", None)
     } else if status.is_success() && body["accepted"] == true {
         ("accepted", None)
     } else if status.is_success() && call == "display" {
-        ("accepted", detail)
+        ("accepted", stated)
     } else if body["delivered"] == false || status.is_success() || status.is_client_error() {
-        ("refused", detail)
+        ("refused", stated)
     } else {
-        ("failed", detail)
+        ("failed", stated)
     };
     let mut result = body;
     if outcome == "failed" {

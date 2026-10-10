@@ -7,8 +7,10 @@ import { test } from "node:test";
 import type { ModuleReply } from "../src/link.ts";
 import type { CallState } from "../src/sessions.ts";
 import { SessionManager } from "../src/sessions.ts";
-import { MAX_LINE_BYTES, MAX_WAITING_REQUESTS, SkillSocket } from "../src/skill_socket.ts";
+import { HostLink } from "../src/link.ts";
+import { MAX_LINE_BYTES, MAX_WAITING_REQUESTS, SkillSocket, SPEAK_REPLY_MARGIN_MS } from "../src/skill_socket.ts";
 import { FakeDaemon } from "./fake_daemon.ts";
+import { FakeService } from "./fake_service.ts";
 
 interface Relayed {
 	handle: string;
@@ -101,7 +103,7 @@ test("hello: not on call, then settings once the service puts the session on a c
 		assert.deepEqual(await ask({ op: "hello", session_id: "unknown-session", depth: 0 }), { on_call: false });
 		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
 		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: true, token: "call-token-1", persona: "Jev", speech_deadline_ms: 25000 });
-		await manager.handle("leave_call", { session: handle });
+		await manager.handle("detach", { session: handle });
 		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: false });
 	});
 });
@@ -132,7 +134,7 @@ test("calls: token check, then delivery decided from session state", async () =>
 		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
 		assert.deepEqual(await call("speak", { text: "hi" }, "stale-token"), { status: "refused", reason: "not_on_call" });
 		assert.deepEqual(await call("speak", { text: "hi" }), { status: "delivered", reason: null });
-		assert.deepEqual(relayed.at(-1), { handle, token: CALL.token, call: "speak", args: { text: "hi" }, timeoutMs: 25000 });
+		assert.deepEqual(relayed.at(-1), { handle, token: CALL.token, call: "speak", args: { text: "hi" }, timeoutMs: 25000 + SPEAK_REPLY_MARGIN_MS });
 		assert.deepEqual(await call("request_to_speak", { message: "done", reason: "finished" }), { status: "refused", reason: "caller_listening" });
 		assert.deepEqual(await call("display", { action: { op: "show" } }), { status: "delivered", reason: null });
 		assert.equal(relayed.at(-1)?.timeoutMs, 1234);
@@ -367,4 +369,59 @@ test("requests waiting on one connection hold at most one line's cap of text bet
 		assert.deepEqual(answers(one.text()), [{ status: "delivered", reason: null }]);
 		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: true, ...CALL });
 	});
+});
+
+test("speak waits past the speech deadline for the service's answer: the service starts its deadline later", { timeout: 30_000 }, async () => {
+	const home = mkdtempSync(path.join(os.tmpdir(), "sb-sk-"));
+	const socketPath = path.join(home, ".cache", "switchboard", "host-agent.sock");
+	const daemon = new FakeDaemon();
+	const manager = new SessionManager({ port: daemon, stateFile: path.join(home, "state.json"), emit: () => {} });
+	const info = (await manager.createSession("homelab", { cwd: "/srv/homelab" })) as { session: string; session_id: string };
+	await manager.handle("join_call", { session: info.session, token: "call-token-1", persona: "Jev", speech_deadline_ms: 200, mode: "foreground" });
+	const service = await FakeService.start();
+	const link = new HostLink({
+		url: service.url,
+		hostId: "h1",
+		token: "t",
+		gitSha: "sha",
+		versions: () => ({ prime_agent_client: null, prime_agent_daemon: null, daemon_protocol: 7 }),
+		command: (n, a) => manager.handle(n, a),
+		sessions: () => [],
+		describe: async (h) => ({ session: h }),
+		heartbeatMs: 1000,
+		backoffInitialMs: 10,
+	});
+	const socket = new SkillSocket({
+		socketPath,
+		lookup: (id) => manager.bySessionId(id),
+		relay: (handle, token, call, args, timeoutMs, turnId, turnCause) => link.relayModuleCall(handle, token, call, args, timeoutMs, turnId, turnCause),
+	});
+	await socket.listen();
+	const conn = net.createConnection(socketPath);
+	try {
+		await new Promise<void>((r) => conn.once("connect", () => r()));
+		link.start();
+		const l = await service.link(0);
+		await l.next((m) => m.type === "synced");
+		const answer = new Promise<Record<string, unknown>>((resolve) => {
+			let buffered = "";
+			conn.on("data", (d) => {
+				buffered += String(d);
+				if (buffered.includes("\n")) resolve(JSON.parse(buffered.slice(0, buffered.indexOf("\n"))));
+			});
+		});
+		conn.write(`${JSON.stringify({ op: "call", session_id: info.session_id, depth: 0, token: "call-token-1", call: "speak", args: { text: "a long line" } })}\n`);
+		const call = await l.next((m) => m.type === "module_call");
+		// The service admits the call later than the host agent sent it, so
+		// its own 200 ms deadline ends later too: its drain answers at 300 ms
+		// on the host agent's clock, and that answer is the one that counts.
+		await new Promise((r) => setTimeout(r, 300));
+		l.send({ type: "module_reply", id: call.id, status: "delivered", reason: null });
+		assert.deepEqual(await answer, { status: "delivered", reason: null });
+	} finally {
+		conn.destroy();
+		link.stop();
+		await socket.close();
+		await service.close();
+	}
 });

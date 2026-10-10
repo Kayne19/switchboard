@@ -4,8 +4,10 @@
 // hello {session_id, depth}           -> {on_call: false} | {on_call: true, token, persona, speech_deadline_ms}
 // call  {session_id, depth, token, call, args} -> {status, reason, result?}
 //
-// Delivery is decided here from the session's call state, so the module's
-// surface never changes within a session. See docs/host-link.md.
+// The calls the session's call state settles (speak in the background,
+// request_to_speak in front) are refused here; display and view are relayed,
+// and the service decides them. The module's surface never changes within a
+// session. See docs/host-link.md, "Delivery".
 
 import { chmodSync, mkdirSync, rmSync } from "node:fs";
 import net from "node:net";
@@ -47,12 +49,25 @@ export const MAX_WAITING_REQUESTS = 8;
 /** The answer to a request past MAX_WAITING_REQUESTS or the bytes they may hold. */
 const QUEUE_FULL = { status: "refused", reason: "queue_full" } as const;
 
+/**
+ * How much longer than the speech deadline a relayed `speak` waits for the
+ * service's answer. The service starts its own deadline only when it admits
+ * the call, after the frame has crossed the link and waited for the session's
+ * frame loop, and answers `delivered` when the whole line has played. If this
+ * side gave up at the deadline itself, a line the caller heard to the end
+ * could be reported `failed`, and the agent would say it again. With the
+ * margin the service's answer decides. The module waits one margin more than
+ * this (`_SPEAK_MARGIN_S` in skills/switchboard/src/switchboard/__init__.py);
+ * scripts/check_hygiene.mjs keeps the two in step.
+ */
+export const SPEAK_REPLY_MARGIN_MS = 5_000;
+
 export interface SkillSocketOptions {
 	socketPath: string;
 	/** The call and turn state of the tracked session with this persisted id. */
 	lookup: (sessionId: string) => { handle: string; call: CallState | null; turnId: string | null; turnCause: TurnCause | null } | null;
 	relay: (handle: string, token: string, call: string, args: Record<string, unknown>, timeoutMs: number, turnId: string | null, turnCause: TurnCause | null) => Promise<ModuleReply>;
-	/** Relay timeout for calls other than speak (speak uses the speech deadline). */
+	/** Relay timeout for calls other than speak (speak uses the speech deadline and SPEAK_REPLY_MARGIN_MS). */
 	relayTimeoutMs?: number;
 }
 
@@ -212,7 +227,7 @@ export class SkillSocket {
 		const decision = decide(call.mode, name);
 		if (decision !== "relay") return { ...decision };
 		const args = request.args && typeof request.args === "object" ? (request.args as Record<string, unknown>) : {};
-		const timeoutMs = name === "speak" ? call.speechDeadlineMs : (this.#o.relayTimeoutMs ?? 30_000);
+		const timeoutMs = name === "speak" ? call.speechDeadlineMs + SPEAK_REPLY_MARGIN_MS : (this.#o.relayTimeoutMs ?? 30_000);
 		try {
 			const reply = await this.#o.relay(session.handle, call.token, name, args, timeoutMs, session.turnId, session.turnCause);
 			return { ...reply };

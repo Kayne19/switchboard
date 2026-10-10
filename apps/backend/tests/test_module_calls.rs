@@ -1098,6 +1098,42 @@ async fn background_view_reports_but_does_not_change_the_screen() {
 }
 
 #[tokio::test]
+async fn a_background_refusal_reaches_the_module_as_its_bare_reason() {
+    // The module and SKILL.md branch on `caller_away`; the sentence that
+    // explains it stays in the result (#234).
+    let state = state();
+    let (_connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    for (call, args, explained) in [
+        ("view", json!({"target": "theater"}), "not yours to change"),
+        ("speak", json!({"text": "Done."}), "request_to_speak"),
+    ] {
+        let reply = module_call(
+            &state,
+            AgentCall {
+                call: call.into(),
+                token: "background-token".into(),
+                turn_id: None,
+                cause: None,
+                args,
+            },
+        )
+        .await;
+        assert_eq!(reply["status"], "refused", "{call}: {reply}");
+        assert_eq!(reply["reason"], "caller_away", "{call}: {reply}");
+        assert!(
+            reply["result"]["detail"]
+                .as_str()
+                .is_some_and(|detail| detail.contains(explained)),
+            "{call}: {reply}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn background_speak_is_refused_and_latest_display_is_released_on_promotion() {
     let state = state();
     let (mut connection, _, _) = state.register_connection().await;
