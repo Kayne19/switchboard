@@ -141,7 +141,9 @@ delivered turn passes through. A model or thinking redial is decided before
 anything is torn down: `RedialPlanner` (`redial.rs`) makes every refusal from the
 coordinator's leg and prewarm's launch plan, without the PBX lock, so a refused
 page swap never rescues the live leg; `Switchboard::redial` runs a plan only
-while the leg it was made for is still on the line. Between them they own:
+while the leg it was made for is still on the line, and the PBX acts on its
+project session for that leg only while the session is that project's
+(`agent_on_the_line`). Between them they own:
 
 - operator and project legs
 - transfer and return

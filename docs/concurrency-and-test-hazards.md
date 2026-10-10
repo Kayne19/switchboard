@@ -295,6 +295,19 @@ was made for, and each is closed where its side effect happens:
   it, and refuses (`StaleLeg`) without launching anything. The comparison is
   the whole leg (project, identity, model, session), not the generation alone,
   because a return to the operator keeps the generation.
+- **While the leg is coming up.** A candidate is adopted on its first sign of
+  life, but the PBX holds its session (`Switchboard::agent`) only once its
+  intro ends and `commit_leg` runs. In between, the coordinator names the new
+  project while the PBX still holds the leg before it. A redial then would
+  rescue the transfer's turn, which cancels it before it commits, and switch
+  the old session under the new project's name (#236). So the planner refuses
+  while `Coordinator::startup_in_flight`, and `begin_rescue_of` refuses too, in
+  the same lock as its check. A rescue that does cancel a startup (a hangup, a
+  connect) ends that startup with it: it clears the startup's rollback, so a
+  late rollback has nothing to restore. And the PBX only acts on its project
+  session for the leg on the line (a caller turn, a redial) while that
+  session belongs to the coordinator's project (`agent_on_the_line`); a turn
+  that finds another project's session returns the caller to the operator.
 
 ## A run that starts as the caller's turn settles
 
