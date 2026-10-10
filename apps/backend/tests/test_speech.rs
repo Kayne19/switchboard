@@ -445,6 +445,32 @@ async fn a_voiced_page_reply_names_the_utterance_its_speech_starts_with() {
     );
 }
 
+// `SWITCHBOARD_HISTORY_LIMIT=0` keeps no line for a reload; it does not stop
+// a line reaching the live page (#293).
+#[tokio::test]
+async fn a_log_that_keeps_nothing_still_sends_every_spoken_line() {
+    let state = speaking_state_keeping(0);
+    let (mut connection, _, _) = state.register_connection().await;
+
+    let (code, _) = agent_call_json(&state, "/speak", json!({"text": "From the agent."})).await;
+    assert_eq!(code, StatusCode::OK);
+    let frames = wire_frames_until(&mut connection, "spoken").await;
+    let spoken = frames.last().expect("a spoken frame");
+    assert_eq!(spoken["entry"]["text"], "From the agent.", "{frames:#?}");
+
+    let generation = state.0.coordinator.generation();
+    let reply = voiced_reply("Putting you through.", &["Putting you through."]);
+    assert!(deliver_page_reply_if_current(&state, &reply, generation).await);
+    let frames = wire_frames_until(&mut connection, "spoken").await;
+    let spoken = frames.last().expect("a spoken frame");
+    assert_eq!(
+        spoken["entry"]["text"], "Putting you through.",
+        "{frames:#?}"
+    );
+
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
+}
+
 #[tokio::test]
 async fn a_reply_with_nothing_to_say_aloud_names_no_utterance() {
     let state = speaking_state();
@@ -1021,6 +1047,11 @@ async fn a_stale_reply_is_traced_as_speech_not_delivered() {
 
 /// A call whose speech synthesis succeeds, with its speech worker running.
 fn speaking_state() -> AppState {
+    speaking_state_keeping(10)
+}
+
+/// `speaking_state`, its transcript log keeping `limit` entries.
+fn speaking_state_keeping(limit: usize) -> AppState {
     let config = crate::Config::for_tests(&[]);
     let registry = Registry::new(vec![]);
     let prewarm = crate::prewarm::Prewarm::settled(
@@ -1030,7 +1061,7 @@ fn speaking_state() -> AppState {
     );
     let state = AppState::new(
         Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
-        TranscriptLog::new(10),
+        TranscriptLog::new(limit),
         Speaker::test_success(100, Duration::from_millis(25_000)),
         SttAdapter::from_command(None),
         SttStreamAdapter::from_command(None),
