@@ -736,8 +736,11 @@ stays out of focus; a focused note is itself the note.
 A reconnecting browser is replayed the full current projection — every
 visible object, the current focus, and any pending `say` — via
 `DisplayProjection::snapshot_actions()`, not just the single most recent
-action. `screen_state.has_visual` / `visual_kind` reflect what the browser
-has actually confirmed, so an agent can verify its own display via `view`.
+action. `view({})` takes `has_visual`, `visual_kind`, `title` and
+`object_ids` from that projection, what the service has sent, and the `view`
+from the browser's last `screen_state`; its `confirmed` flag says whether the
+browser's `applied_seq` has reached what was sent (below), so an agent
+verifies its own display by `confirmed`, not by `has_visual`.
 
 ### Confirmed rendering: `seq`, the watermark, and honest results
 
@@ -926,37 +929,3 @@ rules"); the reasons are these.
   existing browser WebSocket delivers it, where the page validates it again.
   There is no HTTP route for it and no URL setting: the agent callback routes
   and `DISPLAY_URL` are retired (`docs/environment.md`).
-
-## Resolved: the display extension hardships log
-
-`DISPLAY_EXTENSION_ISSUES.md` recorded three problems found while dogfooding
-the `display` tool before this phase. All three are resolved by the pieces
-documented above:
-
-1. **Schema validation confusion.** A `diagram` (or `document` / `note`)
-   payload was rejected with an error that read like it wanted chart fields
-   (`series`, `label`/`value`), regardless of the `type` actually sent. The
-   validator now discriminates on `type` before checking shape, so a bad
-   `diagram` payload is scored against the diagram schema and names which
-   diagram field is wrong — not a chart's. See `docs/display-tool.md`'s per-type
-   `data` table and the per-type `data` shapes in the `switchboard` skill
-   module's `skills/switchboard/SKILL.md`.
-2. **Silent failure: "On screen" when nothing rendered.** The display call
-   used to report success the moment the action was handed to the delivery
-   layer, with no signal that the browser ever actually painted it. That is
-   exactly the gap the confirm/reject round trip above closes: it now waits
-   for the browser's own `applied_seq` to reach the action's `seq` before
-   calling it rendered, and the `display` tool's result text distinguishes
-   "On screen." from "Sent, but the caller's screen has not confirmed it" and
-   from an outright rejection carrying its reason.
-3. **`view` contradicting what the caller actually saw.** The `view` tool
-   used to report whatever the agent had last requested, independent of
-   whether the browser ever confirmed it — so "Screen is in auto view with
-   chart" could be true of the agent's intent and false of the caller's
-   screen at the same moment. `view` with no target now reports that intent
-   *and* a `confirmed` flag computed from the same watermark the display call
-   waits on, and the tool text says "has not confirmed it yet" instead of
-   asserting success.
-
-The log itself stays in place with a note pointing here, rather than being
-deleted, since it is the dogfooding evidence this phase was built to answer.
