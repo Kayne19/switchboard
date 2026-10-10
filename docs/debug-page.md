@@ -63,8 +63,9 @@ The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`
   flight moves. A line to a pane rises to the bus above the panes and drops
   onto the pane's top rule; a floor request leaves along the bus below. A
   hop that skips a stage node goes around the band, never under the node.
-- A pane item or log line from a record with `"clipped": true` shows a
-  `clipped` tag.
+- A log line, and an agent pane's input, text, tool or module item, from a
+  record with `"clipped": true` shows a `clipped` tag. Speech, routed, floor
+  and utility cards are cut the same way but carry no tag.
 
 `?fixture=1` plays the shared fixture and then a scripted call, with no
 listener. `&instant=1` applies it all at once, `&speed=N` changes the pace,
@@ -155,8 +156,8 @@ scrubbed: text, JSON strings and keys, log messages, and names and ids
   (`-----BEGIN ... PRIVATE KEY-----` through its `-----END ...-----` line, or
   to the end of a cut string), the value after a credential-like name and `=`
   or `:` (`API_KEY=...`, `"token": "..."`; a plain number such as
-  `max tokens: 500` is kept), and the word after `Bearer` (and after
-  `Authorization: Bearer`).
+  `max tokens: 500` is kept), and the word after `Bearer` or `Basic` (and
+  after `Authorization: Bearer` or `Authorization: Basic`).
 - It also replaces a word that is a credential by its shape: a word of 16 or
   more characters with a well-known key prefix (`sk-`, `ghp_`, `gho_`, `ghu_`,
   `ghs_`, `ghr_`, `github_pat_`, `xoxa-`, `xoxb-`, `xoxp-`, `xoxr-`, `xoxs-`,

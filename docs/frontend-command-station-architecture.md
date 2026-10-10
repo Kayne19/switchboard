@@ -92,8 +92,10 @@ The workspace has five canonical views:
 | `system` | Prioritize route, model, thinking, and session controls |
 | `theater` | Present the current visual with minimal surrounding chrome |
 
-Legacy agent aliases such as `stage`, `bay2`, `transcript`, `routing`, `magi`,
-and `overview` normalize to these canonical views.
+An agent names one of these five (the skill module refuses any other). The
+page and the service still read older names (`stage`, `bay2`, `transcript`,
+`routing`, `magi`, `overview` and others) as one of the five, but no agent
+can send them.
 
 ### Focus precedence
 
@@ -172,10 +174,11 @@ The browser reports the state it actually rendered over the existing WebSocket:
 }
 ```
 
-The backend stores the latest report. The agent's `view` tool has two forms:
+The backend stores the latest report. The agent's `view` (in the
+`switchboard` skill module) has two forms:
 
-- `view({ target, reason })` requests a composition change.
-- `view({})` inspects the current composition, visual type/title, stale status,
+- `view(target)` requests a composition change to one of the five views.
+- `view()` inspects the current composition, visual type/title, stale status,
   and whether a browser is connected.
 
 This closes the loop: the agent can present content, move focus, and verify what
