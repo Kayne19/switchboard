@@ -15,6 +15,10 @@ interface FocusableSurfaceProps {
 // was a region of a button, and a screen reader could read the whole object
 // as one button. The button is beside what the surface holds, not round it;
 // it is drawn as the page's focus ring over the surface, and nothing else.
+// It carries tabIndex={0}, as the surface did: Safari, by default, leaves a
+// button without one out of the Tab order (only "Press Tab to highlight
+// each item" or Option-Tab reach it), so without it a keyboard in Safari
+// could no longer reach the object it could reach before.
 //
 // One rule for a control inside the surface (a rail's count or the map of a
 // scrolled drawing, its scroller's keys, a metric in a cluster): the child
@@ -41,7 +45,7 @@ export function FocusableSurface({ children, onActivate, ariaLabel, className }:
 
   return (
     <div className={`focusable-content${className ? ` ${className}` : ''}`} onClick={handleClick} onKeyDown={handleKeyDown}>
-      <button ref={expand} className="focusable-content__expand" type="button" aria-label={ariaLabel} />
+      <button ref={expand} className="focusable-content__expand" type="button" tabIndex={0} aria-label={ariaLabel} />
       {children}
     </div>
   );

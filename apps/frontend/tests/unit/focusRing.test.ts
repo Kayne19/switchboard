@@ -94,8 +94,9 @@ describe('the focus ring', () => {
     expect(where).toEqual([]);
     const lit = (name: string) => rules().some((rule) => rule.selectors.some((selector) => selector.includes(`.${name}[`) && selector.endsWith(':focus-visible')) && /background:\s*var\(--orange\)/.test(rule.body));
     const reached = (name: string) => ringed(name) || lit(name) || control.selectors.some((selector) => selector.includes(`.${name}[`) || selector.includes(`.${name}:`));
-    // An object's surface is not a tab stop: its own button is (#269).
-    expect(classes.sort()).toEqual(['calendar-grid', 'drawing-viewport__scroll', 'list-viewport__scroll', 'metric-row']);
+    // An object's surface is not a tab stop: its own button is (#269), with
+    // tabIndex={0}, which Safari needs to put a <button> in its Tab order.
+    expect(classes.sort()).toEqual(['calendar-grid', 'drawing-viewport__scroll', 'focusable-content__expand', 'list-viewport__scroll', 'metric-row']);
     // The paged days carry the grid's class first; the ring names the pages.
     expect(ringed('calendar-pages')).toBe(true);
     expect(classes.filter((name) => name !== 'calendar-grid' && !reached(name))).toEqual([]);
