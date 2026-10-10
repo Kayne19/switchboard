@@ -94,6 +94,68 @@ function snapshotListeners(player: ReturnType<typeof fakePlayer>) {
   );
 }
 
+class FakeSourceBuffer {
+  listeners = new Map<string, Set<Handler>>();
+  updating = false;
+  mode = "segments";
+  appended: Uint8Array[] = [];
+  fail = false;
+  addEventListener(name: string, handler: Handler) {
+    if (!this.listeners.has(name)) this.listeners.set(name, new Set());
+    this.listeners.get(name)!.add(handler);
+  }
+  removeEventListener(name: string, handler: Handler) {
+    this.listeners.get(name)?.delete(handler);
+  }
+  emit(name: string) {
+    if (name === "updateend") this.updating = false;
+    for (const handler of [...(this.listeners.get(name) || [])]) handler();
+  }
+  appendBuffer(data: ArrayBuffer) {
+    if (this.fail) {
+      const error = new Error("quota");
+      error.name = "QuotaExceededError";
+      throw error;
+    }
+    this.updating = true;
+    this.appended.push(new Uint8Array(data));
+  }
+}
+
+class FakeMediaSource {
+  static isTypeSupported = () => true;
+  // A MediaSource is closed until a media element attaches its URL, and
+  // `sourceopen` fires then and not before. A fake that opens on its own
+  // let the streaming path pass a test no browser can run (#203).
+  readyState = "closed";
+  buffer = new FakeSourceBuffer();
+  ended = false;
+  listeners = new Map<string, Set<Handler>>();
+  addEventListener(name: string, handler: Handler) {
+    if (!this.listeners.has(name)) this.listeners.set(name, new Set());
+    this.listeners.get(name)!.add(handler);
+  }
+  /** What the browser does when the element is given this source's URL. */
+  attach() {
+    if (this.readyState !== "closed") return;
+    this.readyState = "open";
+    for (const handler of [...(this.listeners.get("sourceopen") || [])])
+      handler();
+  }
+  addSourceBuffer() {
+    if (this.readyState !== "open") {
+      const error = new Error("source is not open");
+      error.name = "InvalidStateError";
+      throw error;
+    }
+    return this.buffer;
+  }
+  endOfStream() {
+    this.ended = true;
+    this.readyState = "ended";
+  }
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -438,68 +500,6 @@ describe("AudioPlayback and Web Audio", () => {
 });
 
 describe("AudioPlayback streaming", () => {
-  class FakeSourceBuffer {
-    listeners = new Map<string, Set<Handler>>();
-    updating = false;
-    mode = "segments";
-    appended: Uint8Array[] = [];
-    fail = false;
-    addEventListener(name: string, handler: Handler) {
-      if (!this.listeners.has(name)) this.listeners.set(name, new Set());
-      this.listeners.get(name)!.add(handler);
-    }
-    removeEventListener(name: string, handler: Handler) {
-      this.listeners.get(name)?.delete(handler);
-    }
-    emit(name: string) {
-      if (name === "updateend") this.updating = false;
-      for (const handler of [...(this.listeners.get(name) || [])]) handler();
-    }
-    appendBuffer(data: ArrayBuffer) {
-      if (this.fail) {
-        const error = new Error("quota");
-        error.name = "QuotaExceededError";
-        throw error;
-      }
-      this.updating = true;
-      this.appended.push(new Uint8Array(data));
-    }
-  }
-
-  class FakeMediaSource {
-    static isTypeSupported = () => true;
-    // A MediaSource is closed until a media element attaches its URL, and
-    // `sourceopen` fires then and not before. A fake that opens on its own
-    // let the streaming path pass a test no browser can run (#203).
-    readyState = "closed";
-    buffer = new FakeSourceBuffer();
-    ended = false;
-    listeners = new Map<string, Set<Handler>>();
-    addEventListener(name: string, handler: Handler) {
-      if (!this.listeners.has(name)) this.listeners.set(name, new Set());
-      this.listeners.get(name)!.add(handler);
-    }
-    /** What the browser does when the element is given this source's URL. */
-    attach() {
-      if (this.readyState !== "closed") return;
-      this.readyState = "open";
-      for (const handler of [...(this.listeners.get("sourceopen") || [])])
-        handler();
-    }
-    addSourceBuffer() {
-      if (this.readyState !== "open") {
-        const error = new Error("source is not open");
-        error.name = "InvalidStateError";
-        throw error;
-      }
-      return this.buffer;
-    }
-    endOfStream() {
-      this.ended = true;
-      this.readyState = "ended";
-    }
-  }
-
   function streamingPlayback(
     onUtterance?: (sequence: number) => void,
     statuses?: Array<[string, boolean | undefined]>,
@@ -1761,5 +1761,754 @@ describe("AudioPlayback pause between messages", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("AudioPlayback holder: phase x event", () => {
+  // Who holds the one element, and what each event does to it, in every
+  // phase the holder can be in: a whole replay (starting, playing, paused,
+  // paused before its play() settled, paused at its end, blocked), a stream
+  // (opening, playing, paused, paused before its play() settled, blocked,
+  // cut off while still arriving, playing out after streaming stopped), the
+  // pause between messages, and nothing. Each row starts from its phase,
+  // sends one event, and records what is on the element, whether the page is
+  // told playback is sounding, whether everything has drained, whether the
+  // level meter runs, how many `play()` calls were made, which utterances
+  // were reached, and what was said.
+  //
+  // Utterance n carries the bytes "un". Utterances 1 and 2 are the ones the
+  // phase set up; 3 arrives with the `arrives` event.
+
+  const text = (value: string) => new TextEncoder().encode(value).buffer;
+  const decoder = new TextDecoder();
+
+  function rig(options: { gapMs?: number; streaming: boolean }) {
+    vi.useFakeTimers();
+    const { urls } = stubObjectUrls();
+    const player = fakePlayer((url) => {
+      const source = urls.get(url);
+      if (source instanceof FakeMediaSource) source.attach();
+    });
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    // The level meter samples on animation frames: one is outstanding while
+    // it runs. Decoding gives every clip a flat envelope.
+    const frames = new Set<number>();
+    let frame = 0;
+    vi.stubGlobal("requestAnimationFrame", () => {
+      frame += 1;
+      frames.add(frame);
+      return frame;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    vi.stubGlobal(
+      "OfflineAudioContext",
+      class {
+        decodeAudioData() {
+          return Promise.resolve({
+            sampleRate: 1000,
+            length: 1000,
+            getChannelData: () => new Float32Array(1000).fill(0.5),
+          } as unknown as AudioBuffer);
+        }
+      },
+    );
+    const said: string[] = [];
+    const reached: number[] = [];
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: (status, error) => said.push(error ? "!" + status : status),
+      onChange: () => {},
+      onUtterance: (sequence) => reached.push(sequence),
+      onAudioLevel: () => {},
+      gapMs: options.gapMs ?? 0,
+      stallMs: 1000,
+    });
+    playback.setStreamingEnabled(options.streaming);
+    const settle = async () => {
+      for (let step = 0; step < 8; step += 1) await Promise.resolve();
+    };
+    const arrive = (sequence: number, done = true) => {
+      playback.receiveAudioStart({ generation: 0, sequence, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(text("u" + sequence));
+      const source = urls.get(player.src);
+      if (source instanceof FakeMediaSource)
+        while (source.buffer.updating) source.buffer.emit("updateend");
+      if (done) finish(sequence);
+    };
+    const finish = (sequence: number) => {
+      playback.receiveAudioDone({ generation: 0, sequence, done: true });
+      const source = urls.get(player.src);
+      if (source instanceof FakeMediaSource)
+        while (source.buffer.updating) source.buffer.emit("updateend");
+    };
+    const settlePlay = (outcome: "resolve" | "reject") => {
+      const pending = player.playPromises.at(-1);
+      if (!pending) return;
+      if (outcome === "resolve") pending.resolve();
+      else
+        pending.reject(
+          Object.assign(new Error("blocked"), { name: "NotAllowedError" }),
+        );
+    };
+    return {
+      player,
+      urls,
+      playback,
+      frames,
+      said,
+      reached,
+      settle,
+      arrive,
+      settlePlay,
+    };
+  }
+  type Rig = ReturnType<typeof rig>;
+
+  /** What is on the element now. */
+  async function element(at: Rig): Promise<string> {
+    const source = at.urls.get(at.player.src);
+    if (source instanceof Blob) return "replay " + (await source.text());
+    if (source instanceof FakeMediaSource) {
+      const heard = source.buffer.appended
+        .map((part) => decoder.decode(part))
+        .join("");
+      return "stream " + (heard || "(no bytes)");
+    }
+    return "empty";
+  }
+
+  const phases: Record<string, () => Promise<Rig>> = {
+    idle: async () => {
+      const at = rig({ streaming: true });
+      await at.settle();
+      return at;
+    },
+    "gap (1 ended, 2 waits)": async () => {
+      const at = rig({ gapMs: 350, streaming: false });
+      at.arrive(1);
+      at.arrive(2);
+      at.settlePlay("resolve");
+      await at.settle();
+      at.player.ended = true;
+      at.player.emit("ended");
+      await at.settle();
+      return at;
+    },
+    "replay starting (2 queued)": async () => {
+      const at = rig({ streaming: false });
+      at.arrive(1);
+      at.arrive(2);
+      await at.settle();
+      return at;
+    },
+    "replay playing (2 queued)": async () => {
+      const at = await phases["replay starting (2 queued)"]();
+      at.settlePlay("resolve");
+      await at.settle();
+      return at;
+    },
+    "replay paused (2 queued)": async () => {
+      const at = await phases["replay playing (2 queued)"]();
+      at.player.paused = true;
+      at.player.emit("pause");
+      await at.settle();
+      return at;
+    },
+    "replay paused at its end (2 queued)": async () => {
+      const at = await phases["replay playing (2 queued)"]();
+      at.player.currentTime = at.player.duration;
+      at.player.emit("seeking");
+      at.player.paused = true;
+      at.player.emit("pause");
+      await at.settle();
+      return at;
+    },
+    "replay paused before play() settled (2 queued)": async () => {
+      const at = await phases["replay starting (2 queued)"]();
+      at.player.paused = true;
+      at.player.emit("pause");
+      await at.settle();
+      return at;
+    },
+    "replay blocked (1 back in the queue, 2 behind)": async () => {
+      const at = await phases["replay starting (2 queued)"]();
+      at.settlePlay("reject");
+      await at.settle();
+      return at;
+    },
+    "replay playing, streaming back on (2 queued)": async () => {
+      const at = await phases["replay playing (2 queued)"]();
+      at.playback.setStreamingEnabled(true);
+      await at.settle();
+      return at;
+    },
+    "stream opening": async () => {
+      const at = rig({ streaming: true });
+      at.playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      await at.settle();
+      return at;
+    },
+    "stream playing (2 queued)": async () => {
+      const at = rig({ streaming: true });
+      at.arrive(1);
+      at.settlePlay("resolve");
+      at.arrive(2);
+      await at.settle();
+      return at;
+    },
+    "stream paused (2 queued)": async () => {
+      const at = await phases["stream playing (2 queued)"]();
+      at.player.paused = true;
+      at.player.emit("pause");
+      await at.settle();
+      return at;
+    },
+    "stream paused before play() settled": async () => {
+      const at = rig({ streaming: true });
+      at.arrive(1);
+      at.player.paused = true;
+      at.player.emit("pause");
+      await at.settle();
+      return at;
+    },
+    "stream blocked": async () => {
+      const at = rig({ streaming: true });
+      at.arrive(1);
+      at.settlePlay("reject");
+      await at.settle();
+      return at;
+    },
+    "stream cut off while arriving": async () => {
+      const at = rig({ streaming: true });
+      at.arrive(1, false);
+      at.settlePlay("resolve");
+      await at.settle();
+      at.playback.setStreamingEnabled(false);
+      await at.settle();
+      return at;
+    },
+    "stream playing out, streaming off (2 as a replay)": async () => {
+      const at = await phases["stream playing (2 queued)"]();
+      at.playback.setStreamingEnabled(false);
+      await at.settle();
+      return at;
+    },
+  };
+
+  const events: Record<string, (at: Rig) => void> = {
+    ended: (at) => {
+      at.player.ended = true;
+      at.player.emit("ended");
+    },
+    pause: (at) => {
+      at.player.paused = true;
+      at.player.emit("pause");
+    },
+    error: (at) => {
+      at.player.error = { code: 3 };
+      at.player.emit("error");
+    },
+    "play resolves": (at) => at.settlePlay("resolve"),
+    "play rejects": (at) => at.settlePlay("reject"),
+    gesture: (at) => at.playback.handleGesture(null),
+    "2.5 s, no progress": () => vi.advanceTimersByTime(2500),
+    "3 arrives": (at) => at.arrive(3),
+    "streaming on": (at) => at.playback.setStreamingEnabled(true),
+    "streaming off": (at) => at.playback.setStreamingEnabled(false),
+    reset: (at) => at.playback.resetForGeneration(0),
+    dispose: (at) => at.playback.dispose(),
+  };
+
+  async function rowOutcome(phase: string, event: string): Promise<string> {
+    try {
+      const at = await phases[phase]();
+      const plays = at.player.playCalls.length;
+      const said = at.said.length;
+      const reached = at.reached.length;
+      events[event](at);
+      await at.settle();
+      return [
+        await element(at),
+        at.playback.isPlaying ? "sounding" : "silent",
+        at.playback.isDrained() ? "drained" : "busy",
+        at.frames.size ? "metered" : "unmetered",
+        "plays +" + (at.player.playCalls.length - plays),
+        "reached [" + at.reached.slice(reached).join(",") + "]",
+        "said [" + at.said.slice(said).join(" | ") + "]",
+      ].join("; ");
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  // phase -> event -> what follows, as master does it.
+  const table: Record<string, Record<string, string>> = {
+    "idle": {
+      "ended":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "pause":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "error":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "play resolves":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "gesture":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "stream u3; sounding; busy; metered; plays +1; reached [3]; said []",
+      "streaming on":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "gap (1 ended, 2 waits)": {
+      "ended":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "pause":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "error":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "play resolves":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "gesture":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "empty; silent; drained; unmetered; plays +1; reached [2]; said [!Audio started but produced no sound (nothing played in 1000ms). | idle]",
+      "3 arrives":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming on":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "replay starting (2 queued)": {
+      "ended":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said []",
+      "pause":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
+      "error":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said [!Audio failed to play (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "play rejects":
+        "empty; silent; busy; unmetered; plays +0; reached []; said [!Audio blocked by the browser — tap or click anywhere on this page once, then it will play (NotAllowedError).]",
+      "gesture":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "empty; silent; drained; unmetered; plays +1; reached [2]; said [!Audio started but produced no sound (nothing played in 1000ms). | !Audio started but produced no sound (nothing played in 1000ms). | idle]",
+      "3 arrives":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming on":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming off":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "replay playing (2 queued)": {
+      "ended":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said []",
+      "pause":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
+      "error":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said [!Audio failed to play (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "play rejects":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "gesture":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "empty; silent; drained; unmetered; plays +1; reached [2]; said [!Audio started but produced no sound (nothing played in 1000ms). | !Audio started but produced no sound (nothing played in 1000ms). | idle]",
+      "3 arrives":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming on":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming off":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "replay paused (2 queued)": {
+      "ended":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said []",
+      "pause":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
+      "error":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said [!Audio failed to play (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "gesture":
+        "replay u1; sounding; busy; metered; plays +1; reached []; said []",
+      "2.5 s, no progress":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming on":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "replay paused at its end (2 queued)": {
+      "ended":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said []",
+      "pause":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said [!Audio finishing — tap or click anywhere on this page to continue.]",
+      "error":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said [!Audio failed to play (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "gesture":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming on":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "replay paused before play() settled (2 queued)": {
+      "ended":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said []",
+      "pause":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
+      "error":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said [!Audio failed to play (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "empty; silent; busy; unmetered; plays +0; reached []; said [!Audio blocked by the browser — tap or click anywhere on this page once, then it will play (NotAllowedError).]",
+      "gesture":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming on":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "replay blocked (1 back in the queue, 2 behind)": {
+      "ended":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "pause":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "error":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "play resolves":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "gesture":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said []",
+      "2.5 s, no progress":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said []",
+      "streaming on":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "replay playing, streaming back on (2 queued)": {
+      "ended":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said []",
+      "pause":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
+      "error":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said [!Audio failed to play (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "play rejects":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "gesture":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "empty; silent; drained; unmetered; plays +1; reached [2]; said [!Audio started but produced no sound (nothing played in 1000ms). | !Audio started but produced no sound (nothing played in 1000ms). | idle]",
+      "3 arrives":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming on":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming off":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "stream opening": {
+      "ended":
+        "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said [idle]",
+      "pause":
+        "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
+      "error":
+        "empty; silent; busy; unmetered; plays +0; reached []; said [!Streaming audio failed; using the complete replay (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
+      "gesture":
+        "stream (no bytes); sounding; busy; metered; plays +1; reached []; said []",
+      "2.5 s, no progress":
+        "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming on":
+        "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "stream playing (2 queued)": {
+      "ended":
+        "stream u2; sounding; busy; metered; plays +1; reached [2]; said []",
+      "pause":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
+      "error":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "play rejects":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "gesture":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (no playback progress).]",
+      "3 arrives":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming on":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming off":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "stream paused (2 queued)": {
+      "ended":
+        "stream u2; sounding; busy; metered; plays +1; reached [2]; said []",
+      "pause":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "error":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "gesture":
+        "stream u1; sounding; busy; metered; plays +1; reached []; said []",
+      "2.5 s, no progress":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming on":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "stream paused before play() settled": {
+      "ended":
+        "stream u1; silent; drained; unmetered; plays +0; reached []; said [idle]",
+      "pause":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "error":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said [!Audio blocked by the browser — tap or click anywhere on this page once, then it will play (NotAllowedError).]",
+      "gesture":
+        "stream u1; sounding; busy; metered; plays +1; reached []; said []",
+      "2.5 s, no progress":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming on":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "stream blocked": {
+      "ended":
+        "stream u1; silent; drained; unmetered; plays +0; reached []; said [idle]",
+      "pause":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "error":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "gesture":
+        "stream u1; sounding; busy; metered; plays +1; reached []; said []",
+      "2.5 s, no progress":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming on":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "stream cut off while arriving": {
+      "ended":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "pause":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "error":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "play resolves":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "play rejects":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "gesture":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "3 arrives":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming on":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "streaming off":
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "stream playing out, streaming off (2 as a replay)": {
+      "ended":
+        "replay u2; sounding; busy; metered; plays +1; reached [2]; said []",
+      "pause":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
+      "error":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "play rejects":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "gesture":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (no playback progress).]",
+      "3 arrives":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming on":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming off":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+  };
+
+  for (const [phase, row] of Object.entries(table))
+    for (const [event, outcome] of Object.entries(row))
+      it(`${phase}: ${event}`, async () => {
+        expect(await rowOutcome(phase, event)).toBe(outcome);
+      });
+
+  it("plays a stream that came after the replays once they end, in order", async () => {
+    // A stream used to take the element from the replay holding it and
+    // never call play(); the replay's handlers then acted on the stream.
+    const at = await phases["replay playing, streaming back on (2 queued)"]();
+    try {
+      at.arrive(3);
+      await at.settle();
+      expect(await element(at)).toBe("replay u1");
+      events.ended(at);
+      at.settlePlay("resolve");
+      await at.settle();
+      expect(await element(at)).toBe("replay u2");
+      events.ended(at);
+      at.settlePlay("resolve");
+      await at.settle();
+      expect(await element(at)).toBe("stream u3");
+      expect(at.reached).toEqual([1, 2, 3]);
+      expect(at.playback.isPlaying).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("replays a stream that fails while playing out before what came after it", async () => {
+    const at = await phases["stream playing out, streaming off (2 as a replay)"]();
+    try {
+      events.error(at);
+      await at.settle();
+      expect(await element(at)).toBe("replay u1");
+      events.ended(at);
+      at.settlePlay("resolve");
+      await at.settle();
+      expect(await element(at)).toBe("replay u2");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("covers every phase and every event", () => {
+    expect(Object.keys(table)).toEqual(Object.keys(phases));
+    for (const row of Object.values(table))
+      expect(Object.keys(row)).toEqual(Object.keys(events));
   });
 });
