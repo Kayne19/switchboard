@@ -159,10 +159,11 @@ caller.
 
 ### 2. Pi owns agent reasoning, not the call
 
-`apps/backend/src/pi_client.rs` owns the operator's process/RPC transport and
-the service's side of a project session over the host link. The agent (the
-operator's Pi process, or a project's prime-agent session) owns prompts, model
-responses, tool calls, and project work. It does not own:
+`apps/backend/src/pi_client.rs` owns the operator's process/RPC transport, and
+`apps/backend/src/project_session.rs` the service's side of a project session
+over the host link. The agent (the operator's Pi process, or a project's
+prime-agent session) owns prompts, model responses, tool calls, and project
+work. It does not own:
 
 - which leg is active
 - the project registry
@@ -442,7 +443,8 @@ removes the real coupling; do not create interfaces for ceremony.
 | `reply.rs` | `Reply` and the switchboard's reply and failure builders | routing or lifecycle policy |
 | `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions, module calls | routing decisions, leg lifecycle |
 | `prewarm.rs` | per-host setup and launch plans: catalogs, prepare | routing decisions, model policy |
-| `pi_client.rs` | the operator's Pi process/RPC transport, project sessions over the host link, process-tree cleanup | route authority or deployment registry |
+| `pi_client.rs` | the operator's and the utility's Pi process/RPC transport, process-tree cleanup, `LegSession` (the leg on the line, operator or project, as the controls see it) | project sessions, route authority or deployment registry |
+| `project_session.rs` | a project session over the host link: its commands, the caller turn it collects, the frame pump, self-woken turn reports, module-call answers, and its release on the host | the host link itself (`hosts.rs`), which leg is on the line, route authority |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
 | `display.rs` | the stage projection (`DisplayProjection`), the display gate state, and the display-precedence rule for `view` and the snapshot | generation checks, HTTP/WebSocket handling |
 | `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |

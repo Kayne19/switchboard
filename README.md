@@ -338,7 +338,8 @@ container, and the post-deploy checklist.
 | `apps/backend/src/jev.rs` | typed client for the hosted Jev endpoint; the key is read at request time and never retained |
 | `apps/backend/src/hosts.rs` | the host link: host agents dialling in on `/host`, their commands, events and module calls |
 | `apps/backend/src/prewarm.rs` | setup per host and project as each host links, and launch plans |
-| `apps/backend/src/pi_client.rs` | the operator's pi RPC process, and project sessions over the host link — one turn in, text and signals out |
+| `apps/backend/src/pi_client.rs` | the operator's and the utility's pi RPC process — one turn in, text and signals out |
+| `apps/backend/src/project_session.rs` | a project session over the host link: its turns, its frame pump and its module calls |
 | `apps/backend/src/models.rs` | model catalogs and spoken model/thinking resolution |
 | `apps/backend/src/registry.rs` | the project registry and spoken-name resolution |
 | `apps/backend/src/audio.rs` | speech-to-text sidecar, ElevenLabs, and reply-length shaping |

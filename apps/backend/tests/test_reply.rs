@@ -28,12 +28,14 @@ async fn a_delivered_speak_keeps_the_written_turn_reply_silent() {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let calls = Arc::new(StdMutex::new(Vec::new()));
     let seen = Arc::clone(&calls);
-    board.set_module_callback(Some(Arc::new(move |call: crate::pi_client::AgentCall| {
-        seen.lock()
-            .unwrap()
-            .push((call.call.clone(), call.token.clone(), call.args.clone()));
-        Box::pin(async { json!({"status": "delivered", "reason": null}) })
-    })));
+    board.set_module_callback(Some(Arc::new(
+        move |call: crate::project_session::AgentCall| {
+            seen.lock()
+                .unwrap()
+                .push((call.call.clone(), call.token.clone(), call.args.clone()));
+            Box::pin(async { json!({"status": "delivered", "reason": null}) })
+        },
+    )));
     let log = serve(
         &board,
         Box::new(|_, _| {

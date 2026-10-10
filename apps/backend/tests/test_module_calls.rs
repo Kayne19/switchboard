@@ -7,7 +7,7 @@ use crate::app_state::{
 use crate::browser::{handle_text_frame, queued_frames};
 use crate::delivery::{DeliveryFrame, Event};
 use crate::pbx::{AgentStateNotice, OPERATOR};
-use crate::pi_client::AgentCall;
+use crate::project_session::AgentCall;
 use crate::protocol::AgentRequest;
 use crate::speech::AUDIO_SLOTS;
 use crate::within;
