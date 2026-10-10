@@ -36,7 +36,6 @@ _MAX_EXACT_INT = 2**53
 # over it, so the service's answer decides); for every other call, and for a
 # speak when a hello does not say, it is 30 s.
 _RELAY_TIMEOUT_S = 30.0
-_SPEAK_REPLY_MARGIN_S = 5.0
 _MARGIN_S = 5.0
 
 _VIEW_TARGETS = ("visual", "comms", "system", "theater", "auto")
