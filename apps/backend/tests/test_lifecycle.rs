@@ -942,6 +942,54 @@ fn a_redial_rescue_waits_for_the_startup_to_commit() {
     assert!(call.begin_rescue_of(&beta, "redial").is_some());
 }
 
+/// Shutdown is final. It used to leave a staged candidate and the startup's
+/// rollback in place, so a transfer still finishing as the service shut down
+/// could adopt its leg or roll back to the old one, and either moved the call
+/// out of `Shutdown`: turns and module calls were admitted again while the
+/// processes were being reaped.
+#[test]
+fn a_shutdown_ends_the_startup_in_flight_and_nothing_reopens_the_call() {
+    // A candidate staged: abandoned as a rescue abandons it.
+    let (call, notices) = coordinator_with_notices();
+    on_alpha(&call);
+    call.begin_candidate(beta_candidate()).unwrap();
+    notices.lock().unwrap().clear();
+    assert!(call.begin_shutdown());
+    assert!(!call.startup_in_flight());
+    assert_eq!(call.candidate_identity(), None);
+    // Past the candidate's generation (2) as well as the line's (1).
+    assert_eq!(call.generation(), 3);
+    assert_eq!(
+        *notices.lock().unwrap(),
+        vec![CandidateNotice {
+            route: "beta".into(),
+            generation: 3,
+            ended: Some(CandidateEnd::Rescued),
+        }]
+    );
+    assert_eq!(
+        call.adopt_candidate("beta-leg"),
+        Err(LifecycleError::NoCandidate)
+    );
+    assert!(!call.rollback_startup("startup failed"));
+    assert_eq!(phase(&call), "shutdown");
+
+    // A candidate adopted, its intro not finished: nothing to roll back to.
+    let call = coordinator();
+    on_alpha(&call);
+    call.begin_candidate(beta_candidate()).unwrap();
+    call.adopt_candidate("beta-leg").unwrap();
+    assert!(call.begin_shutdown());
+    assert!(!call.startup_in_flight());
+    assert!(!call.rollback_startup("intro failed"));
+    assert!(!call.finish_intro());
+    assert_eq!(phase(&call), "shutdown");
+    assert_eq!(
+        call.begin_prompt(&call.current_identity()),
+        Err(LifecycleError::Shutdown)
+    );
+}
+
 // The call line, phase by event. Each phase is reached the way a call reaches
 // it, from a fresh coordinator, and is then given one event. A row reads:
 //
@@ -1395,7 +1443,7 @@ starting | thinking from the candidate => false | starting alpha cand@1 - startu
 starting | adopt_candidate => beta-leg@2 | turn running beta beta-leg@2 new turn startup adopted:beta thinking:low [beta@2 Adopted]
 starting | finish_intro => false | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | rollback_startup => true | active alpha cand@1 - adopted:alpha thinking:medium [beta@1 RolledBack]
-starting | begin_shutdown => true | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
+starting | begin_shutdown => true | shutdown alpha cand-shutdown-3@3 - thinking:medium [beta@3 Rescued]
 starting | accept_side_effect => CandidateSideEffect | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | activity from the line => Publish | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | activity from the candidate => Promote | starting alpha cand@1 - startup adopted:alpha thinking:medium []
@@ -1415,7 +1463,7 @@ starting in a turn | thinking from the candidate => false | starting operator op
 starting in a turn | adopt_candidate => cand@1 | turn running alpha cand@1 new turn startup adopted:alpha thinking:medium [alpha@1 Adopted]
 starting in a turn | finish_intro => false | starting operator operator@0 turn startup thinking: []
 starting in a turn | rollback_startup => true | operator operator operator@0 turn thinking: [alpha@0 RolledBack]
-starting in a turn | begin_shutdown => true | shutdown operator operator-shutdown-1@1 - startup thinking: []
+starting in a turn | begin_shutdown => true | shutdown operator operator-shutdown-2@2 - thinking: [alpha@2 Rescued]
 starting in a turn | accept_side_effect => CandidateSideEffect | starting operator operator@0 turn startup thinking: []
 starting in a turn | activity from the line => Publish | starting operator operator@0 turn startup thinking: []
 starting in a turn | activity from the candidate => Promote | starting operator operator@0 turn startup thinking: []
@@ -1435,7 +1483,7 @@ adopted | thinking from the candidate => StaleLeg | turn running alpha cand@1 tu
 adopted | adopt_candidate => NoCandidate | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | finish_intro => true | active alpha cand@1 - adopted:alpha thinking:medium []
 adopted | rollback_startup => true | operator operator operator@1 - thinking: [alpha@1 RolledBack]
-adopted | begin_shutdown => true | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
+adopted | begin_shutdown => true | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 adopted | accept_side_effect => accepted | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | activity from the line => Publish | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | activity from the candidate => Discard | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
@@ -1455,7 +1503,7 @@ adopted at rest | thinking from the candidate => StaleLeg | active alpha cand@1 
 adopted at rest | adopt_candidate => NoCandidate | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | finish_intro => false | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | rollback_startup => true | operator operator operator@1 - thinking: [alpha@1 RolledBack]
-adopted at rest | begin_shutdown => true | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
+adopted at rest | begin_shutdown => true | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 adopted at rest | accept_side_effect => StaleLeg | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | activity from the line => Publish | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | activity from the candidate => Discard | active alpha cand@1 - startup adopted:alpha thinking:medium []
@@ -1499,24 +1547,24 @@ shutdown | begin_shutdown => false | shutdown alpha cand-shutdown-2@2 - thinking
 shutdown | accept_side_effect => StaleLeg | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | activity from the line => Discard | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | activity from the candidate => Discard | shutdown alpha cand-shutdown-2@2 - thinking:medium []
-shutdown starting | begin_prompt => Shutdown | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | begin_autonomous => WrongPhase | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | bind_turn => StaleLeg | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | settle_turn => false | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | finish_operation => false | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | attach_steer => WrongPhase | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | begin_rescue => cand-shutdown-2-rescue-3@3 | shutdown alpha cand-shutdown-2-rescue-3@3 - thinking:medium [beta@3 Rescued]
-shutdown starting | begin_rescue_of => None | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | settle => alpha | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | return_to_operator => () | shutdown operator operator@2 - startup thinking: []
-shutdown starting | begin_candidate => Shutdown | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | thinking from the line => StaleLeg | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | thinking from the candidate => StaleLeg | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | adopt_candidate => beta-leg@2 | turn running beta beta-leg@2 new turn startup adopted:beta thinking:low [beta@2 Adopted]
-shutdown starting | finish_intro => false | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | rollback_startup => true | active alpha cand-shutdown-2@2 - thinking:medium [beta@2 RolledBack]
-shutdown starting | begin_shutdown => false | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | accept_side_effect => StaleLeg | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | activity from the line => Discard | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
-shutdown starting | activity from the candidate => Discard | shutdown alpha cand-shutdown-2@2 - startup thinking:medium []
+shutdown starting | begin_prompt => Shutdown | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | begin_autonomous => WrongPhase | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | bind_turn => StaleLeg | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | settle_turn => false | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | finish_operation => false | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | attach_steer => WrongPhase | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | begin_rescue => cand-shutdown-3-rescue-4@4 | shutdown alpha cand-shutdown-3-rescue-4@4 - thinking:medium []
+shutdown starting | begin_rescue_of => None | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | settle => alpha | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | return_to_operator => () | shutdown operator operator@3 - thinking: []
+shutdown starting | begin_candidate => Shutdown | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | thinking from the line => StaleLeg | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | thinking from the candidate => StaleLeg | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | adopt_candidate => NoCandidate | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | finish_intro => false | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | rollback_startup => false | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | begin_shutdown => false | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | accept_side_effect => StaleLeg | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | activity from the line => Discard | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | activity from the candidate => Discard | shutdown alpha cand-shutdown-3@3 - thinking:medium []
 ";

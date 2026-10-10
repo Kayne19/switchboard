@@ -1119,20 +1119,36 @@ impl Coordinator {
         })
     }
 
+    /// Shuts the call down for good. A startup in flight ends with it, the
+    /// way a rescue ends one: a candidate is abandoned (its generation
+    /// retired, the browser told it was rescued), and nothing is left for a
+    /// late adoption or rollback to reopen the call with.
     pub fn begin_shutdown(&self) -> bool {
         self.linearize(|state| {
             if state.phase == Phase::Shutdown {
-                false
-            } else {
-                state.phase = Phase::Shutdown;
-                state.operation = None;
-                state.background_tokens.clear();
-                let next_token =
-                    format!("{}-shutdown-{}", state.leg.token, state.leg.generation + 1);
-                state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
-                self.refresh_locked(state);
-                true
+                return false;
             }
+            let abandoned = state.candidate.take();
+            let retired = abandoned
+                .as_ref()
+                .map_or(state.leg.generation, |candidate| {
+                    candidate.identity.generation.max(state.leg.generation)
+                });
+            state.startup_rollback = None;
+            state.phase = Phase::Shutdown;
+            state.operation = None;
+            state.background_tokens.clear();
+            let next_token = format!("{}-shutdown-{}", state.leg.token, retired + 1);
+            state.leg = LegIdentity::new(next_token, retired + 1);
+            if let Some(candidate) = abandoned {
+                self.notify_candidate(&CandidateNotice {
+                    route: candidate.route,
+                    generation: state.leg.generation,
+                    ended: Some(CandidateEnd::Rescued),
+                });
+            }
+            self.refresh_locked(state);
+            true
         })
     }
 
