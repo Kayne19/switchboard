@@ -558,7 +558,8 @@ const rows: Row[] = [
 
   { from: "lease", event: "speech start", seen: { published: ["lease_capturing"], said: CAPTURING, starts: 1 }, then: "lease_capturing" },
   { from: "lease", event: "lease tick", seen: { published: ["lease"], said: LEASE }, then: "lease" },
-  { from: "lease", event: "lease expires", seen: { published: ["armed"], said: LEASE_CLOSED }, then: "armed" },
+  // Every way back to `armed` resets both detectors (#367).
+  { from: "lease", event: "lease expires", seen: { published: ["armed"], said: LEASE_CLOSED, ...QUIET }, then: "armed" },
   { from: "lease", event: "follow-up", seen: { published: ["lease"], said: LEASE, resets: [0, 1] }, then: "lease" },
   { from: "lease", event: "no reply", seen: {}, then: "lease" },
   { from: "lease", event: "wake", seen: {}, then: "lease" },

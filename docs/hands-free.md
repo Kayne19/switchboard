@@ -75,7 +75,8 @@ asynchronous and queued, as the wake detector's is, and a reset stamps a new
 generation so a window scored before a reset cannot start or end a turn after
 it. The endpointer is reset where the wake detector is: on enable, on a wake
 grace period, when an expired grace period re-arms, when a turn brings no
-reply, on a follow-up lease, on a PTT pause, and on disable or an epoch change.
+reply, on a follow-up lease, when a follow-up lease expires unused (#367), on
+a PTT pause, and on disable or an epoch change.
 
 The two detectors share one ONNX Runtime Web instance, and its `run` is not
 re-entrant across sessions: a session that runs while another session's run

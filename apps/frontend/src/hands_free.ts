@@ -565,10 +565,11 @@ export class HandsFreeController {
 		if (this.capture) this.capture.lease = false;
 		this.leaseUsed = true;
 		if (this.state === "lease") {
-			this.publish(
-				"armed",
-				"Follow-up window closed; wake word required again.",
-			);
+			// Every way back to `armed` starts the detectors from silence. The
+			// wake detector was last fed before the turn this lease follows, so
+			// its window still holds that audio, often the wake word itself
+			// (#367).
+			this.rearm("Follow-up window closed; wake word required again.");
 		} else if (this.state === "lease_capturing") {
 			this.publish(
 				"capturing",
