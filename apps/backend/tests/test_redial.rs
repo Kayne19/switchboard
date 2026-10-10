@@ -489,6 +489,43 @@ async fn an_unavailable_catalog_admits_a_qualified_model_and_refuses_a_bare_one(
     }
 }
 
+/// The coordinator names alpha while the PBX still holds beta: the state an
+/// adopted transfer to alpha left when its task was cancelled before it
+/// committed. A redial planned on alpha must not switch beta's session and
+/// put it on the line as alpha (#236).
+#[tokio::test]
+async fn a_redial_never_switches_another_projects_session() {
+    let mut board = board_on(
+        vec![project("alpha", ""), project("beta", "")],
+        &[],
+        two_model_catalog(),
+    );
+    let log = serve(&board, Box::new(|_, _| says("On it.")));
+    let reply = board
+        .transfer_ctx(&transcript("look at beta"), "beta", "", "")
+        .await;
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    let beta = board.agent.clone().expect("beta is on the line");
+    put_on(&board, "alpha", "anthropic/current", two_model_catalog());
+
+    let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
+        panic!("a swap to a listed model goes ahead");
+    };
+    let reply = board.redial(*plan).await.unwrap();
+
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert!(log.named("set_model").is_empty(), "{:?}", log.names());
+    assert!(
+        !(board.coordinator.route() == "alpha"
+            && board
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.same_session(&beta))),
+        "beta's session is on the line as alpha"
+    );
+    board.shutdown().await;
+}
+
 /// A model change is refused while the leg on the line is still coming up:
 /// adopted on its first sign of life, its intro not yet over.
 #[tokio::test]

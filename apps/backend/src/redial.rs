@@ -458,7 +458,7 @@ impl Switchboard {
         to: &str,
         leg_token: &str,
     ) -> Result<ProjectSession, PiSessionError> {
-        let Some(session) = self.agent.clone() else {
+        let Some(session) = self.agent_on_the_line() else {
             return Err(PiSessionError("the project session is gone".into()));
         };
         let (from_provider, from_model, from_thinking) = parse_spec(from);
