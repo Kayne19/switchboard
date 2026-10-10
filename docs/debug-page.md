@@ -35,6 +35,24 @@ network opens gets a 403. A request with no `Origin` (curl, a probe script) is
 served. The `npm run dev:debug` proxy forwards the dev server's own `Host`, so
 it passes.
 
+That comparison alone trusts `Host`, and DNS rebinding defeats it: a page at
+`http://evil.example:8766` whose DNS then points at this machine sends
+`Host: evil.example:8766` and `Origin: http://evil.example:8766`, which agree.
+So the same check also refuses (403) any request whose `Host` is a name that
+public DNS could answer for, with or without an `Origin`. It serves a `Host`
+that is an IP literal (`192.168.1.217:8766`, `[::1]:8766`), a single-label
+name (`localhost`, `damocles`), or a name under a suffix that public DNS
+never delegates: `home.arpa` (RFC 8375), `local` (mDNS), `localhost`, or
+`internal`. Reach the page by one of those; a name under any other suffix
+(`damocles.lan`, `damocles.example.com`) gets a 403. No setting changes this.
+
+What is left: a rebinding page needs a name that resolves to this machine,
+and only the local network (its DNS resolver, or an mDNS responder for
+`.local`) can answer for the names that pass. Anyone who controls those can
+already reach the listener directly, and it has no authentication, so
+rebinding gives them nothing new. The listener is still meant only for a
+trusted network.
+
 ## The page
 
 The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`).

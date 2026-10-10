@@ -472,6 +472,17 @@ does by default: the page at `https://switchboard.home.arpa` sends
 `Host: switchboard.home.arpa`. A proxy that rewrites `Host` to the upstream
 address would lock the page out.
 
+Matching `Origin` to `Host` does not stop DNS rebinding: a page on another
+site whose name is then pointed at damocles sends its own name in both. So
+the same layer also refuses any request whose `Host` is a name public DNS
+could answer for. It serves an IP literal (`192.168.1.217:8765`), a
+single-label name (`localhost`, `damocles`), and a name under a suffix public
+DNS never delegates: `home.arpa` (RFC 8375; `switchboard.home.arpa` and the
+host agents' `wss://switchboard.home.arpa/host` pass), `local`, `localhost`,
+or `internal`. A name under any other suffix gets a 403, whether or not it
+sends an `Origin`. Only the local network can answer for the names that
+pass, and anyone who controls it can reach the page directly anyway.
+
 Restarting drops whatever call is in progress and repeats the startup prewarm.
 Speech-to-text runs in its own service (`switchboard-stt`) and is not restarted
 with it.
