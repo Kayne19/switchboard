@@ -10,6 +10,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -25,7 +26,8 @@ TOKEN = "call-token-1"
 class FakeHostAgent:
     """Serves the skill socket: JSON lines, one reply per request, in order."""
 
-    def __init__(self, home, on_call=True, reply=None):
+    def __init__(self, home, on_call=True, reply=None, speech_deadline_ms=2000):
+        self.speech_deadline_ms = speech_deadline_ms
         self.path = os.path.join(home, ".cache", "switchboard", "host-agent.sock")
         os.makedirs(os.path.dirname(self.path), mode=0o700)
         self.on_call = on_call
@@ -61,7 +63,7 @@ class FakeHostAgent:
                 return {"on_call": False, "reason": "subagent"}
             if not self.on_call:
                 return {"on_call": False}
-            return {"on_call": True, "token": TOKEN, "persona": "Calm.", "speech_deadline_ms": 2000}
+            return {"on_call": True, "token": TOKEN, "persona": "Calm.", "speech_deadline_ms": self.speech_deadline_ms}
         return self.reply(request)
 
     def calls(self):
@@ -195,6 +197,20 @@ class FailureTest(ModuleTestCase):
         self.host(reply=lambda request: {"status": "maybe"})
         result, _ = self.run_call(switchboard.speak, "Hi.")
         self.assertEqual(result.status, "failed")
+
+    def test_speak_waits_for_the_host_agent_past_its_margin_over_the_deadline(self):
+        # The host agent waits the speech deadline and SPEAK_REPLY_MARGIN_MS
+        # for the service's answer (skill_socket.ts); the module waits that
+        # and its own margin. Scaled down: a 0.1 s deadline, a 0.4 s host
+        # margin, and an answer that comes after 0.35 s.
+        def late(request):
+            time.sleep(0.35)
+            return {"status": "delivered", "reason": None}
+
+        self.host(reply=late, speech_deadline_ms=100)
+        with mock.patch.object(switchboard, "_SPEAK_REPLY_MARGIN_S", 0.4, create=True), mock.patch.object(switchboard, "_MARGIN_S", 0.1):
+            result, line = self.run_call(switchboard.speak, "A long line.")
+        self.assertEqual(result.status, "delivered", line)
 
     def test_host_agent_failure_reason_is_reported(self):
         self.host(reply=lambda request: {"status": "failed", "reason": "link_down"})

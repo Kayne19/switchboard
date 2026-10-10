@@ -380,8 +380,11 @@ WebM/Opus clients after the WebSocket hello handshake; unavailable or
 backpressured workers explicitly fall back to the complete-clip contract.
 
 `SWITCHBOARD_SPEECH_DEADLINE_MS` bounds one synthesized utterance, for an
-agent's `speak` and for replies alike. The skill module waits for the speech deadline the host
-agent gives it with the call token, so the two cannot disagree.
+agent's `speak` and for replies alike. The service starts it when it admits a
+`speak`, which is later than the host agent sent it, so the host agent waits the
+deadline and a margin for the service's answer, and the skill module (which
+gets the deadline with the call token) waits one margin more. The service's
+answer decides what the agent is told.
 
 ## Building and testing
 

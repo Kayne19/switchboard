@@ -47,8 +47,9 @@ const CLOSE_GOING_AWAY: u16 = 1001;
 const CLOSE_PROTOCOL_ERROR: u16 = 1002;
 const CLOSE_POLICY: u16 = 1008;
 /// How long a module call may wait for the service's answer before the host
-/// agent is told it failed. The host agent gives up sooner (the speech
-/// deadline for `speak`, 30 s otherwise); this only bounds a lost answer.
+/// agent is told it failed. The host agent gives up sooner (for `speak`, the
+/// speech deadline and its 5 s margin; 30 s otherwise); this only bounds a
+/// lost answer.
 const MODULE_REPLY_LIMIT: Duration = Duration::from_secs(150);
 
 /// The link heartbeat: a JSON `ping` every `interval`; a link with
