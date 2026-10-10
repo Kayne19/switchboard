@@ -68,6 +68,14 @@ describe('the CI browser job', () => {
       expect(source, config).toContain("browserName: 'webkit'");
     }
   });
+
+  // A focused test left in a spec would make each leg run it alone and pass:
+  // the browser job would go green with the rest of its specs unrun.
+  it('fails a run on CI that finds a focused test', () => {
+    for (const config of ['apps/frontend/playwright.config.ts', 'apps/frontend/playwright.production.config.ts']) {
+      expect(read(config), config).toContain('forbidOnly: !!process.env.CI,');
+    }
+  });
 });
 
 describe('the CI triggers', () => {

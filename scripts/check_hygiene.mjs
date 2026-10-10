@@ -215,9 +215,20 @@ for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set(["
 	scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
 }
 
+// 13. No focused test: a `.only` left in a test makes its runner skip the
+//     rest. Playwright fails a CI run that finds one (forbidOnly), but the
+//     browser job is not the check master requires, and `node --test` runs
+//     every test anyway, so a focused host-agent test hides nothing until it
+//     is run by hand. This refuses it in `npm test`, which master requires.
+for (const dir of ["apps/frontend/tests", "apps/host-agent/tests"]) {
+	for (const file of files(path.join(root, dir), new Set([".ts", ".tsx", ".mjs", ".js"]))) {
+		scan(file, /\b(?:test|it|describe)(?:\.\w+)*\.only\(/, "a focused test (.only): it makes its runner skip the rest");
+	}
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests");

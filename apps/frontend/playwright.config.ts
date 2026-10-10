@@ -13,6 +13,9 @@ const origin = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: './tests/visual',
+  // A focused test (`test.only`) on CI fails the run instead of running
+  // alone and passing with every other spec skipped.
+  forbidOnly: !!process.env.CI,
   timeout: 30_000,
   // On CI a leg that runs past this ends with the tests that did not finish
   // named, a little before the job's own timeout-minutes in

@@ -4,6 +4,9 @@ const executablePath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
 
 export default defineConfig({
   testDir: './tests/integration',
+  // A focused test (`test.only`) on CI fails the run instead of running
+  // alone and passing with every other spec skipped.
+  forbidOnly: !!process.env.CI,
   timeout: 30_000,
   // On CI a run past this ends with the tests that did not finish named, a
   // little before the job's own timeout-minutes in .github/workflows/ci.yml.
