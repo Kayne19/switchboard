@@ -4,7 +4,7 @@ import { createInitialState, reduceActions } from '../../src/controller/reducer'
 import { validateControllerAction } from '../../src/controller/validation';
 import { sceneKind } from '../../src/app/sceneModel';
 import { fixtures, pipelineDiagram, topologyDiagram, traceDiagram } from '../../src/fixtures/scenes';
-import { createLayers } from '../../src/primitives/diagramLayout';
+import { layoutDiagram } from '../../src/primitives/diagramLayout';
 
 // The hard canonical diagrams are agent-sendable: every action passes the
 // same validator the page runs on a display action from the wire.
@@ -33,7 +33,9 @@ describe('hard diagram fixtures', () => {
     const data: DiagramData = pipelineDiagram;
     expect(data.nodes.length).toBeGreaterThanOrEqual(30);
     expect(data.nodes.length).toBeLessThanOrEqual(40);
-    const widths = createLayers(data.nodes, data.edges).map((layer) => layer.length);
+    // The layers the page draws it in, by the width of each.
+    const widths: number[] = [];
+    for (const laid of layoutDiagram(data, 'landscape').nodes) widths[laid.layer] = (widths[laid.layer] ?? 0) + 1;
     expect(widths.filter((width) => width >= 6).length).toBeGreaterThanOrEqual(2);
     expect(Math.max(...widths)).toBeGreaterThanOrEqual(10);
   });
