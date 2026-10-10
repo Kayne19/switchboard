@@ -122,8 +122,9 @@ export class ScreenReporter {
           case "idle":
             return this.offer(state, report);
           case "awaiting":
-            // The report on the wire already says this.
-            if (sameReport(report, line.report)) return state;
+            // The report on the wire already says this, and a queued one
+            // would say what the page no longer shows.
+            if (sameReport(report, line.report)) return { ...state, queued: null };
             return { ...state, queued: report };
           default:
             return unreachable(line);
@@ -157,13 +158,17 @@ export class ScreenReporter {
     return report;
   }
 
-  /** Puts `report` on the wire; one the socket refuses waits as the queued one. */
+  /**
+   * Puts `report` on the wire; one the socket refuses waits as the queued
+   * one. A report that goes is the newest, so nothing older stays queued.
+   */
   private offer(state: ReporterState, report: ScreenStateReport): ReporterState {
     if (!this.transmit(report)) return { ...state, line: IDLE, queued: report };
     const carried = state.rejection !== null && report.rejected === state.rejection;
     return {
       ...state,
       line: { kind: "awaiting", report },
+      queued: null,
       rejection: carried ? null : state.rejection,
     };
   }

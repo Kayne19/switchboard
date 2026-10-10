@@ -278,7 +278,7 @@ describe('screen reports: phase x event', () => {
       expect(sent().length).toBe(mark);
     });
 
-    it('awaiting with a queued scene | the scene goes back to the report on the wire: today the queued one still goes', async () => {
+    it('awaiting with a queued scene | the scene goes back to the report on the wire: the queued one is dropped', async () => {
       await awaiting();
       const mark = sent().length;
       const onTheWire = sent().at(-1);
@@ -288,10 +288,9 @@ describe('screen reports: phase x event', () => {
       await receive({ type: 'view', target: 'comms', reason: '' });
       await receive({ type: 'view', target: 'auto', reason: '' });
       await receive(ack);
-      // Today: the page shows what `onTheWire` says, and the report after the
-      // ack still says `comms`.
-      expect(sent().slice(mark).map((report) => report.view)).toEqual(['comms']);
+      // The page shows what `onTheWire` says, so nothing more goes.
       expect(onTheWire?.view).toBe('auto');
+      expect(sent().length).toBe(mark);
     });
 
     it('awaiting | epoch: the report on the wire is given up, and the next goes without an ack', async () => {
@@ -379,7 +378,7 @@ describe('screen reports: phase x event', () => {
   });
 
   describe('refused sends', () => {
-    it('idle | scene the socket refuses: the report waits, and today it goes after the next ack', async () => {
+    it('idle | scene the socket refuses: the report waits until a newer one goes, and never goes after it', async () => {
       await idle();
       const mark = sent().length;
       socket().readyState = 0;
@@ -389,8 +388,7 @@ describe('screen reports: phase x event', () => {
       await receive(show('b', 2));
       expect(shownSince(mark)).toEqual([['a', 'b']]);
       await receive(ack);
-      // Today: the refused, older report goes after the newer one.
-      expect(shownSince(mark)).toEqual([['a', 'b'], ['a']]);
+      expect(shownSince(mark)).toEqual([['a', 'b']]);
     });
   });
 });
