@@ -3,13 +3,15 @@
 //! The debug bus is deliberately independent from call control. Publishing is
 //! synchronous and bounded: it records a small in-memory copy and uses
 //! `broadcast::Sender::send`, so a slow browser can never hold up a call.
+use crate::api::refuse_cross_origin;
 use crate::protocol::AgentState;
 use axum::{
     extract::{
         ws::{Message, WebSocket},
         State, WebSocketUpgrade,
     },
-    http::{header, HeaderMap, StatusCode},
+    http::header,
+    middleware,
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -49,18 +51,23 @@ struct Site {
 }
 
 /// The debug listener's whole router: the embedded page and the read-only
-/// WebSocket. `agents` reads the current agent projection for snapshots;
-/// `shutdown` is the service's shutdown signal.
+/// WebSocket, behind the same origin check as the primary listener (a
+/// browser applies no CORS to a WebSocket, so any page it opens could
+/// otherwise read this stream). `agents` reads the current agent projection
+/// for snapshots; `shutdown` is the service's shutdown signal.
 pub(crate) fn router(
     bus: DebugBus,
     agents: impl Fn() -> Vec<AgentState> + Send + Sync + 'static,
     shutdown: watch::Receiver<bool>,
 ) -> Router {
-    asset_routes().route("/ws", get(ws)).with_state(Site {
-        bus,
-        agents: Arc::new(agents),
-        shutdown,
-    })
+    asset_routes()
+        .route("/ws", get(ws))
+        .with_state(Site {
+            bus,
+            agents: Arc::new(agents),
+            shutdown,
+        })
+        .layer(middleware::from_fn(refuse_cross_origin))
 }
 
 /// The debug page's asset routes. Anything else is a 404.
@@ -1188,50 +1195,13 @@ impl Feed {
     }
 }
 
-/// The read-only debug stream. A browser does not apply CORS to a
-/// WebSocket, so any page it opens could otherwise read this stream: only a
-/// request from the debug page itself (an `Origin` naming the host it
-/// connected to) or from a non-browser client (no `Origin`) is upgraded.
-async fn ws(State(site): State<Site>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
-    if !same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
+/// The read-only debug stream. The origin check the router applies
+/// (`api::refuse_cross_origin`) keeps other sites' pages off it.
+async fn ws(State(site): State<Site>, upgrade: WebSocketUpgrade) -> Response {
     // The page sends nothing; anything it sends is ignored.
     upgrade
         .max_message_size(MAX_INCOMING_BYTES)
         .on_upgrade(move |socket| serve_socket(socket, site))
-}
-
-/// True when the request has no `Origin`, or its `Origin` names the same
-/// host and port as its `Host`.
-fn same_origin(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get(header::ORIGIN) else {
-        return true;
-    };
-    let (Ok(origin), Some(host)) = (
-        origin.to_str(),
-        headers
-            .get(header::HOST)
-            .and_then(|host| host.to_str().ok()),
-    ) else {
-        return false;
-    };
-    let Some((scheme, authority)) = origin.split_once("://") else {
-        return false;
-    };
-    let default_port = match scheme.to_ascii_lowercase().as_str() {
-        "http" => ":80",
-        "https" => ":443",
-        _ => return false,
-    };
-    let normal = |authority: &str| {
-        let authority = authority.to_ascii_lowercase();
-        match authority.strip_suffix(default_port) {
-            Some(bare) => bare.to_owned(),
-            None => authority,
-        }
-    };
-    normal(authority) == normal(host)
 }
 
 async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ()> {
