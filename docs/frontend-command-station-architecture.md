@@ -238,7 +238,10 @@ The running client architecture:
 
 - `static/index.html`: the built V17 shell and the wake-word import map
 - `apps/frontend/src/App.tsx`: V17 presentation and semantic scene rendering
-- `apps/frontend/src/components/Scenes.tsx`: the one scene shell every page is drawn in, and the main slot each composition fills
+- `apps/frontend/src/components/Scenes.tsx`: the one scene shell every page is drawn in (`SceneShell`), its aux row, and the conversation page
+- `apps/frontend/src/components/sceneContent.tsx`: what a scene is given (`SceneProps`, with the composition `SceneRenderer` built) and what it hands the shell (`SceneContent`)
+- `apps/frontend/src/components/TrainingScene.tsx`, `ObjectScene.tsx`, `ComposedScene.tsx`: the main slot each content composition fills -- a chart's, any other visual's, and the composed workspace's
+- `apps/frontend/src/components/Rail.tsx`: the rail beside the main column (`RailDetails`) and how it fits what it carries (`useRailFit`)
 - `apps/frontend/src/controller/`: semantic state machine, reducer, and validation boundary
 - `apps/frontend/src/integration/runtime.tsx`: connects the call runtime to the controller and reports screen state
 - `apps/frontend/src/runtime/`: backend WebSocket, push-to-talk, playback, and hands-free wiring; audio levels feed the presence indicator through requestAnimationFrame without React state updates

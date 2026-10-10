@@ -71,6 +71,6 @@ describe('layout motion', () => {
     expect(written).toEqual([]);
     // And the hook is what the elements that move take.
     const users = sources.filter(({ text }) => /useLayoutMotion\(/.test(text)).map(({ file }) => file).sort();
-    expect(users).toEqual(['components/FocusLayer.tsx', 'components/Scenes.tsx', 'primitives/DamoclesPresence.tsx', 'primitives/MetricsPrimitive.tsx', 'primitives/ObjectMotion.tsx']);
+    expect(users).toEqual(['components/FocusLayer.tsx', 'components/Scenes.tsx', 'components/sceneContent.tsx', 'primitives/DamoclesPresence.tsx', 'primitives/MetricsPrimitive.tsx', 'primitives/ObjectMotion.tsx']);
   });
 });

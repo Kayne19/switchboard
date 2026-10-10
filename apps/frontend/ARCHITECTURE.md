@@ -330,7 +330,7 @@ Add a new content type in this order:
 1. Define its semantic data type.
 2. Implement one reusable primitive that takes the `slot` prop.
 3. Draw it in `renderObject`, once for every slot.
-4. Add it to scene composition rules: a visual type to `VISUAL_TYPES`, which names its scene, and its frame words to `sceneFrame` (`src/components/Scenes.tsx`).
+4. Add it to scene composition rules: a visual type to `VISUAL_TYPES`, which names its scene, and its frame words to `sceneFrame` (`src/components/ObjectScene.tsx`).
 5. Create a canonical fixture. Every fixture action must be one the validator accepts as written (`validation.test.ts`).
 6. Add reducer or rendering tests.
 7. Add visual references at approved geometries.
