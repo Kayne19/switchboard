@@ -85,3 +85,8 @@ Note the iPadOS version in the pull request.
    touch sequence in the page and only the scroller's computed
    `touch-action: pan-y` is asserted. Whether the browser hands the pan
    over is the device's answer.
+9. Edges: in landscape and portrait, the corner marks, the scene heading
+   and the foot of the stage are clear of the home indicator, and nothing
+   but black lies outside them. CI cannot check this: Playwright has no
+   safe-area insets, so the hygiene check only holds the viewport tag
+   (see "Sizes worth checking").
