@@ -551,6 +551,23 @@ pub(crate) fn transcript(text: &str) -> TransferContext {
     }
 }
 
+/// A transfer to the registered project `id`, the way routing makes one.
+#[cfg(test)]
+impl Switchboard {
+    pub(crate) async fn transfer_to(
+        &mut self,
+        context: &TransferContext,
+        id: &str,
+    ) -> crate::reply::Reply {
+        let project = self
+            .registry
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} is not registered"));
+        self.transfer_ctx(context, &project, "", "").await
+    }
+}
+
 /// A switchboard with the caller on alpha, whose host agent runs `on_prompt`.
 #[cfg(test)]
 pub(crate) async fn on_alpha(
@@ -560,7 +577,7 @@ pub(crate) async fn on_alpha(
     let mut board = board_on(vec![project("alpha", "")], settings, two_model_catalog());
     let log = serve(&board, on_prompt);
     let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
     (board, log)

@@ -487,16 +487,10 @@ impl Switchboard {
             // operator handler.
             return Box::pin(self.handle_agent_ctx(&context)).await;
         }
-        self.transfer_ctx(
-            &TransferContext {
-                exact_caller_transcript: text.to_owned(),
-                derived_intent: String::new(),
-            },
-            target,
-            "",
-            "",
-        )
-        .await
+        let Some(project) = self.registry.get(target).cloned() else {
+            unreachable!("a target that is not registered is refused above");
+        };
+        self.transfer_ctx(&context, &project, "", "").await
     }
 
     /// Dispatch every part of a split. The part for the agent already on the

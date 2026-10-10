@@ -530,7 +530,7 @@ async fn hanging_up_a_project_leg_from_the_page_does_not_wait_for_its_turn() {
             exact_caller_transcript: "put me through to alpha".into(),
             ..Default::default()
         };
-        let reply = board.transfer_ctx(&context, "alpha", "", "").await;
+        let reply = board.transfer_to(&context, "alpha").await;
         assert_eq!(reply.route, "alpha", "{reply:?}");
     }
     let project = state

@@ -93,7 +93,7 @@ async fn a_model_the_daemon_refuses_still_ends_the_session_on_its_host() {
     }));
     let log = host.serve(board.hosts().connect_fake(HOST));
     let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
     let live = board.agent.clone().expect("alpha is on the line");
@@ -228,7 +228,7 @@ async fn a_kept_model_change_whose_adoption_fails_announces_finished_once() {
     }));
     let _log = fake.serve(board.hosts().connect_fake(HOST));
     let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
     let notices = record_agent_states(&mut board);
@@ -363,7 +363,7 @@ async fn a_redial_whose_leg_has_moved_since_it_was_planned_is_refused() {
 
     // The rescue made for it hands the plan on to the leg that rescue left.
     let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
     let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
@@ -384,7 +384,7 @@ async fn a_redial_that_cannot_reach_the_host_refuses_and_keeps_the_live_leg() {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let log = serve(&board, Box::new(|_, _| says("On it.")));
     let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
     let leg = board.coordinator.project_leg().unwrap();
@@ -419,7 +419,7 @@ async fn an_unavailable_catalog_admits_a_qualified_model_and_refuses_a_bare_one(
         serve(&board, Box::new(|_, _| says("On it.")));
 
         let reply = board
-            .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+            .transfer_to(&transcript("look at alpha"), "alpha")
             .await;
 
         if admitted {
@@ -446,9 +446,7 @@ async fn a_redial_never_switches_another_projects_session() {
         two_model_catalog(),
     );
     let log = serve(&board, Box::new(|_, _| says("On it.")));
-    let reply = board
-        .transfer_ctx(&transcript("look at beta"), "beta", "", "")
-        .await;
+    let reply = board.transfer_to(&transcript("look at beta"), "beta").await;
     assert_eq!(reply.route, "beta", "{reply:?}");
     let beta = board.agent.clone().expect("beta is on the line");
     put_on(&board, "alpha", "anthropic/current", two_model_catalog());

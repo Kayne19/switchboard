@@ -23,7 +23,7 @@ fn read_lines(path: &std::path::Path) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
+async fn a_dial_to_an_ambiguous_name_asks_which_project_was_meant() {
     let p1 = Project {
         id: "proj-a".into(),
         description: String::new(),
@@ -44,12 +44,8 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
     };
 
     let mut board = board_with(vec![p1, p2], true);
-    let ctx = TransferContext {
-        exact_caller_transcript: "transfer to shared".into(),
-        derived_intent: String::new(),
-    };
 
-    let reply = board.transfer_ctx(&ctx, "shared", "", "").await;
+    let reply = board.dial("shared", "").await;
     assert!(reply
         .to_speak
         .iter()
@@ -61,17 +57,21 @@ async fn transfer_ctx_ambiguous_project_returns_candidate_options() {
         .contains("Couldn't tell which project \"shared\" meant: proj-a, proj-b."));
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn a_refused_transfer_keeps_the_caller_on_the_leg_they_are_on() {
-    let (mut board, _log) = on_alpha(&[], Box::new(|_, _| says("here"))).await;
-    let reply = board
-        .transfer_ctx(&transcript("go to gamma"), "gamma", "", "")
-        .await;
-    assert!(reply.error.is_some(), "{reply:?}");
-    assert_eq!(board.coordinator.route(), "alpha");
-    assert!(board.agent.is_some(), "the refusal dropped alpha");
-    board.shutdown().await;
+async fn a_dial_to_an_unknown_name_names_the_projects_there_are() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+
+    let reply = board.dial("gamma", "").await;
+
+    assert_eq!(
+        reply.to_speak,
+        ["I don't have a project called gamma. The ones I have are alpha, beta."]
+    );
+    assert_eq!(reply.error.as_deref(), Some("unknown project \"gamma\""));
+    assert_eq!(
+        board.operator_note.as_deref(),
+        Some("No project matches \"gamma\". Registered: alpha, beta.")
+    );
 }
 
 #[tokio::test]
@@ -221,7 +221,7 @@ async fn a_transfer_to_a_host_that_is_not_connected_is_refused_with_the_reason()
     let mut board = board_with(vec![project("alpha", "")], true);
 
     let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
 
     assert_eq!(reply.route, OPERATOR);
@@ -245,8 +245,9 @@ async fn a_transfer_resolves_a_bare_model_against_the_launch_catalog() {
     let mut board = board_with(vec![project("alpha", "")], true);
     let log = serve(&board, Box::new(|_, _| says("Ready.")));
 
+    let alpha = project("alpha", "");
     let reply = board
-        .transfer_ctx(&transcript("connect me"), "alpha", "current", "high")
+        .transfer_ctx(&transcript("connect me"), &alpha, "current", "high")
         .await;
 
     assert!(reply.error.is_none(), "transfer failed: {:?}", reply.error);
@@ -299,7 +300,7 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
         turn_board
             .lock()
             .await
-            .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+            .transfer_to(&transcript("put me through"), "alpha")
             .await
     });
 
@@ -464,7 +465,7 @@ async fn a_transfer_whose_session_cannot_start_leaves_the_caller_on_the_operator
     let generation = coordinator.generation();
 
     let reply = board
-        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .transfer_to(&transcript("put me through to alpha"), "alpha")
         .await;
 
     let error = reply.error.clone().expect("the transfer failed");
@@ -515,7 +516,7 @@ async fn an_intro_that_never_settles_is_dropped_at_the_turn_deadline() {
     let generation = coordinator.generation();
 
     let reply = board
-        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .transfer_to(&transcript("put me through to alpha"), "alpha")
         .await;
 
     assert_eq!(reply.error.as_deref(), Some("the agent stopped responding"));
@@ -605,7 +606,7 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
     })));
     board.handle("hello").await;
     let reply = board
-        .transfer_ctx(&transcript("put me through to alpha"), "alpha", "", "")
+        .transfer_to(&transcript("put me through to alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
     let agent = board.agent.clone().expect("the project leg is live");
@@ -639,9 +640,7 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
 async fn at_most_one_session_per_project_stays_up() {
     let (mut board, log) = on_alpha(&[], Box::new(|_, _| says("On it."))).await;
     // Put through to alpha again from alpha: the old session ends.
-    let reply = board
-        .transfer_ctx(&transcript("again"), "alpha", "", "")
-        .await;
+    let reply = board.transfer_to(&transcript("again"), "alpha").await;
     assert_eq!(reply.route, "alpha");
     assert_eq!(log.named("create_session").len(), 2);
     assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
@@ -685,7 +684,7 @@ async fn failed_transfer_adoption_returns_to_the_operator_and_cleans_up() {
     let log = serve(&board, Box::new(|_, _| says("ready")));
 
     let reply = board
-        .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+        .transfer_to(&transcript("put me through"), "alpha")
         .await;
 
     assert!(reply.error.is_some(), "adoption must fail: {reply:?}");
@@ -723,7 +722,7 @@ async fn failed_transfer_intro_publishes_finished_instead_of_stuck_busy() {
     fake.serve(board.hosts().connect_fake(HOST));
 
     let reply = board
-        .transfer_ctx(&transcript("put me through"), "alpha", "", "")
+        .transfer_to(&transcript("put me through"), "alpha")
         .await;
 
     assert!(reply.error.is_some());
@@ -748,9 +747,7 @@ async fn a_stopped_project_starts_fresh_after_close() {
         .handle_decision("yes", &Decision::fallback("confirm"))
         .await;
     assert_eq!(stopped.route, OPERATOR);
-    let resumed = board
-        .transfer_ctx(&transcript("fresh alpha"), "alpha", "", "")
-        .await;
+    let resumed = board.transfer_to(&transcript("fresh alpha"), "alpha").await;
     assert_eq!(resumed.route, "alpha");
     assert_ne!(board.agent.as_ref().unwrap().session_id(), first);
     assert_eq!(log.named("create_session").len(), 2);
@@ -846,9 +843,7 @@ async fn takeover_backgrounds_an_existing_service_foreground_agent() {
         None
     }));
     let log = host.serve(board.hosts().connect_fake(HOST));
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     let alpha = board.agent.clone().expect("alpha is foreground");
     let reply = board
         .handle_decision(
@@ -1037,9 +1032,7 @@ async fn leaving_a_taken_over_leg_by_transfer_detaches_without_kill() {
             },
         )
         .await;
-    let reply = board
-        .transfer_ctx(&transcript("beta"), "beta", "", "")
-        .await;
+    let reply = board.transfer_to(&transcript("beta"), "beta").await;
     assert_eq!(reply.route, "beta");
     tokio::time::timeout(Duration::from_secs(1), detached_rx)
         .await
@@ -1199,7 +1192,7 @@ async fn failed_takeover_from_project_restores_foreground_for_steering() {
     }));
     let log = host.serve(board.hosts().connect_fake(HOST));
     board
-        .transfer_ctx(&transcript("connect alpha"), "alpha", "", "")
+        .transfer_to(&transcript("connect alpha"), "alpha")
         .await;
     assert_eq!(board.coordinator.route(), "alpha");
 
@@ -1504,7 +1497,7 @@ async fn bring_up_scene() -> BringUp {
     }));
     host.serve(board.hosts().connect_fake(HOST));
     let reply = board
-        .transfer_ctx(&transcript("look at alpha"), "alpha", "", "")
+        .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
     let alpha = board.agent.clone().expect("alpha is on the line");
@@ -1638,7 +1631,7 @@ async fn bring_up_row(kind: &str, exit: &str) -> String {
     let reply = match kind {
         "transfer" | "promotion" => {
             board
-                .transfer_ctx(&transcript("put me through to beta"), "beta", "", "")
+                .transfer_to(&transcript("put me through to beta"), "beta")
                 .await
         }
         "takeover" => {

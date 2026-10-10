@@ -24,10 +24,7 @@ async fn direct_dial_reuses_a_background_resident_instead_of_creating_a_duplicat
     );
     let log = serve(&board, Box::new(|_, _| says("ready")));
     assert_eq!(
-        board
-            .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-            .await
-            .route,
+        board.transfer_to(&transcript("alpha"), "alpha").await.route,
         "alpha"
     );
     board
@@ -67,9 +64,7 @@ async fn fresh_start_does_not_publish_idle_before_busy() {
     })));
     let _log = serve(&board, Box::new(|_, _| says("ready")));
 
-    let reply = board
-        .transfer_ctx(&transcript("start alpha"), "alpha", "", "")
-        .await;
+    let reply = board.transfer_to(&transcript("start alpha"), "alpha").await;
     assert_eq!(reply.route, "alpha");
     assert_eq!(
         notices.lock().unwrap().first().map(String::as_str),
@@ -331,9 +326,7 @@ async fn stopped_background_prompt_does_not_publish_idle_after_close() {
         let _ = state_tx.send((notice.project, notice.state));
         Box::pin(async {})
     })));
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     board
         .start_background_part("beta", "long beta work")
         .await
@@ -374,7 +367,7 @@ async fn a_saved_resident_session_is_resumed_with_open_session() {
     }));
     let log = fake.serve(board.hosts().connect_fake(HOST));
     let reply = board
-        .transfer_ctx(&transcript("resume alpha"), "alpha", "", "")
+        .transfer_to(&transcript("resume alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha");
     assert_eq!(log.named("create_session").len(), 0);
@@ -407,9 +400,7 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
             }
         }),
     );
-    board
-        .transfer_ctx(&transcript("alpha"), "alpha", "", "")
-        .await;
+    board.transfer_to(&transcript("alpha"), "alpha").await;
     let alpha = board.agent.clone().expect("alpha is foreground");
     let held = tokio::spawn({
         let alpha = alpha.clone();
@@ -427,9 +418,7 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
             .push((notice.project, notice.state));
         Box::pin(async {})
     })));
-    let reply = board
-        .transfer_ctx(&transcript("beta"), "beta", "", "")
-        .await;
+    let reply = board.transfer_to(&transcript("beta"), "beta").await;
     assert_eq!(reply.route, "beta");
     assert!(states
         .lock()

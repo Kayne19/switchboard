@@ -68,45 +68,16 @@ impl Switchboard {
 }
 
 impl Switchboard {
+    /// Puts the caller through to `project`, a registered project the
+    /// caller of this has already resolved: routing's targets are exact
+    /// ids, and `dial` resolves the words the page sends.
     pub async fn transfer_ctx(
         &mut self,
         context: &TransferContext,
-        spoken: &str,
+        project: &Project,
         requested_model: &str,
         requested_thinking: &str,
     ) -> Reply {
-        let project = match self.registry.resolve_detailed(spoken) {
-            crate::registry::ResolveResult::Exact(project) => project.clone(),
-            // A refused transfer leaves the caller on the leg they are on.
-            crate::registry::ResolveResult::Ambiguous(candidates) => {
-                let candidates_text = candidates.join(", ");
-                self.operator_note = Some(format!(
-                    "Couldn't tell which project {spoken:?} meant: {candidates_text}."
-                ));
-                return self.reply_transfer_error(
-                    format!(
-                        "Which project did you mean by {spoken}? It could be {candidates_text}."
-                    ),
-                    Some(format!("ambiguous project {spoken:?}: {candidates_text}")),
-                );
-            }
-            crate::registry::ResolveResult::Unknown => {
-                let known = self.registry.ids();
-                let known_text = if known.is_empty() {
-                    "nothing yet".to_owned()
-                } else {
-                    known.join(", ")
-                };
-                self.operator_note = Some(format!(
-                    "No project matches {spoken:?}. Registered: {known_text}."
-                ));
-                return self.reply_transfer_error(
-                    self.unknown_project_line(spoken),
-                    Some(format!("unknown project {spoken:?}")),
-                );
-            }
-        };
-
         tracing::info!(
             from = %self.coordinator.route(),
             to = %project.id,
@@ -132,7 +103,7 @@ impl Switchboard {
             }
         }
 
-        let plan = match self.prewarm.launch_plan(&project).await {
+        let plan = match self.prewarm.launch_plan(project).await {
             Ok(plan) => plan,
             Err(err) => {
                 tracing::warn!(project = %project.id, error = %err, "the project's host is not ready");
@@ -142,7 +113,7 @@ impl Switchboard {
         };
 
         let model = match self.select_transfer_model(
-            &project,
+            project,
             &plan.catalog,
             requested_model,
             requested_thinking,
@@ -187,7 +158,7 @@ impl Switchboard {
             }
         }
 
-        let session = match self.start_agent(&project, &model, &leg_token, &plan).await {
+        let session = match self.start_agent(project, &model, &leg_token, &plan).await {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(
@@ -203,7 +174,7 @@ impl Switchboard {
         };
         startup.attach(self, &session).await;
 
-        let intro_prompt = build_intro_prompt(context, &project, plan.prepare_report.as_ref());
+        let intro_prompt = build_intro_prompt(context, project, plan.prepare_report.as_ref());
 
         self.announce_agent_state(&project.id, "busy").await;
         let utterance = self.current_utterance();
@@ -243,9 +214,10 @@ impl Switchboard {
         session: ProjectSession,
         context: TransferContext,
     ) -> Reply {
-        let project = match self.registry.resolve_detailed(session.label()) {
-            crate::registry::ResolveResult::Exact(project) => project.clone(),
-            _ => {
+        // A resident is labelled with its project's id.
+        let project = match self.registry.get(session.label()) {
+            Some(project) => project.clone(),
+            None => {
                 let project = session.label().to_owned();
                 session.close();
                 self.announce_agent_state(&project, "finished").await;
@@ -670,16 +642,51 @@ impl Switchboard {
         }
     }
 
-    pub async fn dial(&mut self, project: &str, intent: &str) -> Reply {
+    /// `/connect`: hangs up whatever is on the line and puts the caller
+    /// through to the project `spoken` names. The page sends words, not an
+    /// id, so this is the one place a project is resolved by name; a name
+    /// that matches no project, or several, is refused here with the
+    /// projects there are.
+    pub async fn dial(&mut self, spoken: &str, intent: &str) -> Reply {
         self.force_hangup().await;
-        if project.eq_ignore_ascii_case(OPERATOR) {
+        if spoken.eq_ignore_ascii_case(OPERATOR) {
             return self.reply(["Back at the front desk."], None);
         }
+        let project = match self.registry.resolve_detailed(spoken) {
+            crate::registry::ResolveResult::Exact(project) => project.clone(),
+            crate::registry::ResolveResult::Ambiguous(candidates) => {
+                let candidates_text = candidates.join(", ");
+                self.operator_note = Some(format!(
+                    "Couldn't tell which project {spoken:?} meant: {candidates_text}."
+                ));
+                return self.reply_transfer_error(
+                    format!(
+                        "Which project did you mean by {spoken}? It could be {candidates_text}."
+                    ),
+                    Some(format!("ambiguous project {spoken:?}: {candidates_text}")),
+                );
+            }
+            crate::registry::ResolveResult::Unknown => {
+                let known = self.registry.ids();
+                let known_text = if known.is_empty() {
+                    "nothing yet".to_owned()
+                } else {
+                    known.join(", ")
+                };
+                self.operator_note = Some(format!(
+                    "No project matches {spoken:?}. Registered: {known_text}."
+                ));
+                return self.reply_transfer_error(
+                    self.unknown_project_line(spoken),
+                    Some(format!("unknown project {spoken:?}")),
+                );
+            }
+        };
         let context = TransferContext {
             derived_intent: intent.to_owned(),
             ..TransferContext::default()
         };
-        self.transfer_ctx(&context, project, "", "").await
+        self.transfer_ctx(&context, &project, "", "").await
     }
 
     pub(crate) async fn stop_project(&mut self, target: &str) -> Reply {
