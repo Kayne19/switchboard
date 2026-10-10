@@ -135,12 +135,12 @@ async fn a_floor_event_between_the_check_and_the_wait_is_not_lost() {
     floor.set_page_connected(true).await;
     floor.enqueue(request(1)).await;
     let mut h = hooks(connected, live, Arc::new(AtomicUsize::new(0)), released);
-    // The page's second check reads it gone, and it comes back before the
-    // worker waits: the wake-up lands in the gap after the state is read.
+    // The worker's first read finds the page gone, and it comes back before
+    // the worker waits: the wake-up lands in the gap after the state is read.
     let checks = Arc::new(AtomicUsize::new(0));
     let racing = floor.clone();
     h.connected = Arc::new(move || {
-        if checks.fetch_add(1, Ordering::SeqCst) == 1 {
+        if checks.fetch_add(1, Ordering::SeqCst) == 0 {
             racing.changed.notify_waiters();
             return false;
         }
@@ -1288,4 +1288,207 @@ async fn the_front_request_phase_by_event_table() {
     for row in ROWS {
         run_row(row).await;
     }
+}
+
+fn view(page: bool, caller_last_spoke: Instant) -> FloorView {
+    FloorView {
+        page,
+        caller_last_spoke,
+        quiet_threshold: THRESHOLD,
+    }
+}
+
+const THRESHOLD: Duration = Duration::from_secs(10);
+
+/// `step`, the front request's one transition, row by row: the phase, the
+/// event, and the phase it moves to or how the request leaves.
+#[test]
+fn step_moves_the_front_request_by_its_table() {
+    use FloorEvent as Event;
+    use FrontPhase as Phase;
+    let now = Instant::now();
+    let long_ago = now - THRESHOLD * 3;
+    let held = Clearance::QuietAfterHold {
+        held_since: long_ago,
+    };
+    let releasing = |clearance| Phase::Releasing {
+        words: "said".into(),
+        clearance,
+    };
+    let retrying = |clearance| Phase::RetryingRelease {
+        words: "said".into(),
+        clearance,
+        next: now,
+    };
+    let rows: Vec<(&str, Phase, Event, Step)> = vec![
+        (
+            "reading + no page -> awaiting the page",
+            Phase::Reading { hold: None },
+            Event::Read(view(false, long_ago)),
+            Step::Next(Phase::AwaitingPage { hold: None }),
+        ),
+        (
+            "awaiting the page, held + still no page -> still held",
+            Phase::AwaitingPage { hold: Some(now) },
+            Event::Read(view(false, long_ago)),
+            Step::Next(Phase::AwaitingPage { hold: Some(now) }),
+        ),
+        (
+            "reading + page, quiet line -> gating, quiet",
+            Phase::Reading { hold: None },
+            Event::Read(view(true, long_ago)),
+            Step::Next(Phase::Gating { quiet: true }),
+        ),
+        (
+            "awaiting the page + page, caller just spoke -> gating, not quiet",
+            Phase::AwaitingPage { hold: None },
+            Event::Read(view(true, now)),
+            Step::Next(Phase::Gating { quiet: false }),
+        ),
+        (
+            "reading just held + page, quiet line -> awaiting quiet from the hold",
+            Phase::Reading { hold: Some(now) },
+            Event::Read(view(true, long_ago)),
+            Step::Next(Phase::AwaitingQuiet {
+                held_since: now,
+                until: now + THRESHOLD,
+            }),
+        ),
+        (
+            "awaiting quiet + caller spoke after the hold -> quiet counts from the caller",
+            Phase::AwaitingQuiet {
+                held_since: long_ago,
+                until: long_ago + THRESHOLD,
+            },
+            Event::Read(view(true, now)),
+            Step::Next(Phase::AwaitingQuiet {
+                held_since: long_ago,
+                until: now + THRESHOLD,
+            }),
+        ),
+        (
+            "awaiting quiet + quiet reached -> rewriting, no gate",
+            Phase::AwaitingQuiet {
+                held_since: long_ago,
+                until: long_ago + THRESHOLD,
+            },
+            Event::Read(view(true, long_ago)),
+            Step::Next(Phase::Rewriting {
+                quiet: true,
+                clearance: held,
+            }),
+        ),
+        (
+            "awaiting quiet + page gone -> awaiting the page, still held",
+            Phase::AwaitingQuiet {
+                held_since: long_ago,
+                until: now,
+            },
+            Event::Read(view(false, long_ago)),
+            Step::Next(Phase::AwaitingPage {
+                hold: Some(long_ago),
+            }),
+        ),
+        (
+            "gating + yes -> rewriting",
+            Phase::Gating { quiet: false },
+            Event::GateAnswered(Ok(true)),
+            Step::Next(Phase::Rewriting {
+                quiet: false,
+                clearance: Clearance::GateYes,
+            }),
+        ),
+        (
+            "gating + no -> held now",
+            Phase::Gating { quiet: true },
+            Event::GateAnswered(Ok(false)),
+            Step::Next(Phase::Reading { hold: Some(now) }),
+        ),
+        (
+            "gating + failed -> held now",
+            Phase::Gating { quiet: true },
+            Event::GateAnswered(Err(())),
+            Step::Next(Phase::Reading { hold: Some(now) }),
+        ),
+        (
+            "rewriting + words -> releasing them",
+            Phase::Rewriting {
+                quiet: true,
+                clearance: held,
+            },
+            Event::Rewritten("said".into()),
+            Step::Next(releasing(held)),
+        ),
+        (
+            "rewriting + agent gone -> left, agent gone",
+            Phase::Rewriting {
+                quiet: false,
+                clearance: Clearance::GateYes,
+            },
+            Event::AgentGone,
+            Step::Left(Left::AgentGone),
+        ),
+        (
+            "releasing + played -> left, played as cleared",
+            releasing(held),
+            Event::Played,
+            Step::Left(Left::Played(held)),
+        ),
+        (
+            "releasing + agent gone -> left, agent gone",
+            releasing(Clearance::GateYes),
+            Event::AgentGone,
+            Step::Left(Left::AgentGone),
+        ),
+        (
+            "releasing + not released, page there -> retrying the same words",
+            releasing(Clearance::GateYes),
+            Event::NotReleased { page: true },
+            Step::Next(Phase::RetryingRelease {
+                words: "said".into(),
+                clearance: Clearance::GateYes,
+                next: now + RETRY_AFTER,
+            }),
+        ),
+        (
+            "releasing + not released, page gone -> reading, still held",
+            releasing(held),
+            Event::NotReleased { page: false },
+            Step::Next(Phase::Reading {
+                hold: Some(long_ago),
+            }),
+        ),
+        (
+            "retrying + due -> releasing the same words",
+            retrying(Clearance::GateYes),
+            Event::RetryDue,
+            Step::Next(releasing(Clearance::GateYes)),
+        ),
+        (
+            "retrying + floor changed -> reading, gate again",
+            retrying(Clearance::GateYes),
+            Event::FloorChanged,
+            Step::Next(Phase::Reading { hold: None }),
+        ),
+        (
+            "retrying after a hold + floor changed -> reading, still held",
+            retrying(held),
+            Event::FloorChanged,
+            Step::Next(Phase::Reading {
+                hold: Some(long_ago),
+            }),
+        ),
+        (
+            "gating + an event it does not wait for -> unchanged",
+            Phase::Gating { quiet: true },
+            Event::Played,
+            Step::Next(Phase::Gating { quiet: true }),
+        ),
+    ];
+    for (name, phase, event, want) in rows {
+        assert_eq!(step(phase, event, now), want, "{name}");
+    }
+    assert_eq!(Left::Played(Clearance::GateYes).how(), "gate_yes");
+    assert_eq!(Left::Played(held).how(), "quiet_after_hold");
+    assert_eq!(Left::AgentGone.how(), "dropped_agent_gone");
 }
