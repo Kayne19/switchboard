@@ -622,7 +622,6 @@ export type RuntimeAction =
   | { op: 'runtime_activity'; activity: ActivityState | null; at?: number }
   /** One call of `tool` ended. */
   | { op: 'runtime_activity_end'; tool: string; at?: number }
-  | { op: 'runtime_reset' }
   | { op: 'epoch_reset' }
   | { op: 'set_view'; view: string | null }
   | { op: 'pin_view'; view: string }

@@ -243,7 +243,6 @@ describe('controller reducer & ownership', () => {
     const carried = reduceActions(state, [diagramAction, { op: 'focus', id: 'sys-arch' }]);
     expect(carried.activity).toBe(state.activity);
     expect(controllerReducer(carried, { op: 'runtime_activity', activity: null }).activity).toBeNull();
-    expect(controllerReducer(carried, { op: 'runtime_reset' }).activity).toBeNull();
     expect(controllerReducer(carried, { op: 'epoch_reset' }).activity).toBeNull();
   });
 
@@ -313,11 +312,9 @@ describe('controller reducer & ownership', () => {
       expect(settled.toolRun.running).toEqual({});
       expect(controllerReducer(settled, start('read', 2)).activity?.burst).toEqual([{ tool: 'read', count: 1 }]);
 
-      for (const reset of [{ op: 'runtime_reset' }, { op: 'epoch_reset' }] as ControllerAction[]) {
-        const after = controllerReducer(ran, reset);
-        expect(after.toolRun).toEqual({ running: {}, burst: [], endedAt: null });
-        expect(controllerReducer(after, start('read', 2)).activity?.burst).toEqual([{ tool: 'read', count: 1 }]);
-      }
+      const after = controllerReducer(ran, { op: 'epoch_reset' });
+      expect(after.toolRun).toEqual({ running: {}, burst: [], endedAt: null });
+      expect(controllerReducer(after, start('read', 2)).activity?.burst).toEqual([{ tool: 'read', count: 1 }]);
     });
 
     it('carries the run through a scene change', () => {
@@ -398,13 +395,6 @@ describe('controller reducer & ownership', () => {
     expect(afterAgentClear.runtimeObjects[RUNTIME_CONVERSATION_ID]).toBeDefined();
     expect(afterAgentClear.runtimeSpeech?.text).toBe('Damocles speaking');
     expect(afterAgentClear.listening).toBe(true);
-
-    // Runtime reset removes runtime state, preserves agent state
-    const afterRuntimeReset = controllerReducer(state, { op: 'runtime_reset' });
-    expect(afterRuntimeReset.agentObjects.gpu).toBeDefined();
-    expect(afterRuntimeReset.agentSpeech?.text).toBe('Agent explanation');
-    expect(afterRuntimeReset.runtimeObjects).toEqual({});
-    expect(afterRuntimeReset.runtimeSpeech).toBeNull();
 
     // Epoch reset is a new leg: the old agent's state goes, the call's
     // conversation stays
