@@ -348,9 +348,17 @@ export class SessionManager {
 	}
 
 	async openSession(sessionId: string, cwd: string, project: string | undefined): Promise<Record<string, unknown>> {
-		for (const t of this.#tracked.values()) if (t.sessionId === sessionId) return this.#info(t);
 		const expected = project ? `${SESSION_NAME_PREFIX}${project}-` : SESSION_NAME_PREFIX;
 		const refuse = (name: string | null) => new CommandError("refused", `session ${sessionId} (${name || "unnamed"}) was not created by the switchboard`);
+		// A session already tracked is returned only on the terms a reopen
+		// would be held to: one the switchboard made, under this project's
+		// name, in this folder.
+		for (const t of this.#tracked.values()) {
+			if (t.sessionId !== sessionId) continue;
+			if (t.provenance !== "created" || !(t.name ?? "").startsWith(expected) || (project && t.project !== project)) throw refuse(t.name);
+			if (t.cwd !== cwd) throw new CommandError("refused", `session ${sessionId} runs in ${t.cwd}, not ${cwd}`);
+			return this.#info(t);
+		}
 		// The name is checked on the saved record before anything is made
 		// live: a daemon `create` with a session path reopens the session (or
 		// returns it, if someone else has it open), and a desk session the
