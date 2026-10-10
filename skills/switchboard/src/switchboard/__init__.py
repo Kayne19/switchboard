@@ -596,6 +596,12 @@ def display(action=None, **fields):
 
     def describe(result):
         data = result.data if isinstance(result.data, dict) else {}
+        if result.accepted and data.get("delivered") is False and data.get("held") is not True:
+            # The scene kept it, but no caller's page is connected to draw it.
+            return (
+                "Kept, but no screen is connected; it appears when the caller's page reconnects. "
+                "Do not say it's on screen."
+            )
         if result.delivered or result.accepted:
             if data.get("held") is True:
                 return "Held until the caller comes back to you. Say it's ready, not that it's on screen."

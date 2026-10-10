@@ -39,6 +39,12 @@ below `yMax`, and a timer's `remaining` that breaks its rule (required when
 paused, refused when running, 0 to 7258118400). Values with `tolist()`, such
 as numpy arrays, are sent as lists.
 
+A display's line says where it went: "On screen." only when the caller's
+screen confirmed it. Otherwise it says it was held for when the caller
+brings you forward, sent but not yet confirmed, or kept with no screen
+connected (it appears when their page reconnects). Say it is on screen only
+after "On screen.".
+
 ## Functions
 
 - `speak(text)`: say `text` out loud. Your written output goes to a screen
