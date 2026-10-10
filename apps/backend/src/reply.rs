@@ -2,7 +2,7 @@
 //! it said aloud, the leg it came from, and any error. Every concern that
 //! answers the caller builds its `Reply` here, so a failure is spoken the same
 //! way whichever transition hit it, and its raw detail stays on the screen.
-use crate::lifecycle::Coordinator;
+use crate::lifecycle::{Coordinator, LegIdentity};
 use crate::pbx::Switchboard;
 use crate::pi_client::Turn;
 use serde::Serialize;
@@ -70,11 +70,15 @@ impl Switchboard {
         )
     }
 
+    /// The reply to a turn of the leg the caller's operation runs on. It
+    /// carries no generation of its own: it is delivered at the generation
+    /// the operation was admitted at, so a rescue that lands while the turn
+    /// runs makes it stale.
     pub(crate) fn reply_with_turn(&self, turn: Turn) -> Reply {
         let failed = turn.failed;
         let error = turn.error;
         let status = self.coordinator.status();
-        let mut reply = Reply::new(
+        Reply::new(
             &status.route,
             &status.label,
             vec![Utterance {
@@ -82,8 +86,16 @@ impl Switchboard {
                 synthesize: false,
             }],
             failed.then_some(error),
-        );
-        reply.delivery_generation = Some(self.coordinator.generation());
+        )
+    }
+
+    /// The reply to the first turn of a leg a transition committed (a
+    /// transfer, a promotion, a takeover, a redial), delivered at the
+    /// generation that leg was staged under. Never the generation current
+    /// when the reply is built: a rescue that landed meanwhile owns that one.
+    pub(crate) fn reply_with_turn_on(&self, turn: Turn, leg: &LegIdentity) -> Reply {
+        let mut reply = self.reply_with_turn(turn);
+        reply.delivery_generation = Some(leg.generation);
         reply
     }
 

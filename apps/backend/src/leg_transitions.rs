@@ -183,10 +183,13 @@ impl Switchboard {
             thinking_in_spec(&model),
         )
         .with_catalog(plan.catalog.clone());
-        if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            tracing::warn!(project = %project.id, %error, "candidate startup was refused");
-            return self.couldnt_open(&project.id, error.to_string());
-        }
+        let leg = match self.coordinator.begin_candidate(candidate) {
+            Ok(leg) => leg,
+            Err(error) => {
+                tracing::warn!(project = %project.id, %error, "candidate startup was refused");
+                return self.couldnt_open(&project.id, error.to_string());
+            }
+        };
 
         // At most one session per project: one the caller is on is ended
         // before another is made for the same project.
@@ -259,7 +262,7 @@ impl Switchboard {
             self.rollback_startup(format!("adoption failed: {error}"));
             return self.couldnt_open(&project.id, error.to_string());
         }
-        self.reply_with_turn(turn)
+        self.reply_with_turn_on(turn, &leg)
     }
 
     pub(crate) async fn promote_background(
@@ -305,11 +308,14 @@ impl Switchboard {
             "",
             self.coordinator.thinking_default(),
         );
-        if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            session.close();
-            self.announce_agent_state(&project.id, "finished").await;
-            return self.couldnt_bring_back(&project.id, error.to_string());
-        }
+        let leg = match self.coordinator.begin_candidate(candidate) {
+            Ok(leg) => leg,
+            Err(error) => {
+                session.close();
+                self.announce_agent_state(&project.id, "finished").await;
+                return self.couldnt_bring_back(&project.id, error.to_string());
+            }
+        };
         // Steering and a page rescue reach the leg being brought up, as they
         // do on a transfer or a takeover.
         self.set_active_session(Some(LegSession::Project(session.clone())))
@@ -344,7 +350,7 @@ impl Switchboard {
             self.set_active_session(previous_foreground).await;
             return self.couldnt_bring_back(&project.id, error.to_string());
         }
-        self.reply_with_turn(turn)
+        self.reply_with_turn_on(turn, &leg)
     }
 
     /// Find one untracked top-level desk session for a registered project.
@@ -491,9 +497,10 @@ impl Switchboard {
                 thinking.clone()
             },
         );
-        if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            return self.couldnt_take_over(&project.id, error.to_string());
-        }
+        let leg = match self.coordinator.begin_candidate(candidate) {
+            Ok(leg) => leg,
+            Err(error) => return self.couldnt_take_over(&project.id, error.to_string()),
+        };
         let host = match project.canonical_host() {
             Some(host) => host.to_owned(),
             None => unreachable!("desk_session_for_takeover checked project host"),
@@ -564,7 +571,7 @@ impl Switchboard {
             self.set_active_session(previous_foreground).await;
             return self.couldnt_take_over(&project.id, error.to_string());
         }
-        self.reply_with_turn(turn)
+        self.reply_with_turn_on(turn, &leg)
     }
 
     /// Makes the staged project leg the one on the line. Every transition

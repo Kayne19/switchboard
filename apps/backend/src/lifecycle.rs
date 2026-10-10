@@ -758,7 +758,13 @@ impl Coordinator {
         });
     }
 
-    pub fn begin_candidate(&self, mut candidate: CandidateLeg) -> Result<(), LifecycleError> {
+    /// Stages `candidate` and returns the identity it is staged under, the
+    /// one an adoption puts on the line: its first turn is delivered at that
+    /// generation.
+    pub fn begin_candidate(
+        &self,
+        mut candidate: CandidateLeg,
+    ) -> Result<LegIdentity, LifecycleError> {
         self.linearize(|state| {
             if state.phase == Phase::Shutdown {
                 return Err(LifecycleError::Shutdown);
@@ -782,6 +788,7 @@ impl Coordinator {
             });
             state.phase = Phase::Starting;
             let route = candidate.route.clone();
+            let identity = candidate.identity.clone();
             state.candidate = Some(candidate);
             self.notify_candidate(&CandidateNotice {
                 route,
@@ -789,7 +796,7 @@ impl Coordinator {
                 ended: None,
             });
             self.operation_changed.notify_waiters();
-            Ok(())
+            Ok(identity)
         })
     }
 

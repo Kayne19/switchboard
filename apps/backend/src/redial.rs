@@ -312,13 +312,16 @@ impl Switchboard {
             thinking_in_spec(&spec),
         )
         .with_catalog(launch.catalog.clone());
-        if let Err(error) = self.coordinator.begin_candidate(candidate) {
-            tracing::warn!(project = %project.id, %error, "candidate startup for the model change was refused");
-            return self.reply_failure(
-                format!("I couldn't change the model on {}.", project.id),
-                error.to_string(),
-            );
-        }
+        let staged = match self.coordinator.begin_candidate(candidate) {
+            Ok(staged) => staged,
+            Err(error) => {
+                tracing::warn!(project = %project.id, %error, "candidate startup for the model change was refused");
+                return self.reply_failure(
+                    format!("I couldn't change the model on {}.", project.id),
+                    error.to_string(),
+                );
+            }
+        };
 
         let switched = if keep_context {
             self.switch_live(&leg.model, &spec, &leg_token).await
@@ -409,7 +412,7 @@ impl Switchboard {
             return self.couldnt_bring_up_on(&project.id, &spoken, error.to_string());
         }
         match turn {
-            Some(turn) => self.reply_with_turn(turn),
+            Some(turn) => self.reply_with_turn_on(turn, &staged),
             None => {
                 let mut reply = self.reply(
                     [if keep_context {
@@ -419,7 +422,7 @@ impl Switchboard {
                     }],
                     None,
                 );
-                reply.delivery_generation = Some(self.coordinator.generation());
+                reply.delivery_generation = Some(staged.generation);
                 reply
             }
         }
