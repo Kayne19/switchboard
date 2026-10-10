@@ -341,6 +341,21 @@ test("a daemon that reports one command unsupported fails that command cleanly; 
 	assert.ok(((await manager.handle("list_sessions", {})) as { sessions: unknown[] }).sessions.length === 1);
 });
 
+test("prepare: a second run_prepare of the same command in the same folder joins the running one", async () => {
+	// The service sends run_prepare again when its link drops mid-prepare;
+	// a second copy must not race the first in the same tree (#292).
+	const cwd = mkdtempSync(path.join(os.tmpdir(), "sb-prep-"));
+	const { manager } = setup();
+	const command = "echo x >> runs.txt; sleep 1; echo done";
+	const [first, second] = (await Promise.all([manager.handle("run_prepare", { cwd, command }), manager.handle("run_prepare", { cwd, command })])) as Message[];
+	assert.equal(readFileSync(path.join(cwd, "runs.txt"), "utf8"), "x\n", "the command ran once");
+	assert.deepEqual(second, first);
+	assert.equal(first.outcome, "succeeded");
+	// Once it has finished, the same command runs again.
+	await manager.handle("run_prepare", { cwd, command: "echo x >> runs.txt" });
+	assert.equal(readFileSync(path.join(cwd, "runs.txt"), "utf8"), "x\nx\n");
+});
+
 test("catalog: list_models returns the daemon host's models", async () => {
 	const { manager } = setup();
 	assert.deepEqual(await manager.handle("list_models", {}), { models: [{ provider: "anthropic", id: "claude-x", name: "Claude X", reasoning: true }] });
