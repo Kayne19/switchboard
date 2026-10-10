@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { DaemonCommandError } from "../src/daemon_port.ts";
 import { HostLink } from "../src/link.ts";
-import { clipDetail, type LinkEvent, PREPARE_OUTPUT_LIMIT, runPrepare, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
+import { clipDetail, type LinkEvent, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
 import { SkillSocket } from "../src/skill_socket.ts";
 import { FakeDaemon, flush } from "./fake_daemon.ts";
 import { command, FakeService, type Message } from "./fake_service.ts";
@@ -577,41 +577,10 @@ test("commands the service never sends are unknown: leave_call, follow_up, list_
 	}
 });
 
-test("prepare: output, failure, bounded output and timeout reports", async () => {
+test("run_prepare is a host-link command", async () => {
 	const cwd = mkdtempSync(path.join(os.tmpdir(), "sb-prep-"));
-	const ok = await runPrepare({ cwd, command: "pwd; echo err >&2" });
-	assert.equal(ok.outcome, "succeeded");
-	assert.equal(ok.exit_code, 0);
-	assert.equal(ok.stdout.trim(), cwd);
-	assert.equal(ok.stderr.trim(), "err");
-	const failed = await runPrepare({ cwd, command: "exit 3" });
-	assert.equal(failed.outcome, "failed");
-	assert.equal(failed.exit_code, 3);
-	const big = await runPrepare({ cwd, command: "head -c 100000 /dev/zero | tr '\\0' a; echo END" });
-	assert.equal(big.truncated, true);
-	assert.equal(big.stdout.length, PREPARE_OUTPUT_LIMIT);
-	assert.ok(big.stdout.endsWith("END\n"), "the tail is kept");
-	const slow = await runPrepare({ cwd, command: "echo started; sleep 5", timeoutMs: 200 });
-	assert.equal(slow.outcome, "timed_out");
-	assert.equal(slow.stdout.trim(), "started");
-	assert.ok(slow.duration_ms < 4000);
 	const viaCommand = (await setup().manager.handle("run_prepare", { cwd, command: "true" })) as Message;
 	assert.equal(viaCommand.outcome, "succeeded");
-});
-
-test("prepare: a shell that exits while a process it started holds the output pipes settles on the shell's exit", async () => {
-	const cwd = mkdtempSync(path.join(os.tmpdir(), "sb-prep-"));
-	// The backgrounded sleep inherits stdout and stderr; the shell exits 0 at once.
-	const background = await runPrepare({ cwd, command: "sleep 6 & echo started", timeoutMs: 5000 });
-	assert.equal(background.outcome, "succeeded", JSON.stringify(background));
-	assert.equal(background.exit_code, 0);
-	assert.equal(background.stdout, "started\n");
-	// A shell that does overrun is killed with its group, and the reply still
-	// comes when a process in another session (setsid) keeps the pipes open.
-	const overrun = await runPrepare({ cwd, command: "setsid sleep 8 & echo started; sleep 5", timeoutMs: 200 });
-	assert.equal(overrun.outcome, "timed_out", JSON.stringify(overrun));
-	assert.equal(overrun.stdout, "started\n");
-	assert.ok(overrun.duration_ms < 6000, `settled after ${overrun.duration_ms} ms, not when the setsid process let go`);
 });
 
 test("a host-agent restart reattaches from the daemon and sends each session a snapshot", async () => {
