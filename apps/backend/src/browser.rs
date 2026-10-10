@@ -29,7 +29,6 @@ impl AppState {
         gate.screen_state["stale"] = json!(true);
         self.0.floor.set_page_connected(true).await;
         self.start_debug_call();
-        *self.0.screen_state.lock().await = gate.screen_state.clone();
         let snapshot_actions = gate.projection.snapshot_actions();
         let watermark = gate.watermark;
         (connection, snapshot_actions, watermark)
@@ -41,7 +40,6 @@ impl AppState {
             if gate.active_epoch == Some(epoch) || gate.active_epoch.is_none() {
                 gate.active_epoch = None;
                 gate.screen_state["stale"] = json!(true);
-                *self.0.screen_state.lock().await = gate.screen_state.clone();
             }
         }
         self.0.delivery.retire(epoch);
@@ -260,10 +258,9 @@ async fn apply_screen_state(
         "stale": stale,
         "generation": current_gen,
     });
-    gate.screen_state = report.clone();
+    gate.screen_state = report;
     gate.report_epoch = Some(epoch);
     gate.report_generation = Some(current_gen);
-    *state.0.screen_state.lock().await = report;
     drop(gate);
 
     let applied_seq = command.applied_seq;

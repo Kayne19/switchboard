@@ -363,6 +363,10 @@ pub(crate) struct SceneLeg {
 
 pub(crate) struct DisplayGateState {
     pub(crate) projection: DisplayProjection,
+    /// The caller's screen as the page last reported it, marked stale when a
+    /// page connects or retires or a new leg begins. The one copy: `view`
+    /// (`module_calls.rs`), Jev's routing summary (`turns.rs`) and the floor
+    /// gate (`speech.rs`) read it here.
     pub(crate) screen_state: Value,
     pub(crate) active_epoch: Option<u64>,
     pub(crate) report_epoch: Option<u64>,
