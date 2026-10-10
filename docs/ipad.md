@@ -46,6 +46,10 @@ never breakpoints.
   pull request what it does on WebKit.
 - A user-agent branch is a last resort. It names the WebKit bug it works
   around in a comment, and it is listed below until it is removed.
+  `scripts/check_hygiene.mjs` refuses a `navigator.userAgent`, `userAgentData`,
+  `vendor` or `platform` read in `apps/frontend/src` in a file the table
+  below does not name, and an `@supports` or `@media` query on a `-webkit-`
+  or `-apple-` feature.
 
 ## Engine-specific code in the tree
 

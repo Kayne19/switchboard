@@ -64,9 +64,9 @@ commit.
   `scripts/check_hygiene.mjs`, which enforces the structural rules below that
   a grep can check (private modules, no lint allowances, one `Config`, a
   documented environment, one fake-executable writer, one skill socket path,
-  one frame depth, one set of size caps, CPU-time budgets, live paths,
-  routes and settings in the docs); a new rule of that kind gets a check
-  there.
+  one frame depth, one set of size caps, CPU-time budgets, no user-agent
+  checks, live paths, routes and settings in the docs); a new rule of that
+  kind gets a check there.
 - CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
   `npm run test:browser` (every spec in `apps/frontend/tests/visual` but
   the pixel goldens, which are tagged `@golden`) and `npm run
@@ -117,7 +117,8 @@ commit.
   failed 17 times in 7 loaded runs (`docs/concurrency-and-test-hazards.md`,
   "A time budget measured on the wall clock"). `scripts/check_hygiene.mjs`
   refuses `performance.now`, `Date.now` and `process.hrtime` in
-  `apps/frontend/tests/unit` outside `cpuTime.ts`.
+  `apps/frontend/tests/unit` outside `cpuTime.ts`, and in
+  `apps/host-agent/tests`.
 - Keep the backend module layout: one concern per file in `apps/backend/src/`,
   no new module layers until something concrete needs one.
 - The backend's modules are private (`mod`, not `pub mod`, in `main.rs`), and
@@ -125,9 +126,10 @@ commit.
   rustc then stops reporting it when unused; that is how two dozen dead
   functions and a parallel lifecycle accumulated unnoticed. With private
   modules, clippy's `-D warnings` fails on dead code.
-- No `#[allow(...)]` in the backend. An unused item is deleted or made
-  `#[cfg(test)]`; an import one `cfg` block needs is written inside that
-  block; a lint that is wrong is argued with in the commit, not silenced in
+- No `#[allow(...)]` in the backend, its tests included, and no
+  `#[expect(...)]`, `cfg_attr` allowance, `[lints]` table or `-A` rustflag
+  either. An unused item is deleted or made `#[cfg(test)]`; an import one
+  `cfg` block needs is written inside that block; a lint that is wrong is argued with in the commit, not silenced in
   the code. An allowance is a place the compiler was told to stop looking,
   and the last one here hid a dead import for months.
 - Only `Config` (`apps/backend/src/main.rs`) reads the environment; modules
