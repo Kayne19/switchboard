@@ -931,14 +931,14 @@ async fn release_floor(
     }
     match result {
         Ok(()) => {
-            if let Some(agents) = state
+            if let Some(change) = state
                 .0
                 .coordinator
                 .with_background(&request.token, |project| {
                     state.0.projection.floor_released(project)
                 })
             {
-                publish_agents(state, agents);
+                publish_agents(state, change);
                 ReleaseOutcome::Played
             } else {
                 ReleaseOutcome::Drop
