@@ -581,13 +581,7 @@ async fn a_self_woken_start_before_the_caller_turn_settles_stays_the_callers() {
     for _ in 0..20 {
         tokio::task::yield_now().await;
     }
-    assert!(!state
-        .0
-        .turns
-        .autonomous_operations
-        .lock()
-        .await
-        .contains_key(&instance_id));
+    assert!(!state.0.turns.holds_self_woken_for_test(instance_id).await);
     assert!(state
         .0
         .coordinator
@@ -697,13 +691,7 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
         tokio::task::yield_now().await;
     }
     assert!(!state.0.turns.in_flight_for_test());
-    assert!(state
-        .0
-        .turns
-        .autonomous_operations
-        .lock()
-        .await
-        .contains_key(&instance_id));
+    assert!(state.0.turns.holds_self_woken_for_test(instance_id).await);
     assert!(
         events.try_recv().is_err(),
         "caller turn started before autonomous end"
@@ -788,13 +776,7 @@ async fn a_caller_turn_runs_after_an_autonomous_turn_whose_session_closed() {
     .await
     .expect("the caller turn waited behind a turn whose session had closed");
     assert_eq!(thinking["type"], "thinking");
-    assert!(!state
-        .0
-        .turns
-        .autonomous_operations
-        .lock()
-        .await
-        .contains_key(&instance_id));
+    assert!(!state.0.turns.holds_self_woken_for_test(instance_id).await);
     worker.abort();
     let _ = worker.await;
     state.0.switchboard.lock().await.shutdown().await;
@@ -2114,14 +2096,7 @@ fn alpha_host_event(state: &AppState, event: Value) {
 #[cfg(unix)]
 async fn until_autonomous(state: &AppState, instance_id: u64) {
     timeout(Duration::from_secs(1), async {
-        while !state
-            .0
-            .turns
-            .autonomous_operations
-            .lock()
-            .await
-            .contains_key(&instance_id)
-        {
+        while !state.0.turns.holds_self_woken_for_test(instance_id).await {
             tokio::time::sleep(Duration::from_millis(2)).await;
         }
     })

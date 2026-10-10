@@ -397,7 +397,7 @@ pub(crate) async fn dispatch_routed_transcript(
 /// Queued caller turns and the state only this module reads: the turn
 /// channel and the receiver the turn worker takes once, what routing reads
 /// about the call, the decisions made for turns still in the queue, the
-/// autonomous turns in flight, how many caller turns wait, and whether one
+/// self-woken run admitted, how many caller turns wait, and whether one
 /// is open. `AppInner` holds one so the fields are the
 /// turns module's own.
 pub(crate) struct TurnState {
@@ -412,9 +412,9 @@ pub(crate) struct TurnState {
     /// decision with the clip prevents a second Jev request while preserving
     /// steering for a turn that was already active.
     routed_decisions: Mutex<HashMap<String, RoutedDecision>>,
-    /// Autonomous host turns admitted by the lifecycle, keyed by resident
-    /// instance so a stale turn_end cannot finish a newer operation.
-    autonomous_operations: Mutex<HashMap<u64, OperationIdentity>>,
+    /// The self-woken run admitted as an operation of its own, if any.
+    /// Written only by `hold_self_woken` and `release_self_woken`.
+    self_woken: Mutex<Option<SelfWokenRun>>,
     /// Caller turns sent to the worker and not yet taken: the `waiting`
     /// count the page is shown.
     queued: AtomicU64,
@@ -432,10 +432,45 @@ impl TurnState {
             receiver: Mutex::new(Some(receiver)),
             routing,
             routed_decisions: Mutex::new(HashMap::new()),
-            autonomous_operations: Mutex::new(HashMap::new()),
+            self_woken: Mutex::new(None),
             queued: AtomicU64::new(0),
             in_flight: AtomicBool::new(false),
         }
+    }
+
+    /// Holds `run`, just admitted. A run held before it is replaced: the
+    /// coordinator opens one operation at a time, so that run's operation
+    /// was already closed under it (a rescue), and its end has nothing left
+    /// to close.
+    async fn hold_self_woken(&self, run: SelfWokenRun) {
+        *self.self_woken.lock().await = Some(run);
+    }
+
+    /// Lets go of the held run if it is session `instance_id`'s run
+    /// `turn_id`, and returns its operation. A late end from an older run
+    /// on the same session does not release a newer one.
+    async fn release_self_woken(
+        &self,
+        instance_id: u64,
+        turn_id: Option<&str>,
+    ) -> Option<OperationIdentity> {
+        self.self_woken
+            .lock()
+            .await
+            .take_if(|run| {
+                run.instance_id == instance_id && run.operation.turn_id.as_deref() == turn_id
+            })
+            .map(|run| run.operation)
+    }
+
+    /// Whether session `instance_id` holds an admitted self-woken run.
+    #[cfg(test)]
+    pub(crate) async fn holds_self_woken_for_test(&self, instance_id: u64) -> bool {
+        self.self_woken
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|run| run.instance_id == instance_id)
     }
 
     /// The turn worker's end of the channel, for a test that stands in for
@@ -762,6 +797,15 @@ impl TurnRun {
     }
 }
 
+/// A self-woken run the application admitted as an operation of its own:
+/// the session that reported it and the operation it runs under, whose
+/// `turn_id` is the run's. It is held from its admission to its end; at
+/// most one is, because the coordinator opens one operation at a time.
+struct SelfWokenRun {
+    instance_id: u64,
+    operation: OperationIdentity,
+}
+
 /// A turn boundary a project session reported, as the application acts on
 /// it. `HostTurn::of` reads the report's cause and end once; the pump's
 /// turn (`session_turn.rs`) decides which boundaries are reported.
@@ -922,10 +966,11 @@ async fn admit_self_woken_run(
             state
                 .0
                 .turns
-                .autonomous_operations
-                .lock()
-                .await
-                .insert(instance_id, operation);
+                .hold_self_woken(SelfWokenRun {
+                    instance_id,
+                    operation,
+                })
+                .await;
             true
         }
         Err(LifecycleError::OperationActive | LifecycleError::CandidateActive) => {
@@ -944,24 +989,17 @@ async fn admit_self_woken_run(
 
 /// The end of the self-woken run `turn_id` on session `instance_id`: its
 /// operation closes, it is traced to its end, and its written words reach
-/// the caller's transcript. A late end from an older run on the same
-/// session does not settle a newer one, and one whose operation a rescue
-/// already closed ends nothing.
+/// the caller's transcript. The end of a run not held, or of one whose
+/// operation a rescue already closed, ends nothing.
 async fn end_self_woken_run(
     state: &AppState,
     instance_id: u64,
     turn_id: Option<&str>,
     text: String,
 ) {
-    let mut operations = state.0.turns.autonomous_operations.lock().await;
-    let Some(operation) = operations.get(&instance_id).cloned() else {
+    let Some(operation) = state.0.turns.release_self_woken(instance_id, turn_id).await else {
         return;
     };
-    if operation.turn_id.as_deref() != turn_id {
-        return;
-    }
-    operations.remove(&instance_id);
-    drop(operations);
     if !state.0.coordinator.finish_operation(&operation) {
         tracing::info!(
             instance = instance_id,
