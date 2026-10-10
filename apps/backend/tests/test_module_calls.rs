@@ -974,7 +974,11 @@ async fn display_reports_a_rejection_that_a_later_report_followed() {
     let (mut connection, _s, _w) = state.register_connection().await;
     let epoch = connection.epoch;
     let handle = post_display_in_task(&state, diagram_show()).await;
-    let DeliveryFrame::Event { sequence, .. } = connection.receiver.recv().await.unwrap() else {
+    let DeliveryFrame::Event { sequence, .. } =
+        within("connection.receiver", connection.receiver.recv())
+            .await
+            .unwrap()
+    else {
         panic!("expected a display event")
     };
     let generation = state.0.coordinator.generation();
