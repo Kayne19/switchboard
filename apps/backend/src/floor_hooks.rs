@@ -8,8 +8,8 @@ use crate::floor;
 use crate::floor::{FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome};
 use crate::pbx::Switchboard;
 use crate::speech::{
-    finish_audio, release_reply_voice, reserve_speech, send_speech, trace_speech,
-    ContinuationScope, SpeakUnder, SpeechAdmission, SpeechFailure, WhenQueueFull,
+    finish_audio, reserve_speech, send_speech, trace_speech, ContinuationScope, SpeakUnder,
+    SpeechAdmission, SpeechFailure, WhenQueueFull,
 };
 use crate::turns::{call_summary_without_desk_sessions, jev_response_event};
 use std::sync::Arc;
@@ -159,7 +159,7 @@ async fn release_floor(
     // The page may have gone while the request waited for its place; the
     // place is given back and the request waits for the page.
     if !state.0.delivery.connected() {
-        release_reply_voice(state, Some(reserved), generation).await;
+        reserved.give_back(state).await;
         return ReleaseOutcome::Retry;
     }
     // Promotion or host loss may have happened while the audio slot was
@@ -172,7 +172,7 @@ async fn release_floor(
             .with_background(&request.token, |project| project == request.project)
             .is_none()
     {
-        release_reply_voice(state, Some(reserved), generation).await;
+        reserved.give_back(state).await;
         return ReleaseOutcome::Drop;
     }
     let scope = if state.0.take_foreground_audio(generation) {

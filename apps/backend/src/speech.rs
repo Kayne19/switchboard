@@ -857,7 +857,9 @@ async fn admit_reply<'a>(
     let voice = reserve_reply_voice(state, &reply.to_speak, generation).await;
     let transition = state.0.operation_transition.lock().await;
     if generation != state.0.coordinator.generation() {
-        release_reply_voice(state, voice, generation).await;
+        if let Some(voice) = voice {
+            voice.give_back(state).await;
+        }
         return ReplyAdmission::Stale;
     }
     if reply.error.as_deref() == Some("routing_unavailable") {
@@ -868,7 +870,9 @@ async fn admit_reply<'a>(
             },
         );
         publish_status(state);
-        release_reply_voice(state, voice, generation).await;
+        if let Some(voice) = voice {
+            voice.give_back(state).await;
+        }
         return ReplyAdmission::RoutingUnavailable;
     }
     ReplyAdmission::Deliver { voice, transition }
@@ -1018,6 +1022,16 @@ pub(crate) struct ReservedSpeech<'a> {
     pub(crate) generation: u64,
 }
 
+impl ReservedSpeech<'_> {
+    /// Gives back a place that will not be spoken in: the worker's place is
+    /// freed and the audio slot closed, or every later utterance would wait
+    /// behind it.
+    pub(crate) async fn give_back(self, state: &AppState) {
+        drop(self.permit);
+        finish_audio(state, self.sequence, self.generation, Vec::new()).await;
+    }
+}
+
 /// The generation a speech request speaks under. A reply knows its delivery
 /// generation up front; a floor release speaks under whatever generation is
 /// current once the worker has room for it, so a leg change during the wait
@@ -1101,22 +1115,6 @@ async fn reserve_reply_voice<'a>(
     )
     .await
     .ok()
-}
-
-/// Gives back a reply's reserved first utterance that will not be spoken. Its
-/// audio slot is closed, or every later utterance would wait behind it.
-pub(crate) async fn release_reply_voice(
-    state: &AppState,
-    voice: Option<ReservedSpeech<'_>>,
-    generation: u64,
-) {
-    if let Some(ReservedSpeech {
-        permit, sequence, ..
-    }) = voice
-    {
-        drop(permit);
-        finish_audio(state, sequence, generation, Vec::new()).await;
-    }
 }
 
 /// Why speech that had its place was not spoken.
@@ -1245,7 +1243,9 @@ async fn synthesize_reply_if_current(
             break;
         }
     }
-    release_reply_voice(state, first, generation).await;
+    if let Some(first) = first {
+        first.give_back(state).await;
+    }
     if success && generation == state.0.coordinator.generation() {
         state.0.mark_foreground_audio(generation);
         true
