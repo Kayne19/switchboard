@@ -5182,10 +5182,14 @@ button {
   padding: 4cqh 4cqw;
   background: rgba(0, 0, 0, 0.965);
 }
+/* The focus box and everything in it are sized from the stage (cqw, cqh),
+   never from the viewport: Safari's vh is its large viewport, taller than
+   the stage while its toolbars show, and a box sized in it ran under them
+   (#271; scripts/check_hygiene.mjs refuses vh and vw here). */
 .focus-layer__content {
   position: relative;
-  width: min(92vw, 1500px);
-  height: min(88vh, 920px);
+  width: min(92cqw, 1500px);
+  height: min(88cqh, 920px);
   min-width: 0;
   min-height: 0;
   background: #000;
@@ -5194,12 +5198,12 @@ button {
 .focus-layer__content--chart {
   height: auto;
   aspect-ratio: 2 / 1;
-  max-height: 82vh;
+  max-height: 82cqh;
 }
 .focus-layer__content--note,
 .focus-layer__content--metric,
 .focus-layer__content--progress {
-  width: min(72vw, 900px);
+  width: min(72cqw, 900px);
   height: auto;
   min-height: 240px;
   padding: 7cqh 5cqw 5cqh;
@@ -5261,7 +5265,7 @@ button {
 .focus-layer__content--note .annotation-card {
   height: auto;
   min-height: 220px;
-  max-height: 76vh;
+  max-height: 76cqh;
   padding: 3cqh 0;
   overflow: visible;
 }
@@ -5275,8 +5279,8 @@ button {
    its card rather than push the box, and RETURN with it, off the screen. */
 .focus-layer__content--metric.focus-layer__content--noted,
 .focus-layer__content--progress.focus-layer__content--noted {
-  width: min(92vw, 1240px);
-  max-height: min(88vh, 920px);
+  width: min(92cqw, 1240px);
+  max-height: min(88cqh, 920px);
 }
 .focus-layer__content--metric .metrics {
   display: grid;
@@ -5290,7 +5294,7 @@ button {
 }
 /* Focus lists every step; a plan longer than the screen scrolls inside. */
 .focus-layer__content--progress .progress-primitive__steps {
-  max-height: 52vh;
+  max-height: 52cqh;
   font-size: clamp(11px, 0.85cqw, 15px);
 }
 /* A progress holding the primary slot is framed to its own height and
@@ -5348,7 +5352,7 @@ button {
   z-index: 100;
   top: 0;
   bottom: 0;
-  width: min(460px, 92vw);
+  width: min(460px, 92dvw);
   padding: 24px;
   background: rgba(3, 3, 3, 0.985);
   border-left: 1px solid rgba(var(--orange-rgb), 0.46);
@@ -5792,15 +5796,15 @@ button {
     padding: 5cqh 3cqw;
   }
   .focus-layer__content {
-    width: 94vw;
-    height: 86vh;
+    width: 94cqw;
+    height: 86cqh;
   }
   /* The chart's frame follows its box (chartFrame), so a portrait focus
      gives it a square to read in rather than a 2:1 strip. */
   .focus-layer__content--chart {
-    width: 94vw;
+    width: 94cqw;
     height: auto;
-    max-height: 70vh;
+    max-height: 70cqh;
     aspect-ratio: 1 / 1;
   }
   .focus-layer__content--note,
@@ -5808,7 +5812,7 @@ button {
   .focus-layer__content--progress,
   .focus-layer__content--metric.focus-layer__content--noted,
   .focus-layer__content--progress.focus-layer__content--noted {
-    width: 90vw;
+    width: 90cqw;
     min-height: 220px;
   }
   .focus-layer__content--noted {
@@ -5830,7 +5834,7 @@ button {
   /* A chart with its notes under it takes the focus box's height, not a
      square: the notes come out of the box, not out of the chart's room. */
   .focus-layer__content--chart.focus-layer__content--noted {
-    height: 86vh;
+    height: 86cqh;
     max-height: none;
     aspect-ratio: auto;
   }

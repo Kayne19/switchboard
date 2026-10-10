@@ -215,9 +215,24 @@ for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set(["
 	scan(file, /\b(?:performance\.now|Date\.now|process\.hrtime)\b/, "the wall clock in a unit test (time a budget with leastCpuMs, cpuTime.ts)");
 }
 
+// 13. The layout reads only the stage's own geometry (docs/ipad.md): a
+//     size in the stylesheet is in container units, not the viewport's.
+//     Safari's `vh` is its large viewport, taller than what shows with
+//     its toolbars out, and a focus box sized in it ran under them (#271).
+//     The stage sizes itself (`100vw`, and `100vh` before `100dvh`).
+{
+	const stylesheet = path.join(root, "apps/frontend/src/styles/index.css");
+	let inStage = false;
+	lines(stylesheet).forEach((line, index) => {
+		if (/^\.stage \{$/.test(line)) inStage = true;
+		else if (inStage && /^\}$/.test(line)) inStage = false;
+		else if (!inStage && /\d(?:vh|vw|vmin|vmax)\b/.test(line)) findings.push(`${rel(stylesheet)}:${index + 1}: a large-viewport unit (size it in cqw/cqh from the stage)`);
+	});
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, stage-relative sizes");
