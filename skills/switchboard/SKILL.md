@@ -82,7 +82,9 @@ data.events[3].location`.
   the cap, so you know how much to cut.
 - The stage holds at most 32 objects, 4 of them images. A `show` with a new
   id past that is refused; hide what the caller is done with, or update an
-  object by its id.
+  object by its id. From the background, every display is kept, in order,
+  and the caller sees the whole scene when they bring you forward; the same
+  limits apply to it.
 - `say` (`text`, optional `target`, optional `at: {x?, series?}`) anchors
   speech to an object.
 

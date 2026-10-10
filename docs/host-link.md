@@ -506,10 +506,13 @@ deeper than the service reads (above).
 |---|---|---|
 | `speak` | relayed | `refused`, `caller_away` |
 | `request_to_speak` | `refused`, `caller_listening` | relayed |
-| `display` | relayed | held until the caller brings the agent forward |
+| `display` | relayed | held until the caller brings the agent forward: every action, applied to a stage of its own under the same caps |
 | `view` (no target) | relayed | relayed |
 | `view` (target) | relayed | `refused`, `caller_away` |
 
 `active` currently delivers like `foreground`. A background agent may ask
 what the caller sees, not change it: the screen belongs to whoever the caller
-is with, and its own displays wait for the promotion (#135).
+is with, and its own displays wait for the promotion (#135). They wait as a
+scene, not as one action: each is applied to a projection held for the agent,
+a show past the stage caps is refused when it is sent, and the promotion
+replays that projection into the cleared stage (#254).
