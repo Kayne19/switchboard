@@ -148,7 +148,7 @@ impl LegAnnouncer {
             if let Some(held) = self.projection.take_display(&leg.route) {
                 let actions = held.snapshot_actions();
                 let mut delivered = false;
-                for action in actions.iter().cloned() {
+                for action in &actions {
                     let event = Event::Json(
                         ServerMessage::Display {
                             action: action.clone(),
@@ -159,10 +159,15 @@ impl LegAnnouncer {
                     let sequence;
                     (delivered, sequence) = self.delivery.publish_sequenced(event.clone());
                     let _ = self.events.send(event);
-                    gate.projection.apply(&action, sequence);
+                    gate.projection.apply(action, sequence);
                     gate.watermark = sequence;
-                    *self.last_display.lock().await =
-                        Some(ServerMessage::Display { action, seq: None }.to_value());
+                    *self.last_display.lock().await = Some(
+                        ServerMessage::Display {
+                            action: action.clone(),
+                            seq: None,
+                        }
+                        .to_value(),
+                    );
                 }
                 tracing::info!(route = %leg.route, actions = actions.len(), delivered, "released the background scene on foreground");
             }
