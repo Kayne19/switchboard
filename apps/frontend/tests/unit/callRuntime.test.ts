@@ -16,6 +16,7 @@ import type { HelloAckMessage, ServerMessage } from "../../src/protocol";
 import { AudioPlayback } from "../../src/runtime/audioPlayback";
 import { CAPTION_WAIT_MS } from "../../src/runtime/spokenLines";
 import { helloAck, statusMessage } from "../fixtures/serverMessages";
+import { realHandsFree, stubHandsFreeBrowser } from "../fixtures/handsFreeRuntime";
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
@@ -1061,6 +1062,29 @@ describe("CallRuntime hands-free", () => {
     runtime.send();
     await settle();
     expect(handsFree.calls).toEqual(["enable", "pause", "resume"]);
+    runtime.dispose();
+  });
+
+  // The fake above only records the word "resume". A real controller asks
+  // push-to-talk whether it still holds the microphone, and refused while
+  // the stopped recording had not let go of it (#257).
+  it("is still listening after a push-to-talk press", async () => {
+    stubHandsFreeBrowser();
+    const handsFree = realHandsFree(
+      () => new FakeRecorder() as unknown as MediaRecorder,
+    );
+    const { runtime, latestState } = makeRuntime(handsFree.options);
+    await connectAt(runtime);
+    runtime.toggleHandsFree();
+    await handsFree.reach("armed");
+    expect(handsFree.controller().currentState).toBe("armed");
+    runtime.talk();
+    await settle();
+    expect(handsFree.controller().currentState).toBe("paused_ptt");
+    runtime.send();
+    await handsFree.reach("armed");
+    expect(handsFree.controller().currentState).toBe("armed");
+    expect(latestState()).toMatchObject({ handsFree: true, recording: false });
     runtime.dispose();
   });
 });

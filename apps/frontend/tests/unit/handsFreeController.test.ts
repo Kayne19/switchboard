@@ -334,4 +334,23 @@ describe("the hands-free controller over fakes", () => {
     expect(harness.detector.resets).toBeGreaterThan(0);
     expect(harness.endpointer.resets).toBeGreaterThan(0);
   });
+
+  // A refusal is published as an error, which the page shows as hands-free
+  // off. The controller must agree, or the next MODE tap turns it "off" and
+  // nothing visible happens (#257).
+  it("is off after a resume it refuses", async () => {
+    stubBrowser();
+    const harness = controller();
+    expect(await harness.instance.enable()).toBe(true);
+    harness.instance.pauseForPtt();
+    harness.pressPtt(true);
+    harness.instance.resumeAfterPtt();
+    for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+    expect(harness.instance.currentState).toBe("error");
+    expect(harness.instance.isEnabled).toBe(false);
+
+    harness.pressPtt(false);
+    expect(await harness.instance.enable()).toBe(true);
+    expect(harness.instance.currentState).toBe("armed");
+  });
 });

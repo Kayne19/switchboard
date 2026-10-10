@@ -191,29 +191,20 @@ export class HandsFreeController {
 	async enable(): Promise<boolean> {
 		if (this.enabled && this.state !== "error" && this.state !== "paused_ptt")
 			return true;
-		if (this.options.isPttActive() || !this.isForeground()) {
-			this.publish(
-				"error",
+		if (this.options.isPttActive() || !this.isForeground())
+			return this.refuseStart(
 				"Finish push-to-talk and keep this page visible first.",
 			);
-			return false;
-		}
-		if (!this.supported()) {
-			this.publish(
-				"error",
+		if (!this.supported())
+			return this.refuseStart(
 				"Hands-free needs a secure browser with local audio worklet support.",
 			);
-			return false;
-		}
-		if (!this.detector || !this.endpointer) {
-			this.publish(
-				"error",
+		if (!this.detector || !this.endpointer)
+			return this.refuseStart(
 				this.detector
 					? "Hands-free speech detector is unavailable."
 					: "Hands-free wake detector is unavailable.",
 			);
-			return false;
-		}
 		this.enabled = true;
 		this.publish(
 			"starting",
@@ -570,6 +561,19 @@ export class HandsFreeController {
 			message,
 			leaseRemainingMs: Math.max(0, this.leaseDeadline - this.now()),
 		});
+	}
+
+	/**
+	 * A start that cannot begin leaves the controller off. A refused resume
+	 * after push-to-talk was still enabled, and the page shows `error` as
+	 * hands-free off: unless the controller is off too, the next MODE tap
+	 * reads `isEnabled` and turns "off" what the caller already sees as off
+	 * (#257).
+	 */
+	private refuseStart(message: string): false {
+		this.enabled = false;
+		this.publish("error", message);
+		return false;
 	}
 
 	/** A detector that failed stops hands-free and says which one it was. */
