@@ -14,7 +14,7 @@ use crate::floor::{FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome};
 use crate::history::AGENT;
 use crate::pbx::Switchboard;
 use crate::protocol::ServerMessage;
-use crate::turns::{jev_response_event, live_agents};
+use crate::turns::{call_summary_without_desk_sessions, jev_response_event};
 use futures_util::StreamExt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -405,14 +405,8 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
                     .find(|entry| entry.role == crate::history::CALLER)
                     .map(|entry| entry.text.clone())
                     .unwrap_or_default();
-                let (router, mut summary) = {
-                    let board = state.0.switchboard.lock().await;
-                    (
-                        board.router(),
-                        board.call_summary(&entries, screen, caller_last),
-                    )
-                };
-                summary.merge_live_agents(&live_agents(&state));
+                let (router, mut summary) =
+                    call_summary_without_desk_sessions(&state, &entries, screen, caller_last);
                 summary.queued_update = Some(crate::router::QueuedUpdate {
                     from_agent: request.project.clone(),
                     message: request.message.clone(),
@@ -440,12 +434,15 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
         rewrite: Arc::new(move |input: FloorRewriteInput| {
             let state = rewrite_state.clone();
             Box::pin(async move {
-                let session = {
-                    let mut board = state.0.switchboard.lock().await;
-                    board.floor_rewrite_session().await.map_err(|_| ())?
-                };
                 let project = input.project.clone();
+                // The utility is reached through the PBX lock, which a
+                // foreground turn holds for its whole prompt, so the wait for
+                // it is inside the timeout too.
                 let operation = async {
+                    let session = {
+                        let mut board = state.0.switchboard.lock().await;
+                        board.floor_rewrite_session().await.map_err(|_| ())?
+                    };
                     Switchboard::rewrite_floor_with_session(&session, &input)
                         .await
                         .map_err(|error| {

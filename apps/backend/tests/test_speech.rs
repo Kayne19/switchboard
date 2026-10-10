@@ -703,6 +703,94 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
     host.disconnect_fake("scriptorium");
 }
 
+/// A floor test's state, with alpha in the background and its update queued
+/// on a quiet line. The utility is `/bin/sh`, which cannot rewrite anything.
+async fn floor_update_queued_on_a_quiet_line(
+    client: crate::jev::JevClient,
+) -> (AppState, DeliveryConnection) {
+    let config = crate::Config::for_tests(&[
+        ("SWITCHBOARD_PI_BINARY", "/bin/sh"),
+        ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
+    ]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("test catalog"),
+    );
+    let state = state_on(Switchboard::new_with_jev(
+        &config,
+        registry,
+        std::sync::Arc::new(prewarm),
+        client,
+    ));
+    let (connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "alpha-token");
+    state
+        .0
+        .floor
+        .enqueue(crate::floor::FloorRequest {
+            floor_id: 0,
+            project: "alpha".into(),
+            token: "alpha-token".into(),
+            generation: state.0.coordinator.generation(),
+            context: "caller: previous line".into(),
+            message: "alpha finished".into(),
+            reason: "finished".into(),
+            held_display: false,
+        })
+        .await;
+    state.0.floor.force_quiet_for_test().await;
+    (state, connection)
+}
+
+#[tokio::test]
+async fn floor_good_moment_gate_does_not_wait_for_the_pbx_lock() {
+    let (client, _, jev_called) = fake_jev_client();
+    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
+    // A foreground turn holds the PBX lock for its whole prompt.
+    let _turn = state.0.switchboard.lock().await;
+    spawn_floor_worker(state.clone());
+
+    timeout(Duration::from_secs(1), jev_called.notified())
+        .await
+        .expect("the floor gate asks Jev while a foreground turn runs");
+}
+
+#[tokio::test]
+async fn floor_rewrite_waits_for_the_pbx_lock_only_within_its_timeout() {
+    let (client, _, _) = fake_jev_client();
+    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
+    let _turn = state.0.switchboard.lock().await;
+    spawn_floor_worker(state.clone());
+
+    // The utility is behind the lock the turn holds; the rewrite gives up at
+    // its timeout and the update goes on as the agent wrote it.
+    let rewrite = timeout(
+        crate::floor::REWRITE_TIMEOUT + Duration::from_secs(3),
+        async {
+            loop {
+                if let Some(event) = debug_events(&state)
+                    .into_iter()
+                    .find(|event| matches!(event, crate::debug::DebugEvent::FloorRewrite { .. }))
+                {
+                    return event;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        },
+    )
+    .await
+    .expect("the floor rewrite gives up within its timeout while a foreground turn runs");
+    assert!(matches!(
+        rewrite,
+        crate::debug::DebugEvent::FloorRewrite { ref rewritten, .. } if rewritten == "alpha finished"
+    ));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn floor_pbx_api_flow_gates_rewrites_announces_and_plays_in_order() {
@@ -1017,7 +1105,9 @@ done
     let mut board = timeout(Duration::from_millis(100), state.0.switchboard.lock())
         .await
         .expect("rewrite must not hold the PBX lock");
-    let summary = board.call_summary(&[], json!({}), "caller turn");
+    let summary = board
+        .routing_view()
+        .call_summary(&[], json!({}), "caller turn");
     assert_eq!(summary.caller_just_said, "caller turn");
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);

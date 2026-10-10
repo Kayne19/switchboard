@@ -79,16 +79,6 @@ impl Switchboard {
         }
     }
 
-    pub fn call_summary(
-        &self,
-        transcript: &[TranscriptEntry],
-        screen: Value,
-        utterance: impl Into<String>,
-    ) -> CallSummary {
-        self.routing_view()
-            .call_summary(transcript, screen, utterance)
-    }
-
     /// List foreign live sessions in registered project folders. The service
     /// labels a session as `taken_over` in the routing summary because that is
     /// the provenance it will record if the caller selects it.
