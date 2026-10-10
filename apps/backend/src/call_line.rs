@@ -35,13 +35,18 @@ pub(crate) struct Launch {
 /// The leg on the line. Every phase of the call has one.
 #[derive(Clone, Debug)]
 pub(crate) struct LiveLeg {
+    /// Read here and by the coordinator (`lifecycle.rs`), which checks every
+    /// caller's identity against it.
     pub(crate) identity: LegIdentity,
-    /// What the project leg was launched with; `None` on the operator.
+    /// What the project leg was launched with; `None` on the operator. Read
+    /// here and by the coordinator (`lifecycle.rs`: the operator test).
     pub(crate) launch: Option<Launch>,
     /// The level the leg reported through `/leg-state`; empty until it does.
     thinking_effective: String,
     /// The identity is the one an adoption put on the line. Every other
     /// identity (a rescue's, a rollback's, a return's, a shutdown's) is not.
+    /// Read here and by the coordinator (`lifecycle.rs`: the route a
+    /// reconnecting page is told was adopted).
     pub(crate) adopted: bool,
 }
 
