@@ -77,7 +77,8 @@ export interface HandsFreeControllerOptions {
 	isSnapshotReady: () => boolean;
 	currentEpoch: () => number;
 	isPttActive: () => boolean;
-	onClip: (audio: Blob, mime: string, epoch: number) => void;
+	/** Takes a finished utterance; false when the page could not send it. */
+	onClip: (audio: Blob, mime: string, epoch: number) => boolean;
 	onAudioLevel?: (level: number) => void;
 	onState: (detail: HandsFreeStateDetail) => void;
 }
@@ -317,6 +318,17 @@ export class HandsFreeController {
 		);
 	}
 
+	/**
+	 * The turn hands-free is waiting on will bring no reply: the server
+	 * refused the clip, or the reply could not be produced. Only a successful
+	 * reply opens the follow-up lease, so without this the controller would
+	 * wait in `awaiting_response`, where no wake word is heard (#258).
+	 */
+	endAwaitedTurn(): void {
+		if (!this.enabled || this.state !== "awaiting_response") return;
+		this.rearm(`No reply is coming; listening locally for “${WAKE_PHRASE}”.`);
+	}
+
 	epochChanged(): void {
 		if (!this.enabled) return;
 		this.disable("Hands-free stopped because the call changed.");
@@ -371,13 +383,10 @@ export class HandsFreeController {
 		this.clearWakeTimer();
 		this.wakeTimer = this.setTimer(() => {
 			this.wakeTimer = null;
-			if (this.state === "wake_grace") {
-				this.resetListening();
-				this.publish(
-					"armed",
+			if (this.state === "wake_grace")
+				this.rearm(
 					`Wake heard; speak within ${WAKE_SPEECH_GRACE_MS / 1000} seconds.`,
 				);
-			}
 		}, WAKE_SPEECH_GRACE_MS);
 		this.publish("wake_grace", "Wake word heard. Speak now.");
 	}
@@ -417,18 +426,20 @@ export class HandsFreeController {
 		recorder.onstop = () => {
 			if (this.capture !== capture || token !== this.runtimeToken) return;
 			this.capture = null;
+			// Nothing was sent, so no reply will come: listen for the wake
+			// word again, after a follow-up as after a wake word (#258).
 			if (!capture.chunks.length) {
-				this.publish(
-					capture.lease ? "awaiting_response" : "armed",
-					"No utterance was retained.",
-				);
+				this.rearm("No utterance was retained.");
 				return;
 			}
 			const blob = new Blob(capture.chunks, {
 				type: recorder.mimeType || "audio/webm",
 			});
 			capture.chunks.length = 0;
-			this.options.onClip(blob, blob.type, capture.epoch);
+			if (!this.options.onClip(blob, blob.type, capture.epoch)) {
+				this.rearm("The utterance could not be sent; say the wake word again.");
+				return;
+			}
 			this.publish(
 				"awaiting_response",
 				"Utterance sent; waiting for the response.",
@@ -590,6 +601,16 @@ export class HandsFreeController {
 			"error",
 			`Hands-free ${what} failed (${this.errorName(error)}).`,
 		);
+	}
+
+	/**
+	 * Back to waiting for the wake word after a turn, or a wake word, that
+	 * came to nothing. The detectors start from silence, so audio from before
+	 * cannot open the next turn.
+	 */
+	private rearm(message: string): void {
+		this.resetListening();
+		this.publish("armed", message);
 	}
 
 	/** Both detectors forget the audio before this moment. */
