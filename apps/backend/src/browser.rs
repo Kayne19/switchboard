@@ -29,7 +29,6 @@ impl AppState {
         gate.screen_state["stale"] = json!(true);
         self.0.floor.set_page_connected(true).await;
         self.start_debug_call();
-        *self.0.screen_state.lock().await = gate.screen_state.clone();
         let snapshot_actions = gate.projection.snapshot_actions();
         let watermark = gate.watermark;
         (connection, snapshot_actions, watermark)
@@ -41,7 +40,6 @@ impl AppState {
             if gate.active_epoch == Some(epoch) || gate.active_epoch.is_none() {
                 gate.active_epoch = None;
                 gate.screen_state["stale"] = json!(true);
-                *self.0.screen_state.lock().await = gate.screen_state.clone();
             }
         }
         self.0.delivery.retire(epoch);
@@ -239,9 +237,14 @@ async fn apply_screen_state(
     let pinned = command.pinned.unwrap_or(false);
     let has_visual = command.has_visual.unwrap_or(false);
     let stale = command.stale.unwrap_or(false);
-    let report_gen = command
-        .generation
-        .unwrap_or_else(|| state.0.coordinator.generation());
+    // A report without a generation is ignored, never taken as one on the
+    // call current when it arrives: it confirms display seqs and replaces the
+    // screen `view` reads, so a page that has not seen a transfer would act on
+    // a call it never rendered (`AGENTS.md`, the browser command rule).
+    let Some(report_gen) = command.generation else {
+        tracing::warn!("a screen_state without a generation was ignored");
+        return Ok(());
+    };
 
     let current_gen = state.0.coordinator.generation();
     let active_ep = state.0.delivery.active_epoch();
@@ -260,10 +263,7 @@ async fn apply_screen_state(
         "stale": stale,
         "generation": current_gen,
     });
-    gate.screen_state = report.clone();
-    gate.report_epoch = Some(epoch);
-    gate.report_generation = Some(current_gen);
-    *state.0.screen_state.lock().await = report;
+    gate.screen_state = report;
     drop(gate);
 
     let applied_seq = command.applied_seq;
@@ -273,18 +273,10 @@ async fn apply_screen_state(
             .unwrap_or_else(|| "the caller's screen could not render it".to_string());
         (rejection.seq, reason)
     });
-    state.0.display_confirm.send_modify(|c| {
-        if c.generation != current_gen {
-            c.generation = current_gen;
-            c.watermark = None;
-        }
-        if let Some(seq) = applied_seq {
-            if c.watermark.is_none_or(|w| seq > w) {
-                c.watermark = Some(seq);
-            }
-        }
-        c.rejection = rejected.clone();
-    });
+    state
+        .0
+        .display_confirm
+        .send_modify(|c| c.fold_report(current_gen, applied_seq, rejected));
 
     send_message(state, epoch, ServerMessage::ScreenStateAck).await
 }
@@ -423,12 +415,14 @@ pub(crate) async fn handle_text_frame(
             mime,
             generation,
         } => {
-            let Some(header) = parse_clip_header(id, mime, generation) else {
-                pending_header.take();
-                return send_message(state, epoch, ServerMessage::error("Invalid clip id.")).await;
-            };
-            *pending_header = Some(header);
-            Ok(())
+            pending_header.take();
+            match parse_clip_header(id, mime, generation) {
+                Ok(header) => {
+                    *pending_header = Some(header);
+                    Ok(())
+                }
+                Err(refusal) => send_message(state, epoch, *refusal).await,
+            }
         }
     }
 }

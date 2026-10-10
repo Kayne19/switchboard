@@ -26,6 +26,14 @@ fn caller_ids_round_trip_and_old_entries_still_load() {
 }
 
 #[test]
+fn a_limit_of_zero_keeps_nothing_but_still_returns_the_entry() {
+    let mut log = TranscriptLog::new(0);
+    let entry = log.add_voiced(AGENT, "spoken", "operator").unwrap();
+    assert_eq!(entry.text, "spoken");
+    assert!(log.entries().is_empty());
+}
+
+#[test]
 fn is_bounded_to_the_newest_entries() {
     let mut log = TranscriptLog::new(2);
     for value in ["one", "two", "three"] {

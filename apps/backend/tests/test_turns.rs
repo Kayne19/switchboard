@@ -357,6 +357,46 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
     state.0.switchboard.lock().await.shutdown().await;
 }
 
+/// Jev reads the caller's screen from the display gate, the one owner of it.
+/// A new leg clears the stage and marks that screen stale; a routing request
+/// made before the page reports again says so, rather than describing the
+/// last leg's drawing as fresh (#225).
+#[tokio::test]
+async fn routing_after_a_new_leg_sees_the_screen_the_gate_marked_stale() {
+    let (client, _, _) = fake_jev_client();
+    let state = state_with_jev(client, Registry::new(vec![]));
+    let (connection, _snapshot, _watermark) = state.register_connection().await;
+    crate::browser::handle_text_frame(
+        &state,
+        connection.epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"visual","has_visual":true,
+               "visual_kind":"diagram","title":"Old leg chart",
+               "generation":state.0.coordinator.generation()})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    state.0.switchboard.lock().await.announce_route().await;
+    assert_eq!(
+        state.0.display_gate.lock().await.screen_state["stale"],
+        true
+    );
+
+    route_transcript(&state, "clip-1", "what is on my screen").await;
+    let screen = debug_events(&state)
+        .into_iter()
+        .find_map(|event| match event {
+            crate::debug::DebugEvent::JevRequest { purpose, state, .. } if purpose == "route" => {
+                Some(state["screen"].clone())
+            }
+            _ => None,
+        })
+        .expect("a routing request");
+    assert_eq!(screen["stale"], true, "{screen}");
+}
+
 #[tokio::test]
 async fn takeover_desk_listing_does_not_hold_the_pbx_lock() {
     let (client, _, _) = fake_jev_client();
@@ -884,12 +924,9 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
     let agent = state
         .0
         .projection
-        .states
-        .lock()
-        .unwrap()
-        .iter()
+        .snapshot()
+        .into_iter()
         .find(|agent| agent.project == "alpha")
-        .cloned()
         .expect("waiting agent state");
     assert_eq!(agent.state, "waiting");
     assert_eq!(

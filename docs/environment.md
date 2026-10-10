@@ -31,16 +31,16 @@ means unset.
 | `SWITCHBOARD_MODEL_SWAPS` | `1` | `0`, `false`, or `no` turns off mid-call model and thinking changes. |
 | `SWITCHBOARD_PERSONA` | empty | The spoken character. The service puts it in the operator's and the utility's system prompts and in each project session's voice brief, and still passes it in `join_call` (see `docs/host-link.md`). |
 | `SWITCHBOARD_MAX_SPOKEN_CHARS` | `700` | Longest reply the switchboard voices; longer text is clipped, at a sentence end when one is near. |
-| `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000. Also given to each project session when it joins the call. The service starts it when it admits a `speak`; the host agent waits it and 5 s more for the service's answer (`SPEAK_REPLY_MARGIN_MS`), so the service's answer decides. |
+| `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000 ms; any other value stops startup (see below). Also given to each project session when it joins the call. The service starts it when it admits a `speak`; the host agent waits it and 5 s more for the service's answer (`SPEAK_REPLY_MARGIN_MS`), so the service's answer decides. |
 | `SWITCHBOARD_HISTORY_LIMIT` | `200` | Transcript entries kept for page reloads; `0` keeps none. |
 | `SWITCHBOARD_JEV_KEY_FILE` | `/etc/switchboard/secrets/typesafe-api-key` | Secret file path. The Jev bearer key is read from this file and never logged or returned in errors. |
 | `SWITCHBOARD_JEV_URL` | `https://api.typesafe.ai/v1/systemone` | Jev System One endpoint. Tests use an in-process fake URL. |
 | `SWITCHBOARD_JEV_TIMEOUT_MS` | `2000` | Maximum time for one Jev request, 1–120000 ms; timeout uses the top-level LLM path. |
-| `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER` | `0.3` | Below this probability band Jev's action can be used when its confidence meets the action threshold. |
-| `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER` | `0.7` | At or above this probability a project utterance stays with its current agent. |
+| `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER` | `0.3` | Below this probability band Jev's action can be used when its confidence meets the action threshold. Must not exceed `_UPPER`; if it does (also when only one of the two is set and it crosses the other's default), both are logged and replaced by their defaults. |
+| `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER` | `0.7` | At or above this probability a project utterance stays with its current agent. Must not be below `_LOWER` (see above). |
 | `SWITCHBOARD_JEV_ACTION_THRESHOLD` | `0.6` | Minimum Jev action confidence for a non-uncertain decision. Stopping still asks for confirmation. |
 | `SWITCHBOARD_JEV_SUMMARY_TOKEN_BUDGET` | `8000` | Approximate state token budget; oldest conversation turns are removed first and the Jev 32000-token per-question limit is enforced. |
-| `SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS` | `10000` | Caller silence in milliseconds before a held background update is released with its short announcement. |
+| `SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS` | `10000` | Caller silence before a held background update is released with its short announcement, 1–120000 ms. |
 | `SWITCHBOARD_STT_COMMAND` | none | Complete-clip speech-to-text: WebM on stdin, text on stdout. |
 | `SWITCHBOARD_STT_STREAM_COMMAND` | none | Optional long-lived streaming worker; framing is described in `README.md`. |
 | `SWITCHBOARD_LOG` | `switchboard=info,warn` | Log filter; falls back to `RUST_LOG`. A filter that does not parse is reported and replaced by the default. |
@@ -53,9 +53,11 @@ means unset.
 | `ELEVENLABS_STYLE` | `0.0` | |
 | `ELEVENLABS_SPEED` | `1.0` | |
 
-A numeric setting that does not parse is logged and replaced by its default,
-because the symptom of a silently wrong duration looks nothing like its cause.
-`SWITCHBOARD_SPEECH_DEADLINE_MS` is the exception: the host agent bounds a
+A numeric setting that does not parse, or is outside its range, is logged and
+replaced by its default, because the symptom of a silently wrong duration looks
+nothing like its cause. A Jev band whose lower bound exceeds its upper one is
+logged and both bounds are replaced by their defaults.
+`SWITCHBOARD_SPEECH_DEADLINE_MS` is the one exception: the host agent bounds a
 relayed `speak` by the same deadline (plus its margin), so a value the service
 would replace with its default would leave the two sides disagreeing, and
 startup stops instead.

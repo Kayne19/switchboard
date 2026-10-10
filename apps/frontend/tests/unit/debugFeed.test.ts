@@ -77,4 +77,58 @@ describe('debug feed connection', () => {
     vi.advanceTimersByTime(20_000);
     expect(sockets).toHaveLength(3);
   });
+
+  it('keeps backing off while sockets open and close, until one has held its snapshot a while', () => {
+    // The listener closes a client that lags or cannot take a frame in time;
+    // each of those closes comes after a successful open. Resetting the
+    // backoff on open made every such retry wait only the base delay.
+    const sockets: FakeSocket[] = [];
+    const rejected: string[] = [];
+    const feed = new SocketFeed(
+      'ws://test/ws',
+      { frames: () => {}, rejected: (error) => rejected.push(error), status: () => {} },
+      () => {
+        const socket = new FakeSocket();
+        sockets.push(socket);
+        return socket;
+      },
+      (callback) => callback(),
+    );
+    const snapshot = JSON.stringify({
+      type: 'snapshot',
+      last_seq: 0,
+      events: [],
+      logs: [],
+      agents: [],
+      config: { jev_for_current_agent_lower: 0.3, jev_for_current_agent_upper: 0.7, jev_action_threshold: 0.6 },
+    });
+    /** The time from `sockets[index]` closing to the next socket opening. */
+    const retryDelay = (index: number): number => {
+      sockets[index].drop();
+      let waited = 0;
+      while (sockets.length === index + 1) {
+        vi.advanceTimersByTime(100);
+        waited += 100;
+      }
+      return waited;
+    };
+    feed.start();
+    sockets[0].open();
+    expect(retryDelay(0)).toBe(500);
+    sockets[1].open();
+    expect(retryDelay(1)).toBe(1000);
+    // A snapshot alone does not reset it: the socket may still be dropped
+    // before it can take the next frame.
+    sockets[2].open();
+    sockets[2].send(snapshot);
+    vi.advanceTimersByTime(5_000);
+    expect(retryDelay(2)).toBe(2000);
+    // A socket that got its snapshot and stayed open resets it.
+    sockets[3].open();
+    sockets[3].send(snapshot);
+    vi.advanceTimersByTime(10_000);
+    expect(retryDelay(3)).toBe(500);
+    expect(rejected).toEqual([]);
+    feed.stop();
+  });
 });

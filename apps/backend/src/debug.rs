@@ -3,13 +3,15 @@
 //! The debug bus is deliberately independent from call control. Publishing is
 //! synchronous and bounded: it records a small in-memory copy and uses
 //! `broadcast::Sender::send`, so a slow browser can never hold up a call.
+use crate::api::refuse_cross_origin;
 use crate::protocol::AgentState;
 use axum::{
     extract::{
         ws::{Message, WebSocket},
         State, WebSocketUpgrade,
     },
-    http::{header, HeaderMap, StatusCode},
+    http::{header, StatusCode},
+    middleware,
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -28,7 +30,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{broadcast, watch},
+    sync::{broadcast, watch, Semaphore},
     time::{timeout, Duration, Instant},
 };
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
@@ -46,21 +48,29 @@ struct Site {
     bus: DebugBus,
     agents: Arc<dyn Fn() -> Vec<AgentState> + Send + Sync>,
     shutdown: watch::Receiver<bool>,
+    /// One permit per open socket (`MAX_CLIENTS`).
+    clients: Arc<Semaphore>,
 }
 
 /// The debug listener's whole router: the embedded page and the read-only
-/// WebSocket. `agents` reads the current agent projection for snapshots;
-/// `shutdown` is the service's shutdown signal.
+/// WebSocket, behind the same origin check as the primary listener (a
+/// browser applies no CORS to a WebSocket, so any page it opens could
+/// otherwise read this stream). `agents` reads the current agent projection
+/// for snapshots; `shutdown` is the service's shutdown signal.
 pub(crate) fn router(
     bus: DebugBus,
     agents: impl Fn() -> Vec<AgentState> + Send + Sync + 'static,
     shutdown: watch::Receiver<bool>,
 ) -> Router {
-    asset_routes().route("/ws", get(ws)).with_state(Site {
-        bus,
-        agents: Arc::new(agents),
-        shutdown,
-    })
+    asset_routes()
+        .route("/ws", get(ws))
+        .with_state(Site {
+            bus,
+            agents: Arc::new(agents),
+            shutdown,
+            clients: Arc::new(Semaphore::new(MAX_CLIENTS)),
+        })
+        .layer(middleware::from_fn(refuse_cross_origin))
 }
 
 /// The debug page's asset routes. Anything else is a 404.
@@ -117,8 +127,13 @@ const CLIP_MARKER: &str = "…[clipped]";
 /// A debug client that does not take a frame within this time is dropped; it
 /// can reconnect and get a fresh snapshot.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
-/// The largest frame the debug socket accepts; it reads none.
+/// The largest frame the debug socket accepts; it reads none. It bounds a
+/// frame as well as a message: the frame bound is checked on the header,
+/// before the payload is buffered, and the message bound only after.
 const MAX_INCOMING_BYTES: usize = 4096;
+/// The most debug sockets open at once. Each one costs a full snapshot when
+/// it opens and when it resyncs; a socket past this gets a 503.
+const MAX_CLIENTS: usize = 8;
 /// A client that falls behind twice within this time is closed instead of
 /// resynced again: each resync is a full snapshot.
 const RESYNC_INTERVAL: Duration = Duration::from_secs(10);
@@ -419,6 +434,12 @@ impl Clip {
         self.remaining = self.remaining.saturating_sub(bytes.max(1));
     }
 
+    /// One JSON node kept in the record: a `Value` is this size in memory
+    /// whatever its text, so an empty string or array is not free.
+    fn node(&mut self) {
+        self.spend(std::mem::size_of::<Value>());
+    }
+
     /// Scrubs `text` and keeps at most `field_limit` bytes of it, and no
     /// more than the record has left. Only the window that can be kept is
     /// scrubbed.
@@ -448,12 +469,14 @@ impl Clip {
 
     fn marker(&mut self, dropped: usize) -> Value {
         let marker = format!("{CLIP_MARKER} {dropped} more");
+        self.node();
         self.spend(marker.len());
         self.clipped = true;
         Value::String(marker)
     }
 
     fn json(&mut self, value: &mut Value) {
+        self.node();
         match value {
             Value::String(text) => self.text(text),
             Value::Array(items) => {
@@ -467,10 +490,13 @@ impl Clip {
                     kept += 1;
                 }
                 if kept < items.len() {
+                    // A new buffer: `truncate` would keep the input's whole
+                    // allocation, which the byte estimate does not see.
                     let dropped = items.len() - kept;
-                    items.truncate(kept);
-                    let marker = self.marker(dropped);
-                    items.push(marker);
+                    let mut cut = Vec::with_capacity(kept + 1);
+                    cut.extend(items.drain(..kept));
+                    cut.push(self.marker(dropped));
+                    *items = cut;
                 }
             }
             Value::Object(map) => {
@@ -516,6 +542,19 @@ impl Clip {
     fn opt_name(&mut self, name: &mut Option<String>) {
         if let Some(name) = name {
             self.name(name);
+        }
+    }
+
+    /// The agent projection, as an `agents_state` event and a snapshot both
+    /// carry it.
+    fn agents(&mut self, agents: &mut [AgentState]) {
+        for agent in agents {
+            self.name(&mut agent.project);
+            self.name(&mut agent.state);
+            if let Some(request) = &mut agent.pending_request {
+                self.text(&mut request.message);
+                self.text(&mut request.reason);
+            }
         }
     }
 
@@ -794,16 +833,7 @@ impl Clip {
                 self.name(how);
                 self.opt_name(floor_id);
             }
-            DebugEvent::AgentsState { agents } => {
-                for agent in agents {
-                    self.name(&mut agent.project);
-                    self.name(&mut agent.state);
-                    if let Some(request) = &mut agent.pending_request {
-                        self.text(&mut request.message);
-                        self.text(&mut request.reason);
-                    }
-                }
-            }
+            DebugEvent::AgentsState { agents } => self.agents(agents),
             DebugEvent::HostLink { host, connected: _ } => self.name(host),
             DebugEvent::CallBoundary {
                 phase,
@@ -1188,50 +1218,20 @@ impl Feed {
     }
 }
 
-/// The read-only debug stream. A browser does not apply CORS to a
-/// WebSocket, so any page it opens could otherwise read this stream: only a
-/// request from the debug page itself (an `Origin` naming the host it
-/// connected to) or from a non-browser client (no `Origin`) is upgraded.
-async fn ws(State(site): State<Site>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
-    if !same_origin(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
+/// The read-only debug stream. The origin check the router applies
+/// (`api::refuse_cross_origin`) keeps other sites' pages off it.
+async fn ws(State(site): State<Site>, upgrade: WebSocketUpgrade) -> Response {
+    let Ok(client) = site.clients.clone().try_acquire_owned() else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
     // The page sends nothing; anything it sends is ignored.
     upgrade
+        .max_frame_size(MAX_INCOMING_BYTES)
         .max_message_size(MAX_INCOMING_BYTES)
-        .on_upgrade(move |socket| serve_socket(socket, site))
-}
-
-/// True when the request has no `Origin`, or its `Origin` names the same
-/// host and port as its `Host`.
-fn same_origin(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get(header::ORIGIN) else {
-        return true;
-    };
-    let (Ok(origin), Some(host)) = (
-        origin.to_str(),
-        headers
-            .get(header::HOST)
-            .and_then(|host| host.to_str().ok()),
-    ) else {
-        return false;
-    };
-    let Some((scheme, authority)) = origin.split_once("://") else {
-        return false;
-    };
-    let default_port = match scheme.to_ascii_lowercase().as_str() {
-        "http" => ":80",
-        "https" => ":443",
-        _ => return false,
-    };
-    let normal = |authority: &str| {
-        let authority = authority.to_ascii_lowercase();
-        match authority.strip_suffix(default_port) {
-            Some(bare) => bare.to_owned(),
-            None => authority,
-        }
-    };
-    normal(authority) == normal(host)
+        .on_upgrade(move |socket| async move {
+            serve_socket(socket, site).await;
+            drop(client);
+        })
 }
 
 async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ()> {
@@ -1242,12 +1242,17 @@ async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ()> {
 }
 
 /// Serializes a snapshot on the blocking pool: it can be megabytes, and the
-/// runtime workers also carry audio and turns.
+/// runtime workers also carry audio and turns. The agents are read from the
+/// projection, not the rings, so they are scrubbed and clipped here, as an
+/// `agents_state` record is.
 async fn send_snapshot(socket: &mut WebSocket, site: &Site, snapshot: Snapshot) -> Result<(), ()> {
-    let agents = (site.agents)();
-    let text = tokio::task::spawn_blocking(move || snapshot.to_json(&agents))
-        .await
-        .map_err(|_| ())?;
+    let mut agents = (site.agents)();
+    let text = tokio::task::spawn_blocking(move || {
+        Clip::new().agents(&mut agents);
+        snapshot.to_json(&agents)
+    })
+    .await
+    .map_err(|_| ())?;
     send_text(socket, text).await
 }
 

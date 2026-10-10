@@ -35,6 +35,7 @@ async fn browser_screen_state_is_available_to_the_agent_view_tool() {
             "visual_kind": "document",
             "title": "Authentication changes",
             "stale": false,
+            "generation": state.0.coordinator.generation(),
         })
         .to_string(),
     )
@@ -83,7 +84,8 @@ async fn view_reports_requested_diagram_as_unconfirmed_until_the_browser_acks() 
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"auto","has_visual":true,
-               "visual_kind":"diagram","applied_seq":sequence})
+               "visual_kind":"diagram","applied_seq":sequence,
+               "generation":state.0.coordinator.generation()})
         .to_string(),
     )
     .await
@@ -235,6 +237,32 @@ async fn a_refused_reason_or_target_lists_the_names_it_takes() {
         body,
         json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"})
     );
+}
+
+// A background agent's request is shown on the debug page as it is on the
+// caller's: the projection's every change goes to both.
+#[tokio::test]
+async fn a_request_to_speak_reaches_the_debug_bus() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "alpha-token");
+    let response = request_to_speak(
+        state.clone(),
+        "alpha-token",
+        json!({"message": "the update is ready", "reason": "finished"}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    crate::app_state::until_debug(&state, |event| {
+        matches!(
+            event,
+            crate::debug::DebugEvent::AgentsState { agents }
+                if agents.iter().any(|agent| agent.project == "alpha" && agent.state == "waiting")
+        )
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -479,7 +507,6 @@ async fn display_protocol_validation_and_composition() {
     };
     assert_eq!(event["type"], "display");
     assert_eq!(event["action"]["id"], "main");
-    assert_eq!(*state.0.last_display.lock().await, Some(event));
     for (id, role) in [("compare", "compare"), ("secondary", "secondary")] {
         let (code, _) = agent_call_json(
             &state,
@@ -901,7 +928,8 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"auto","has_visual":true,
-               "visual_kind":"diagram","applied_seq":sequence})
+               "visual_kind":"diagram","applied_seq":sequence,
+               "generation":state.0.coordinator.generation()})
         .to_string(),
     )
     .await
@@ -949,7 +977,8 @@ async fn display_reports_rejection_from_the_browser() {
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"auto","has_visual":false,
-               "rejected":{"seq":sequence,"reason":"unsupported node shape"}})
+               "rejected":{"seq":sequence,"reason":"unsupported node shape"},
+               "generation":state.0.coordinator.generation()})
         .to_string(),
     )
     .await
@@ -962,6 +991,45 @@ async fn display_reports_rejection_from_the_browser() {
     assert_eq!(
         body.get("reason").and_then(Value::as_str),
         Some("unsupported node shape")
+    );
+}
+
+/// The page sends a rejection once. A later report without one, here the
+/// confirmation of the next action, must not hide it from the call still
+/// waiting on the rejected `seq` (#255).
+#[tokio::test]
+async fn display_reports_a_rejection_that_a_later_report_followed() {
+    let state = state();
+    let (mut connection, _s, _w) = state.register_connection().await;
+    let epoch = connection.epoch;
+    let handle = post_display_in_task(&state, diagram_show()).await;
+    let DeliveryFrame::Event { sequence, .. } =
+        within("connection.receiver", connection.receiver.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected a display event")
+    };
+    let generation = state.0.coordinator.generation();
+    for report in [
+        json!({"type":"screen_state","view":"auto","has_visual":false,"generation":generation,
+               "rejected":{"seq":sequence,"reason":"unknown field in chart data: zeta"}}),
+        json!({"type":"screen_state","view":"auto","has_visual":true,"generation":generation,
+               "visual_kind":"metric","applied_seq":sequence + 1}),
+    ] {
+        handle_text_frame(&state, epoch, &mut None, &mut None, &report.to_string())
+            .await
+            .unwrap();
+    }
+    let (_code, body) = timeout(Duration::from_secs(2), handle)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(body["rejected"], true, "{body}");
+    assert_eq!(body["rendered"], false, "{body}");
+    assert_eq!(
+        body["reason"], "unknown field in chart data: zeta",
+        "{body}"
     );
 }
 
@@ -1134,7 +1202,7 @@ async fn a_background_refusal_reaches_the_module_as_its_bare_reason() {
 }
 
 #[tokio::test]
-async fn background_speak_is_refused_and_latest_display_is_released_on_promotion() {
+async fn background_speak_is_refused_and_held_display_is_released_on_promotion() {
     let state = state();
     let (mut connection, _, _) = state.register_connection().await;
     state
@@ -1167,13 +1235,7 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
         .as_str()
         .unwrap()
         .contains("not on screen yet"));
-    assert!(state
-        .0
-        .projection
-        .displays
-        .lock()
-        .unwrap()
-        .contains_key("alpha"));
+    assert!(state.0.projection.has_held_display("alpha"));
 
     begin_alpha_candidate(&state, "foreground-token");
     assert!(
@@ -1188,13 +1250,111 @@ async fn background_speak_is_refused_and_latest_display_is_released_on_promotion
     assert!(frames
         .iter()
         .any(|frame| frame["type"] == "display" && frame["action"]["id"] == "d1"));
-    assert!(!state
+    assert!(!state.0.projection.has_held_display("alpha"));
+}
+
+/// A background agent composes a scene in several calls. Every one is held,
+/// and the caller who brings it forward sees the whole scene, not only the
+/// last call (#254).
+#[tokio::test]
+async fn every_background_display_is_held_and_replayed_on_promotion() {
+    let state = state();
+    let (mut connection, _, _) = state.register_connection().await;
+    state
         .0
-        .projection
-        .displays
+        .coordinator
+        .register_background("alpha", "background-token");
+    let note = json!({"op":"show","id":"n1","type":"note","data":{
+        "segments":[{"text":"this edge is new"}],"anchor":{"target":"d1"}}});
+    let metric = json!({"op":"show","id":"m1","type":"metric","data":{
+        "label":"latency","value":"12 ms"}});
+    for action in [diagram_show()["action"].clone(), note, metric] {
+        let (code, held) = agent_call_json(
+            &state,
+            "/display",
+            json!({"token":"background-token", "action":action}),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{held}");
+        assert_eq!(held["held"], true, "{held}");
+    }
+
+    begin_alpha_candidate(&state, "foreground-token");
+    assert!(
+        state
+            .0
+            .leg_announcer
+            .promote_candidate("foreground-token")
+            .await
+    );
+    assert_lifecycle_consistent(&state).await;
+    let shown: Vec<String> = queued_frames(&mut connection)
+        .iter()
+        .filter(|frame| frame["type"] == "display")
+        .filter_map(|frame| frame["action"]["id"].as_str().map(String::from))
+        .collect();
+    assert_eq!(
+        shown,
+        ["d1", "n1", "m1"],
+        "the page is sent every held object"
+    );
+    let staged: Vec<String> = state
+        .0
+        .display_gate
         .lock()
-        .unwrap()
-        .contains_key("alpha"));
+        .await
+        .projection
+        .snapshot_actions()
+        .iter()
+        .filter_map(|action| action["id"].as_str().map(String::from))
+        .collect();
+    assert_eq!(
+        staged,
+        ["d1", "n1", "m1"],
+        "the stage holds every held object"
+    );
+}
+
+/// A held show is held to the stage caps it will meet on promotion, and is
+/// refused when it is sent, not dropped later (#254).
+#[tokio::test]
+async fn a_background_display_past_the_stage_caps_is_refused_at_once() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let note =
+        |id: String| json!({"op":"show","id":id,"type":"note","data":{"segments":[{"text":"x"}]}});
+    for index in 0..crate::display::MAX_STAGE_OBJECTS {
+        let (code, held) = agent_call_json(
+            &state,
+            "/display",
+            json!({"token":"background-token", "action":note(format!("n{index}"))}),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK, "{held}");
+    }
+    let (code, refused) = agent_call_json(
+        &state,
+        "/display",
+        json!({"token":"background-token", "action":note("one-too-many".into())}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(refused["delivered"], false);
+    assert!(
+        refused["detail"].as_str().unwrap().contains("hide one"),
+        "{refused}"
+    );
+    // An update in place still fits.
+    let (code, held) = agent_call_json(
+        &state,
+        "/display",
+        json!({"token":"background-token", "action":note("n0".into())}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK, "{held}");
 }
 
 #[tokio::test]
@@ -1252,7 +1412,7 @@ async fn an_idle_notice_does_not_clear_a_background_speak_request() {
     .await;
     assert_lifecycle_consistent(&state).await;
 
-    let agents = state.0.projection.states.lock().unwrap();
+    let agents = state.0.projection.snapshot();
     let agent = agents
         .iter()
         .find(|agent| agent.project == "alpha")

@@ -51,6 +51,10 @@ impl TranscriptLog {
         self.add_with_id_and_voiced(role, text, route, id, false)
     }
 
+    /// The entry for `text`, or None when it is blank. The entry is kept for
+    /// page reloads only while the limit allows (a limit of 0 keeps none),
+    /// but it is returned either way: whether a line is kept does not decide
+    /// whether it reaches the live page (#293).
     pub fn add_with_id_and_voiced(
         &mut self,
         role: impl Into<String>,
@@ -60,7 +64,7 @@ impl TranscriptLog {
         voiced: bool,
     ) -> Option<TranscriptEntry> {
         let text = text.trim();
-        if text.is_empty() || self.limit == 0 {
+        if text.is_empty() {
             return None;
         }
         let entry = TranscriptEntry {
@@ -74,6 +78,9 @@ impl TranscriptLog {
             id,
             voiced,
         };
+        if self.limit == 0 {
+            return Some(entry);
+        }
         if self.entries.len() == self.limit {
             self.entries.pop_front();
         }

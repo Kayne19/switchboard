@@ -176,6 +176,61 @@ fn floor_quiet_threshold_is_parsed_by_config_only() {
     assert_eq!(config.floor_quiet_threshold_ms, 321);
 }
 
+#[test]
+fn a_bad_duration_only_the_service_enforces_falls_back_to_its_default() {
+    // `docs/environment.md`: a numeric setting that does not parse is logged
+    // and replaced by its default; only the speech deadline stops startup.
+    for bad in ["10s", "0", "-5", "1.5", "120001", "200000"] {
+        let config = Config::for_tests(&[
+            ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", bad),
+            ("SWITCHBOARD_JEV_TIMEOUT_MS", bad),
+        ]);
+        assert_eq!(config.floor_quiet_threshold_ms, 10_000, "{bad:?}");
+        assert_eq!(config.jev_timeout_ms, 2_000, "{bad:?}");
+    }
+    let edges = Config::for_tests(&[
+        ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "120000"),
+        ("SWITCHBOARD_JEV_TIMEOUT_MS", "1"),
+    ]);
+    assert_eq!(edges.floor_quiet_threshold_ms, 120_000);
+    assert_eq!(edges.jev_timeout_ms, 1);
+}
+
+#[test]
+#[should_panic(expected = "SWITCHBOARD_SPEECH_DEADLINE_MS must be a positive integer")]
+fn an_out_of_range_speech_deadline_stops_startup() {
+    Config::for_tests(&[("SWITCHBOARD_SPEECH_DEADLINE_MS", "120001")]);
+}
+
+#[test]
+fn a_crossed_current_agent_band_falls_back_to_both_defaults() {
+    // Only one bound set, and it crosses the other's default.
+    for values in [
+        &[("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER", "0.8")][..],
+        &[("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER", "0.2")][..],
+        &[
+            ("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER", "0.6"),
+            ("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER", "0.4"),
+        ][..],
+    ] {
+        let config = Config::for_tests(values);
+        assert_eq!(
+            (
+                config.jev_for_current_agent_lower,
+                config.jev_for_current_agent_upper
+            ),
+            (0.3, 0.7),
+            "{values:?}"
+        );
+    }
+    let empty_band = Config::for_tests(&[
+        ("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER", "0.5"),
+        ("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER", "0.5"),
+    ]);
+    assert_eq!(empty_band.jev_for_current_agent_lower, 0.5);
+    assert_eq!(empty_band.jev_for_current_agent_upper, 0.5);
+}
+
 #[tokio::test]
 async fn a_debug_bind_failure_leaves_the_debug_listener_and_bus_off() {
     let bus = debug::DebugBus::off();

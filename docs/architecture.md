@@ -415,7 +415,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | Area | Owns | Must not own |
 |---|---|---|
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
-| `api.rs` | the primary router, `/healthz`, and the debug listener's router | anything a handler does |
+| `api.rs` | the primary router, `/healthz`, the debug listener's router, and the origin check both listeners apply | anything a handler does |
 | `app_state.rs` | `AppState`/`AppInner` and their construction (the callbacks installed into the PBX and coordinator), the workers, shutdown, the event fan-out, the operation registry, the resident-agent projection | provider wire formats, PBX policy |
 | `browser.rs` | the `/ws` connection and its size bound: registration, snapshot, the frame multiplexer, screen state, frame writes | what a command does once parsed |
 | `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, and the rescue each control starts with | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |

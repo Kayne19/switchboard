@@ -21,6 +21,13 @@ export interface Feed {
 
 export const BACKOFF_BASE_MS = 500;
 export const BACKOFF_MAX_MS = 10_000;
+/**
+ * How long a socket has to stay open after its snapshot before the backoff
+ * starts again from the base delay. Opening is not enough: the listener
+ * closes a client that lags or cannot take a frame in time, after the open,
+ * and each reconnect costs it a full snapshot.
+ */
+export const BACKOFF_RESET_AFTER_MS = 10_000;
 
 /** The wait before reconnect attempt `attempt` (0-based). */
 export function backoffDelay(attempt: number): number {
@@ -75,6 +82,8 @@ export class SocketFeed implements Feed {
   private socket: SocketLike | null = null;
   private attempt = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  /** Resets `attempt` once the socket has held its snapshot a while. */
+  private settled: ReturnType<typeof setTimeout> | null = null;
   private stopped = true;
   private readonly batcher: FrameBatcher;
 
@@ -109,6 +118,8 @@ export class SocketFeed implements Feed {
   }
 
   private detach(): SocketLike | null {
+    if (this.settled) clearTimeout(this.settled);
+    this.settled = null;
     const socket = this.socket;
     if (socket) socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
     this.socket = null;
@@ -126,7 +137,6 @@ export class SocketFeed implements Feed {
     }
     this.socket = socket;
     socket.onopen = () => {
-      this.attempt = 0;
       this.handlers.status('live');
     };
     socket.onmessage = (event) => {
@@ -143,6 +153,12 @@ export class SocketFeed implements Feed {
         return;
       }
       for (const skipped of parsed.value.skipped) this.handlers.rejected(`snapshot entry skipped: ${skipped}`);
+      if (parsed.value.frame.type === 'snapshot' && !this.settled) {
+        this.settled = setTimeout(() => {
+          this.settled = null;
+          this.attempt = 0;
+        }, BACKOFF_RESET_AFTER_MS);
+      }
       this.batcher.push(parsed.value.frame);
     };
     socket.onclose = () => {

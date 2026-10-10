@@ -461,6 +461,37 @@ logged with the mime its browser recorded it as (`clip arrived`), which is
 how the journal says whether a caller's browser sent `audio/webm;codecs=opus`
 or the `audio/mp4` every iPad browser records.
 
+### Who can reach the call
+
+The page has no login: anyone who can load it on the network can take the
+call. What the service does refuse is another site's page acting through the
+caller's own browser. A browser applies no CORS to a WebSocket, and it sends a
+`POST` with no body to another site without asking first, so both listeners
+refuse any request whose `Origin` names a different host and port than its
+`Host` (`api::refuse_cross_origin`, a 403). That covers `/ws` (which reads the
+call and speaks to the agent on the line as the caller), `/hangup`, and every
+other route. The page's own requests name its own origin and pass; a client
+that is not a browser sends no `Origin` and passes too (curl, a probe, the
+host agents dialling in to `/host`, which have their own token check).
+
+The check compares `Origin` with the `Host` the service receives, so a proxy
+in front must hand on the browser's `Host` unchanged. Caddy's `reverse_proxy`
+does by default: the page at `https://switchboard.home.arpa` sends
+`Origin: https://switchboard.home.arpa` and arrives with
+`Host: switchboard.home.arpa`. A proxy that rewrites `Host` to the upstream
+address would lock the page out.
+
+Matching `Origin` to `Host` does not stop DNS rebinding: a page on another
+site whose name is then pointed at damocles sends its own name in both. So
+the same layer also refuses any request whose `Host` is a name public DNS
+could answer for. It serves an IP literal (`192.168.1.217:8765`), a
+single-label name (`localhost`, `damocles`), and a name under a suffix public
+DNS never delegates: `home.arpa` (RFC 8375; `switchboard.home.arpa` and the
+host agents' `wss://switchboard.home.arpa/host` pass), `local`, `localhost`,
+or `internal`. A name under any other suffix gets a 403, whether or not it
+sends an `Origin`. Only the local network can answer for the names that
+pass, and anyone who controls it can reach the page directly anyway.
+
 Restarting drops whatever call is in progress and repeats the startup prewarm.
 Speech-to-text runs in its own service (`switchboard-stt`) and is not restarted
 with it.

@@ -9,7 +9,7 @@
 //! around each apply.
 use crate::delivery::Event;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// The most metrics the primary cluster holds; `MAX_PRIMARY_METRICS` in
 /// apps/frontend/src/controller/reducer.ts. Keep the two equal.
@@ -52,7 +52,6 @@ pub(crate) struct DisplayProjection {
     pub(crate) order: Vec<String>,
     pub(crate) focus_id: Option<String>,
     pub(crate) speech: Option<DisplaySpeech>,
-    pub(crate) watermark: u64,
 }
 
 impl DisplayProjection {
@@ -88,7 +87,6 @@ impl DisplayProjection {
     }
 
     pub(crate) fn apply(&mut self, action: &Value, sequence: u64) {
-        self.watermark = sequence;
         let Some(op) = action.get("op").and_then(Value::as_str) else {
             return;
         };
@@ -248,6 +246,11 @@ impl DisplayProjection {
         primaries
     }
 
+    /// Whether the stage shows nothing: no object and no anchored speech.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.order.is_empty() && self.speech.is_none()
+    }
+
     pub(crate) fn clear(&mut self) {
         self.objects.clear();
         self.order.clear();
@@ -363,15 +366,23 @@ pub(crate) struct SceneLeg {
 
 pub(crate) struct DisplayGateState {
     pub(crate) projection: DisplayProjection,
+    /// The caller's screen as the page last reported it, marked stale when a
+    /// page connects or retires or a new leg begins. The one copy: `view`
+    /// (`module_calls.rs`), Jev's routing summary (`turns.rs`) and the floor
+    /// gate (`speech.rs`) read it here.
     pub(crate) screen_state: Value,
     pub(crate) active_epoch: Option<u64>,
-    pub(crate) report_epoch: Option<u64>,
-    pub(crate) report_generation: Option<u64>,
     /// The leg the projection was last reset for; `None` until one is
     /// announced.
     pub(crate) scene_leg: Option<SceneLeg>,
     pub(crate) watermark: u64,
 }
+
+/// The most rejections `ConfirmState` keeps per generation. A display call
+/// waits at most `DISPLAY_CONFIRM_DEADLINE_MS`, so only the newest few can
+/// still have a waiter; the bound keeps a page that rejects everything from
+/// growing the map.
+const MAX_KEPT_REJECTIONS: usize = 16;
 
 #[derive(Clone, Default)]
 pub(crate) struct ConfirmState {
@@ -380,7 +391,56 @@ pub(crate) struct ConfirmState {
     // generation yet" -- distinct from confirming sequence 0, which is a
     // real, reachable sequence number.
     pub(crate) watermark: Option<u64>,
-    pub(crate) rejection: Option<(u64, String)>,
+    // Every rejection the page has sent in this generation, newest
+    // `MAX_KEPT_REJECTIONS` by `seq`. The page sends each one once, so a
+    // later report without one must not clear it before its waiter looks.
+    rejections: BTreeMap<u64, String>,
+}
+
+impl ConfirmState {
+    /// Folds in one `screen_state` report the page made in `generation`: a
+    /// report from another generation starts that one first, `applied_seq`
+    /// raises the watermark, and a rejection is kept. A report without a
+    /// rejection clears none.
+    pub(crate) fn fold_report(
+        &mut self,
+        generation: u64,
+        applied_seq: Option<u64>,
+        rejected: Option<(u64, String)>,
+    ) {
+        if self.generation != generation {
+            self.begin_generation(generation);
+        }
+        if let Some(seq) = applied_seq {
+            if self.watermark.is_none_or(|w| seq > w) {
+                self.watermark = Some(seq);
+            }
+        }
+        if let Some((seq, reason)) = rejected {
+            self.reject(seq, reason);
+        }
+    }
+
+    /// Records the page's rejection of `seq`, dropping the oldest past the
+    /// bound.
+    fn reject(&mut self, seq: u64, reason: String) {
+        self.rejections.insert(seq, reason);
+        while self.rejections.len() > MAX_KEPT_REJECTIONS {
+            self.rejections.pop_first();
+        }
+    }
+
+    /// Why the page rejected `seq`, if it did in this generation.
+    pub(crate) fn rejection(&self, seq: u64) -> Option<&str> {
+        self.rejections.get(&seq).map(String::as_str)
+    }
+
+    /// A new generation: nothing confirmed or rejected in it yet.
+    pub(crate) fn begin_generation(&mut self, generation: u64) {
+        self.generation = generation;
+        self.watermark = None;
+        self.rejections.clear();
+    }
 }
 
 pub(crate) const DISPLAY_CONFIRM_DEADLINE_MS: u64 = 2500;

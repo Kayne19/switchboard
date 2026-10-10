@@ -1,8 +1,8 @@
 //! A project session's module calls over the host link: the `/host`
 //! upgrade, the admission every acting call passes, and `speak`,
 //! `request_to_speak`, `display` and `view`.
-use crate::app_state::emit_message;
 use crate::app_state::AppState;
+use crate::app_state::{emit_message, publish_agents};
 use crate::browser::MAX_WEBSOCKET_MESSAGE_BYTES;
 use crate::delivery::Event;
 use crate::display::DISPLAY_CONFIRM_DEADLINE_MS;
@@ -334,12 +334,12 @@ pub(crate) async fn request_to_speak(state: AppState, token: &str, raw: Value) -
     };
     let generation = state.0.coordinator.generation();
     let context = recent_floor_context(&state.0.transcript_log.lock().await.entries());
-    let Some((project, agents, held_display)) =
+    let Some((project, change, held_display)) =
         state.0.coordinator.with_background(token, |project| {
             let project = project.to_owned();
             let held_display = state.0.projection.has_held_display(&project);
-            let agents = state.0.projection.waiting(project.clone(), request.clone());
-            (project, agents, held_display)
+            let change = state.0.projection.waiting(project.clone(), request.clone());
+            (project, change, held_display)
         })
     else {
         return (
@@ -348,7 +348,7 @@ pub(crate) async fn request_to_speak(state: AppState, token: &str, raw: Value) -
         )
             .into_response();
     };
-    emit_message(&state, ServerMessage::AgentsState { agents });
+    publish_agents(&state, change);
     state
         .0
         .floor
@@ -439,25 +439,32 @@ async fn display(
         }
     }
 
-    if state
-        .0
-        .coordinator
-        .with_background(token, |project| {
-            state
-                .0
-                .projection
-                .hold_display(project.to_owned(), normalized_action.clone())
-        })
-        .is_some()
-    {
-        return Json(json!({
-            "delivered": false,
-            "accepted": true,
-            "held": true,
-            "reason": "caller_away",
-            "detail": "the display is held, not on screen yet; it will appear when the caller brings this agent forward. Say it is ready, not that it is on screen"
-        }))
-        .into_response();
+    let held = state.0.coordinator.with_background(token, |project| {
+        state
+            .0
+            .projection
+            .hold_display(project.to_owned(), &normalized_action)
+    });
+    match held {
+        Some(Err(detail)) => {
+            tracing::info!(%detail, "refused: the held stage is full");
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({"delivered":false, "detail":detail})),
+            )
+                .into_response();
+        }
+        Some(Ok(())) => {
+            return Json(json!({
+                "delivered": false,
+                "accepted": true,
+                "held": true,
+                "reason": "caller_away",
+                "detail": "the display is held, not on screen yet; it will appear when the caller brings this agent forward. Say it is ready, not that it is on screen"
+            }))
+            .into_response();
+        }
+        None => {}
     }
     let authority = match admit_module_call(
         &state,
@@ -493,13 +500,12 @@ async fn display(
         seq: None,
     }
     .to_value();
-    let event = Event::Json(value.clone());
+    let event = Event::Json(value);
     let _ = state.0.events.send(event.clone());
     let (delivered, sequence) = state.0.delivery.publish_sequenced(event);
 
     gate.projection.apply(&normalized_action, sequence);
     gate.watermark = sequence;
-    *state.0.last_display.lock().await = Some(value);
     drop(gate);
 
     if !delivered {
@@ -520,21 +526,19 @@ async fn display(
         {
             let c = confirm_rx.borrow_and_update();
             if c.generation == permit_generation {
-                if let Some((rseq, reason)) = &c.rejection {
-                    if *rseq == sequence {
-                        tracing::info!(
-                            generation = permit_generation,
-                            sequence,
-                            %reason,
-                            elapsed = ?started.elapsed(),
-                            "the browser could not render it"
-                        );
-                        return Json(json!({
-                            "delivered": true, "rendered": false,
-                            "rejected": true, "reason": reason
-                        }))
-                        .into_response();
-                    }
+                if let Some(reason) = c.rejection(sequence) {
+                    tracing::info!(
+                        generation = permit_generation,
+                        sequence,
+                        %reason,
+                        elapsed = ?started.elapsed(),
+                        "the browser could not render it"
+                    );
+                    return Json(json!({
+                        "delivered": true, "rendered": false,
+                        "rejected": true, "reason": reason
+                    }))
+                    .into_response();
                 }
                 if c.watermark.is_some_and(|w| w >= sequence) {
                     tracing::info!(

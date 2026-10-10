@@ -26,12 +26,32 @@ trusted network: it can contain caller text, prompts, project activity, and
 logs. There is no authentication and no disk history. The event and log rings
 are bounded and memory-only.
 
-Browsers do not apply CORS to a WebSocket, so `/ws` checks the origin itself:
-a request with an `Origin` header is upgraded only when that origin's host and
-port equal the request's `Host` (a default port may be left out on either
-side). Any other page a browser on the network opens gets a 403. A request
-with no `Origin` (curl, a probe script) is served. The `npm run dev:debug`
-proxy forwards the dev server's own `Host`, so it passes.
+Browsers do not apply CORS to a WebSocket, so the listener checks the origin
+itself, with the same check as the primary listener (`api::refuse_cross_origin`;
+see the README, "Who can reach the call"): a request with an `Origin` header is
+served only when that origin's host and port equal the request's `Host` (a
+default port may be left out on either side). Any other page a browser on the
+network opens gets a 403. A request with no `Origin` (curl, a probe script) is
+served. The `npm run dev:debug` proxy forwards the dev server's own `Host`, so
+it passes.
+
+That comparison alone trusts `Host`, and DNS rebinding defeats it: a page at
+`http://evil.example:8766` whose DNS then points at this machine sends
+`Host: evil.example:8766` and `Origin: http://evil.example:8766`, which agree.
+So the same check also refuses (403) any request whose `Host` is a name that
+public DNS could answer for, with or without an `Origin`. It serves a `Host`
+that is an IP literal (`192.168.1.217:8766`, `[::1]:8766`), a single-label
+name (`localhost`, `damocles`), or a name under a suffix that public DNS
+never delegates: `home.arpa` (RFC 8375), `local` (mDNS), `localhost`, or
+`internal`. Reach the page by one of those; a name under any other suffix
+(`damocles.lan`, `damocles.example.com`) gets a 403. No setting changes this.
+
+What is left: a rebinding page needs a name that resolves to this machine,
+and only the local network (its DNS resolver, or an mDNS responder for
+`.local`) can answer for the names that pass. Anyone who controls those can
+already reach the listener directly, and it has no authentication, so
+rebinding gives them nothing new. The listener is still meant only for a
+trusted network.
 
 ## The page
 
@@ -52,7 +72,11 @@ The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`
   after 2 seconds makes the page reconnect for a fresh snapshot. A trace that
   a `pbx_branch` `dropped_stale` or `failed` ends is drawn as ended, not as
   still routing.
-- `connection.ts` reconnects with backoff from 0.5 s up to 10 s.
+- `connection.ts` reconnects with backoff from 0.5 s up to 10 s. The backoff
+  starts again from 0.5 s only once a socket has received its snapshot and
+  stayed open 10 s more; opening is not enough, since the listener closes a
+  client that lags or cannot take a frame after the open, and each reconnect
+  costs it a full snapshot.
 - The page looks like the main page because it is drawn with it: it loads
   `src/styles/index.css` before its own `debug.css`, and takes the tokens,
   type and frames from there. Agent text goes through `RichText`, latencies
@@ -74,7 +98,9 @@ listener. `&instant=1` applies it all at once, `&speed=N` changes the pace,
 ## WebSocket framing
 
 The page connects to `/ws` on the debug listener. The page sends nothing; the
-listener ignores anything it receives, and refuses a frame over 4 KiB. The
+listener ignores anything it receives, and closes a client that sends a frame
+over 4 KiB, judged on the frame's header before its payload is read. At most
+8 debug sockets are open at once; one more gets a 503 until one closes. The
 first frame is a JSON `snapshot`:
 
 ```json
@@ -124,7 +150,10 @@ events and 8 MiB of logs by each record's estimated size; past either bound
 the oldest records go first. One record is also bounded in bytes: each text
 field is cut at 4 KiB, each name, id or JSON object key at 256 bytes, a JSON
 value keeps at most 64 items per array or object, and a record keeps about
-16 KiB of text in total, whatever its input. A cut string ends with
+16 KiB in total, whatever its input. That total counts each kept JSON value's
+own size in memory (a `serde_json::Value`, 32 bytes) as well as its text, so a
+record of many empty strings or arrays is bounded too, and a cut array is
+copied into a new buffer rather than keeping its input's. A cut string ends with
 `…[clipped]`, a cut array or object gains a `…[clipped] N more` entry, and the
 record carries `"clipped": true`. The field is absent when nothing was cut.
 A field is cut before it is scrubbed, so publishing a 16 MiB value costs about
@@ -138,7 +167,9 @@ A tracing layer copies every log line that passes the service's log filter
 the page. The journal still receives every line unchanged.
 
 Every event and log record is scrubbed before it is kept, in one place
-(`Clip` in `debug.rs`); producers publish raw values. Every string is
+(`Clip` in `debug.rs`); producers publish raw values. A snapshot's `agents`
+come from the live projection, not a ring, and go through the same `Clip`
+when the snapshot is serialized. Every string is
 scrubbed: text, JSON strings and keys, log messages, and names and ids
 (`target`, `to_agent`, `tool`, `call_id`, a module call's `name`).
 
@@ -205,7 +236,7 @@ Rust `DebugEvent` in `apps/backend/src/debug.rs` is the source of truth. The
 - `floor_gate`: `agent`, `answer` (`yes`, `no`, or `failed`), `latency_ms`, optional `floor_id`
 - `floor_rewrite`: `agent`, `original`, `rewritten`, `latency_ms`, optional `floor_id`; the utility's floor rewrite. `rewritten` equals `original` when the rewrite failed or timed out.
 - `floor_released`: `agent`, `how` (`gate_yes`, `quiet_after_hold`, or `dropped_agent_gone`), optional `floor_id`
-- `agents_state`: `agents` (the existing `AgentsState` projection)
+- `agents_state`: `agents` (the existing `AgentsState` projection), on every change to it, including a `request_to_speak` that marks an agent `waiting`; the caller's page gets the same change at the same time (`app_state::publish_agents`)
 - `host_link`: `host`, `connected`; a fenced link closing while its newer link is up is not reported
 - `call_boundary`: `phase` (`started` or `ended`), `call_id` (opaque, minted by the service), optional `reason` for `ended` (`page_closed`, `hangup`, or `shutdown`). A call starts when a caller page connects to no open call. A hangup ends it and, while the page stays connected, starts the next one.
 

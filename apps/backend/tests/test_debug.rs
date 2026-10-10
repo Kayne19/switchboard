@@ -593,6 +593,104 @@ mod wire {
         }
     }
 
+    /// A listener serving the debug router on a loopback port.
+    async fn serve_debug() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let app = router(DebugBus::new(), Vec::new, shutdown_rx);
+        let server = tokio::spawn(async move {
+            let _shutdown = shutdown;
+            let _ = axum::serve(listener, app).await;
+        });
+        (address, server)
+    }
+
+    #[tokio::test]
+    async fn a_frame_over_the_incoming_bound_is_refused_from_its_header() {
+        // #231: the frame bound is checked on a frame's header, before its
+        // payload is buffered; the message bound only after. A client that
+        // announces a large frame is closed on the header alone.
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (address, server) = serve_debug().await;
+        let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET /ws HTTP/1.1\r\nHost: {address}\r\nUpgrade: websocket\r\n\
+                     Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                     Sec-WebSocket-Version: 13\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut byte = [0u8; 1];
+            stream.read_exact(&mut byte).await.unwrap();
+            head.push(byte[0]);
+        }
+        assert!(
+            head.starts_with(b"HTTP/1.1 101"),
+            "{}",
+            String::from_utf8_lossy(&head)
+        );
+        // A masked text frame that announces 1 MiB, and none of its payload.
+        let mut header = vec![0x81, 0x80 | 127];
+        header.extend_from_slice(&(1u64 << 20).to_be_bytes());
+        header.extend_from_slice(&[1, 2, 3, 4]);
+        stream.write_all(&header).await.unwrap();
+        let closed = timeout(Duration::from_secs(1), async {
+            let mut buffer = [0u8; 4096];
+            loop {
+                match stream.read(&mut buffer).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await;
+        assert!(
+            closed.is_ok(),
+            "the listener waits for the announced payload"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn the_debug_listener_serves_a_bounded_number_of_sockets() {
+        let (address, server) = serve_debug().await;
+        let url = format!("ws://{address}/ws");
+        let mut sockets = Vec::new();
+        for _ in 0..MAX_CLIENTS {
+            let (mut socket, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+            assert_eq!(next_json(&mut socket).await["type"], "snapshot");
+            sockets.push(socket);
+        }
+        let refused = |result| match result {
+            Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+                response.status().as_u16()
+            }
+            Ok(_) => 101,
+            Err(error) => panic!("upgrade failed: {error}"),
+        };
+        assert_eq!(refused(tokio_tungstenite::connect_async(&url).await), 503);
+        // A socket that closes frees its place.
+        sockets.pop().unwrap().close(None).await.unwrap();
+        let reopened = timeout(Duration::from_secs(5), async {
+            loop {
+                if refused(tokio_tungstenite::connect_async(&url).await) == 101 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(reopened.is_ok(), "a freed place is not reused");
+        server.abort();
+    }
+
     /// The status the debug socket answers an upgrade from `origin` with.
     async fn upgrade_status(origin: Option<&str>) -> u16 {
         use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error};
@@ -631,27 +729,6 @@ mod wire {
         ] {
             assert_eq!(upgrade_status(Some(foreign)).await, 403, "{foreign}");
         }
-    }
-
-    #[test]
-    fn an_origin_matches_its_host_with_or_without_the_default_port() {
-        let headers = |origin: &str, host: &str| {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::ORIGIN, origin.parse().unwrap());
-            headers.insert(header::HOST, host.parse().unwrap());
-            headers
-        };
-        assert!(same_origin(&headers("http://damocles", "damocles:80")));
-        assert!(same_origin(&headers("https://damocles:443", "damocles")));
-        assert!(same_origin(&headers("http://[::1]:8766", "[::1]:8766")));
-        assert!(!same_origin(&headers(
-            "http://damocles:8765",
-            "damocles:8766"
-        )));
-        assert!(!same_origin(&HeaderMap::from_iter([(
-            header::ORIGIN,
-            "http://damocles".parse().unwrap()
-        )])));
     }
 
     #[tokio::test]
@@ -715,6 +792,40 @@ mod wire {
         })
         .await;
         assert!(closed.is_ok(), "the debug socket closes on shutdown");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn a_snapshot_scrubs_and_clips_the_agents_it_sends() {
+        let agents = || {
+            vec![AgentState {
+                project: "alpha".into(),
+                state: "waiting".into(),
+                pending_request: Some(crate::protocol::AgentRequest {
+                    message: format!(
+                        "api_key=sk-live-1234567890abcdef {}",
+                        "x".repeat(MAX_FIELD_BYTES * 4)
+                    ),
+                    reason: "finished".into(),
+                }),
+            }]
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (_shutdown, shutdown_rx) = watch::channel(false);
+        let app = router(DebugBus::new(), agents, shutdown_rx);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+            .await
+            .unwrap();
+        let snapshot = next_json(&mut socket).await;
+        let message = snapshot["agents"][0]["pending_request"]["message"]
+            .as_str()
+            .unwrap();
+        assert!(message.contains("[redacted]"), "{}", &message[..80]);
+        assert!(!message.contains("sk-live"));
+        assert!(message.ends_with(CLIP_MARKER));
+        assert!(message.len() <= MAX_FIELD_BYTES + CLIP_MARKER.len());
         server.abort();
     }
 }
@@ -1169,6 +1280,53 @@ fn a_record_size_estimate_counts_what_it_keeps() {
     // The rings' budgets hold far more than one record each.
     const { assert!(EVENT_BUDGET_BYTES > 1000 * (MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES)) };
     const { assert!(LOG_BUDGET_BYTES > 256 * (MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES)) };
+}
+
+#[test]
+fn a_clipped_array_does_not_keep_its_input_buffer() {
+    // A producer moves its value into the record. The kept array must be a
+    // new buffer of the kept items, not the input's buffer cut short.
+    let bus = DebugBus::new();
+    bus.publish(DebugEvent::ModuleCall {
+        agent: "alpha".into(),
+        call_id: "m1".into(),
+        name: "display".into(),
+        args: Value::Array(vec![Value::Null; 1_000_000]),
+        turn_id: None,
+    });
+    let snapshot = bus.snapshot();
+    let DebugEvent::ModuleCall { args, .. } = &snapshot.events[0].event else {
+        panic!("module call")
+    };
+    let items = args.as_array().unwrap();
+    assert_eq!(items.len(), MAX_JSON_ITEMS + 1);
+    assert!(
+        items.capacity() <= MAX_JSON_ITEMS + 1,
+        "the kept array holds {} slots",
+        items.capacity()
+    );
+}
+
+#[test]
+fn a_record_size_estimate_counts_every_json_node() {
+    fn nodes(value: &Value) -> usize {
+        1 + match value {
+            Value::Array(items) => items.iter().map(nodes).sum(),
+            Value::Object(map) => map.values().map(nodes).sum(),
+            _ => 0,
+        }
+    }
+    // Empty strings and arrays have almost no text, but each node is a
+    // `Value` in memory all the same.
+    let mut value = json!(vec![vec![""; 64]; 64]);
+    let mut clip = Clip::new();
+    clip.json(&mut value);
+    let kept = nodes(&value);
+    assert!(
+        clip.bytes() >= kept * std::mem::size_of::<Value>(),
+        "{kept} nodes kept, estimated at {} bytes",
+        clip.bytes()
+    );
 }
 
 #[tokio::test]

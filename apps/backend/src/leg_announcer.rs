@@ -7,7 +7,7 @@ use crate::lifecycle::{ActivityDisposition, Coordinator};
 use crate::pi_client::Activity;
 use crate::protocol::ServerMessage;
 use crate::speech::{SpeechContinuity, SpeechGroup};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, watch, Mutex};
 
@@ -25,7 +25,6 @@ pub(crate) struct LegAnnouncer {
     pub(crate) delivery: DeliveryState,
     pub(crate) display_gate: Arc<Mutex<DisplayGateState>>,
     pub(crate) display_confirm: watch::Sender<ConfirmState>,
-    pub(crate) last_display: Arc<Mutex<Option<Value>>>,
     pub(crate) projection: AgentProjection,
     pub(crate) continuity: Arc<StdMutex<SpeechContinuity>>,
     pub(crate) active_speech_group: Arc<StdMutex<Option<SpeechGroup>>>,
@@ -129,34 +128,34 @@ impl LegAnnouncer {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
         gate.projection.clear();
         gate.screen_state["stale"] = json!(true);
-        gate.report_epoch = None;
-        gate.report_generation = None;
-        *self.last_display.lock().await = None;
-        self.display_confirm.send_modify(|confirm| {
-            confirm.generation = leg.generation;
-            confirm.watermark = None;
-            confirm.rejection = None;
-        });
+        self.display_confirm
+            .send_modify(|confirm| confirm.begin_generation(leg.generation));
         self.publish(ServerMessage::Epoch {
             generation: leg.generation,
         });
         gate.scene_leg = Some(leg.clone());
         if leg.route != crate::pbx::OPERATOR {
-            if let Some(action) = self.projection.take_display(&leg.route) {
-                let event = Event::Json(
-                    ServerMessage::Display {
-                        action: action.clone(),
-                        seq: None,
-                    }
-                    .to_value(),
-                );
-                let (delivered, sequence) = self.delivery.publish_sequenced(event.clone());
-                let _ = self.events.send(event);
-                gate.projection.apply(&action, sequence);
-                gate.watermark = sequence;
-                *self.last_display.lock().await =
-                    Some(ServerMessage::Display { action, seq: None }.to_value());
-                tracing::info!(route = %leg.route, delivered, "released the final background display on foreground");
+            // The scene the agent built while in the background is replayed
+            // into the cleared stage as the actions a reconnecting page is
+            // sent (`snapshot_actions`), each one sequenced like a live show.
+            if let Some(held) = self.projection.take_display(&leg.route) {
+                let actions = held.snapshot_actions();
+                let mut delivered = false;
+                for action in &actions {
+                    let event = Event::Json(
+                        ServerMessage::Display {
+                            action: action.clone(),
+                            seq: None,
+                        }
+                        .to_value(),
+                    );
+                    let sequence;
+                    (delivered, sequence) = self.delivery.publish_sequenced(event.clone());
+                    let _ = self.events.send(event);
+                    gate.projection.apply(action, sequence);
+                    gate.watermark = sequence;
+                }
+                tracing::info!(route = %leg.route, actions = actions.len(), delivered, "released the background scene on foreground");
             }
         }
     }
