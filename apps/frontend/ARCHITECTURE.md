@@ -213,12 +213,24 @@ straight to the whole replay with no silence watch and no second status line
 -- and a reconnect's `hello_ack`, which offers MSE again, cannot turn it back
 on: the engine does not change mid-call.
 
+Streaming stops in one place (`mseStop`), whether a stream failed or a
+`hello_ack` turned it off, and nothing it held is lost (#259). Every
+utterance it held goes on as a whole replay, in order: one that is complete
+is queued at once, and one still arriving falls back on its `audio_done`. A
+complete stream that did not fail plays out, and the replays follow it. A
+replay that owns the element is left alone. Before this, the utterances
+queued behind a failed stream were never played or reported, and the queue
+never drained, so hands-free never got its follow-up lease back.
+
 A streamed utterance's `MediaSource` is attached to the element as soon as it
 is made: a `MediaSource` is `closed` until an element takes its URL, and
 `sourceopen` -- where the `SourceBuffer` is added and the chunks go in --
 fires from that attach. Waiting for the event before attaching waits for an
 event that cannot come, which is what made every page offering `mse_mp3`
-(Chrome, an iPad) hear nothing at all. A page offers it when it has a
+(Chrome, an iPad) hear nothing at all. A source the engine leaves `closed`
+with no error is caught too: the silence watch is armed on the attach, holds
+once the source is open and waiting for bytes, and otherwise falls back with
+"MediaSource did not open" (#259). A page offers it when it has a
 `MediaSource` that supports `audio/mpeg`; Firefox does not and has always
 taken the whole replay.
 
