@@ -102,14 +102,22 @@ fn normalize(text: &str) -> String {
         .collect()
 }
 
+/// Splits `provider/model:thinking`. The provider ends at the first `/`; the
+/// thinking level is the text after the *last* `:`, and only when it is one
+/// (`is_thinking_suffix`). Otherwise the colon belongs to the model id:
+/// OpenRouter's `qwen/qwen3-coder:free`, Ollama's `qwen3:32b`. This is how
+/// pi reads `--model provider/id:level` too (prime-agent's
+/// `parseModelPattern`), so a spec means the same model on both sides.
 pub fn parse_spec(text: &str) -> (String, String, String) {
     let raw = text.trim();
     if raw.is_empty() {
         return (String::new(), String::new(), String::new());
     }
     let (base, thinking) = raw
-        .split_once(':')
-        .map_or((raw, ""), |(base, thinking)| (base, thinking.trim()));
+        .rsplit_once(':')
+        .map(|(base, suffix)| (base, suffix.trim()))
+        .filter(|(_, suffix)| is_thinking_suffix(suffix))
+        .unwrap_or((raw, ""));
     let (provider, model) = base
         .split_once('/')
         .map_or(("", base), |(provider, model)| {
@@ -128,6 +136,14 @@ fn thinking_alias(value: &str) -> Option<&'static str> {
         "default" => Some(""),
         _ => None,
     }
+}
+
+/// Whether the text after a spec's last `:` names a thinking level rather than
+/// ending the model id. `normalize_thinking` is the judge, so a spec's suffix
+/// and a requested level accept the same words; a suffix without a letter
+/// (`qwen2.5:7`) is a tag, though `normalize_thinking` reads it as no level.
+fn is_thinking_suffix(suffix: &str) -> bool {
+    suffix.chars().any(|c| c.is_ascii_alphabetic()) && normalize_thinking(suffix).is_ok()
 }
 
 pub fn normalize_thinking(text: &str) -> Result<String, ModelError> {
