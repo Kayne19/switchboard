@@ -777,15 +777,22 @@ the page applies or declines a frame) carries two more fields:
 ```rust
 pub struct ConfirmState {
     pub generation: u64,
-    pub watermark: Option<u64>,   // None: nothing confirmed yet this generation
-    pub rejection: Option<(u64, String)>,
+    pub watermark: Option<u64>,         // None: nothing confirmed yet this generation
+    rejections: BTreeMap<u64, String>,  // seq -> the page's reason
 }
 ```
 
-Every `screen_state` report folds its `applied_seq` / `rejected` into this
-watch as a running per-generation maximum. Moving to a new leg resets it —
-`generation` moves to the new value, `watermark` goes back to `None`,
-`rejection` clears — the same reset the projection itself gets (`objects` /
+Every `screen_state` report folds its `applied_seq` into this watch
+(`ConfirmState::fold_report`) as a running per-generation maximum, and adds its `rejected`, if it carries one,
+to `rejections`. The page sends each rejection once, and a `watch` keeps only
+its latest value, so a rejection is never cleared by a later report without
+one: it stays in the map, and a waiter checks the map for its own `seq`
+before it checks the watermark. The map keeps the newest
+`MAX_KEPT_REJECTIONS` (16) by `seq`; a display call waits at most
+`DISPLAY_CONFIRM_DEADLINE_MS`, so only the newest few can still have a
+waiter. Moving to a new leg resets the watch (`ConfirmState::begin_generation`)
+— `generation` moves to the new value, `watermark` goes back to `None`,
+`rejections` clears — the same reset the projection itself gets (`objects` /
 `order` / `focus_id` / `speech` cleared) — so a confirmation left over from
 the leg that just transferred away can never satisfy a wait started by the
 leg that replaced it.
@@ -807,7 +814,9 @@ answers with one of these, which the agent's skill module receives as the
 call's `result` and turns into the line it prints:
 - `{"delivered": true, "rendered": true}` — the browser confirmed this `seq`.
 - `{"delivered": true, "rendered": false, "rejected": true, "reason": "..."}`
-  — the browser nacked this exact `seq`.
+  — the browser nacked this exact `seq`. The skill prints the page's reason
+  and tells the agent to adjust the payload; for the other `rendered: false`
+  answers below it prints the `reason` too.
 - `{"delivered": true, "rendered": false, "reason": "no confirmation from
   the browser"}` — the deadline passed with nothing seen.
 - `{"delivered": true, "rendered": false, "reason": "the caller's screen

@@ -350,3 +350,22 @@ fn matches_the_shared_display_precedence_fixture() {
         );
     }
 }
+
+#[test]
+fn confirm_state_keeps_the_newest_rejections_until_the_generation_moves() {
+    let mut confirm = ConfirmState::default();
+    for seq in 0..(MAX_KEPT_REJECTIONS as u64 + 2) {
+        confirm.reject(seq, format!("reason {seq}"));
+    }
+    assert_eq!(confirm.rejection(0), None, "the oldest past the bound goes");
+    assert_eq!(confirm.rejection(1), None);
+    let newest = MAX_KEPT_REJECTIONS as u64 + 1;
+    assert_eq!(confirm.rejection(2), Some("reason 2"));
+    assert_eq!(
+        confirm.rejection(newest),
+        Some(format!("reason {newest}").as_str())
+    );
+    confirm.begin_generation(4);
+    assert_eq!((confirm.generation, confirm.watermark), (4, None));
+    assert_eq!(confirm.rejection(newest), None);
+}
