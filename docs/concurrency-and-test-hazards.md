@@ -436,7 +436,10 @@ still under its cost. `cpuTime.ts` says how each number was set.
 
 The rule: a unit-test time budget measures with `leastCpuMs`, never the wall
 clock. `scripts/check_hygiene.mjs` refuses `performance.now`, `Date.now` and
-`process.hrtime` anywhere in `apps/frontend/tests/unit` but `cpuTime.ts`. A
+`process.hrtime` anywhere in `apps/frontend/tests/unit` but `cpuTime.ts`, and
+in `apps/host-agent/tests`. There, "answered at once" means settled before
+the event loop turns (raced against `setImmediate`), and `until` gives up
+after a count of polls, not a span of the clock. A
 test about the page clock uses vitest's fake timers
 (`vi.setSystemTime`, `vi.advanceTimersByTime`), never the real one, and reads
 the fake time with `vi.getMockedSystemTime()` or `new Date()`, since the gate
