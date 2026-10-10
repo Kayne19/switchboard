@@ -110,17 +110,21 @@ pub(crate) async fn cancel_active_operations(state: &AppState) -> Option<String>
 }
 /// `cancel_active_operations` for a page control, only while the call is
 /// still at `generation`, the one the control carries (`control_generation`).
-/// `Err` rescued nothing: the call moved on after the control was checked.
+/// Returns the generation the rescue left, which is the only one the control
+/// may go on to act at, and the label of the leg it closed. `Err` rescued
+/// nothing: the call moved on after the control was checked.
 async fn cancel_active_operations_at(
     state: &AppState,
     generation: u64,
-) -> Result<Option<String>, LineMoved> {
+) -> Result<(u64, Option<String>), LineMoved> {
     let rescued = state
         .0
         .coordinator
         .begin_rescue_at(generation, "operation interrupted")
-        .ok_or(LineMoved)?;
-    Ok(release_rescued_work(state, rescued.generation, false, "operation interrupted").await)
+        .ok_or(LineMoved)?
+        .generation;
+    let closed = release_rescued_work(state, rescued, false, "operation interrupted").await;
+    Ok((rescued, closed))
 }
 /// The call moved on from the generation a page control carried.
 struct LineMoved;
@@ -188,8 +192,10 @@ where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    cancel_active_operations_at(state, generation).await.ok()?;
-    let generation = state.0.coordinator.generation();
+    // At the generation this rescue left, not the current one: a newer
+    // control that rescued while this one was still releasing the old leg
+    // owns the call, and this one must not run on it.
+    let (generation, _) = cancel_active_operations_at(state, generation).await.ok()?;
     let (task, id) = spawn_registered_operation(state, generation, future).await?;
     Some((task, id, generation))
 }
@@ -376,7 +382,7 @@ pub(crate) async fn hangup(
         Err(stale) => return stale.refusal("hangup", "ignored"),
     };
     // The process the rescue closed, and the leg the PBX then dropped.
-    let Ok(closed) = cancel_active_operations_at(&state, generation).await else {
+    let Ok((_, closed)) = cancel_active_operations_at(&state, generation).await else {
         tracing::info!("hangup ignored: the line moved on before its rescue");
         return page_conflict("hangup", "ignored");
     };

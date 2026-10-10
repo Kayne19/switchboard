@@ -98,6 +98,41 @@ async fn newer_page_control_supersedes_setup_before_a_session_exists() {
     assert!(state.0.active_operations.lock().await.is_empty());
 }
 
+// #263: a control acts at the generation its own rescue left. A newer
+// control (a second tab, a hangup pressed during a slow /connect) that
+// rescues while this one is still releasing the old leg owns the call, and
+// this one must not register on the generation that rescue made.
+#[tokio::test]
+async fn a_control_overtaken_during_its_rescue_registers_nothing() {
+    let state = state();
+    let generation = state.0.coordinator.generation();
+    // The rescue stops after it moved the generation, while it waits to close
+    // the live session.
+    let session = state.0.active_session.lock().await;
+    let control_state = state.clone();
+    let control = tokio::spawn(async move {
+        spawn_replacing_operation(&control_state, generation, async { 7 })
+            .await
+            .map(|(_, _, generation)| generation)
+    });
+    timeout(Duration::from_secs(5), async {
+        while state.0.coordinator.generation() == generation {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the control's rescue moves the generation");
+    state.0.coordinator.begin_rescue("a newer control");
+    drop(session);
+
+    let registered = timeout(Duration::from_secs(5), control)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(registered, None, "it ran on the newer control's generation");
+    assert!(state.0.active_operations.lock().await.is_empty());
+}
+
 #[tokio::test]
 async fn speech_queued_while_a_page_control_starts_a_leg_is_dropped_with_notice_on_adoption() {
     let state = state();
