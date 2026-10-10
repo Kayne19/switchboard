@@ -314,6 +314,81 @@ async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
     assert!(settled.pending_sequence.is_none());
 }
 
+/// A rescue (hang up, a model change, a new connection) stops the speech it
+/// retires on purpose. The agent that asked for it learns it was not spoken,
+/// but the caller's page shows no error for it.
+#[tokio::test]
+async fn speech_a_rescue_stops_is_not_shown_to_the_caller_as_an_error() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let gate = TestTtsGate::new();
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_gated(100, Duration::from_millis(25_000), gate.clone()),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let (_connection, _, _) = state.register_connection().await;
+    start_speech_worker_for_test(&state);
+    let mut events = state.0.events.subscribe();
+    let generation = state.0.coordinator.generation();
+    let group = state.0.new_speech_group();
+    let admission = |text: &str, scope| SpeechAdmission {
+        text: text.into(),
+        route: OPERATOR.into(),
+        generation,
+        deadline: std::time::Instant::now() + Duration::from_secs(1),
+        scope,
+        group,
+        log_spoken: false,
+    };
+    let speaking = tokio::spawn({
+        let state = state.clone();
+        let admission = admission("The first sentence.", ContinuationScope::FreshTurn);
+        async move { queue_speech(&state, admission, None).await }
+    });
+    timeout(Duration::from_secs(1), gate.wait_started())
+        .await
+        .expect("the speech started");
+
+    cancel_active_operations(&state).await;
+    gate.release();
+    // The reply's next sentence, queued under the generation the rescue
+    // retired.
+    let queued = queue_speech(
+        &state,
+        admission(
+            "The second sentence.",
+            ContinuationScope::ContinueCurrentTurn,
+        ),
+        None,
+    )
+    .await;
+
+    assert!(
+        within("speaking", speaking).await.unwrap().is_err(),
+        "cancelled speech reports that it was not spoken"
+    );
+    assert!(
+        queued.is_err(),
+        "superseded speech reports that it was not spoken"
+    );
+    while let Ok(event) = events.try_recv() {
+        if let Event::Json(value) = event {
+            assert_ne!(
+                value["type"], "error",
+                "a rescue's cancellation reached the page as an error: {value}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
     let state = state();

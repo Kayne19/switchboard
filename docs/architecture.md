@@ -515,7 +515,9 @@ Failure ownership should be obvious:
 - STT worker failure: audio adapter reports it; application decides fallback
 - Pi or host-link failure: PBX returns the caller to the operator
 - TTS failure: application reports it; the written reply remains in the transcript
-- stale result: generation gate discards it without side effects
+- stale result: generation gate discards it without side effects. Speech a
+  rescue cancels or supersedes is one: its requester learns it was not
+  spoken, and the page shows no error for it
 - deployment mismatch: configuration/health surface names the missing contract
 
 ## Architectural test
