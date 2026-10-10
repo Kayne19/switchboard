@@ -1076,13 +1076,13 @@ describe("CallRuntime hands-free", () => {
     const { runtime, latestState } = makeRuntime(handsFree.options);
     await connectAt(runtime);
     runtime.toggleHandsFree();
-    await settle();
+    await handsFree.reach("armed");
     expect(handsFree.controller().currentState).toBe("armed");
     runtime.talk();
     await settle();
     expect(handsFree.controller().currentState).toBe("paused_ptt");
     runtime.send();
-    await settle();
+    await handsFree.reach("armed");
     expect(handsFree.controller().currentState).toBe("armed");
     expect(latestState()).toMatchObject({ handsFree: true, recording: false });
     runtime.dispose();
