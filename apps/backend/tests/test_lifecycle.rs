@@ -1025,6 +1025,40 @@ fn every_candidate_notice_is_sent_under_the_state_lock() {
     );
 }
 
+/// A rollback restores the leg the adoption replaced as it was when it was
+/// replaced. It used to restore it as it was when the candidate was staged,
+/// so what changed on the line while the candidate started came undone: the
+/// level the leg confirmed in that window, or the caller's return to the
+/// operator, after which the rollback put the project they had left back on
+/// the line.
+#[test]
+fn a_rollback_restores_the_leg_as_the_adoption_found_it() {
+    let call = coordinator();
+    on_alpha(&call);
+    call.begin_candidate(beta_candidate()).unwrap();
+    assert_eq!(call.accept_thinking_callback("cand", "high"), Ok(true));
+    call.adopt_candidate("beta-leg").unwrap();
+    assert!(call.rollback_startup("intro failed"));
+    let status = call.status();
+    assert_eq!(
+        (
+            status.route.as_str(),
+            status.thinking.as_str(),
+            status.thinking_confirmed
+        ),
+        ("alpha", "high", true)
+    );
+
+    let call = coordinator();
+    on_alpha(&call);
+    call.begin_candidate(beta_candidate()).unwrap();
+    call.return_to_operator();
+    call.adopt_candidate("beta-leg").unwrap();
+    assert!(call.rollback_startup("intro failed"));
+    assert_on_the_operator(&call);
+    assert_eq!(call.current_identity(), LegIdentity::new("operator", 2));
+}
+
 // The call line, phase by event. Each phase is reached the way a call reaches
 // it, from a fresh coordinator, and is then given one event. A row reads:
 //

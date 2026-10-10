@@ -251,6 +251,20 @@ impl CallLifecycle {
         }
     }
 
+    /// The leg on the line, as a failed startup restores it.
+    fn rollback_point(&self) -> StartupRollback {
+        StartupRollback {
+            route: self.route.clone(),
+            project: self.project.clone(),
+            persistent_session_id: self.persistent_session_id.clone(),
+            leg: self.leg.clone(),
+            model: self.model.clone(),
+            thinking_requested: self.thinking_requested.clone(),
+            thinking_effective: self.thinking_effective.clone(),
+            catalog: self.catalog.clone(),
+        }
+    }
+
     fn on_operator(&self) -> bool {
         self.route == OPERATOR
     }
@@ -810,16 +824,7 @@ impl Coordinator {
                 return Err(LifecycleError::CandidateTokenMismatch);
             }
             candidate.identity.generation = state.leg.generation + 1;
-            state.startup_rollback = Some(StartupRollback {
-                route: state.route.clone(),
-                project: state.project.clone(),
-                persistent_session_id: state.persistent_session_id.clone(),
-                leg: state.leg.clone(),
-                model: state.model.clone(),
-                thinking_requested: state.thinking_requested.clone(),
-                thinking_effective: state.thinking_effective.clone(),
-                catalog: state.catalog.clone(),
-            });
+            state.startup_rollback = Some(state.rollback_point());
             state.phase = Phase::Starting;
             let route = candidate.route.clone();
             let identity = candidate.identity.clone();
@@ -1032,6 +1037,9 @@ impl Coordinator {
                 }
                 None => return Err(LifecycleError::NoCandidate),
             };
+            // A rollback restores the leg this adoption replaces as it is
+            // now: it may have changed since the candidate was staged.
+            state.startup_rollback = Some(state.rollback_point());
             let identity = candidate.identity.clone();
             let route = candidate.route.clone();
             state.route = candidate.route;
