@@ -314,6 +314,22 @@ describe("the hands-free controller over fakes", () => {
     expect(instance.currentState).toBe("armed");
   });
 
+  // WebKit can leave `resume()` pending while the audio session is taken
+  // away (#183). Waited on without a limit, the start never finished.
+  it("fails a start whose audio never resumes, and says so", async () => {
+    stubBrowser();
+    const harness = controller();
+    harness.audio.context.state = "suspended";
+    harness.audio.context.resume = () => new Promise<undefined>(() => undefined);
+    const start = harness.instance.enable();
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    expect(harness.instance.currentState).toBe("starting");
+    harness.advance(3_000);
+    expect(await start).toBe(false);
+    expect(harness.instance.currentState).toBe("error");
+    expect(harness.instance.isEnabled).toBe(false);
+  });
+
   it("pauses for push-to-talk and resumes", async () => {
     stubBrowser();
     const harness = controller();

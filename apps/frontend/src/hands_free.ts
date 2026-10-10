@@ -15,6 +15,8 @@ export const SPEECH_END_PROBABILITY = 0.35;
 export const WAKE_SPEECH_GRACE_MS = 2_000;
 export const MAX_HANDS_FREE_UTTERANCE_MS = 30_000;
 export const FOLLOW_UP_LEASE_MS = 8_000;
+/** How long a start waits for a suspended audio context to run. */
+export const AUDIO_RESUME_DEADLINE_MS = 3_000;
 export const PLAYBACK_DRAIN_DEBOUNCE_MS = 400;
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -89,6 +91,18 @@ interface Capture {
 	chunks: Blob[];
 	discard: boolean;
 	lease: boolean;
+}
+
+/** A start's audio context did not run by `AUDIO_RESUME_DEADLINE_MS`. */
+class AudioSuspended extends Error {
+	constructor() {
+		super("the audio context did not start");
+		this.name = "AudioSuspended";
+	}
+}
+
+function isRunning(context: AudioContext): boolean {
+	return context.state === "running";
 }
 
 /** Stops what a start made and never installed. */
@@ -254,7 +268,7 @@ export class HandsFreeController {
 				releaseUnused(context, stream);
 				return false;
 			}
-			if (context.state === "suspended") await context.resume();
+			await this.resumeAudio(context);
 			await context.audioWorklet.addModule(
 				this.options.workletUrl || "/vad-worklet.js",
 			);
@@ -292,6 +306,31 @@ export class HandsFreeController {
 			);
 			return false;
 		}
+	}
+
+	/**
+	 * Resumes a suspended context, but not forever. WebKit can leave
+	 * `resume()` pending while the audio session is interrupted (#183), and a
+	 * start that waited on it never finished (#261). A context that is not
+	 * running by the deadline fails the start, which says so.
+	 */
+	private async resumeAudio(context: AudioContext): Promise<void> {
+		if (context.state !== "suspended") return;
+		const resumed = context.resume();
+		// A rejection after the deadline has nobody waiting for it.
+		resumed.catch(() => undefined);
+		let expire: () => void = () => undefined;
+		const deadline = new Promise<void>((resolve) => {
+			expire = resolve;
+		});
+		const timer = this.setTimer(() => expire(), AUDIO_RESUME_DEADLINE_MS);
+		try {
+			await Promise.race([resumed, deadline]);
+		} finally {
+			this.clearTimer(timer);
+		}
+		// Read again: `resume()` changes the state the check above narrowed.
+		if (!isRunning(context)) throw new AudioSuspended();
 	}
 
 	disable(message = "Hands-free is off."): void {
