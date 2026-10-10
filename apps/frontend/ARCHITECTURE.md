@@ -207,6 +207,13 @@ iPad's audio session taken for the microphone or another app, a lock-screen
 control) stops a stream as it stops a replay: not playing, reported as an
 error, resumed by the next page gesture.
 
+A pause or a blocked `play()` is taken down once the clip sounds again: the
+`play()` that the gesture made resolves, and either path reports "Audio
+resumed." without the flag (`reportResumed`, the one place for both). A
+stream's end reports the idle line when nothing is queued, as a replay's end
+does. Before this, a stream that recovered left the red card up over the
+conversation until the next turn's status (#260).
+
 A browser that takes a stream and cannot sound it is asked once. The first
 named failure turns streaming off for the whole call -- later utterances go
 straight to the whole replay with no silence watch and no second status line

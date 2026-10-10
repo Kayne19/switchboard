@@ -1022,7 +1022,9 @@ describe("AudioPlayback streaming", () => {
       playback.receiveAudioStart({ generation: 0, sequence: 2, mime: "audio/mpeg" });
       player.currentTime = 0;
       vi.advanceTimersByTime(1000);
-      expect(statuses).toEqual([]);
+      expect(statuses, "the idle line at its end, and no blame").toEqual([
+        ["idle", false],
+      ]);
       expect(playback.streamingEnabled).toBe(true);
     } finally {
       vi.useRealTimers();
@@ -1234,6 +1236,59 @@ describe("AudioPlayback streaming", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("takes the pause error down once the tap resumes the stream (#260)", async () => {
+    // The stream resumed and played to its end, and "Audio paused -- tap"
+    // stayed up in red over the conversation until the next turn's status.
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const { player, urls, playback } = streamingPlayback(undefined, statuses);
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("interrupted"));
+    (urls.get(player.src) as FakeMediaSource).buffer.emit("updateend");
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    await Promise.resolve();
+    player.paused = true;
+    player.emit("pause");
+    expect(statuses.at(-1)?.[1]).toBe(true);
+
+    playback.handleGesture(null);
+    player.paused = false;
+    await Promise.resolve();
+    expect(statuses.at(-1), "sounding again withdraws it").toEqual([
+      "Audio resumed.",
+      false,
+    ]);
+    player.ended = true;
+    player.emit("ended");
+    expect(statuses.at(-1), "and the end is the idle line").toEqual([
+      "idle",
+      false,
+    ]);
+  });
+
+  it("takes the blocked error down once a tap starts the stream (#260)", async () => {
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const { player, playback } = streamingPlayback(undefined, statuses);
+    let blocked = true;
+    player.play = () => {
+      player.playCalls.push(player.src);
+      return blocked
+        ? Promise.reject(
+            Object.assign(new Error("blocked"), { name: "NotAllowedError" }),
+          )
+        : Promise.resolve();
+    };
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("blocked"));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(statuses.at(-1)?.[1]).toBe(true);
+    blocked = false;
+    playback.handleGesture(null);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(statuses.at(-1)).toEqual(["Audio resumed.", false]);
   });
 
   it("ignores audio stamped with another generation", () => {
@@ -1458,6 +1513,33 @@ describe("AudioPlayback silent playback", () => {
     player.emit("pause");
     expect(statuses).toEqual([
       ["Audio paused — tap or click anywhere on this page to resume.", true],
+    ]);
+  });
+  it("takes the pause error down once the tap resumes the replay (#260)", async () => {
+    const player = fakePlayer();
+    stubObjectUrls();
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: (text, error) => statuses.push([text, error]),
+      onChange: () => {},
+      gapMs: 0,
+    });
+    playback.audioQueue.push(new Blob(["first"]), new Blob(["second"]));
+    playback.playNext();
+    player.playPromises[0].resolve();
+    await Promise.resolve();
+    expect(statuses, "an ordinary start says nothing").toEqual([]);
+    player.paused = true;
+    player.emit("pause");
+    playback.handleGesture(null);
+    player.paused = false;
+    player.playPromises[1].resolve();
+    await Promise.resolve();
+    expect(statuses.at(-1), "before the queue is done").toEqual([
+      "Audio resumed.",
+      false,
     ]);
   });
 });
