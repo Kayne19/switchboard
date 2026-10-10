@@ -97,7 +97,9 @@ export class SocketFeed implements Feed {
   }
 
   start(): void {
+    if (!this.stopped) return;
     this.stopped = false;
+    this.attempt = 0;
     this.connect();
   }
 

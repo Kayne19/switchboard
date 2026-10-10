@@ -355,6 +355,20 @@ describe('debug feed lifecycle: phase x event', () => {
 
     ...leaves('waiting'),
     { from: 'waiting', event: 'retry-due', statuses: ['reconnecting'], opens: 1, then: { phase: 'connecting', attempt: 3 } },
+
+    // A feed starts once: `start` on a running feed changes nothing.
+    { from: 'connecting', event: 'start', statuses: [], closes: false, opens: 0, then: { phase: 'connecting', attempt: 2 } },
+    { from: 'open', event: 'start', statuses: [], closes: false, opens: 0, then: { phase: 'open', attempt: 2 } },
+    {
+      from: 'settling',
+      event: 'start',
+      statuses: [],
+      closes: false,
+      opens: 0,
+      then: { phase: 'settling', attempt: 2, settlesIn: BACKOFF_RESET_AFTER_MS - SETTLING_HELD_MS },
+    },
+    { from: 'live', event: 'start', statuses: [], closes: false, opens: 0, then: { phase: 'live' } },
+    { from: 'waiting', event: 'start', statuses: [], opens: 0, then: { phase: 'waiting', attempt: 3, retryIn: backoffDelay(2) } },
   ];
 
   it.each(rows.map((row) => [`${row.from} + ${row.event} -> ${row.then.phase}`, row] as const))('%s', (_name, row) => {
@@ -386,6 +400,14 @@ describe('debug feed lifecycle: phase x event', () => {
       expect(h.frames).toEqual([]);
       expect(h.sockets).toHaveLength(count);
     }
+  });
+
+  it('starts a stopped feed again from the base delay', () => {
+    const h = reach('waiting');
+    h.feed.stop();
+    h.feed.start();
+    expect(h.statuses).toEqual(['connecting']);
+    expect(retryDelay(h)).toBe(backoffDelay(0));
   });
 
   it('waits and retries when the socket cannot be made', () => {
