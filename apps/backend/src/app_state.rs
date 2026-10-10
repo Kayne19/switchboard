@@ -528,7 +528,6 @@ pub async fn shutdown(state: &AppState) {
     // can otherwise leave systemd waiting on a browser tab indefinitely.
     state.0.shutdown.send_replace(true);
     state.end_debug_call("shutdown");
-    state.0.coordinator.finish_shutdown();
 }
 pub(crate) fn emit(state: &AppState, event: Event) -> bool {
     let browser_delivered = state.0.delivery.publish(event.clone());

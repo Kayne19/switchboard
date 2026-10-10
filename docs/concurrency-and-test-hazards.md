@@ -340,8 +340,9 @@ was made for, and each is closed where its side effect happens:
   the old session under the new project's name (#236). So the planner refuses
   while `Coordinator::startup_in_flight`, and `begin_rescue_of` refuses too, in
   the same lock as its check. A rescue that does cancel a startup (a hangup, a
-  connect) ends that startup with it: it clears the startup's rollback, so a
-  late rollback has nothing to restore. And the PBX only acts on its project
+  connect) ends that startup with it: the call is `Quiescing`, which holds
+  no candidate and no leg to restore, so a late rollback has nothing to
+  restore. And the PBX only acts on its project
   session for the leg on the line (a caller turn, a redial) while that
   session belongs to the coordinator's project (`agent_on_the_line`); a turn
   that finds another project's session returns the caller to the operator.
