@@ -437,7 +437,14 @@ export class PushToTalk {
   }
 
   private startRecorder(take: Take): void {
-    const timeslice = take.streaming ? STREAMING_TIMESLICE_MS : undefined;
+    try {
+      take.recorder.start(take.streaming ? STREAMING_TIMESLICE_MS : undefined);
+    } catch (error) {
+      this.transition({ kind: "startFailed", take, error });
+      return;
+    }
+    // The stream opens once the recorder runs, so a recorder that cannot
+    // start leaves no stream open on the server. Its first chunk comes later.
     const socket = take.streaming ? this.options.openSocket() : null;
     if (socket) {
       try {
@@ -451,12 +458,6 @@ export class PushToTalk {
       } catch {
         take.streaming = false;
       }
-    }
-    try {
-      take.recorder.start(timeslice);
-    } catch (error) {
-      this.transition({ kind: "startFailed", take, error });
-      return;
     }
     this.options.onRecordingChange(true);
     this.options.onStatus(

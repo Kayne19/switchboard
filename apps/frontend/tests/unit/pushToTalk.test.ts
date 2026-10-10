@@ -715,7 +715,8 @@ describe("push-to-talk lifecycle: phase x event", () => {
     {
       from: "acquiring",
       event: "granted, start throws",
-      seen: { ...ENDED, status: ["This browser cannot record audio (start refused).", true], frames: ["stt_start"] },
+      // No stream is opened for a recorder that never ran.
+      seen: { ...ENDED, status: ["This browser cannot record audio (start refused).", true] },
       then: "idle",
     },
     { from: "acquiring", event: "refused", seen: { resumed: 1, closed: 1, status: REFUSED }, then: "idle" },
