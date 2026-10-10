@@ -8,6 +8,12 @@
 //! It is the one owner of the leg on the line: its route, project, model,
 //! session, thinking, and catalog. The PBX owns the processes and changes the
 //! leg only through the named transitions here; everything else reads it.
+//!
+//! The call is one value, a `Line`, whose phases carry what exists only in
+//! them: the staged candidate, the leg a startup would restore, the turn
+//! open on the leg. `Line::next` is its one transition function and
+//! `CallLifecycle::step` its one writer; each public transition below is
+//! one event through them.
 
 use crate::models::{parse_spec, ModelCatalog, THINKING_LEVELS};
 use crate::protocol::{CandidateEnd, ModelEntry, Status};
@@ -46,18 +52,6 @@ pub struct ProjectLeg {
     pub model: String,
     /// The pi session the leg writes; a redial that keeps context reopens it.
     pub persistent_session_id: String,
-}
-
-/// Where the call is. `Starting` is the only phase in which a candidate leg
-/// exists; its side effects stay private until it is adopted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Phase {
-    Operator,
-    Starting,
-    Active,
-    TurnRunning,
-    Quiescing,
-    Shutdown,
 }
 
 /// One prompt turn on one leg. A steer attaches to the turn already running.
@@ -180,137 +174,153 @@ impl fmt::Display for LifecycleError {
 }
 impl std::error::Error for LifecycleError {}
 
-/// What a rescue retired, for the notice sent once the state lock is released.
-struct Rescue {
-    /// The route of the candidate the rescue abandoned, if one was starting.
-    abandoned_candidate: Option<String>,
-    next: LegIdentity,
-}
-
-/// The leg a startup replaces, restored if the startup fails.
-#[derive(Clone)]
-struct StartupRollback {
+/// What a project leg was launched with. The operator has none: its model
+/// is a deployment setting (`StatusConfig::operator_model`).
+#[derive(Clone, Debug)]
+struct Launch {
     route: String,
-    project: Option<String>,
+    project: String,
+    /// The pi session the leg writes; a redial that keeps context reopens it.
     persistent_session_id: String,
-    leg: LegIdentity,
+    /// The model spec the leg was started with.
     model: String,
     thinking_requested: String,
-    thinking_effective: String,
+    /// The catalog the leg launched with.
     catalog: Option<Arc<ModelCatalog>>,
 }
 
-pub struct CallLifecycle {
-    route: String,
-    /// The project on the line; `None` on the operator.
-    project: Option<String>,
-    persistent_session_id: String,
-    leg: LegIdentity,
-    phase: Phase,
-    /// The project leg's model spec; empty on the operator, whose model is a
-    /// deployment setting (`StatusConfig::operator_model`).
-    model: String,
-    thinking_requested: String,
+/// The leg on the line. Every phase of the call has one.
+#[derive(Clone, Debug)]
+struct LiveLeg {
+    identity: LegIdentity,
+    /// What the project leg was launched with; `None` on the operator.
+    launch: Option<Launch>,
     /// The level the leg reported through `/leg-state`; empty until it does.
     thinking_effective: String,
-    /// The level the next project call is asked for when the caller names
-    /// none. `/thinking` changes it.
-    thinking_default: String,
-    operation: Option<OperationIdentity>,
-    terminal_reason: Option<String>,
-    candidate: Option<CandidateLeg>,
-    startup_rollback: Option<StartupRollback>,
-    /// The leg the last adoption put on the line. While it is still the leg
-    /// on the line, the generation is the one it was adopted at.
-    adopted: Option<LegIdentity>,
-    /// The catalog the project leg launched with.
-    catalog: Option<Arc<ModelCatalog>>,
-    /// Tokens belonging to resident sessions that are not foreground.
-    background_tokens: HashMap<String, String>,
+    /// The identity is the one an adoption put on the line. Every other
+    /// identity (a rescue's, a rollback's, a return's, a shutdown's) is not.
+    adopted: bool,
 }
 
-impl CallLifecycle {
-    fn operator(thinking_default: String) -> Self {
+impl LiveLeg {
+    fn operator() -> Self {
         Self {
-            route: OPERATOR.into(),
-            project: None,
-            persistent_session_id: String::new(),
-            leg: LegIdentity::new(OPERATOR, 0),
-            phase: Phase::Operator,
-            model: String::new(),
-            thinking_requested: String::new(),
+            identity: LegIdentity::new(OPERATOR, 0),
+            launch: None,
             thinking_effective: String::new(),
-            thinking_default,
-            operation: None,
-            terminal_reason: None,
-            candidate: None,
-            startup_rollback: None,
-            adopted: None,
-            catalog: None,
-            background_tokens: HashMap::new(),
+            adopted: false,
         }
     }
 
-    fn on_operator(&self) -> bool {
-        self.route == OPERATOR
+    /// The leg an adoption puts on the line. Its level is confirmed only by
+    /// its own report: what it was asked for is not what it runs at when
+    /// its model clamps the level.
+    fn adopted(candidate: &CandidateLeg) -> Self {
+        Self {
+            identity: candidate.identity.clone(),
+            launch: Some(Launch {
+                route: candidate.route.clone(),
+                project: candidate.project.clone(),
+                persistent_session_id: candidate.persistent_session_id.clone(),
+                model: candidate.model.clone(),
+                thinking_requested: candidate.thinking.clone(),
+                catalog: candidate.catalog.clone(),
+            }),
+            thinking_effective: if THINKING_LEVELS.contains(&candidate.startup_thinking.as_str()) {
+                candidate.startup_thinking.clone()
+            } else {
+                String::new()
+            },
+            adopted: true,
+        }
     }
 
-    /// The phase a call at rest on its route is in.
-    fn resting_phase(&self) -> Phase {
-        if self.on_operator() {
-            Phase::Operator
+    /// The same leg under a new identity.
+    fn renamed(&self, identity: LegIdentity) -> Self {
+        Self {
+            identity,
+            adopted: false,
+            ..self.clone()
+        }
+    }
+
+    /// The same leg, its work retired at `generation`: a rescue or a
+    /// shutdown.
+    fn retired(&self, why: &str, generation: u64) -> Self {
+        let token = format!("{}-{why}-{generation}", self.identity.token);
+        self.renamed(LegIdentity::new(token, generation))
+    }
+
+    /// The operator, back on the line at the same generation. A project
+    /// leg's token is retired with it, so a callback still carrying it (a
+    /// module call already in flight) is refused rather than taken as the
+    /// operator's.
+    fn returned(&self) -> Self {
+        let identity = if self.launch.is_some() {
+            LegIdentity::new(OPERATOR, self.identity.generation)
         } else {
-            Phase::Active
+            self.identity.clone()
+        };
+        Self {
+            identity,
+            launch: None,
+            thinking_effective: String::new(),
+            adopted: false,
         }
     }
 
-    fn route_label(&self) -> String {
-        if self.on_operator() {
-            "Operator".into()
-        } else {
-            self.project.clone().unwrap_or_else(|| self.route.clone())
-        }
+    fn route(&self) -> &str {
+        self.launch
+            .as_ref()
+            .map_or(OPERATOR, |launch| launch.route.as_str())
+    }
+
+    fn label(&self) -> String {
+        self.launch
+            .as_ref()
+            .map_or_else(|| "Operator".into(), |launch| launch.project.clone())
     }
 
     fn project_leg(&self) -> Option<ProjectLeg> {
+        let launch = self.launch.as_ref()?;
         Some(ProjectLeg {
-            project: self.project.clone()?,
-            identity: self.leg.clone(),
-            model: self.model.clone(),
-            persistent_session_id: self.persistent_session_id.clone(),
+            project: launch.project.clone(),
+            identity: self.identity.clone(),
+            model: launch.model.clone(),
+            persistent_session_id: launch.persistent_session_id.clone(),
         })
     }
 
-    /// The status the page is shown, built from this lifecycle alone. On the
-    /// operator the model and its thinking are the operator's deployment
-    /// setting; on a project they are the leg's.
-    fn status(&self, config: &StatusConfig) -> Status {
-        let on_operator = self.on_operator();
-        let model = if on_operator {
-            config.operator_model.clone()
-        } else {
-            self.model.clone()
-        };
+    /// The status the page is shown for this leg. On the operator the model
+    /// and its thinking are the operator's deployment setting; on a project
+    /// they are the leg's.
+    fn status(&self, config: &StatusConfig, thinking_default: &str) -> Status {
+        let model = self
+            .launch
+            .as_ref()
+            .map_or(&config.operator_model, |launch| &launch.model)
+            .clone();
         let (provider, model_id, spec_thinking) = parse_spec(&model);
         let model_name = if provider.is_empty() {
             model_id
         } else {
             format!("{provider}/{model_id}")
         };
-        let thinking_requested = if on_operator {
-            spec_thinking
-        } else {
-            self.thinking_requested.clone()
-        };
+        let thinking_requested = self
+            .launch
+            .as_ref()
+            .map_or(spec_thinking, |launch| launch.thinking_requested.clone());
         let thinking = if self.thinking_effective.is_empty() {
             thinking_requested.clone()
         } else {
             self.thinking_effective.clone()
         };
-        let (models, models_available, models_diagnostic) = if on_operator {
-            (Vec::new(), true, None)
-        } else if let Some(catalog) = &self.catalog {
-            (
+        let (models, models_available, models_diagnostic) = match &self.launch {
+            None => (Vec::new(), true, None),
+            Some(Launch {
+                catalog: Some(catalog),
+                ..
+            }) => (
                 catalog
                     .entries
                     .iter()
@@ -322,23 +332,22 @@ impl CallLifecycle {
                     .collect(),
                 catalog.available,
                 catalog.diagnostic.clone(),
-            )
-        } else {
-            (
+            ),
+            Some(_) => (
                 Vec::new(),
                 false,
                 Some("model catalog has not been loaded".into()),
-            )
+            ),
         };
         Status {
-            route: self.route.clone(),
-            label: self.route_label(),
+            route: self.route().to_owned(),
+            label: self.label(),
             model,
             model_name,
             thinking,
             thinking_requested,
             thinking_confirmed: !self.thinking_effective.is_empty(),
-            thinking_default: self.thinking_default.clone(),
+            thinking_default: thinking_default.to_owned(),
             levels: THINKING_LEVELS
                 .iter()
                 .map(|level| (*level).to_owned())
@@ -349,6 +358,419 @@ impl CallLifecycle {
             model_swaps: config.model_swaps,
             projects: config.projects.clone(),
         }
+    }
+}
+
+/// Where the call is. Each phase carries what exists only in it, so a
+/// candidate, the leg a startup would restore, or a turn cannot outlive
+/// the phase it belongs to. `Line::next` is the one transition function.
+#[derive(Clone, Debug)]
+enum Line {
+    /// The leg on the line takes turns. `turn` is the one running, if any.
+    Open {
+        leg: LiveLeg,
+        turn: Option<OperationIdentity>,
+    },
+    /// A candidate is staged behind the leg on the line, which still
+    /// answers; `turn` is the leg's (a transfer runs inside the caller's
+    /// turn). The candidate's side effects stay private until it is adopted.
+    Starting {
+        leg: LiveLeg,
+        candidate: CandidateLeg,
+        turn: Option<OperationIdentity>,
+    },
+    /// The candidate was adopted on its first sign of life and holds the
+    /// line, opening with its intro turn. The PBX commits it when the intro
+    /// ends (`finish_intro`); a rollback puts `replaced` back.
+    Adopted {
+        leg: LiveLeg,
+        replaced: LiveLeg,
+        turn: Option<OperationIdentity>,
+    },
+    /// A rescue retired the leg's work: nothing is admitted until the call
+    /// settles.
+    Quiescing { leg: LiveLeg },
+    /// For good.
+    Shutdown { leg: LiveLeg },
+}
+
+/// Which leg a rescue may retire. The check and the rescue are one
+/// transition, so nothing lands between them.
+enum RescueOf<'a> {
+    /// Whatever is on the line.
+    Line,
+    /// The leg on the line, only while the call is at this generation.
+    Generation(u64),
+    /// This project leg, only while it is on the line and no startup is in
+    /// flight: the leg the coordinator names then is not yet the PBX's.
+    Leg(&'a ProjectLeg),
+}
+
+/// What moves the call line.
+enum Event<'a> {
+    BeginPrompt(OperationIdentity),
+    BeginAutonomous(OperationIdentity),
+    BindTurn { token: &'a str, turn_id: &'a str },
+    SettleTurn { token: &'a str, turn_id: &'a str },
+    FinishOperation(&'a OperationIdentity),
+    Rescue(RescueOf<'a>),
+    Settle,
+    ReturnToOperator,
+    BeginCandidate(CandidateLeg),
+    StartupThinking { token: &'a str, level: &'a str },
+    LegThinking { token: &'a str, level: &'a str },
+    Adopt { token: &'a str, intro: u64 },
+    FinishIntro,
+    Rollback,
+    BeginShutdown,
+}
+
+/// The line an event moves the call to, and the notice it owes the
+/// browser: a candidate began, or its startup ended.
+type Transition = (Line, Option<CandidateNotice>);
+
+fn candidate_notice(
+    route: &str,
+    generation: u64,
+    ended: Option<CandidateEnd>,
+) -> Option<CandidateNotice> {
+    Some(CandidateNotice {
+        route: route.to_owned(),
+        generation,
+        ended,
+    })
+}
+
+impl Line {
+    fn at_rest(leg: LiveLeg) -> Self {
+        Self::Open { leg, turn: None }
+    }
+
+    fn leg(&self) -> &LiveLeg {
+        match self {
+            Self::Open { leg, .. }
+            | Self::Starting { leg, .. }
+            | Self::Adopted { leg, .. }
+            | Self::Quiescing { leg }
+            | Self::Shutdown { leg } => leg,
+        }
+    }
+
+    fn turn(&self) -> Option<&OperationIdentity> {
+        match self {
+            Self::Open { turn, .. } | Self::Starting { turn, .. } | Self::Adopted { turn, .. } => {
+                turn.as_ref()
+            }
+            Self::Quiescing { .. } | Self::Shutdown { .. } => None,
+        }
+    }
+
+    fn candidate(&self) -> Option<&CandidateLeg> {
+        match self {
+            Self::Starting { candidate, .. } => Some(candidate),
+            _ => None,
+        }
+    }
+
+    /// The same phase with `turn` open in it. Quiescing and shutdown have
+    /// no turn to open.
+    fn with_turn(&self, turn: Option<OperationIdentity>) -> Self {
+        let mut next = self.clone();
+        match &mut next {
+            Self::Open { turn: slot, .. }
+            | Self::Starting { turn: slot, .. }
+            | Self::Adopted { turn: slot, .. } => *slot = turn,
+            Self::Quiescing { .. } | Self::Shutdown { .. } => {}
+        }
+        next
+    }
+
+    /// The same phase with `leg` on the line.
+    fn with_leg(&self, leg: LiveLeg) -> Self {
+        let mut next = self.clone();
+        match &mut next {
+            Self::Open { leg: slot, .. }
+            | Self::Starting { leg: slot, .. }
+            | Self::Adopted { leg: slot, .. }
+            | Self::Quiescing { leg: slot }
+            | Self::Shutdown { leg: slot } => *slot = leg,
+        }
+        next
+    }
+
+    /// The generation the next identity is issued past: the line's, or a
+    /// staged candidate's, which is one past it. A rescue or shutdown that
+    /// abandons a candidate retires its generation too, so work stamped
+    /// with it is stale after.
+    fn retired_generation(&self) -> u64 {
+        let line = self.leg().identity.generation;
+        self.candidate()
+            .map_or(line, |candidate| candidate.identity.generation.max(line))
+    }
+
+    /// The one transition function of the call line: the line `event`
+    /// moves the call to, or why the event is refused in this phase. It
+    /// reads the line and never writes it, so a refused event changes
+    /// nothing; `CallLifecycle::step` writes what it returns.
+    fn next(&self, event: Event) -> Result<Transition, LifecycleError> {
+        let leg = self.leg();
+        let unchanged = || Ok((self.clone(), None));
+        match event {
+            Event::BeginPrompt(operation) => {
+                if leg.identity != operation.leg {
+                    return Err(LifecycleError::StaleLeg);
+                }
+                match self {
+                    Self::Quiescing { .. } => Err(LifecycleError::WrongPhase),
+                    Self::Shutdown { .. } => Err(LifecycleError::Shutdown),
+                    _ if self.turn().is_some() => Err(LifecycleError::OperationActive),
+                    // A turn begun now would move the call out of
+                    // `Starting` with the candidate still staged, and a
+                    // candidate the PBX no longer sees starting is never
+                    // adopted.
+                    Self::Starting { .. } => Err(LifecycleError::CandidateActive),
+                    Self::Open { .. } | Self::Adopted { .. } => {
+                        Ok((self.with_turn(Some(operation)), None))
+                    }
+                }
+            }
+            Event::BeginAutonomous(operation) => {
+                if leg.identity != operation.leg {
+                    return Err(LifecycleError::StaleLeg);
+                }
+                match self {
+                    Self::Starting { .. } => Err(LifecycleError::CandidateActive),
+                    // A project leg at rest; the operator wakes no turns.
+                    Self::Open { leg, turn: None }
+                    | Self::Adopted {
+                        leg, turn: None, ..
+                    } if leg.launch.is_some() => Ok((self.with_turn(Some(operation)), None)),
+                    _ => Err(LifecycleError::WrongPhase),
+                }
+            }
+            Event::BindTurn { token, turn_id } => {
+                let Some(turn) = self.turn().filter(|_| leg.identity.token == token) else {
+                    return Err(LifecycleError::StaleLeg);
+                };
+                match turn.turn_id.as_deref() {
+                    Some(bound) if bound != turn_id => Err(LifecycleError::StaleLeg),
+                    Some(_) => unchanged(),
+                    None => {
+                        let bound = OperationIdentity {
+                            turn_id: Some(turn_id.to_owned()),
+                            ..turn.clone()
+                        };
+                        Ok((self.with_turn(Some(bound)), None))
+                    }
+                }
+            }
+            // The host reported the turn settled. A new leg's intro is
+            // closed by `finish_intro`, which also ends its startup: it is
+            // not this report's to close, so only an open line settles.
+            Event::SettleTurn { token, turn_id } => match self {
+                Self::Open {
+                    leg,
+                    turn: Some(turn),
+                } if leg.identity.token == token && turn.turn_id.as_deref() == Some(turn_id) => {
+                    Ok((self.with_turn(None), None))
+                }
+                _ => Err(LifecycleError::NoActiveOperation),
+            },
+            // Matched on the operation's id and leg, not the whole value:
+            // `bind_turn` stamps the host turn id onto the live operation
+            // after its owner took a copy, and that must not orphan it.
+            Event::FinishOperation(operation) => match self.turn() {
+                Some(turn) if turn.id == operation.id && turn.leg == operation.leg => {
+                    Ok((self.with_turn(None), None))
+                }
+                _ => Err(LifecycleError::NoActiveOperation),
+            },
+            Event::Rescue(of) => {
+                let admitted = match of {
+                    RescueOf::Line => true,
+                    RescueOf::Generation(generation) => leg.identity.generation == generation,
+                    RescueOf::Leg(project) => {
+                        matches!(self, Self::Open { .. } | Self::Quiescing { .. })
+                            && leg.project_leg().as_ref() == Some(project)
+                    }
+                };
+                if !admitted {
+                    return Err(LifecycleError::StaleLeg);
+                }
+                // A rescue ends any startup in flight: a staged candidate is
+                // abandoned and must never be adopted, and an adopted one
+                // keeps the line but loses the leg it would roll back to.
+                let generation = self.retired_generation() + 1;
+                let leg = leg.retired("rescue", generation);
+                let notice = self.candidate().and_then(|candidate| {
+                    candidate_notice(&candidate.route, generation, Some(CandidateEnd::Rescued))
+                });
+                let next = match self {
+                    Self::Shutdown { .. } => Self::Shutdown { leg },
+                    _ => Self::Quiescing { leg },
+                };
+                Ok((next, notice))
+            }
+            Event::Settle => match self {
+                Self::Quiescing { leg } => Ok((Self::at_rest(leg.clone()), None)),
+                _ => unchanged(),
+            },
+            // A call quiescing comes to rest on the operator. A turn still
+            // running (the operator is being told why the caller came back)
+            // stays open until it ends, and a staged candidate stays staged:
+            // it is not on the line yet.
+            Event::ReturnToOperator => match self {
+                Self::Quiescing { leg } => Ok((Self::at_rest(leg.returned()), None)),
+                _ => Ok((self.with_leg(leg.returned()), None)),
+            },
+            Event::BeginCandidate(mut candidate) => {
+                match self {
+                    Self::Shutdown { .. } => return Err(LifecycleError::Shutdown),
+                    Self::Starting { .. } => return Err(LifecycleError::CandidateActive),
+                    Self::Open { .. } | Self::Adopted { .. } | Self::Quiescing { .. } => {}
+                }
+                if candidate.identity.token.trim().is_empty() {
+                    return Err(LifecycleError::CandidateTokenMismatch);
+                }
+                // Staged one generation past the line: its first turn is
+                // delivered at the generation its adoption puts on the line.
+                candidate.identity.generation = leg.identity.generation + 1;
+                let notice = candidate_notice(&candidate.route, leg.identity.generation, None);
+                let next = Self::Starting {
+                    leg: leg.clone(),
+                    candidate,
+                    turn: self.turn().cloned(),
+                };
+                Ok((next, notice))
+            }
+            Event::StartupThinking { token, level } => {
+                let mut next = self.clone();
+                match &mut next {
+                    Self::Starting { candidate, .. } if candidate.identity.token == token => {
+                        candidate.startup_thinking = level.to_owned();
+                        Ok((next, None))
+                    }
+                    _ => Err(LifecycleError::NoCandidate),
+                }
+            }
+            Event::LegThinking { token, level } => match self {
+                Self::Quiescing { .. } | Self::Shutdown { .. } => Err(LifecycleError::StaleLeg),
+                _ if leg.identity.token != token => Err(LifecycleError::StaleLeg),
+                _ => {
+                    let leg = LiveLeg {
+                        thinking_effective: level.to_owned(),
+                        ..leg.clone()
+                    };
+                    Ok((self.with_leg(leg), None))
+                }
+            },
+            // The candidate's own sign of life, or the PBX once its intro
+            // turn ends. The caller's turn that ran the transfer, if still
+            // open, is replaced by the intro: its owner's later
+            // `finish_operation` finds nothing to close.
+            Event::Adopt { token, intro } => match self {
+                Self::Starting { leg, candidate, .. } if candidate.identity.token == token => {
+                    let adopted = LiveLeg::adopted(candidate);
+                    let turn = OperationIdentity {
+                        id: intro,
+                        leg: adopted.identity.clone(),
+                        turn_id: None,
+                    };
+                    let notice = candidate_notice(
+                        &candidate.route,
+                        adopted.identity.generation,
+                        Some(CandidateEnd::Adopted),
+                    );
+                    let next = Self::Adopted {
+                        leg: adopted,
+                        replaced: leg.clone(),
+                        turn: Some(turn),
+                    };
+                    Ok((next, notice))
+                }
+                Self::Starting { .. } => Err(LifecycleError::CandidateTokenMismatch),
+                _ => Err(LifecycleError::NoCandidate),
+            },
+            // The intro ended: the PBX holds the new leg. It closes the
+            // turn open on the line, whichever it is.
+            Event::FinishIntro => match self {
+                Self::Adopted {
+                    leg, turn: Some(_), ..
+                } => Ok((Self::at_rest(leg.clone()), None)),
+                _ => Err(LifecycleError::WrongPhase),
+            },
+            Event::Rollback => match self {
+                // Before adoption the line never moved: the leg on it keeps
+                // its turn.
+                Self::Starting {
+                    leg,
+                    candidate,
+                    turn,
+                } => {
+                    let notice = candidate_notice(
+                        &candidate.route,
+                        leg.identity.generation,
+                        Some(CandidateEnd::RolledBack),
+                    );
+                    let next = Self::Open {
+                        leg: leg.clone(),
+                        turn: turn.clone(),
+                    };
+                    Ok((next, notice))
+                }
+                // After adoption the leg it replaced comes back, at the
+                // generation the line is at.
+                Self::Adopted { leg, replaced, .. } => {
+                    let identity =
+                        LegIdentity::new(replaced.identity.token.clone(), leg.identity.generation);
+                    let notice = candidate_notice(
+                        leg.route(),
+                        leg.identity.generation,
+                        Some(CandidateEnd::RolledBack),
+                    );
+                    Ok((Self::at_rest(replaced.renamed(identity)), notice))
+                }
+                _ => Err(LifecycleError::NoCandidate),
+            },
+            // A shutdown ends a startup the way a rescue does.
+            Event::BeginShutdown => {
+                if matches!(self, Self::Shutdown { .. }) {
+                    return Err(LifecycleError::Shutdown);
+                }
+                let generation = self.retired_generation() + 1;
+                let notice = self.candidate().and_then(|candidate| {
+                    candidate_notice(&candidate.route, generation, Some(CandidateEnd::Rescued))
+                });
+                let next = Self::Shutdown {
+                    leg: leg.retired("shutdown", generation),
+                };
+                Ok((next, notice))
+            }
+        }
+    }
+}
+
+struct CallLifecycle {
+    line: Line,
+    /// The level the next project call is asked for when the caller names
+    /// none. `/thinking` changes it.
+    thinking_default: String,
+    /// Tokens belonging to resident sessions that are not foreground.
+    background_tokens: HashMap<String, String>,
+}
+
+impl CallLifecycle {
+    /// The one writer of the call line: moves it by `event`, or leaves it
+    /// as it is if the event is refused. Returns the notice the move owes
+    /// the browser.
+    fn step(&mut self, event: Event) -> Result<Option<CandidateNotice>, LifecycleError> {
+        let (line, notice) = self.line.next(event)?;
+        self.line = line;
+        Ok(notice)
+    }
+
+    fn status(&self, config: &StatusConfig) -> Status {
+        self.line.leg().status(config, &self.thinking_default)
     }
 }
 
@@ -371,7 +793,11 @@ impl Coordinator {
     /// A call on the operator. `thinking_default` is the level the first
     /// project call is asked for.
     pub fn new(config: StatusConfig, thinking_default: impl Into<String>) -> Self {
-        let lifecycle = CallLifecycle::operator(thinking_default.into());
+        let lifecycle = CallLifecycle {
+            line: Line::at_rest(LiveLeg::operator()),
+            thinking_default: thinking_default.into(),
+            background_tokens: HashMap::new(),
+        };
         let projection = Arc::new(RwLock::new(Arc::new(lifecycle.status(&config))));
         Self {
             state: Arc::new(Mutex::new(lifecycle)),
@@ -405,12 +831,30 @@ impl Coordinator {
         }
     }
 
-    pub fn linearize<R>(&self, operation: impl FnOnce(&mut CallLifecycle) -> R) -> R {
+    fn linearize<R>(&self, operation: impl FnOnce(&mut CallLifecycle) -> R) -> R {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         operation(&mut state)
+    }
+
+    /// Moves the call line by `event` under the state lock, then, still
+    /// under it, sends the candidate notice the move owes the browser,
+    /// refreshes the status projection, and wakes the turns waiting to be
+    /// admitted. A refused event does none of that.
+    fn step_locked(
+        &self,
+        state: &mut CallLifecycle,
+        event: Event,
+    ) -> Result<Option<CandidateNotice>, LifecycleError> {
+        let notice = state.step(event)?;
+        if let Some(notice) = &notice {
+            self.notify_candidate(notice);
+        }
+        self.refresh_locked(state);
+        self.operation_changed.notify_waiters();
+        Ok(notice)
     }
 
     fn refresh_locked(&self, state: &CallLifecycle) {
@@ -419,6 +863,10 @@ impl Coordinator {
             .projection
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = projection;
+    }
+
+    fn step(&self, event: Event) -> Result<Option<CandidateNotice>, LifecycleError> {
+        self.linearize(|state| self.step_locked(state, event))
     }
 
     /// The status the page is shown. Read without waiting for a transition in
@@ -434,22 +882,25 @@ impl Coordinator {
 
     /// `operator`, or the id of the project on the line.
     pub fn route(&self) -> String {
-        self.linearize(|state| state.route.clone())
+        self.linearize(|state| state.line.leg().route().to_owned())
     }
 
     /// The route and the generation of the leg on it, read together.
     pub fn route_and_generation(&self) -> (String, u64) {
-        self.linearize(|state| (state.route.clone(), state.leg.generation))
+        self.linearize(|state| {
+            let leg = state.line.leg();
+            (leg.route().to_owned(), leg.identity.generation)
+        })
     }
 
     /// The name the page shows for whoever is on the line.
     pub fn route_label(&self) -> String {
-        self.linearize(|state| state.route_label())
+        self.linearize(|state| state.line.leg().label())
     }
 
     /// The project leg on the line; `None` on the operator.
     pub fn project_leg(&self) -> Option<ProjectLeg> {
-        self.linearize(|state| state.project_leg())
+        self.linearize(|state| state.line.leg().project_leg())
     }
 
     /// True while a leg is coming up: from `begin_candidate` until its
@@ -457,7 +908,7 @@ impl Coordinator {
     /// line may already be the new one, adopted on its first sign of life,
     /// while the PBX still holds the leg before it.
     pub fn startup_in_flight(&self) -> bool {
-        self.linearize(|state| state.startup_rollback.is_some())
+        self.linearize(|state| matches!(state.line, Line::Starting { .. } | Line::Adopted { .. }))
     }
 
     /// The level the next project call is asked for when the caller names
@@ -467,7 +918,7 @@ impl Coordinator {
     }
 
     pub fn current_identity(&self) -> LegIdentity {
-        self.linearize(|state| state.leg.clone())
+        self.linearize(|state| state.line.leg().identity.clone())
     }
 
     pub fn generation(&self) -> u64 {
@@ -484,42 +935,17 @@ impl Coordinator {
     /// generation is still current. The lifecycle lock covers both the check
     /// and mutation, so a rescue/adoption cannot land between them.
     pub fn with_generation<R>(&self, generation: u64, operation: impl FnOnce() -> R) -> Option<R> {
-        self.linearize(|state| (state.leg.generation == generation).then(operation))
+        self.linearize(|state| (state.line.leg().identity.generation == generation).then(operation))
     }
 
     pub fn begin_prompt(&self, leg: &LegIdentity) -> Result<OperationIdentity, LifecycleError> {
-        let id = self.next_operation.fetch_add(1, Ordering::Relaxed);
-        self.linearize(|state| {
-            if state.leg != *leg {
-                return Err(LifecycleError::StaleLeg);
-            }
-            if matches!(state.phase, Phase::Quiescing | Phase::Shutdown) {
-                return Err(if state.phase == Phase::Shutdown {
-                    LifecycleError::Shutdown
-                } else {
-                    LifecycleError::WrongPhase
-                });
-            }
-            if state.operation.is_some() {
-                return Err(LifecycleError::OperationActive);
-            }
-            // Beginning a turn now would move the call out of `Starting` with
-            // the candidate still staged, and a candidate the PBX no longer
-            // sees starting is never adopted.
-            if state.phase == Phase::Starting {
-                return Err(LifecycleError::CandidateActive);
-            }
-            let operation = OperationIdentity {
-                id,
-                leg: leg.clone(),
-                turn_id: None,
-            };
-            state.operation = Some(operation.clone());
-            state.phase = Phase::TurnRunning;
-            self.refresh_locked(state);
-            self.operation_changed.notify_waiters();
-            Ok(operation)
-        })
+        let operation = OperationIdentity {
+            id: self.next_operation.fetch_add(1, Ordering::Relaxed),
+            leg: leg.clone(),
+            turn_id: None,
+        };
+        self.step(Event::BeginPrompt(operation.clone()))?;
+        Ok(operation)
     }
 
     /// Opens the operation for a self-woken project turn. Unlike an ordinary
@@ -529,52 +955,19 @@ impl Coordinator {
         leg: &LegIdentity,
         turn_id: impl Into<String>,
     ) -> Result<OperationIdentity, LifecycleError> {
-        let id = self.next_operation.fetch_add(1, Ordering::Relaxed);
-        let turn_id = turn_id.into();
-        self.linearize(|state| {
-            if state.leg != *leg {
-                return Err(LifecycleError::StaleLeg);
-            }
-            if state.phase != Phase::Active {
-                return Err(if state.phase == Phase::Starting {
-                    LifecycleError::CandidateActive
-                } else {
-                    LifecycleError::WrongPhase
-                });
-            }
-            if state.operation.is_some() {
-                return Err(LifecycleError::OperationActive);
-            }
-            let operation = OperationIdentity {
-                id,
-                leg: leg.clone(),
-                turn_id: Some(turn_id),
-            };
-            state.operation = Some(operation.clone());
-            state.phase = Phase::TurnRunning;
-            self.refresh_locked(state);
-            self.operation_changed.notify_waiters();
-            Ok(operation)
-        })
+        let operation = OperationIdentity {
+            id: self.next_operation.fetch_add(1, Ordering::Relaxed),
+            leg: leg.clone(),
+            turn_id: Some(turn_id.into()),
+        };
+        self.step(Event::BeginAutonomous(operation.clone()))?;
+        Ok(operation)
     }
 
     /// Binds the host's turn id to an operation opened for a caller prompt.
     /// Older hosts do not report a turn id and keep the legacy token check.
     pub fn bind_turn(&self, token: &str, turn_id: &str) -> Result<(), LifecycleError> {
-        self.linearize(|state| {
-            if state.leg.token != token || state.operation.is_none() {
-                return Err(LifecycleError::StaleLeg);
-            }
-            let operation = state.operation.as_mut().expect("checked above");
-            match operation.turn_id.as_deref() {
-                Some(current) if current != turn_id => Err(LifecycleError::StaleLeg),
-                Some(_) => Ok(()),
-                None => {
-                    operation.turn_id = Some(turn_id.to_owned());
-                    Ok(())
-                }
-            }
-        })
+        self.step(Event::BindTurn { token, turn_id }).map(drop)
     }
 
     /// Closes the operation bound to host turn `turn_id` on the leg holding
@@ -585,68 +978,53 @@ impl Coordinator {
     /// as racing a turn that is already over. False when no such operation is
     /// open; its owner's later `finish_operation` is then a no-op.
     pub fn settle_turn(&self, token: &str, turn_id: &str) -> bool {
-        self.linearize(|state| {
-            // A new leg's intro is closed by `finish_intro`, which also ends
-            // its startup; it is not this report's to close.
-            let bound = state.leg.token == token
-                && state.startup_rollback.is_none()
-                && state
-                    .operation
-                    .as_ref()
-                    .is_some_and(|operation| operation.turn_id.as_deref() == Some(turn_id));
-            if !bound {
-                return false;
-            }
-            self.close_operation_locked(state);
-            true
-        })
+        self.step(Event::SettleTurn { token, turn_id }).is_ok()
     }
 
     pub fn attach_steer(&self, leg: &LegIdentity) -> Result<OperationIdentity, LifecycleError> {
         self.linearize(|state| {
-            if state.leg != *leg {
+            if state.line.leg().identity != *leg {
                 return Err(LifecycleError::StaleLeg);
             }
-            if !matches!(state.phase, Phase::TurnRunning | Phase::Active) {
-                return Err(LifecycleError::WrongPhase);
+            match &state.line {
+                Line::Open { turn, .. } | Line::Adopted { turn, .. } => {
+                    turn.clone().ok_or(LifecycleError::NoActiveOperation)
+                }
+                Line::Starting { .. } | Line::Quiescing { .. } | Line::Shutdown { .. } => {
+                    Err(LifecycleError::WrongPhase)
+                }
             }
-            state
-                .operation
-                .clone()
-                .ok_or(LifecycleError::NoActiveOperation)
         })
     }
 
     pub fn finish_operation(&self, operation: &OperationIdentity) -> bool {
-        self.linearize(|state| {
-            // Match on the operation's id and leg, not the whole value:
-            // `bind_turn` stamps the host turn id onto the live operation after
-            // the owner took its copy, and that must not orphan the operation.
-            let owns = state
-                .operation
-                .as_ref()
-                .is_some_and(|current| current.id == operation.id && current.leg == operation.leg);
-            if !owns {
-                return false;
-            }
-            self.close_operation_locked(state);
-            true
-        })
+        self.step(Event::FinishOperation(operation)).is_ok()
     }
 
-    fn close_operation_locked(&self, state: &mut CallLifecycle) {
-        state.operation = None;
-        if state.phase == Phase::TurnRunning {
-            state.phase = state.resting_phase();
-        }
-        self.refresh_locked(state);
-        self.operation_changed.notify_waiters();
+    /// Retires the leg on the line: the call quiesces under a new identity
+    /// until it settles. A rescue abandons any in-flight startup: a rescued
+    /// candidate must never be adopted, and the browser must stop showing
+    /// "connecting". A candidate already adopted on its first sign of life
+    /// keeps the line, but its startup is over too: the rescue cancels the
+    /// work that would have committed or rolled it back, so nothing is left
+    /// for a late rollback to restore.
+    fn rescue(&self, of: RescueOf, reason: String) -> Option<LegIdentity> {
+        let (notice, next) = self.linearize(|state| {
+            let notice = self.step_locked(state, Event::Rescue(of)).ok()?;
+            Some((notice, state.line.leg().identity.clone()))
+        })?;
+        tracing::info!(
+            %reason,
+            generation = next.generation,
+            abandoned_candidate = notice.as_ref().map(|notice| notice.route.as_str()),
+            "rescue retired the current leg"
+        );
+        Some(next)
     }
 
     pub fn begin_rescue(&self, reason: impl Into<String>) -> LegIdentity {
-        let rescue = self.linearize(|state| self.rescue_locked(state, reason.into()));
-        self.announce_rescue(&rescue);
-        rescue.next
+        self.rescue(RescueOf::Line, reason.into())
+            .expect("a rescue of the line is admitted in every phase")
     }
 
     /// `begin_rescue`, only while the call is still at `generation`; `None`
@@ -658,11 +1036,7 @@ impl Coordinator {
         generation: u64,
         reason: impl Into<String>,
     ) -> Option<LegIdentity> {
-        let rescue = self.linearize(|state| {
-            (state.leg.generation == generation).then(|| self.rescue_locked(state, reason.into()))
-        })?;
-        self.announce_rescue(&rescue);
-        Some(rescue.next)
+        self.rescue(RescueOf::Generation(generation), reason.into())
     }
 
     /// `begin_rescue`, only while `leg` is still the leg on the line and no
@@ -676,67 +1050,11 @@ impl Coordinator {
         leg: &ProjectLeg,
         reason: impl Into<String>,
     ) -> Option<ProjectLeg> {
-        let (rescue, rescued) = self.linearize(|state| {
-            if state.phase == Phase::Shutdown
-                || state.startup_rollback.is_some()
-                || state.project_leg().as_ref() != Some(leg)
-            {
-                return None;
-            }
-            let rescue = self.rescue_locked(state, reason.into());
-            Some((rescue, state.project_leg()?))
-        })?;
-        self.announce_rescue(&rescue);
-        Some(rescued)
-    }
-
-    /// Retires the current leg. A rescue abandons any in-flight startup: a
-    /// rescued candidate must never be adopted, and the browser must stop
-    /// showing "connecting". A candidate already adopted on its first sign of
-    /// life keeps the line, but its startup is over too: the rescue cancels
-    /// the work that would have committed or rolled it back, so nothing is
-    /// left for a late rollback to restore.
-    fn rescue_locked(&self, state: &mut CallLifecycle, reason: String) -> Rescue {
-        let abandoned = state.candidate.take();
-        // The rescue retires the candidate's generation too, so work stamped
-        // with the abandoned candidate's generation is stale after it.
-        let retired = abandoned
-            .as_ref()
-            .map_or(state.leg.generation, |candidate| {
-                candidate.identity.generation.max(state.leg.generation)
-            });
-        let abandoned_candidate = abandoned.map(|candidate| candidate.route);
-        state.startup_rollback = None;
-        let next_token = format!("{}-rescue-{}", state.leg.token, retired + 1);
-        state.leg = LegIdentity::new(next_token, retired + 1);
-        if state.phase != Phase::Shutdown {
-            state.phase = Phase::Quiescing;
-            state.operation = None;
-            state.terminal_reason = Some(reason);
-        }
-        self.refresh_locked(state);
-        self.operation_changed.notify_waiters();
-        Rescue {
-            abandoned_candidate,
-            next: state.leg.clone(),
-        }
-    }
-
-    /// Tells the presentation layer what a rescue ended. The clear notice
-    /// carries the post-rescue generation.
-    fn announce_rescue(&self, rescue: &Rescue) {
-        if let Some(route) = &rescue.abandoned_candidate {
-            self.notify_candidate(&CandidateNotice {
-                route: route.clone(),
-                generation: rescue.next.generation,
-                ended: Some(CandidateEnd::Rescued),
-            });
-        }
-        tracing::info!(
-            generation = rescue.next.generation,
-            abandoned_candidate = rescue.abandoned_candidate.as_deref(),
-            "rescue retired the current leg"
-        );
+        let identity = self.rescue(RescueOf::Leg(leg), reason.into())?;
+        Some(ProjectLeg {
+            identity,
+            ..leg.clone()
+        })
     }
 
     /// Ends the quiet a rescue left: a `Quiescing` call comes to rest on the
@@ -745,40 +1063,18 @@ impl Coordinator {
     /// including one that was refused. Returns the status to publish.
     pub fn settle(&self) -> Status {
         self.linearize(|state| {
-            if state.phase == Phase::Quiescing {
-                state.phase = state.resting_phase();
-            }
-            self.refresh_locked(state);
+            self.step_locked(state, Event::Settle)
+                .expect("a settle is admitted in every phase");
             state.status(&self.config)
         })
     }
 
     /// The caller is back on the operator: the project, its model, session,
-    /// thinking, and catalog are gone with its leg. A call at rest or
-    /// quiescing is now at rest on the operator; a turn still running (the
-    /// operator is being told why the caller came back) settles when it ends.
-    ///
-    /// The project leg's token is retired with it. The leg takes the
-    /// operator's identity at the same generation, so a callback still
-    /// carrying the project's token (a module call already in flight) is
-    /// refused rather than taken as the operator's.
+    /// thinking, and catalog are gone with its leg, and so is its token. The
+    /// line takes the operator's identity at the same generation.
     pub fn return_to_operator(&self) {
-        self.linearize(|state| {
-            if !state.on_operator() {
-                state.leg = LegIdentity::new(OPERATOR, state.leg.generation);
-            }
-            state.route = OPERATOR.into();
-            state.project = None;
-            state.persistent_session_id.clear();
-            state.model.clear();
-            state.thinking_requested.clear();
-            state.thinking_effective.clear();
-            state.catalog = None;
-            if matches!(state.phase, Phase::Quiescing | Phase::Active) {
-                state.phase = Phase::Operator;
-            }
-            self.refresh_locked(state);
-        });
+        self.step(Event::ReturnToOperator)
+            .expect("a return to the operator is admitted in every phase");
     }
 
     /// `/thinking`: the level the next project call is asked for when the
@@ -793,47 +1089,20 @@ impl Coordinator {
     /// Stages `candidate` and returns the identity it is staged under, the
     /// one an adoption puts on the line: its first turn is delivered at that
     /// generation.
-    pub fn begin_candidate(
-        &self,
-        mut candidate: CandidateLeg,
-    ) -> Result<LegIdentity, LifecycleError> {
+    pub fn begin_candidate(&self, candidate: CandidateLeg) -> Result<LegIdentity, LifecycleError> {
         self.linearize(|state| {
-            if state.phase == Phase::Shutdown {
-                return Err(LifecycleError::Shutdown);
-            }
-            if state.candidate.is_some() || matches!(state.phase, Phase::Starting) {
-                return Err(LifecycleError::CandidateActive);
-            }
-            if candidate.identity.token.trim().is_empty() {
-                return Err(LifecycleError::CandidateTokenMismatch);
-            }
-            candidate.identity.generation = state.leg.generation + 1;
-            state.startup_rollback = Some(StartupRollback {
-                route: state.route.clone(),
-                project: state.project.clone(),
-                persistent_session_id: state.persistent_session_id.clone(),
-                leg: state.leg.clone(),
-                model: state.model.clone(),
-                thinking_requested: state.thinking_requested.clone(),
-                thinking_effective: state.thinking_effective.clone(),
-                catalog: state.catalog.clone(),
-            });
-            state.phase = Phase::Starting;
-            let route = candidate.route.clone();
-            let identity = candidate.identity.clone();
-            state.candidate = Some(candidate);
-            self.notify_candidate(&CandidateNotice {
-                route,
-                generation: state.leg.generation,
-                ended: None,
-            });
-            self.operation_changed.notify_waiters();
-            Ok(identity)
+            self.step_locked(state, Event::BeginCandidate(candidate))?;
+            Ok(state
+                .line
+                .candidate()
+                .expect("a candidate is staged")
+                .identity
+                .clone())
         })
     }
 
     pub fn is_candidate(&self) -> bool {
-        self.linearize(|state| matches!(state.phase, Phase::Starting))
+        self.linearize(|state| matches!(state.line, Line::Starting { .. }))
     }
 
     /// Register a resident session that may continue while another agent is
@@ -892,25 +1161,26 @@ impl Coordinator {
             if state.background_tokens.contains_key(token) {
                 return Ok(());
             }
-            if matches!(state.phase, Phase::Starting) {
-                return Err(LifecycleError::CandidateSideEffect);
-            }
-            if matches!(state.phase, Phase::Quiescing | Phase::Shutdown) {
-                return Err(LifecycleError::StaleLeg);
-            }
+            let (leg, turn) = match &state.line {
+                Line::Starting { .. } => return Err(LifecycleError::CandidateSideEffect),
+                Line::Quiescing { .. } | Line::Shutdown { .. } => {
+                    return Err(LifecycleError::StaleLeg)
+                }
+                Line::Open { leg, turn } | Line::Adopted { leg, turn, .. } => (leg, turn),
+            };
             // The operator's leg has an identity of its own: a project leg's
             // token is retired when the caller comes back
             // (`return_to_operator`), so it cannot speak for the operator.
-            if state.on_operator() {
-                if token.is_empty() || token == state.leg.token {
+            if leg.launch.is_none() {
+                if token.is_empty() || token == leg.identity.token {
                     return Ok(());
                 }
                 return Err(LifecycleError::StaleLeg);
             }
-            if token.is_empty() || state.leg.token != token {
+            if token.is_empty() || leg.identity.token != token {
                 return Err(LifecycleError::StaleLeg);
             }
-            let Some(operation) = state.operation.as_ref() else {
+            let Some(operation) = turn else {
                 return Err(LifecycleError::StaleLeg);
             };
             // A self-woken call without a host turn authority must never use a
@@ -933,28 +1203,30 @@ impl Coordinator {
         })
     }
 
+    /// The leg `token` reports the level it runs at: kept private for a
+    /// starting candidate (`Ok(false)`), shown for the leg on the line
+    /// (`Ok(true)`).
     pub fn accept_thinking_callback(
         &self,
         token: &str,
         thinking: &str,
     ) -> Result<bool, LifecycleError> {
+        if !THINKING_LEVELS.contains(&thinking) {
+            return Err(LifecycleError::WrongPhase);
+        }
         self.linearize(|state| {
-            if !THINKING_LEVELS.contains(&thinking) {
-                return Err(LifecycleError::WrongPhase);
+            let startup = Event::StartupThinking {
+                token,
+                level: thinking,
+            };
+            if self.step_locked(state, startup).is_ok() {
+                return Ok(false);
             }
-            if let Some(candidate) = state.candidate.as_mut() {
-                if candidate.identity.token == token && matches!(state.phase, Phase::Starting) {
-                    candidate.startup_thinking = thinking.to_owned();
-                    return Ok(false);
-                }
-            }
-            if state.leg.token != token || matches!(state.phase, Phase::Quiescing | Phase::Shutdown)
-            {
-                return Err(LifecycleError::StaleLeg);
-            }
-            state.thinking_effective = thinking.to_owned();
-            self.refresh_locked(state);
-            Ok(true)
+            let leg = Event::LegThinking {
+                token,
+                level: thinking,
+            };
+            self.step_locked(state, leg).map(|_| true)
         })
     }
 
@@ -966,16 +1238,17 @@ impl Coordinator {
     /// leg was connecting (see `CandidateNotice`).
     pub fn generation_and_adoption(&self) -> (u64, Option<String>) {
         self.linearize(|state| {
-            let adopted = (state.adopted.as_ref() == Some(&state.leg)).then(|| state.route.clone());
-            (state.leg.generation, adopted)
+            let leg = state.line.leg();
+            let adopted = leg.adopted.then(|| leg.route().to_owned());
+            (leg.identity.generation, adopted)
         })
     }
 
     pub fn candidate_identity(&self) -> Option<LegIdentity> {
         self.linearize(|state| {
             state
-                .candidate
-                .as_ref()
+                .line
+                .candidate()
                 .map(|candidate| candidate.identity.clone())
         })
     }
@@ -985,19 +1258,21 @@ impl Coordinator {
     /// session token.
     pub fn classify_activity(&self, leg: &str) -> ActivityDisposition {
         self.linearize(|state| {
-            let candidate = state.candidate.as_ref();
-            if state.phase == Phase::Starting
-                && candidate.is_some_and(|candidate| candidate.identity.token == leg)
-            {
-                return ActivityDisposition::Promote;
-            }
-            if matches!(state.phase, Phase::Quiescing | Phase::Shutdown) {
-                return ActivityDisposition::Discard;
-            }
-            let current = if state.on_operator() {
+            let on_line = match &state.line {
+                Line::Starting { candidate, .. } if candidate.identity.token == leg => {
+                    return ActivityDisposition::Promote
+                }
+                Line::Quiescing { .. } | Line::Shutdown { .. } => {
+                    return ActivityDisposition::Discard
+                }
+                Line::Open { leg, .. } | Line::Starting { leg, .. } | Line::Adopted { leg, .. } => {
+                    leg
+                }
+            };
+            let current = if on_line.launch.is_none() {
                 OPERATOR
             } else {
-                state.leg.token.as_str()
+                on_line.identity.token.as_str()
             };
             if leg == current {
                 ActivityDisposition::Publish
@@ -1007,137 +1282,47 @@ impl Coordinator {
         })
     }
 
-    /// Adopts the staged candidate if it is the leg `token` names: the PBX
-    /// once its intro turn ends, or a sign of life from the candidate itself.
+    /// Gives the staged candidate another token, so a test can make its
+    /// adoption fail. It edits the candidate in place: a test-only writer.
     #[cfg(test)]
     pub(crate) fn set_candidate_token_for_test(&self, token: &str) {
         self.linearize(|state| {
-            if let Some(candidate) = state.candidate.as_mut() {
+            if let Line::Starting { candidate, .. } = &mut state.line {
                 candidate.identity.token = token.to_owned();
             }
         });
     }
 
+    /// Adopts the staged candidate if it is the leg `token` names: the PBX
+    /// once its intro turn ends, or a sign of life from the candidate itself.
     pub fn adopt_candidate(&self, token: &str) -> Result<LegIdentity, LifecycleError> {
+        let intro = self.next_operation.fetch_add(1, Ordering::Relaxed);
         self.linearize(|state| {
-            let candidate = match state
-                .candidate
-                .take_if(|candidate| candidate.identity.token == token)
-            {
-                Some(candidate) => candidate,
-                None if state.candidate.is_some() => {
-                    return Err(LifecycleError::CandidateTokenMismatch)
-                }
-                None => return Err(LifecycleError::NoCandidate),
-            };
-            let identity = candidate.identity.clone();
-            let route = candidate.route.clone();
-            state.route = candidate.route;
-            state.project = Some(candidate.project);
-            state.persistent_session_id = candidate.persistent_session_id;
-            state.leg = identity.clone();
-            state.phase = Phase::TurnRunning;
-            state.model = candidate.model;
-            state.thinking_requested = candidate.thinking;
-            // Confirmed only by the leg's own report: what it was asked for
-            // is not what it runs at when its model clamps the level.
-            state.thinking_effective =
-                if THINKING_LEVELS.contains(&candidate.startup_thinking.as_str()) {
-                    candidate.startup_thinking
-                } else {
-                    String::new()
-                };
-            state.operation = Some(OperationIdentity {
-                id: self.next_operation.fetch_add(1, Ordering::Relaxed),
-                leg: identity.clone(),
-                turn_id: None,
-            });
-            state.terminal_reason = None;
-            state.catalog = candidate.catalog;
-            state.adopted = Some(identity.clone());
-            self.notify_candidate(&CandidateNotice {
-                route,
-                generation: identity.generation,
-                ended: Some(CandidateEnd::Adopted),
-            });
-            self.refresh_locked(state);
-            self.operation_changed.notify_waiters();
-            Ok(identity)
+            self.step_locked(state, Event::Adopt { token, intro })?;
+            Ok(state.line.leg().identity.clone())
         })
     }
 
     pub fn finish_intro(&self) -> bool {
-        self.linearize(|state| {
-            if state.startup_rollback.is_none() || state.phase != Phase::TurnRunning {
-                return false;
-            }
-            state.operation = None;
-            state.phase = Phase::Active;
-            state.startup_rollback = None;
-            self.refresh_locked(state);
-            self.operation_changed.notify_waiters();
-            true
-        })
+        self.step(Event::FinishIntro).is_ok()
     }
 
     pub fn rollback_startup(&self, reason: impl Into<String>) -> bool {
-        self.linearize(|state| {
-            if let Some(candidate) = state.candidate.take() {
-                state.startup_rollback = None;
-                state.terminal_reason = Some(reason.into());
-                state.phase = state.resting_phase();
-                self.notify_candidate(&CandidateNotice {
-                    route: candidate.route,
-                    generation: state.leg.generation,
-                    ended: Some(CandidateEnd::RolledBack),
-                });
-                self.refresh_locked(state);
-                return true;
-            }
-            let Some(previous) = state.startup_rollback.take() else {
-                return false;
-            };
-            let generation = state.leg.generation;
-            let abandoned_route = std::mem::replace(&mut state.route, previous.route);
-            state.project = previous.project;
-            state.persistent_session_id = previous.persistent_session_id;
-            state.leg = LegIdentity::new(previous.leg.token, generation);
-            state.phase = state.resting_phase();
-            state.model = previous.model;
-            state.thinking_requested = previous.thinking_requested;
-            state.thinking_effective = previous.thinking_effective;
-            state.operation = None;
-            state.terminal_reason = Some(reason.into());
-            state.catalog = previous.catalog;
-            self.notify_candidate(&CandidateNotice {
-                route: abandoned_route,
-                generation: state.leg.generation,
-                ended: Some(CandidateEnd::RolledBack),
-            });
-            self.refresh_locked(state);
-            true
-        })
+        let Ok(Some(notice)) = self.step(Event::Rollback) else {
+            return false;
+        };
+        tracing::info!(route = %notice.route, reason = %reason.into(), "a startup was rolled back");
+        true
     }
 
     pub fn begin_shutdown(&self) -> bool {
         self.linearize(|state| {
-            if state.phase == Phase::Shutdown {
-                false
-            } else {
-                state.phase = Phase::Shutdown;
-                state.operation = None;
-                state.background_tokens.clear();
-                let next_token =
-                    format!("{}-shutdown-{}", state.leg.token, state.leg.generation + 1);
-                state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
-                self.refresh_locked(state);
-                true
+            if self.step_locked(state, Event::BeginShutdown).is_err() {
+                return false;
             }
+            state.background_tokens.clear();
+            true
         })
-    }
-
-    pub fn finish_shutdown(&self) {
-        self.linearize(|state| state.terminal_reason = Some("shutdown".into()));
     }
 }
 
