@@ -157,7 +157,10 @@ utterance: its turn to play comes, or it is dropped and will never play
 (`runtime/spokenLines.ts`). Queued lines wait their turn, stitched speech
 included. A line with no audio, such as the hangup notice, shows at once. A
 new leg that cuts the audio off shows the lines that were waiting. The
-transcript drawer takes every line as soon as its text arrives.
+transcript drawer takes every line as soon as its text arrives. It holds the
+last 200 lines and follows the newest one the same way the log does
+(`hooks/usePinnedScroll.ts`): scrolling up to reread unpins it, and scrolling
+back to the bottom pins it again (#267).
 
 ## Shared screen-state contract
 

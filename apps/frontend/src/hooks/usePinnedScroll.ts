@@ -32,6 +32,8 @@ function pinTop(element: HTMLElement): number {
  * not read: a surface that is not a log, or a log the reader paused.
  * Every pin-to-bottom scroller in the tree, the page's and the debug
  * page's, is this hook (`apps/frontend/AGENTS.md`).
+ * The live response's log (`SpokenLog`) and the history drawer
+ * (`TranscriptDrawer`) both follow their newest line through it.
  */
 export function usePinnedScroll<T extends HTMLElement>(content: unknown, enabled = true) {
   const ref = useRef<T>(null);
