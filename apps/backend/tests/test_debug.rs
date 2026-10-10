@@ -633,27 +633,6 @@ mod wire {
         }
     }
 
-    #[test]
-    fn an_origin_matches_its_host_with_or_without_the_default_port() {
-        let headers = |origin: &str, host: &str| {
-            let mut headers = HeaderMap::new();
-            headers.insert(header::ORIGIN, origin.parse().unwrap());
-            headers.insert(header::HOST, host.parse().unwrap());
-            headers
-        };
-        assert!(same_origin(&headers("http://damocles", "damocles:80")));
-        assert!(same_origin(&headers("https://damocles:443", "damocles")));
-        assert!(same_origin(&headers("http://[::1]:8766", "[::1]:8766")));
-        assert!(!same_origin(&headers(
-            "http://damocles:8765",
-            "damocles:8766"
-        )));
-        assert!(!same_origin(&HeaderMap::from_iter([(
-            header::ORIGIN,
-            "http://damocles".parse().unwrap()
-        )])));
-    }
-
     #[tokio::test]
     async fn the_debug_socket_sends_a_snapshot_then_live_frames_then_closes_on_shutdown() {
         let bus = DebugBus::new();

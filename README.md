@@ -461,6 +461,26 @@ logged with the mime its browser recorded it as (`clip arrived`), which is
 how the journal says whether a caller's browser sent `audio/webm;codecs=opus`
 or the `audio/mp4` every iPad browser records.
 
+### Who can reach the call
+
+The page has no login: anyone who can load it on the network can take the
+call. What the service does refuse is another site's page acting through the
+caller's own browser. A browser applies no CORS to a WebSocket, and it sends a
+`POST` with no body to another site without asking first, so both listeners
+refuse any request whose `Origin` names a different host and port than its
+`Host` (`api::refuse_cross_origin`, a 403). That covers `/ws` (which reads the
+call and speaks to the agent on the line as the caller), `/hangup`, and every
+other route. The page's own requests name its own origin and pass; a client
+that is not a browser sends no `Origin` and passes too (curl, a probe, the
+host agents dialling in to `/host`, which have their own token check).
+
+The check compares `Origin` with the `Host` the service receives, so a proxy
+in front must hand on the browser's `Host` unchanged. Caddy's `reverse_proxy`
+does by default: the page at `https://switchboard.home.arpa` sends
+`Origin: https://switchboard.home.arpa` and arrives with
+`Host: switchboard.home.arpa`. A proxy that rewrites `Host` to the upstream
+address would lock the page out.
+
 Restarting drops whatever call is in progress and repeats the startup prewarm.
 Speech-to-text runs in its own service (`switchboard-stt`) and is not restarted
 with it.
