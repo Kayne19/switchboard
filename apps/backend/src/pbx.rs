@@ -384,10 +384,6 @@ impl Switchboard {
         self.prewarm.shutdown();
     }
 
-    pub fn router(&self) -> Router {
-        self.router.clone()
-    }
-
     pub(crate) fn set_agent_task(&self, project: &str, text: &str) {
         self.agent_tasks
             .lock()

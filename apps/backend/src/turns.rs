@@ -370,8 +370,10 @@ pub(crate) struct TurnState {
     receiver: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
     /// What routing reads about the call. Routing must never wait on the PBX
     /// lock: the turn worker holds it for a whole prompt, and an utterance
-    /// routed only after the prompt ends can no longer steer it.
-    routing: RoutingView,
+    /// routed only after the prompt ends can no longer steer it. Read here
+    /// and by the floor's good-moment gate (`speech::spawn_floor_worker`),
+    /// which must not hold a background update for a foreground turn.
+    pub(crate) routing: RoutingView,
     /// Decisions made before a queued turn reaches the PBX lock. Keeping the
     /// decision with the clip prevents a second Jev request while preserving
     /// steering for a turn that was already active.

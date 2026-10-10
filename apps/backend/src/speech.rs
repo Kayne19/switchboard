@@ -405,13 +405,12 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
                     .find(|entry| entry.role == crate::history::CALLER)
                     .map(|entry| entry.text.clone())
                     .unwrap_or_default();
-                let (router, mut summary) = {
-                    let board = state.0.switchboard.lock().await;
-                    (
-                        board.router(),
-                        board.call_summary(&entries, screen, caller_last),
-                    )
-                };
+                // Without the PBX lock: the turn worker holds it for a whole
+                // prompt, and a foreground turn is when the caller waits on
+                // a quiet line (#245).
+                let routing = &state.0.turns.routing;
+                let router = routing.router();
+                let mut summary = routing.call_summary(&entries, screen, caller_last);
                 summary.merge_live_agents(&live_agents(&state));
                 summary.queued_update = Some(crate::router::QueuedUpdate {
                     from_agent: request.project.clone(),
