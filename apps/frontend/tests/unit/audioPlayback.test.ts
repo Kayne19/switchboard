@@ -504,6 +504,7 @@ describe("AudioPlayback streaming", () => {
     onUtterance?: (sequence: number) => void,
     statuses?: Array<[string, boolean | undefined]>,
     stallMs?: number,
+    gapMs = 0,
   ) {
     const { urls } = stubObjectUrls();
     const player = fakePlayer((url) => {
@@ -521,7 +522,7 @@ describe("AudioPlayback streaming", () => {
       onStatus: (text, error) => statuses?.push([text, error]),
       onChange: () => {},
       onUtterance,
-      gapMs: 0,
+      gapMs,
       stallMs,
     });
     playback.setStreamingEnabled(true);
@@ -1196,6 +1197,43 @@ describe("AudioPlayback streaming", () => {
     player.ended = true;
     player.emit("ended");
     expect(playback.isDrained()).toBe(true);
+  });
+
+  it("plays what was queued when streaming turns off in the pause between streams (#259)", async () => {
+    // The pause before the next stream was already running, so the replays
+    // could not start then, and the stream it waited for was never started
+    // either: the queue never drained.
+    vi.useFakeTimers();
+    try {
+      const reached: number[] = [];
+      const { player, urls, playback } = streamingPlayback(
+        (sequence) => reached.push(sequence),
+        undefined,
+        undefined,
+        350,
+      );
+      playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("first"));
+      (urls.get(player.src) as FakeMediaSource).buffer.emit("updateend");
+      playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+      playback.receiveAudioStart({ generation: 0, sequence: 2, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(bytes("second"));
+      playback.receiveAudioDone({ generation: 0, sequence: 2, done: true });
+      await Promise.resolve();
+      player.ended = true;
+      player.emit("ended");
+      playback.setStreamingEnabled(false);
+      vi.advanceTimersByTime(350);
+      const second = urls.get(player.src);
+      expect(second instanceof Blob, "the second is replayed whole").toBe(true);
+      expect(await (second as Blob).text()).toBe("second");
+      expect(reached).toEqual([1, 2]);
+      player.ended = true;
+      player.emit("ended");
+      expect(playback.isDrained()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores audio stamped with another generation", () => {

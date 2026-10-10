@@ -856,10 +856,14 @@ export class AudioPlayback {
     this.stopEnvelopeMeter();
     this.playing = false;
     if (utterance.url) URL.revokeObjectURL(utterance.url);
-    if (this.mseQueue.length) this.afterGap(() => this.mseStartNext());
-    // Streaming stopped while this one played out (`mseStop`): what queued
-    // behind it waits as whole replays.
-    else if (this.audioQueue.length) this.afterGap(() => this.playReplayIfIdle());
+    // After the pause: the next stream, or the whole replays `mseStop` left
+    // when streaming stopped. Both are asked once the pause is over, since
+    // streaming can stop during it too.
+    if (this.mseQueue.length || this.audioQueue.length)
+      this.afterGap(() => {
+        this.mseStartNext();
+        this.playReplayIfIdle();
+      });
     this.notifyPlaybackChange();
   }
 
