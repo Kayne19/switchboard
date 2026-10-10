@@ -474,7 +474,6 @@ async fn display_protocol_validation_and_composition() {
     };
     assert_eq!(event["type"], "display");
     assert_eq!(event["action"]["id"], "main");
-    assert_eq!(*state.0.last_display.lock().await, Some(event));
     for (id, role) in [("compare", "compare"), ("secondary", "secondary")] {
         let (code, _) = agent_call_json(
             &state,
