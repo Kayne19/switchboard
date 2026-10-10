@@ -1408,7 +1408,8 @@ async fn an_autonomous_project_turn_is_traced_with_its_host_turn_id() {
 // | running            | the leg replies                         | thinking, reply       | operator      | yes         |
 //
 // A turn whose task panics ends as `failed`. Nothing on the call path can
-// make one panic, so the table cannot drive that row.
+// make one panic, so `a_failed_turn_ends_like_every_other_turn` hands that
+// outcome to the turn's one end directly.
 
 #[derive(Clone, Copy, Debug)]
 enum TurnPhase {
@@ -1491,6 +1492,48 @@ async fn a_caller_turn_ends_once_in_every_phase() {
         let got = drive_caller_turn(phase, event).await;
         assert_eq!(got, want, "{phase:?} x {event:?}");
     }
+}
+
+/// The row the table cannot drive: a turn whose task panicked ends through
+/// the same `TurnRun::finish` as the rest, traced as `failed`, with the
+/// page told, and leaves the worker at rest.
+#[tokio::test]
+async fn a_failed_turn_ends_like_every_other_turn() {
+    let state = state();
+    let mut events = state.0.events.subscribe();
+    let mut errors = state.0.events.subscribe();
+    let id = "failed-turn";
+    let generation = state.0.coordinator.generation();
+    let operation = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("admitted");
+    let run = TurnRun::begin(
+        &state,
+        id.into(),
+        generation,
+        operation,
+        std::time::Instant::now(),
+    );
+    let panicked = tokio::spawn(async { panic!("the turn panicked") })
+        .await
+        .expect_err("the task panicked");
+
+    run.finish(&state, TurnOutcome::Failed(panicked)).await;
+
+    assert_eq!(
+        until_turn_ended(&state, &mut events, id).await,
+        ending(&["thinking"], "failed", true)
+    );
+    let error = next_event_of(&mut errors, "error").await;
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("The call worker failed on that turn")),
+        "{error}"
+    );
+    assert_turn_at_rest(&state, id).await;
 }
 
 /// Drives one caller turn on the operator to `phase`, lands `event`, waits
