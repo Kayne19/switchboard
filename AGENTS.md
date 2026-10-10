@@ -65,9 +65,9 @@ commit.
   a grep can check (private modules, no lint allowances, one `Config`, a
   documented environment, one fake-executable writer, one skill socket path,
   one frame depth, one set of size caps, CPU-time budgets, no focused
-  `.only` test, no user-agent checks, bounded test awaits, live paths,
-  routes and settings in the docs); a new rule of that kind gets a check
-  there. Both Playwright configs also set
+  `.only` test, no user-agent checks, bounded test awaits, no page under
+  the notch, live paths, routes and settings in the docs); a new rule of
+  that kind gets a check there. Both Playwright configs also set
   `forbidOnly` on CI, so a focused spec fails its browser leg.
 - CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
   `npm run test:browser` (every spec in `apps/frontend/tests/visual` but
