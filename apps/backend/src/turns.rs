@@ -16,12 +16,14 @@ use crate::lifecycle::{LifecycleError, OperationIdentity};
 use crate::pbx::{AgentStateNotice, Switchboard};
 use crate::project_session::ProjectTurn;
 use crate::protocol::ServerMessage;
+use crate::reply::Reply;
 use crate::router::{jev_outcome, Action, CallSummary, Decision, RouteRule};
 use crate::routing_view::RoutingView;
-use crate::speech::deliver_turn_if_current;
+use crate::speech::{deliver_turn_if_current, SpeechGroup};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{mpsc, Mutex};
 #[cfg(test)]
 use tokio::time::{timeout, Duration};
@@ -210,8 +212,11 @@ pub(crate) fn jev_response_event(
     }
 }
 
-/// Ends an utterance's routing trace when a newer generation discards it.
-fn trace_stale_utterance(state: &AppState, id: &str, stamped: u64) {
+/// Refuses an utterance a newer generation made stale before it was acted
+/// on: its routing trace ends as `dropped_stale` and the page is told with
+/// an ID-bearing `stale_epoch`. Every stale exit of a caller turn, from
+/// routing to registration, ends here.
+fn refuse_stale(state: &AppState, id: &str, stamped: u64) {
     state.0.debug.publish(DebugEvent::PbxBranch {
         utterance_id: id.to_owned(),
         branch: "dropped_stale".into(),
@@ -220,6 +225,7 @@ fn trace_stale_utterance(state: &AppState, id: &str, stamped: u64) {
             state.0.coordinator.generation()
         ),
     });
+    emit_stale_clip(state, id);
 }
 
 /// Ends an utterance's routing trace when its turn ended without an answer:
@@ -253,15 +259,13 @@ pub(crate) async fn dispatch_routed_transcript(
     // Routing itself can span a rescue. Do not let a fallback decision queue
     // words for the leg that was current when Jev started.
     if generation != state.0.coordinator.generation() {
-        trace_stale_utterance(state, id, generation);
-        emit_stale_clip(state, id);
+        refuse_stale(state, id, generation);
         return;
     }
     let steered = if can_steer {
         let transition = state.0.operation_transition.lock().await;
         if generation != state.0.coordinator.generation() {
-            trace_stale_utterance(state, id, generation);
-            emit_stale_clip(state, id);
+            refuse_stale(state, id, generation);
             return;
         }
         let steer_operation = state
@@ -272,8 +276,7 @@ pub(crate) async fn dispatch_routed_transcript(
         let active = state.0.active_session.lock().await;
         if generation != state.0.coordinator.generation() {
             drop(active);
-            trace_stale_utterance(state, id, generation);
-            emit_stale_clip(state, id);
+            refuse_stale(state, id, generation);
             return;
         }
         let queued = match active.as_ref().cloned() {
@@ -316,8 +319,7 @@ pub(crate) async fn dispatch_routed_transcript(
         let active = state.0.active_session.lock().await;
         if generation != state.0.coordinator.generation() {
             drop(active);
-            trace_stale_utterance(state, id, generation);
-            emit_stale_clip(state, id);
+            refuse_stale(state, id, generation);
             return;
         }
         drop(active);
@@ -362,7 +364,7 @@ pub(crate) async fn dispatch_routed_transcript(
             "queued Jev routing decision"
         );
     }
-    let waiting = state.0.queued_turns.fetch_add(1, Ordering::AcqRel) + 1;
+    let waiting = state.0.turns.queued.fetch_add(1, Ordering::AcqRel) + 1;
     if state
         .0
         .turns
@@ -371,7 +373,7 @@ pub(crate) async fn dispatch_routed_transcript(
         .await
         .is_ok()
     {
-        if waiting > 1 || state.0.turn_in_flight.load(Ordering::Acquire) {
+        if waiting > 1 || state.0.turns.in_flight.load(Ordering::Acquire) {
             emit_message(
                 state,
                 ServerMessage::Queued {
@@ -382,7 +384,7 @@ pub(crate) async fn dispatch_routed_transcript(
             );
         }
     } else {
-        state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
+        state.0.turns.queued.fetch_sub(1, Ordering::AcqRel);
         state.0.turns.routed_decisions.lock().await.remove(id);
         emit_clip_verdict(
             state,
@@ -394,8 +396,9 @@ pub(crate) async fn dispatch_routed_transcript(
 
 /// Queued caller turns and the state only this module reads: the turn
 /// channel and the receiver the turn worker takes once, what routing reads
-/// about the call, the decisions made for turns still in the queue, and the
-/// autonomous turns in flight. `AppInner` holds one so the fields are the
+/// about the call, the decisions made for turns still in the queue, the
+/// autonomous turns in flight, how many caller turns wait, and whether one
+/// is open. `AppInner` holds one so the fields are the
 /// turns module's own.
 pub(crate) struct TurnState {
     sender: mpsc::Sender<(String, String, u64)>,
@@ -412,6 +415,13 @@ pub(crate) struct TurnState {
     /// Autonomous host turns admitted by the lifecycle, keyed by resident
     /// instance so a stale turn_end cannot finish a newer operation.
     autonomous_operations: Mutex<HashMap<u64, OperationIdentity>>,
+    /// Caller turns sent to the worker and not yet taken: the `waiting`
+    /// count the page is shown.
+    queued: AtomicU64,
+    /// True while a `TurnRun` is open: `TurnRun::begin` sets it and
+    /// `TurnRun::finish` clears it. A turn routed meanwhile is told it
+    /// waits.
+    in_flight: AtomicBool,
 }
 
 impl TurnState {
@@ -423,6 +433,8 @@ impl TurnState {
             routing,
             routed_decisions: Mutex::new(HashMap::new()),
             autonomous_operations: Mutex::new(HashMap::new()),
+            queued: AtomicU64::new(0),
+            in_flight: AtomicBool::new(false),
         }
     }
 
@@ -437,13 +449,34 @@ impl TurnState {
             .expect("the turn receiver is taken once")
     }
 
-    /// Queues a raw turn, as a test does in place of a transcribed clip.
+    /// Queues a raw turn, as a test does in place of a transcribed clip, and
+    /// counts it as waiting, as `dispatch_routed_transcript` does.
     #[cfg(test)]
     pub(crate) async fn enqueue_for_test(
         &self,
         turn: (String, String, u64),
     ) -> Result<(), mpsc::error::SendError<(String, String, u64)>> {
+        self.queued.fetch_add(1, Ordering::AcqRel);
         self.sender.send(turn).await
+    }
+
+    /// How many caller turns wait for the worker.
+    #[cfg(test)]
+    pub(crate) fn queued_for_test(&self) -> u64 {
+        self.queued.load(Ordering::Acquire)
+    }
+
+    /// Whether a caller turn is open.
+    #[cfg(test)]
+    pub(crate) fn in_flight_for_test(&self) -> bool {
+        self.in_flight.load(Ordering::Acquire)
+    }
+
+    /// Stands in for a turn that is open (or no longer is) for a test that
+    /// runs no worker.
+    #[cfg(test)]
+    pub(crate) fn set_in_flight_for_test(&self, in_flight: bool) {
+        self.in_flight.store(in_flight, Ordering::Release);
     }
 }
 
@@ -457,7 +490,7 @@ pub(crate) async fn process_turns(state: AppState) {
         .take()
         .expect("turn worker started once");
     while let Some((id, transcript, generation)) = receiver.recv().await {
-        state.0.queued_turns.fetch_sub(1, Ordering::AcqRel);
+        state.0.turns.queued.fetch_sub(1, Ordering::AcqRel);
         // A leg started from the page (a connection or a redial) is held under
         // the PBX lock until it is adopted or rolled back. Wait for that
         // outcome: the stamp check below means nothing until it is known which
@@ -470,8 +503,7 @@ pub(crate) async fn process_turns(state: AppState) {
         let routed_decision = state.0.turns.routed_decisions.lock().await.remove(&id);
         if generation != state.0.coordinator.generation() {
             tracing::info!(clip = %id, stamped = generation, current = state.0.coordinator.generation(), "dropping a queued turn before Jev routing");
-            trace_stale_utterance(&state, &id, generation);
-            emit_stale_clip(&state, &id);
+            refuse_stale(&state, &id, generation);
             continue;
         }
         let RoutedDecision {
@@ -483,93 +515,13 @@ pub(crate) async fn process_turns(state: AppState) {
             route_transcript(&state, &id, &transcript).await
         };
         let takeover = prepare_takeover_lookup(&state, &decision).await;
-
-        let turn_state = state.clone();
-        let speech_group = state.0.new_speech_group();
         let started = std::time::Instant::now();
-        // Register the abort handle before awaiting the task. Page-level rescue
-        // endpoints can now cancel work even while transfer setup has no
-        // PiSession yet. Caller prompts wait behind an autonomous operation;
-        // the notification is created before the serialized admission check so
-        // a fast autonomous turn cannot make the waiter miss its wakeup.
-        let mut logged_wait = false;
-        let operation = 'admit: loop {
-            let operation_notify = state.0.coordinator.operation_changed();
-            let changed = operation_notify.notified();
-            let admission = {
-                let _transition = state.0.operation_transition.lock().await;
-                let current = state.0.coordinator.generation();
-                if generation != current {
-                    tracing::info!(clip = %id, stamped = generation, %current, "dropping a queued turn from before a page rescue");
-                    trace_stale_utterance(&state, &id, generation);
-                    emit_stale_clip(&state, &id);
-                    Some(Err(()))
-                } else {
-                    match state
-                        .0
-                        .coordinator
-                        .begin_prompt(&state.0.coordinator.current_identity())
-                    {
-                        Ok(operation) => Some(Ok(operation)),
-                        Err(LifecycleError::OperationActive | LifecycleError::CandidateActive) => {
-                            None
-                        }
-                        Err(error) => {
-                            tracing::info!(clip = %id, %error, "dropping queued turn during lifecycle transition");
-                            trace_stale_utterance(&state, &id, generation);
-                            emit_stale_clip(&state, &id);
-                            Some(Err(()))
-                        }
-                    }
-                }
-            };
-            match admission {
-                Some(Ok(operation)) => break Some(operation),
-                None => {
-                    // Without this line a turn stuck behind an operation that
-                    // never finishes leaves nothing in the journal.
-                    if !logged_wait {
-                        logged_wait = true;
-                        tracing::info!(clip = %id, "queued turn waiting for the running operation to finish");
-                    }
-                    changed.await
-                }
-                Some(Err(())) => break 'admit None,
-            }
-        };
-        let Some(operation) = operation else {
-            state.0.turn_in_flight.store(false, Ordering::Release);
+        let Some(operation) = admit_turn(&state, &id, generation).await else {
             continue;
         };
-        state.0.turn_in_flight.store(true, Ordering::Release);
-        state.0.set_active_speech_group(speech_group);
-        let route = state.0.coordinator.route();
-        let waiting = state.0.queued_turns.load(Ordering::Acquire);
-        tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
-        let trace_turn_end = {
-            let debug = state.0.debug.clone();
-            let agent = route.clone();
-            let id = id.clone();
-            move || {
-                debug.publish(DebugEvent::TurnEnd {
-                    agent,
-                    turn_id: id.clone(),
-                    generation,
-                    utterance_id: Some(id),
-                });
-            }
-        };
-        state.0.debug.publish(DebugEvent::TurnStart {
-            agent: route.clone(),
-            turn_id: id.clone(),
-            generation,
-            utterance_id: Some(id.clone()),
-        });
-        emit_message(&state, ServerMessage::Thinking { route, waiting });
-        // The PBX, the agent, and the reply's synthesis all log under the
-        // clip that started the turn.
-        let turn = tracing::info_span!("turn", clip = %id);
-        let turn_id = id.clone();
+        let run = TurnRun::begin(&state, id, generation, operation, started);
+        let turn_state = state.clone();
+        let turn_id = run.id.clone();
         let handle_turn = async move {
             let mut board = turn_state.0.switchboard.lock().await;
             board.set_call_state(call_state);
@@ -577,80 +529,228 @@ pub(crate) async fn process_turns(state: AppState) {
                 .handle_decision_with_takeover(&turn_id, &transcript, &decision, takeover)
                 .await
         };
-        let Some((task, task_id)) =
-            spawn_registered_operation(&state, generation, handle_turn.instrument(turn.clone()))
-                .await
-        else {
-            tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
-            trace_turn_end();
-            trace_stale_utterance(&state, &id, generation);
-            emit_stale_clip(&state, &id);
-            state.0.coordinator.finish_operation(&operation);
-            state.0.clear_active_speech_group(speech_group);
-            state.0.turn_in_flight.store(false, Ordering::Release);
-            continue;
+        run.drive(&state, handle_turn).await;
+    }
+    tracing::warn!("the turn worker stopped; no further turns will be dispatched");
+}
+
+/// Waits until the coordinator admits the turn stamped `generation`, and
+/// returns its operation. `None` when the line changed first, or the
+/// lifecycle refuses a prompt for good: the turn is refused as stale.
+///
+/// Caller prompts wait behind a running operation, an autonomous one
+/// included. The notification is created before the serialized admission
+/// check, so a fast operation cannot end between them and leave the turn
+/// waiting for a wakeup that already happened.
+async fn admit_turn(state: &AppState, id: &str, generation: u64) -> Option<OperationIdentity> {
+    let mut logged_wait = false;
+    loop {
+        let operation_notify = state.0.coordinator.operation_changed();
+        let changed = operation_notify.notified();
+        {
+            let _transition = state.0.operation_transition.lock().await;
+            let current = state.0.coordinator.generation();
+            if generation != current {
+                tracing::info!(clip = %id, stamped = generation, %current, "dropping a queued turn from before a page rescue");
+                refuse_stale(state, id, generation);
+                return None;
+            }
+            match state
+                .0
+                .coordinator
+                .begin_prompt(&state.0.coordinator.current_identity())
+            {
+                Ok(operation) => return Some(operation),
+                Err(LifecycleError::OperationActive | LifecycleError::CandidateActive) => {}
+                Err(error) => {
+                    tracing::info!(clip = %id, %error, "dropping queued turn during lifecycle transition");
+                    refuse_stale(state, id, generation);
+                    return None;
+                }
+            }
+        }
+        // Without this line a turn stuck behind an operation that never
+        // finishes leaves nothing in the journal.
+        if !logged_wait {
+            logged_wait = true;
+            tracing::info!(clip = %id, "queued turn waiting for the running operation to finish");
+        }
+        changed.await;
+    }
+}
+
+/// How a caller turn's task ended.
+enum TurnOutcome {
+    /// A rescue landed between admission and registration, so no task ran.
+    NotRegistered,
+    /// A page rescue aborted the task.
+    Cancelled,
+    /// The task panicked.
+    Failed(tokio::task::JoinError),
+    /// The leg answered.
+    Replied(Reply),
+}
+
+/// A caller turn from its admission to its end: the operation the
+/// coordinator admitted it under, the leg it runs on, and its speech group.
+/// `begin` opens it (in flight, speech group, `turn_start`, `thinking`),
+/// `drive` runs its task, and `finish` is its one end, whatever the
+/// outcome.
+#[must_use = "a caller turn ends only through `finish`"]
+struct TurnRun {
+    id: String,
+    /// The generation the clip was stamped with when it was recorded.
+    generation: u64,
+    route: String,
+    operation: OperationIdentity,
+    group: SpeechGroup,
+    /// The PBX, the agent, and the reply's synthesis all log under the clip
+    /// that started the turn.
+    span: tracing::Span,
+    started: std::time::Instant,
+}
+
+impl TurnRun {
+    fn begin(
+        state: &AppState,
+        id: String,
+        generation: u64,
+        operation: OperationIdentity,
+        started: std::time::Instant,
+    ) -> Self {
+        let group = state.0.new_speech_group();
+        state.0.turns.in_flight.store(true, Ordering::Release);
+        state.0.set_active_speech_group(group);
+        let route = state.0.coordinator.route();
+        let waiting = state.0.turns.queued.load(Ordering::Acquire);
+        tracing::info!(clip = %id, %route, waiting, "dispatching a turn");
+        state.0.debug.publish(DebugEvent::TurnStart {
+            agent: route.clone(),
+            turn_id: id.clone(),
+            generation,
+            utterance_id: Some(id.clone()),
+        });
+        emit_message(
+            state,
+            ServerMessage::Thinking {
+                route: route.clone(),
+                waiting,
+            },
+        );
+        let span = tracing::info_span!("turn", clip = %id);
+        Self {
+            id,
+            generation,
+            route,
+            operation,
+            group,
+            span,
+            started,
+        }
+    }
+
+    /// Runs the turn's task to its end and ends the turn with how it went.
+    /// The task is registered before it is awaited, so a page rescue can
+    /// cancel it even while transfer setup has no session yet, and it leaves
+    /// the registry as soon as it ends.
+    async fn drive(self, state: &AppState, task: impl Future<Output = Reply> + Send + 'static) {
+        let registered =
+            spawn_registered_operation(state, self.generation, task.instrument(self.span.clone()))
+                .await;
+        let outcome = match registered {
+            None => TurnOutcome::NotRegistered,
+            Some((task, task_id)) => {
+                let ended = task.await;
+                clear_active_operation(state, task_id).await;
+                match ended {
+                    Ok(reply) => TurnOutcome::Replied(reply),
+                    Err(error) if error.is_cancelled() => TurnOutcome::Cancelled,
+                    Err(error) => TurnOutcome::Failed(error),
+                }
+            }
         };
-        let reply = match task.await {
-            Ok(result) => result,
-            Err(error) if error.is_cancelled() => {
-                tracing::info!(clip = %id, elapsed = ?started.elapsed(), "the turn was cancelled by a page rescue");
-                trace_turn_end();
+        self.finish(state, outcome).await;
+    }
+
+    /// The one end of a caller turn. The operation is released first, the
+    /// turn is traced to its end and its outcome reported, and only then is
+    /// the speech group dropped and the worker free.
+    async fn finish(self, state: &AppState, outcome: TurnOutcome) {
+        state.0.coordinator.finish_operation(&self.operation);
+        let (id, generation) = (self.id.as_str(), self.generation);
+        match outcome {
+            TurnOutcome::NotRegistered => {
+                tracing::info!(clip = %id, stamped = generation, "dropping turn because rescue occurred before registration");
+                self.trace_end(state);
+                refuse_stale(state, id, generation);
+            }
+            TurnOutcome::Cancelled => {
+                tracing::info!(clip = %id, elapsed = ?self.started.elapsed(), "the turn was cancelled by a page rescue");
+                self.trace_end(state);
                 trace_cut_short(
-                    &state,
-                    &id,
+                    state,
+                    id,
                     "dropped_stale",
                     format!(
                         "a page rescue cancelled the turn (stamped generation {generation}, now {}); its answer was discarded",
                         state.0.coordinator.generation()
                     ),
                 );
-                clear_active_operation(&state, task_id).await;
-                state.0.coordinator.finish_operation(&operation);
-                state.0.clear_active_speech_group(speech_group);
-                state.0.turn_in_flight.store(false, Ordering::Release);
-                continue;
             }
-            Err(error) => {
+            TurnOutcome::Failed(error) => {
                 // A panic inside `handle()` arrives here. Without this line the
                 // caller hears a generic apology and the journal holds nothing.
-                tracing::error!(clip = %id, %error, elapsed = ?started.elapsed(), "the turn worker failed");
-                trace_turn_end();
+                tracing::error!(clip = %id, %error, elapsed = ?self.started.elapsed(), "the turn worker failed");
+                self.trace_end(state);
                 trace_cut_short(
-                    &state,
-                    &id,
+                    state,
+                    id,
                     "failed",
                     format!("the turn worker failed: {error}"),
                 );
-                clear_active_operation(&state, task_id).await;
-                state.0.coordinator.finish_operation(&operation);
-                state.0.clear_active_speech_group(speech_group);
-                state.0.turn_in_flight.store(false, Ordering::Release);
                 emit_message(
-                    &state,
+                    state,
                     ServerMessage::error(format!("The call worker failed on that turn: {error}")),
                 );
-                continue;
             }
-        };
-        clear_active_operation(&state, task_id).await;
-        state.0.coordinator.finish_operation(&operation);
-        if let Some(error) = &reply.error {
-            // The caller was answered and recovered, so this is not an error
-            // level — but a turn that carried a failure is worth an audit trail.
-            tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
+            TurnOutcome::Replied(reply) => {
+                if let Some(error) = &reply.error {
+                    // The caller was answered and recovered, so this is not an
+                    // error level — but a turn that carried a failure is worth
+                    // an audit trail.
+                    tracing::warn!(clip = %id, route = %reply.route, %error, "the turn reported a failure");
+                }
+                tracing::info!(clip = %id, route = %reply.route, elapsed = ?self.started.elapsed(), "turn settled");
+                self.trace_end(state);
+                self.deliver(state, &reply).await;
+            }
         }
-        tracing::info!(clip = %id, route = %reply.route, elapsed = ?started.elapsed(), "turn settled");
-        trace_turn_end();
-        let delivery_generation = reply.delivery_generation.unwrap_or(generation);
-        let _delivered = deliver_turn_if_current(&state, &reply, delivery_generation, &id)
-            .instrument(turn)
+        state.0.clear_active_speech_group(self.group);
+        state.0.turns.in_flight.store(false, Ordering::Release);
+    }
+
+    fn trace_end(&self, state: &AppState) {
+        state.0.debug.publish(DebugEvent::TurnEnd {
+            agent: self.route.clone(),
+            turn_id: self.id.clone(),
+            generation: self.generation,
+            utterance_id: Some(self.id.clone()),
+        });
+    }
+
+    /// Delivers the reply and settles the agent idle, both only while the
+    /// generation the reply names is still current.
+    async fn deliver(&self, state: &AppState, reply: &Reply) {
+        let delivery_generation = reply.delivery_generation.unwrap_or(self.generation);
+        let _delivered = deliver_turn_if_current(state, reply, delivery_generation, &self.id)
+            .instrument(self.span.clone())
             .await;
         // Settlement belongs to the same generation as delivery. In
         // particular, do not publish idle for a stale reply after rescue has
         // already replaced the resident or foreground session.
         if reply.route != crate::pbx::OPERATOR {
             update_agent_state_if_current(
-                &state,
+                state,
                 delivery_generation,
                 AgentStateNotice {
                     project: reply.route.clone(),
@@ -659,10 +759,7 @@ pub(crate) async fn process_turns(state: AppState) {
             )
             .await;
         }
-        state.0.clear_active_speech_group(speech_group);
-        state.0.turn_in_flight.store(false, Ordering::Release);
     }
-    tracing::warn!("the turn worker stopped; no further turns will be dispatched");
 }
 
 /// Admit and settle host-reported turns through the one lifecycle owner:
@@ -863,13 +960,11 @@ pub(crate) async fn alpha_caller_turn_in_flight(
     let (state, log) = state_with_agents_and_jev(root, host);
     let (token, instance_id) = foreground_alpha_turn(&state).await;
     let generation = state.0.coordinator.generation();
-    state.0.queued_turns.store(1, Ordering::Release);
     let worker = tokio::spawn(process_turns(state.clone()));
     state
         .0
         .turns
-        .sender
-        .send(("caller-held".into(), "run the tests".into(), generation))
+        .enqueue_for_test(("caller-held".into(), "run the tests".into(), generation))
         .await
         .unwrap();
     timeout(Duration::from_secs(5), async {

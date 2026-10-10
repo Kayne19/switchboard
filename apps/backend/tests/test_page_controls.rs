@@ -19,7 +19,6 @@ use axum::http::{Method, StatusCode};
 use axum::response::Response;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -108,7 +107,7 @@ async fn speech_queued_while_a_page_control_starts_a_leg_is_dropped_with_notice_
         state.0.coordinator.is_candidate(),
         "a turn must not begin while a leg is starting"
     );
-    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert!(!state.0.turns.in_flight_for_test());
     assert_eq!(
         types_of(&queued_frames(&mut connection)),
         ["epoch", "candidate"]
@@ -124,7 +123,7 @@ async fn speech_queued_while_a_page_control_starts_a_leg_is_dropped_with_notice_
         ["candidate_cleared", "epoch", "status", "error"]
     );
     assert_dropped_with_notice(&frames[3], "while-connecting");
-    assert!(!state.0.turn_in_flight.load(Ordering::Acquire));
+    assert!(!state.0.turns.in_flight_for_test());
     assert!(state.0.active_operations.lock().await.is_empty());
     turn_worker.abort();
 }
@@ -986,7 +985,6 @@ async fn queue_a_clip_while_a_page_control_starts_a_leg(
     cancel_active_operations(state).await;
     begin_alpha_candidate(state, "alpha-leg");
 
-    state.0.queued_turns.store(1, Ordering::Release);
     state
         .0
         .turns
@@ -999,7 +997,7 @@ async fn queue_a_clip_while_a_page_control_starts_a_leg(
         .unwrap();
     let turn_worker = tokio::spawn(process_turns(state.clone()));
     timeout(Duration::from_secs(10), async {
-        while state.0.queued_turns.load(Ordering::Acquire) != 0 {
+        while state.0.turns.queued_for_test() != 0 {
             tokio::task::yield_now().await;
         }
     })
