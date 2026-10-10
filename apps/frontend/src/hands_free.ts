@@ -77,7 +77,8 @@ export interface HandsFreeControllerOptions {
 	isSnapshotReady: () => boolean;
 	currentEpoch: () => number;
 	isPttActive: () => boolean;
-	onClip: (audio: Blob, mime: string, epoch: number) => void;
+	/** Takes a finished utterance; false when the page could not send it. */
+	onClip: (audio: Blob, mime: string, epoch: number) => boolean;
 	onAudioLevel?: (level: number) => void;
 	onState: (detail: HandsFreeStateDetail) => void;
 }
@@ -327,6 +328,21 @@ export class HandsFreeController {
 		);
 	}
 
+	/**
+	 * The turn hands-free is waiting on will bring no reply: the server
+	 * refused the clip, or the reply could not be produced. Only a successful
+	 * reply opens the follow-up lease, so without this the controller would
+	 * wait in `awaiting_response`, where no wake word is heard (#258).
+	 */
+	endAwaitedTurn(): void {
+		if (!this.enabled || this.state !== "awaiting_response") return;
+		this.resetListening();
+		this.publish(
+			"armed",
+			`No reply is coming; listening locally for “${WAKE_PHRASE}”.`,
+		);
+	}
+
 	epochChanged(): void {
 		if (!this.enabled) return;
 		this.disable("Hands-free stopped because the call changed.");
@@ -433,18 +449,25 @@ export class HandsFreeController {
 		recorder.onstop = () => {
 			if (this.capture !== capture || token !== this.runtimeToken) return;
 			this.capture = null;
+			// Nothing was sent, so no reply will come: listen for the wake
+			// word again, after a follow-up as after a wake word (#258).
 			if (capture.discard || !capture.chunks.length) {
-				this.publish(
-					capture.lease ? "awaiting_response" : "armed",
-					"No utterance was retained.",
-				);
+				this.resetListening();
+				this.publish("armed", "No utterance was retained.");
 				return;
 			}
 			const blob = new Blob(capture.chunks, {
 				type: recorder.mimeType || "audio/webm",
 			});
 			capture.chunks.length = 0;
-			this.options.onClip(blob, blob.type, capture.epoch);
+			if (!this.options.onClip(blob, blob.type, capture.epoch)) {
+				this.resetListening();
+				this.publish(
+					"armed",
+					"The utterance could not be sent; say the wake word again.",
+				);
+				return;
+			}
 			this.publish(
 				"awaiting_response",
 				"Utterance sent; waiting for the response.",

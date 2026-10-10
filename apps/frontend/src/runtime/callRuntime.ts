@@ -201,6 +201,9 @@ export class CallRuntime {
   private callerLevelAvailable = false;
   private agentLevelAvailable = false;
   private handsFreeStartup: Promise<void> | null = null;
+  // The id of the last clip hands-free sent: an `error` naming it means the
+  // turn hands-free is waiting on will bring no reply.
+  private handsFreeClipId: string | null = null;
   private pendingResponseBarrier: {
     responseId: string;
     generation: number;
@@ -628,8 +631,9 @@ export class CallRuntime {
     }
   }
 
-  private submitHandsFreeClip(audio: Blob, mime: string, epoch: number): void {
-    if (!this.snapshotReady || epoch !== this.turnEpoch) return;
+  /** False when the clip was not taken, so hands-free waits for no reply. */
+  private submitHandsFreeClip(audio: Blob, mime: string, epoch: number): boolean {
+    if (!this.snapshotReady || epoch !== this.turnEpoch) return false;
     const clip: Clip = {
       id: this.newClipId(),
       audio,
@@ -640,8 +644,10 @@ export class CallRuntime {
       sent: false,
       streaming: false,
     };
-    if (!this.enqueueOutbox(clip)) return;
+    if (!this.enqueueOutbox(clip)) return false;
+    this.handsFreeClipId = clip.id;
     this.flushOutbox();
+    return true;
   }
 
   // --- Hands-free -------------------------------------------------------
@@ -1018,10 +1024,8 @@ export class CallRuntime {
         if (message.generation === this.turnEpoch) {
           this.clearResponseBarrier();
           if (!message.success) {
-            this.update({
-              handsFreeStatus:
-                "Hands-free follow-up is waiting for a successful response.",
-            });
+            // No follow-up lease without a reply; listen for the wake word.
+            this.handsFree?.endAwaitedTurn();
           } else {
             this.pendingResponseBarrier = {
               responseId: message.response_id,
@@ -1113,11 +1117,16 @@ export class CallRuntime {
         break;
       case "error":
         if (message.id !== undefined) this.outbox.remove(message.id);
+        if (message.id !== undefined && message.id === this.handsFreeClipId) {
+          this.handsFreeClipId = null;
+          this.handsFree?.endAwaitedTurn();
+        }
         this.setStatus("Error: " + message.message, true);
         break;
       case "routing_unavailable":
         // This is deliberately a page error. The backend emits no reply
         // audio when both routing authorities are unavailable.
+        this.handsFree?.endAwaitedTurn();
         this.setStatus(message.message, true);
         break;
     }

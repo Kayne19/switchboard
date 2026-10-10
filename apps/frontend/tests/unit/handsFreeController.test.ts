@@ -134,6 +134,7 @@ function controller() {
   const clips: number[] = [];
   let clock = 0;
   let ptt = false;
+  let acceptClips = true;
   const stream = { getTracks: () => [{ stop: () => undefined }] };
   const instance = new HandsFreeController({
     getUserMedia: async () => stream as unknown as MediaStream,
@@ -152,7 +153,10 @@ function controller() {
     isSnapshotReady: () => true,
     currentEpoch: () => 4,
     isPttActive: () => ptt,
-    onClip: (_audio, _mime, epoch) => clips.push(epoch),
+    onClip: (_audio, _mime, epoch) => {
+      clips.push(epoch);
+      return acceptClips;
+    },
     onState: (detail) => states.push(detail.state),
   });
   return {
@@ -165,6 +169,9 @@ function controller() {
     clips,
     pressPtt: (down: boolean) => {
       ptt = down;
+    },
+    refuseClips: () => {
+      acceptClips = false;
     },
     advance: (ms: number) => {
       clock += ms;
@@ -232,6 +239,51 @@ describe("the hands-free controller over fakes", () => {
     expect(harness.instance.currentState).toBe("off");
     expect(harness.detector.resets).toBeGreaterThan(resets.detector);
     expect(harness.endpointer.resets).toBeGreaterThan(resets.endpointer);
+  });
+
+  // Only a successful reply opens the follow-up lease, so `awaiting_response`
+  // needs a way out for a turn that brings none, or the wake word is never
+  // heard again (#258).
+  it("listens for the wake word again when the awaited turn brings no reply", async () => {
+    stubBrowser();
+    const harness = controller();
+    expect(await harness.instance.enable()).toBe(true);
+    harness.detector.hear();
+    harness.endpointer.speechStarts();
+    harness.recorder.ondataavailable?.({ data: new Blob(["cough"]) });
+    harness.endpointer.speechEnds();
+    expect(harness.instance.currentState).toBe("awaiting_response");
+
+    harness.instance.endAwaitedTurn();
+    expect(harness.instance.currentState).toBe("armed");
+    harness.detector.hear();
+    expect(harness.instance.currentState).toBe("wake_grace");
+  });
+
+  it("does not wait for a reply to an utterance the page could not send", async () => {
+    stubBrowser();
+    const harness = controller();
+    expect(await harness.instance.enable()).toBe(true);
+    harness.refuseClips();
+    harness.detector.hear();
+    harness.endpointer.speechStarts();
+    harness.recorder.ondataavailable?.({ data: new Blob(["words"]) });
+    harness.endpointer.speechEnds();
+    expect(harness.clips).toEqual([4]);
+    expect(harness.instance.currentState).toBe("armed");
+  });
+
+  it("does not wait for a reply to a follow-up that kept nothing", async () => {
+    stubBrowser();
+    const harness = controller();
+    expect(await harness.instance.enable()).toBe(true);
+    harness.instance.openFollowUpLease(4);
+    expect(harness.instance.currentState).toBe("lease");
+    harness.endpointer.speechStarts();
+    expect(harness.instance.currentState).toBe("lease_capturing");
+    harness.endpointer.speechEnds();
+    expect(harness.clips).toEqual([]);
+    expect(harness.instance.currentState).toBe("armed");
   });
 
   it("resets both detectors when a wake grace lapses", async () => {

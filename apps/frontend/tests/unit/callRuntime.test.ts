@@ -16,6 +16,7 @@ import type { HelloAckMessage, ServerMessage } from "../../src/protocol";
 import { AudioPlayback } from "../../src/runtime/audioPlayback";
 import { CAPTION_WAIT_MS } from "../../src/runtime/spokenLines";
 import { helloAck, statusMessage } from "../fixtures/serverMessages";
+import { realHandsFree, stubHandsFreeBrowser } from "../fixtures/handsFreeRuntime";
 
 class FakeSocket {
   static instances: FakeSocket[] = [];
@@ -1027,6 +1028,56 @@ describe("CallRuntime hands-free", () => {
     expect(handsFree.calls).toContain("epochChanged");
     runtime.dispose();
   });
+
+  // A false trigger is the normal failure of hands-free: Whisper hears
+  // nothing and the server answers the clip with an error, not a reply. The
+  // page must listen for the wake word again, not wait for a reply that is
+  // never coming (#258).
+  const noReply = {
+    "an error for the clip": (socket: FakeSocket, clip: string) =>
+      socket.receive({
+        type: "error",
+        id: clip,
+        message: "I didn't catch that — say it again.",
+      }),
+    "a reply that could not be spoken": (socket: FakeSocket) =>
+      socket.receive({
+        type: "final_response_audio_closed",
+        response_id: "r1",
+        generation: 1,
+        success: false,
+      }),
+    "routing that is unavailable": (socket: FakeSocket) =>
+      socket.receive({
+        type: "routing_unavailable",
+        message: "Routing is unavailable.",
+      }),
+  };
+  for (const [what, answer] of Object.entries(noReply)) {
+    it(`listens for the wake word again after ${what}`, async () => {
+      stubHandsFreeBrowser();
+      const handsFree = realHandsFree(
+        () => new FakeRecorder() as unknown as MediaRecorder,
+      );
+      const { runtime } = makeRuntime(handsFree.options);
+      const socket = await connectAt(runtime);
+      runtime.toggleHandsFree();
+      await settle();
+      expect(handsFree.controller().currentState).toBe("armed");
+      handsFree.hear();
+      handsFree.speechStarts();
+      handsFree.speechEnds();
+      expect(handsFree.controller().currentState).toBe("awaiting_response");
+      const clip = socket.sentJson().find((frame) => frame.type === "clip");
+      expect(clip).toBeDefined();
+
+      answer(socket, String(clip!.id));
+      expect(handsFree.controller().currentState).toBe("armed");
+      handsFree.hear();
+      expect(handsFree.controller().currentState).toBe("wake_grace");
+      runtime.dispose();
+    });
+  }
 
   it("submits a hands-free clip only for the current epoch", async () => {
     const handsFree = fakeHandsFree();
