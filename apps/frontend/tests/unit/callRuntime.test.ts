@@ -823,7 +823,10 @@ describe("CallRuntime line controls", () => {
     runtime.selectThinking("high");
     await settle();
     expect(calls.length, "cross-control requests are serialized").toBe(1);
-    expect(calls[0]).toEqual({ url: "/connect", body: { project: "fixture-project" } });
+    expect(calls[0]).toEqual({
+      url: "/connect",
+      body: { project: "fixture-project", generation: 1 },
+    });
     expect(latestState()).toMatchObject({
       routeDisabled: true,
       modelDisabled: true,
@@ -871,9 +874,39 @@ describe("CallRuntime line controls", () => {
     const { runtime } = makeRuntime({ postJson });
     await connectAt(runtime);
     await runtime.hangup();
-    expect(postJson).toHaveBeenCalledWith("/hangup", {});
+    expect(postJson).toHaveBeenCalledWith("/hangup", { generation: 1 });
     runtime.dispose();
   });
+
+  it("stamps each control with the epoch the page held when the caller acted (#263)", async () => {
+    // A request queued behind a slow one used to go out bare, and the
+    // service applied it to whatever leg was on the line by then.
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const completions: Array<(value: Record<string, unknown>) => void> = [];
+    const { runtime } = makeRuntime({
+      postJson: (url, body) => {
+        calls.push({ url, body });
+        return new Promise((resolve) => completions.push(resolve));
+      },
+    });
+    const socket = await connectAt(runtime, 5);
+    runtime.selectModel("provider/next");
+    runtime.selectThinking("high");
+    await settle();
+    expect(calls).toEqual([
+      { url: "/model", body: { model: "provider/next", generation: 5 } },
+    ]);
+    // The line moves before the queued request goes out.
+    socket.receive({ type: "epoch", generation: 6 });
+    completions.shift()!({ error: null });
+    await settle();
+    expect(calls[1], "the queued one keeps the epoch it was asked at").toEqual({
+      url: "/thinking",
+      body: { level: "high", generation: 5 },
+    });
+    runtime.dispose();
+  });
+
 });
 
 describe("CallRuntime hands-free", () => {
