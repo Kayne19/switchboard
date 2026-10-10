@@ -15,6 +15,11 @@ use tokio::time::{sleep_until, Duration, Instant};
 /// Rewrite work is best effort and must not delay a queued announcement.
 pub(crate) const REWRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// How long a release that could not get its audio waits before it tries
+/// again, when no floor event wakes it first. Audio slots free up as clips
+/// finish, and nothing tells the floor when.
+const RETRY_AFTER: Duration = Duration::from_secs(1);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FloorRequest {
     /// Links one message's floor events on the debug page. `Floor::enqueue`
@@ -255,8 +260,9 @@ impl Floor {
                 }
                 ReleaseOutcome::Retry => {
                     // A page disconnect wakes the queue. A failed audio
-                    // reservation is treated the same way and never spins.
-                    changed.await;
+                    // reservation tries again after `RETRY_AFTER` at most,
+                    // and never spins.
+                    let _ = tokio::time::timeout(RETRY_AFTER, changed).await;
                 }
             }
         }

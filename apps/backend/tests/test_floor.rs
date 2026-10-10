@@ -158,6 +158,46 @@ async fn a_floor_event_between_the_check_and_the_wait_is_not_lost() {
 }
 
 #[tokio::test]
+async fn a_release_that_could_not_get_audio_tries_again_unprompted() {
+    let floor = Floor::new(Duration::ZERO);
+    let connected = Arc::new(AtomicBool::new(true));
+    let live = Arc::new(AtomicBool::new(true));
+    floor.set_page_connected(true).await;
+    floor.enqueue(request(1)).await;
+    let mut h = hooks(
+        connected,
+        live,
+        Arc::new(AtomicUsize::new(0)),
+        mpsc::unbounded_channel().0,
+    );
+    // The first release finds every audio slot taken; nothing tells the
+    // floor when one frees up.
+    let (attempts, mut attempted) = mpsc::unbounded_channel();
+    let tries = Arc::new(AtomicUsize::new(0));
+    h.release = Arc::new(move |_, _| {
+        let attempts = attempts.clone();
+        let first = tries.fetch_add(1, Ordering::SeqCst) == 0;
+        Box::pin(async move {
+            attempts.send(()).unwrap();
+            if first {
+                ReleaseOutcome::Retry
+            } else {
+                ReleaseOutcome::Played
+            }
+        }) as ReleaseFuture
+    });
+    let worker = tokio::spawn({
+        let floor = floor.clone();
+        async move { floor.run(h).await }
+    });
+    within("attempted", attempted.recv()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), attempted.recv())
+        .await
+        .expect("the release is tried again without a floor event");
+    worker.abort();
+}
+
+#[tokio::test]
 async fn releases_record_no_overlapping_speakers() {
     let floor = Floor::new(Duration::ZERO);
     let connected = Arc::new(AtomicBool::new(true));
