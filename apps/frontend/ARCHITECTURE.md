@@ -188,6 +188,36 @@ to the whole replay. Blocked audio is retried on the next page gesture, and
 delegation for a tap on an ordinary element, so `pointerdown`, `touchend` and
 `keydown` are gestures too (`GESTURE_EVENTS` in `callRuntime.ts`).
 
+One element plays every clip, and who holds it is one value, `holder`, with
+one writer, `enter`:
+
+| holder | phases | what it holds |
+|---|---|---|
+| `idle` | | nothing |
+| `gap` | | the timer of the pause between two messages (`INTER_UTTERANCE_GAP_MS`, 0 today) |
+| `replay` | `attaching`, `starting`, `playing`, `paused` | a whole replay's blob URL, its element handlers and its level meter; the silence watch while starting or playing; the `play()` attempt until it settles |
+| `stream` | `attaching`, `opening`, `playing`, `paused`, `blocked` | its `MseSource` (`mseStream.ts`), handlers and meter; the open watch while opening, the silence watch while playing |
+| `cutOff` | | a stream taken off the element while its bytes were still arriving: nothing plays before its whole replay, queued on its `audio_done` |
+
+Moving to another holder releases what the old one put on the element:
+handlers off, meter stopped, element unloaded, URL revoked. A stream that
+played to its end leaves its finished source on the element for the next
+clip's `src` to replace. Every handler, timer and `play()` callback names the
+clip it belongs to and does nothing once that clip no longer holds the
+element. The page is told playback is sounding (`isPlaying`) exactly while a
+replay is starting or playing or a stream is playing, and the level meter
+runs then too. The phase-by-event table in `tests/unit/audioPlayback.test.ts`
+pins what each event does in each phase.
+
+What plays next is decided in one place, `startNext`: a clip starts only when
+nothing holds the element, the oldest whole replay first, then the next
+stream. Every replay waiting is older than every stream waiting, so that is
+arrival order. A clip's end (`afterClip`) waits the gap and starts what waits,
+or says the idle line when nothing does. Streaming is `off`, `on` or
+`refused`, written only by `setMode`. The silence watch is `ProgressWatch`
+(`progressWatch.ts`), the level `PlaybackLevel` (`playbackLevel.ts`), and
+every status line playback says is `PlaybackStatus` (`playbackStatus.ts`).
+
 A clip that produced no sound is noticed whatever `play()` does with its
 promise. `NO_PROGRESS_MS` is armed when the attempt is made, not when
 `play()` resolves: WebKit takes a `MediaSource` of MP3, buffers every append,
@@ -209,7 +239,7 @@ error, resumed by the next page gesture.
 
 A pause or a blocked `play()` is taken down once the clip sounds again: the
 `play()` that the gesture made resolves, and either path reports "Audio
-resumed." without the flag (`reportResumed`, the one place for both). A
+resumed." without the flag (`PlaybackStatus.resumed`, the one place for both). A
 stream's end reports the idle line when nothing is queued, as a replay's end
 does. Before this, a stream that recovered left the red card up over the
 conversation until the next turn's status (#260).
@@ -220,17 +250,18 @@ straight to the whole replay with no silence watch and no second status line
 -- and a reconnect's `hello_ack`, which offers MSE again, cannot turn it back
 on: the engine does not change mid-call.
 
-Streaming stops in one place (`mseStop`), whether a stream failed or a
+Streaming stops in one place (`stopStreaming`), whether a stream failed or a
 `hello_ack` turned it off, and nothing it held is lost (#259). Every
 utterance it held goes on as a whole replay, in order: one that is complete
 is queued at once, and one still arriving falls back on its `audio_done`. A
-complete stream that did not fail plays out, and the replays follow it. A
-replay that owns the element is left alone. Before this, the utterances
+complete stream that did not fail plays out, and the replays follow it; if
+it fails while playing out, its own replay goes first. A replay that holds the
+element is left alone. Before this, the utterances
 queued behind a failed stream were never played or reported, and the queue
 never drained, so hands-free never got its follow-up lease back.
 
-A streamed utterance's `MediaSource` is attached to the element as soon as it
-is made: a `MediaSource` is `closed` until an element takes its URL, and
+A streamed utterance's `MediaSource` (`MseSource`, `mseStream.ts`) is
+attached to the element as soon as it is made: a `MediaSource` is `closed` until an element takes its URL, and
 `sourceopen` -- where the `SourceBuffer` is added and the chunks go in --
 fires from that attach. Waiting for the event before attaching waits for an
 event that cannot come, which is what made every page offering `mse_mp3`
@@ -256,7 +287,8 @@ A caption waits for the audio that voices it (#112) but never for audio that
 is not coming. `SpokenLines` is told whether playback is sounding; while it is
 not, every waiting line is heard `CAPTION_WAIT_MS` later, in order.
 
-The agent's level has one reader in every engine (`speechEnvelope.ts`): the
+The agent's level has one reader in every engine (`playbackLevel.ts`, over
+`speechEnvelope.ts`): the
 utterance's own bytes. They are decoded off to the side in an
 `OfflineAudioContext`, which needs no user gesture and no element, and
 `EnvelopeMeter` reports the step the element's own `currentTime` has reached.
