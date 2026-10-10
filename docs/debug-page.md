@@ -156,8 +156,9 @@ scrubbed: text, JSON strings and keys, log messages, and names and ids
   (`-----BEGIN ... PRIVATE KEY-----` through its `-----END ...-----` line, or
   to the end of a cut string), the value after a credential-like name and `=`
   or `:` (`API_KEY=...`, `"token": "..."`; a plain number such as
-  `max tokens: 500` is kept), and the word after `Bearer` or `Basic` (and
-  after `Authorization: Bearer` or `Authorization: Basic`).
+  `max tokens: 500` is kept), and the word after `Bearer` (and after
+  `Authorization: Bearer` or `Authorization: Basic`; a bare `Basic` arms
+  nothing).
 - It also replaces a word that is a credential by its shape: a word of 16 or
   more characters with a well-known key prefix (`sk-`, `ghp_`, `gho_`, `ghu_`,
   `ghs_`, `ghr_`, `github_pat_`, `xoxa-`, `xoxb-`, `xoxp-`, `xoxr-`, `xoxs-`,
