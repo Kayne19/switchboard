@@ -30,14 +30,12 @@ _MAX_FRAME_DEPTH = 127
 # The service and the page read every number as a double, which holds each
 # integer exactly only up to 2**53.
 _MAX_EXACT_INT = 2**53
-# The host agent answers `failed` at its own deadline (30 s, or for speak the
-# speech deadline and its margin over it); wait a little longer than that for
-# its reply. The speak margin is the host agent's SPEAK_REPLY_MARGIN_MS
-# (apps/host-agent/src/skill_socket.ts): the service starts the speech deadline
-# only when it admits the call, so its answer, not the host agent's, decides.
-# scripts/check_hygiene.mjs keeps the two equal.
+# The host agent answers `failed` at its own deadline, and the module waits
+# _MARGIN_S longer than that for its reply. For speak the hello says how long
+# the host agent waits (`speak_reply_ms`: the speech deadline and its margin
+# over it, so the service's answer decides); for every other call, and for a
+# speak when a hello does not say, it is 30 s.
 _RELAY_TIMEOUT_S = 30.0
-_SPEAK_REPLY_MARGIN_S = 5.0
 _MARGIN_S = 5.0
 
 _VIEW_TARGETS = ("visual", "comms", "system", "theater", "auto")
@@ -265,9 +263,9 @@ def _call_host_agent(call, args, session_id, depth):
                 if not hello.get("on_call"):
                     return _Result(call, "refused", hello.get("reason") or "not_on_call")
                 token = hello.get("token")
-                deadline_ms = hello.get("speech_deadline_ms")
-                if call == "speak" and isinstance(deadline_ms, (int, float)) and deadline_ms > 0:
-                    sock.settimeout(deadline_ms / 1000 + _SPEAK_REPLY_MARGIN_S + _MARGIN_S)
+                speak_reply_ms = hello.get("speak_reply_ms")
+                if call == "speak" and isinstance(speak_reply_ms, (int, float)) and speak_reply_ms > 0:
+                    sock.settimeout(speak_reply_ms / 1000 + _MARGIN_S)
                 else:
                     sock.settimeout(_RELAY_TIMEOUT_S + _MARGIN_S)
                 request = {"op": "call", "session_id": session_id, "depth": depth, "token": token, "call": call, "args": args}
