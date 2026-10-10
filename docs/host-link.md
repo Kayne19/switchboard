@@ -377,8 +377,13 @@ The service answers:
 may omit them. The service checks the token against the session's current call
 and, when present, the turn authority. A self-woken call without an authority
 is refused, while an old host's ordinary caller turn keeps the existing token
-behavior. If no reply arrives in time (the speech deadline for `speak`, 30 s
-otherwise), or the link is down, the module gets `failed`. A call that cannot
+behavior. If no reply arrives in time, or the link is down, the module gets
+`failed`. In time is 30 s, or for `speak` the speech deadline and 5 s more
+(`SPEAK_REPLY_MARGIN_MS` in `skill_socket.ts`). The service starts its own
+speech deadline only when it admits the call, after the frame has crossed the
+link, and answers `delivered` once the whole line has played; the margin lets
+that answer, not the host agent's clock, decide. The skill module waits one
+margin longer again. A call that cannot
 go out because the link's socket is already closing gets `failed` at once.
 
 ### Frames the service cannot read

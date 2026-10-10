@@ -31,7 +31,7 @@ means unset.
 | `SWITCHBOARD_MODEL_SWAPS` | `1` | `0`, `false`, or `no` turns off mid-call model and thinking changes. |
 | `SWITCHBOARD_PERSONA` | empty | The spoken character. The service puts it in the operator's and the utility's system prompts and in each project session's voice brief, and still passes it in `join_call` (see `docs/host-link.md`). |
 | `SWITCHBOARD_MAX_SPOKEN_CHARS` | `700` | Longest reply the switchboard voices; longer text is clipped, at a sentence end when one is near. |
-| `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000. Also given to each project session when it joins the call; its host agent enforces the same deadline. |
+| `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000. Also given to each project session when it joins the call. The service starts it when it admits a `speak`; the host agent waits it and 5 s more for the service's answer (`SPEAK_REPLY_MARGIN_MS`), so the service's answer decides. |
 | `SWITCHBOARD_HISTORY_LIMIT` | `200` | Transcript entries kept for page reloads; `0` keeps none. |
 | `SWITCHBOARD_JEV_KEY_FILE` | `/etc/switchboard/secrets/typesafe-api-key` | Secret file path. The Jev bearer key is read from this file and never logged or returned in errors. |
 | `SWITCHBOARD_JEV_URL` | `https://api.typesafe.ai/v1/systemone` | Jev System One endpoint. Tests use an in-process fake URL. |
@@ -55,9 +55,10 @@ means unset.
 
 A numeric setting that does not parse is logged and replaced by its default,
 because the symptom of a silently wrong duration looks nothing like its cause.
-`SWITCHBOARD_SPEECH_DEADLINE_MS` is the exception: the host agent enforces the
-same deadline, so a value the service would replace with its default would leave
-the two sides disagreeing, and startup stops instead.
+`SWITCHBOARD_SPEECH_DEADLINE_MS` is the exception: the host agent bounds a
+relayed `speak` by the same deadline (plus its margin), so a value the service
+would replace with its default would leave the two sides disagreeing, and
+startup stops instead.
 
 ### Host tokens file
 
