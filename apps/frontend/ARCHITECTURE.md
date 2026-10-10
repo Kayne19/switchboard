@@ -44,7 +44,7 @@ The renderer does not load bespoke route pages. It derives a broad composition f
 | chart | training and analysis |
 | diagram | architecture and flow |
 | document | email and document reader |
-| code | source and diff analysis |
+| code | source analysis (`src/primitives/CodeViewport.tsx`) |
 | table | ruled rows of named columns |
 | image | figure: a raster image contained on the black field |
 | calendar | a day, a week, a month or an agenda of events (`src/primitives/CalendarPrimitive.tsx`), laid out from the box it is given |

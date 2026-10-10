@@ -634,6 +634,7 @@
       "type": "object",
       "properties": {
         "language": {
+          "description": "Chooses the line-comment marker (docs/display-tool.md, 'Code v1 rules'); a language the page does not name marks no comment.",
           "type": "string",
           "maxLength": 64
         },
@@ -642,6 +643,7 @@
           "maxLength": 50000
         },
         "highlight": {
+          "description": "Line numbers to light, counted from 1 (a table's highlight counts rows from 0).",
           "type": "array",
           "items": {
             "type": "number"

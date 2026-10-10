@@ -79,7 +79,7 @@ The stage holds at most **32** objects (`MAX_STAGE_OBJECTS` in `apps/backend/src
 | `progress` | `{ label, value?, detail?, text?, caption?, steps?: [{ label, state?: "done"\|"active"\|"todo"\|"blocked", detail? }] }`; `value` is a percent, 0–100; at least one of `value`/`steps` | progress bar, with the step list under it (see below) |
 | `diagram` | `{ mode: "graph", nodes: [{ id, label, sub?, detail?, semantic?, state? }], edges: [{ from, to, label?, semantic?, active? }], title?, subtitle?, context?, caption? }` or `{ mode: "sequence", actors: [{ id, label, sub?, semantic? }], messages: [{ from, to, label, kind?, active? }], title?, subtitle?, context?, caption? }` | SVG semantic graph, or SVG sequence diagram |
 | `document` | `{ subject, paragraphs: string[], kind?: "email"\|"document", context?, caption?, source?, from?, timestamp? }` | document reader; each paragraph is read as Markdown (see below) |
-| `code` | `{ source: { text, language?, highlight? }, title?, file?, context?, caption? }` | syntax/diff view |
+| `code` | `{ source: { text, language?, highlight? }, title?, file?, context?, caption? }` | source with numbered lines (see below) |
 | `table` | `{ columns: [{ label, semantic? }], rows: Cell[][], highlight?: number[], title?, subtitle?, context?, caption? }`; `Cell = string \| number \| { text, semantic?, bold? }` | ruled data table in a scroll viewport (see below) |
 | `note` | `{ segments: [{ text, accent?, bold?, semantic? }], tag?, caption?, anchor?: { target, x?, series?, node?, item? } }` | persistent annotation |
 | `image` | `{ format: "png"\|"jpeg"\|"webp", bytes: <standard base64>, alt, title?, subtitle?, context?, caption? }` | raster figure, contained, with its alt text and decoded size |
@@ -124,6 +124,12 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
   - `nodes` and `edges` are rejected by name.
 - `note.anchor.node` may name a node id or an actor id. The graph places a fitting note as a callout beside its node when the drawing fits its viewport; otherwise, and always for a sequence, the note stays in the rail and the node or actor carries a NOTE marker, the twin of the rail note's badge.
 - Size is the page's decision. A diagram is never drawn with its text below the page's smallest type; one too large for that is recomposed for its viewport and scrolls inside it, and focus gives it the whole stage (`docs/visual-channel.md`, "Diagrams that outgrow the frame"). A diagram that scrolls opens on the node or actor its note names, rests only where no node is cut at the edge it is read from, counts on each edge what lies past it, names where an edge leaving the view goes, and carries a map of the whole beside it where there is room. A sequence whose pinned headers would take too much of a short view (a phone's slot) shows its actors' names alone; focus shows their `sub` lines as well, unless even focus is too short for them. Focus keeps the note about the diagram: the node or actor it names stays marked and the note stands beside or under the drawing. An agent may send the diagram the explanation needs; it does not have to trim it to fit a screen, and a node it names in a note is the one the caller sees first.
+
+### Code v1 rules
+- `text`: the source, <= 50,000 UTF-16 code units. Each line is drawn with its number.
+- `language` (<= 64): chooses the line-comment marker, case-insensitive: `//` for the C family (`rust`, `typescript`, `go`, `c`, `java`, ...), `#` for `python`, `shell`, `ruby`, `yaml`, `toml` and the like, `--` for `sql`, `lua` and `haskell`. A marker inside a string is not a comment. Source with no `language` is read as C-family; a language the page does not name marks no comment. Keywords, strings, numbers and type names are marked the same way in every language.
+- `highlight`: line numbers counted from 1, the first line being `1` (a table's `highlight` counts rows from 0). The page draws those lines with the accent; a number naming no line marks nothing.
+- There is no diff view: a unified diff is drawn as plain source, its `+` and `-` lines unmarked.
 
 ### Table v1 rules
 - `columns`: 1 to 12 items, each `{ label, semantic? }` with `label` <= 64 UTF-16 code units. A column's `semantic` colours its header; a cell's `semantic` colours that cell.

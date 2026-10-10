@@ -32,7 +32,7 @@ agent sends semantics. See `docs/display-tool.md` for the full action protocol.
 | `metric` | a single tracked value, with the way it moved (`trend` arrow, `delta` text) when that matters |
 | `progress` | a bar, and under it the plan it measures: `steps` with a state each (`done`, `active`, `todo`, `blocked`) and a detail |
 | `document` | headings, paragraphs, bullets, code blocks |
-| `code` | code and diff views (`add`/`del`/`ctx` lines) |
+| `code` | source with numbered lines, comments and strings marked by its `language`, and chosen lines lit |
 | `table` | rows of named columns: results, comparisons, inventories; cells carry semantic colour and rows can be highlighted |
 | `note` | a persistent annotation, independent from the live transcript |
 | `image` | a raster figure (PNG, JPEG or WebP bytes, inline) the agent already has: a plot, a screenshot, a photo |
