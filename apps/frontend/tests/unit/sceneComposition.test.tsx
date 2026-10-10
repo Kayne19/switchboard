@@ -117,6 +117,8 @@ describe('a visual beside the primary', () => {
     expect(deriveScreenState(controllerState(), 1).title).toBe('MAIN CHART');
     expect(page.querySelector('.scene-heading__title')?.textContent).toBe('MAIN CHART');
     expect(page.querySelectorAll('.training-charts [data-testid="chart"]')).toHaveLength(2);
+    // The primary leads the row, as it leads the composition.
+    expect([...page.querySelectorAll('.training-charts [data-chart-id]')].map((panel) => panel.getAttribute('data-chart-id'))).toEqual(['main', 'spark']);
   });
 
   it('a chart primary keeps its progress under the charts until a visual stands beside it', () => {
