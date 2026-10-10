@@ -362,7 +362,9 @@ session whose `attach` fails and that the daemon no longer lists gets
 One the daemon still lists stays tracked (its provenance is kept) and gets
 no events until it attaches: the host agent runs the resync again with the
 connect backoff (1 s, doubling to 30 s) until every listed session is
-attached. A resync that fails as a whole (the daemon cannot `list`) is
+attached. A session detached or killed while its reattach is in flight
+stays released; the reattach does not track it again. A resync that fails
+as a whole (the daemon cannot `list`) is
 retried the same way, at start too: the host agent starts its link without
 those sessions rather than exit.
 

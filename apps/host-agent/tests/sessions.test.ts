@@ -488,6 +488,45 @@ test("resync: a session the daemon still lists but will not attach stays tracked
 	assert.deepEqual(second.failed, []);
 });
 
+test("resync: a session detached while its reattach is in flight stays detached", async () => {
+	// The keeper runs resync again while the link is up, so a detach can
+	// land between a session's attach and its result; the result must not
+	// track the session again.
+	for (const outcome of ["attaches", "fails"] as const) {
+		const { daemon, manager, kinds, stateFile } = setup();
+		const a = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+		const b = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+		const attach = daemon.attach.bind(daemon);
+		let attaching!: () => void;
+		const started = new Promise<void>((resolve) => {
+			attaching = resolve;
+		});
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		daemon.attach = async (handle: string) => {
+			if (handle === a) {
+				attaching();
+				await gate;
+				if (outcome === "fails") throw new DaemonCommandError("attach", "timed out after 60000ms");
+			}
+			return attach(handle);
+		};
+		const resync = manager.resync();
+		await started;
+		await manager.handle("detach", { session: a });
+		release();
+		const { live, failed } = await resync;
+		assert.deepEqual(live, [b], outcome);
+		assert.deepEqual(failed, [], outcome);
+		assert.deepEqual(manager.handles(), [b], `${outcome}: the detached session is not tracked again`);
+		assert.deepEqual(kinds(a).filter((k) => k === "session_closed"), ["session_closed"], outcome);
+		const saved = JSON.parse(readFileSync(stateFile, "utf8")) as { sessions: { handle: string }[] };
+		assert.deepEqual(saved.sessions.map((s) => s.handle), [b], outcome);
+	}
+});
+
 test("rediscovery restores service-created and taken-over provenance", async () => {
 	const dir = mkdtempSync(path.join(os.tmpdir(), "sb-host-"));
 	const stateFile = path.join(dir, "sessions.json");

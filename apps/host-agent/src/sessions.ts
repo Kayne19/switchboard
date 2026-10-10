@@ -194,7 +194,11 @@ export class SessionManager {
 		const live = new Set((await this.#port.list()).map((s) => s.handle));
 		const kept: string[] = [];
 		const closed: string[] = [];
-		const refused: { rec: StateFile["sessions"][number]; error: string }[] = [];
+		const refused: { rec: StateFile["sessions"][number]; previous: Tracked | undefined; error: string }[] = [];
+		// A session detached or killed while its attach was in flight stays
+		// let go: the keeper runs this again while the link is up, so a
+		// command can land between the attach and its result.
+		const letGo = (handle: string, previous: Tracked | undefined) => previous !== undefined && this.#tracked.get(handle) !== previous;
 		const gone = (handle: string) => {
 			if (this.#tracked.delete(handle)) this.#emit(handle, { kind: "session_closed", reason: "gone" });
 			closed.push(handle);
@@ -204,13 +208,15 @@ export class SessionManager {
 				gone(rec.handle);
 				continue;
 			}
+			const previous = this.#tracked.get(rec.handle);
 			let snapshot: DaemonSession;
 			try {
 				snapshot = await this.#port.attach(rec.handle);
 			} catch (error) {
-				refused.push({ rec, error: error instanceof Error ? error.message : String(error) });
+				refused.push({ rec, previous, error: error instanceof Error ? error.message : String(error) });
 				continue;
 			}
+			if (letGo(rec.handle, previous)) continue;
 			const t = this.#tracked.get(rec.handle) ?? this.#untracked(rec);
 			t.last = snapshot;
 			this.#tracked.set(rec.handle, t);
@@ -230,7 +236,8 @@ export class SessionManager {
 			} catch {
 				still = null;
 			}
-			for (const { rec, error } of refused) {
+			for (const { rec, previous, error } of refused) {
+				if (letGo(rec.handle, previous)) continue;
 				if (still && !still.has(rec.handle)) {
 					gone(rec.handle);
 					continue;
