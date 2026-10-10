@@ -87,7 +87,6 @@ pub struct ProjectLaunch {
 pub struct SessionState {
     pub model: String,
     pub thinking: String,
-    pub provenance: String,
 }
 
 impl SessionState {
@@ -95,7 +94,6 @@ impl SessionState {
         Self {
             model: info["model"].as_str().unwrap_or_default().to_owned(),
             thinking: info["thinking"].as_str().unwrap_or_default().to_owned(),
-            provenance: info["provenance"].as_str().unwrap_or("created").to_owned(),
         }
     }
 }
