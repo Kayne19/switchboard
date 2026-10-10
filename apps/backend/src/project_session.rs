@@ -132,7 +132,7 @@ impl Provenance {
 }
 
 /// Where a project session is in its end of life. `ProjectInner::end` is
-/// its only writer, and `Lifecycle::after` its table (`docs/architecture.md`,
+/// its only writer, and `Lifecycle::after` its table (`docs/host-link.md`,
 /// "A project session's end"). The phases that still read the session's
 /// frames hold its subscription, so leaving them, or dropping the last
 /// handle, ends it.

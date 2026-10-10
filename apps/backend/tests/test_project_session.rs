@@ -517,7 +517,7 @@ fn row(
     }
 }
 
-/// A project session's end of life (`docs/architecture.md`, "A project
+/// A project session's end of life (`docs/host-link.md`, "A project
 /// session's end"), every phase against every event, for a session the
 /// service created and one it took over from a desk. Columns: how it came,
 /// the phase, the event; then alive, closed reports, sent by the event,

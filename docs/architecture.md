@@ -441,10 +441,10 @@ removes the real coupling; do not create interfaces for ceremony.
 | `routing_view.rs` | `RoutingView`, what routing reads without the PBX lock, and the desk-session listing | any change to the call |
 | `prompts.rs` | the call's prompt text: the voice block, the voice brief, the foreground and background notices, the utility's rules, the intro prompt | when or to whom a prompt is sent |
 | `reply.rs` | `Reply` and the switchboard's reply and failure builders | routing or lifecycle policy |
-| `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions, module calls | routing decisions, leg lifecycle |
+| `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions (a `Subscription` ends its own delivery when dropped), module calls | routing decisions, leg lifecycle |
 | `prewarm.rs` | per-host setup and launch plans: catalogs, prepare | routing decisions, model policy |
 | `pi_client.rs` | the operator's and the utility's Pi process/RPC transport, process-tree cleanup, `LegSession` (the leg on the line, operator or project, as the controls see it) | project sessions, route authority or deployment registry |
-| `project_session.rs` | a project session over the host link: its commands, the caller turn it collects, the frame pump, self-woken turn reports, module-call answers, and its release on the host | the host link itself (`hosts.rs`), which leg is on the line, route authority |
+| `project_session.rs` | a project session over the host link: its commands, the caller turn it collects, the frame pump, self-woken turn reports, module-call answers, and its end of life (`Lifecycle`, written only by `ProjectInner::end`; `docs/host-link.md`, "A project session's end"): its release on the host and the subscription to its frames | the host link itself (`hosts.rs`), which leg is on the line, route authority |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
 | `display.rs` | the stage projection (`DisplayProjection`); the display gate (`DisplayGateState`: the stage of the leg on the line, the page's `ScreenReport` and its confirmations, whose methods are their only writers); the display-precedence rule for `view` and the snapshot | generation checks, HTTP/WebSocket handling |
 | `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |
