@@ -11,19 +11,21 @@ fn coordinator() -> Coordinator {
 
 /// The phase the call is in, as the tests name it.
 fn phase(coordinator: &Coordinator) -> &'static str {
-    coordinator.linearize(|state| match state.phase {
-        Phase::Operator => "operator",
-        Phase::Starting => "starting",
-        Phase::Active => "active",
-        Phase::TurnRunning => "turn running",
-        Phase::Quiescing => "quiescing",
-        Phase::Shutdown => "shutdown",
+    coordinator.linearize(|state| match &state.line {
+        Line::Open { leg, turn } | Line::Adopted { leg, turn, .. } => match turn {
+            Some(_) => "turn running",
+            None if leg.launch.is_none() => "operator",
+            None => "active",
+        },
+        Line::Starting { .. } => "starting",
+        Line::Quiescing { .. } => "quiescing",
+        Line::Shutdown { .. } => "shutdown",
     })
 }
 
 /// The turn open on the line, if any.
 fn open_turn(coordinator: &Coordinator) -> Option<OperationIdentity> {
-    coordinator.linearize(|state| state.operation.clone())
+    coordinator.linearize(|state| state.line.turn().cloned())
 }
 
 fn coordinator_with_notices() -> (Coordinator, Arc<std::sync::Mutex<Vec<CandidateNotice>>>) {
@@ -466,10 +468,7 @@ fn on_alpha(coordinator: &Coordinator) {
 fn assert_on_the_operator(coordinator: &Coordinator) {
     assert_eq!(coordinator.route(), "operator");
     assert_eq!(coordinator.project_leg(), None);
-    assert_eq!(
-        coordinator.linearize(|state| (state.model.clone(), state.persistent_session_id.clone())),
-        (String::new(), String::new())
-    );
+    assert!(coordinator.linearize(|state| state.line.leg().launch.is_none()));
     let status = coordinator.status();
     assert_eq!(
         (status.route.as_str(), status.label.as_str()),
@@ -1470,7 +1469,7 @@ operator | begin_autonomous => WrongPhase | operator operator operator@0 - think
 operator | bind_turn => StaleLeg | operator operator operator@0 - thinking: []
 operator | settle_turn => false | operator operator operator@0 - thinking: []
 operator | finish_operation => false | operator operator operator@0 - thinking: []
-operator | attach_steer => WrongPhase | operator operator operator@0 - thinking: []
+operator | attach_steer => NoActiveOperation | operator operator operator@0 - thinking: []
 operator | begin_rescue => operator-rescue-1@1 | quiescing operator operator-rescue-1@1 - thinking: []
 operator | begin_rescue_of => None | operator operator operator@0 - thinking: []
 operator | settle => operator | operator operator operator@0 - thinking: []
