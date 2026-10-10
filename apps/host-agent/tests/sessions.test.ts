@@ -171,6 +171,24 @@ test("resume: open_session reopens a saved sb- session; a desk session is refuse
 	assert.equal([...daemon.live.values()].some((s) => s.sessionId === "desk"), false);
 });
 
+test("open_session holds a session it already tracks to the same name, project and folder", async () => {
+	// A tracked session used to be returned before any check, so an
+	// open_session for project B returned project A's session (#294).
+	const { daemon, manager } = setup();
+	daemon.saved.set("old1", { handle: "", sessionId: "old1", name: "sb-homelab-1234abcd", cwd: "/srv/homelab", busy: false, model: null, thinking: "low", depth: 0 });
+	const info = (await manager.handle("open_session", { session_id: "old1", cwd: "/srv/homelab", project: "homelab" })) as Message;
+	const refused = (e: Error & { code?: string }) => e.code === "refused";
+	await assert.rejects(manager.handle("open_session", { session_id: "old1", cwd: "/srv/other", project: "other" }), refused);
+	await assert.rejects(manager.handle("open_session", { session_id: "old1", cwd: "/srv/other" }), refused);
+	// The same project and folder still get the tracked session back.
+	assert.deepEqual(await manager.handle("open_session", { session_id: "old1", cwd: "/srv/homelab", project: "homelab" }), info);
+	assert.deepEqual(await manager.handle("open_session", { session_id: "old1", cwd: "/srv/homelab" }), info);
+	// A desk session taken over is not reopened as the switchboard's.
+	daemon.addLive({ handle: "desk", cwd: "/srv/homelab" });
+	const desk = (await manager.handle("attach", { session: "desk", project: "homelab", cwd: "/srv/homelab" })) as Message;
+	await assert.rejects(manager.handle("open_session", { session_id: String(desk.session_id), cwd: "/srv/homelab", project: "homelab" }), refused);
+});
+
 test("a turn settles on wait_for_idle after the last input, not on agent_end", async () => {
 	const { daemon, manager, kinds } = setup();
 	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
