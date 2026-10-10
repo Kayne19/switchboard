@@ -301,6 +301,87 @@ describe("the hands-free controller over fakes", () => {
     expect(harness.endpointer.resets).toBeGreaterThan(resets.endpointer);
   });
 
+  // A start that a newer one overtook (push-to-talk paused and resumed while
+  // the first one waited) closed whatever graph the controller held when it
+  // woke up: the newer start's. Hands-free then said "armed" and heard
+  // nothing (#261).
+  it("lets an overtaken start release only what it made", async () => {
+    stubBrowser();
+    const detector = fakeDetector();
+    const endpointer = fakeEndpointer();
+    const audio = fakeAudio();
+    const closed: number[] = [];
+    const stopped: number[] = [];
+    let contexts = 0;
+    let streams = 0;
+    let releaseFirstModule: () => void = () => undefined;
+    const instance = new HandsFreeController({
+      getUserMedia: async () => {
+        const id = ++streams;
+        return {
+          getTracks: () => [{ stop: () => stopped.push(id) }],
+        } as unknown as MediaStream;
+      },
+      createAudioContext: () => {
+        const id = ++contexts;
+        return {
+          ...audio.context,
+          audioWorklet: {
+            addModule: () =>
+              id === 1
+                ? new Promise<undefined>((resolve) => {
+                    releaseFirstModule = () => resolve(undefined);
+                  })
+                : Promise.resolve(undefined),
+          },
+          close: async () => {
+            closed.push(id);
+          },
+        } as unknown as AudioContext;
+      },
+      createRecorder: () => fakeRecorder() as unknown as MediaRecorder,
+      createWorkletNode: () => audio.node as unknown as AudioWorkletNode,
+      wakeDetector: detector as unknown as WakeDetector,
+      speechEndpointer: endpointer as unknown as SpeechEndpointer,
+      isForeground: () => true,
+      isSnapshotReady: () => true,
+      currentEpoch: () => 4,
+      isPttActive: () => false,
+      onClip: () => true,
+      onState: () => undefined,
+    });
+
+    const first = instance.enable();
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    instance.pauseForPtt();
+    instance.resumeAfterPtt();
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    expect(instance.currentState).toBe("armed");
+
+    releaseFirstModule();
+    expect(await first).toBe(false);
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    expect(closed, "the overtaken start closes its own context").toEqual([1]);
+    expect(stopped, "and stops its own microphone").toEqual([1]);
+    expect(instance.currentState).toBe("armed");
+  });
+
+  // WebKit can leave `resume()` pending while the audio session is taken
+  // away (#183). Waited on without a limit, the start never finished.
+  it("fails a start whose audio never resumes, and says so", async () => {
+    stubBrowser();
+    const harness = controller();
+    harness.audio.context.state = "suspended";
+    harness.audio.context.resume = () => new Promise<undefined>(() => undefined);
+    const start = harness.instance.enable();
+    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    expect(harness.instance.currentState).toBe("starting");
+    harness.advance(3_000);
+    expect(await start).toBe(false);
+    expect(harness.instance.currentState).toBe("error");
+    expect(harness.instance.isEnabled).toBe(false);
+  });
+
   it("pauses for push-to-talk and resumes", async () => {
     stubBrowser();
     const harness = controller();

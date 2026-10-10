@@ -941,6 +941,63 @@ describe("CallRuntime hands-free", () => {
     runtime.dispose();
   });
 
+  // A first start that never finishes (a `resume()` WebKit leaves pending, a
+  // model that never arrives) held the runtime's startup for the life of the
+  // page, and every MODE tap after it was refused (#261).
+  it("does not lock MODE behind a first start that never finishes", async () => {
+    const enables: string[] = [];
+    let options: HandsFreeControllerOptions | null = null;
+    let enabled = false;
+    const controller = {
+      get isEnabled() {
+        return enabled;
+      },
+      enable() {
+        enabled = true;
+        enables.push("enable");
+        options!.onState({ state: "starting", message: "Starting.", leaseRemainingMs: 0 });
+        return new Promise<boolean>(() => undefined);
+      },
+      disable(message = "Hands-free is off.") {
+        enabled = false;
+        options!.onState({ state: "off", message, leaseRemainingMs: 0 });
+      },
+    };
+    const page = { visibilityState: "visible" as DocumentVisibilityState };
+    const listeners = new Map<string, () => void>();
+    const { runtime, latestState } = makeRuntime({
+      loadWakeDetector: async () => ({}) as WakeDetector,
+      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
+      createHandsFree: (created) => {
+        options = created;
+        return controller as unknown as HandsFreeController;
+      },
+      document: {
+        get visibilityState() {
+          return page.visibilityState;
+        },
+        addEventListener: (type: string, listener: () => void) =>
+          listeners.set(type, listener),
+        removeEventListener: () => undefined,
+      } as unknown as Document,
+    });
+    await connectAt(runtime);
+    runtime.toggleHandsFree();
+    await settle();
+    expect(enables).toEqual(["enable"]);
+
+    page.visibilityState = "hidden";
+    listeners.get("visibilitychange")!();
+    expect(latestState().handsFree).toBe(false);
+    page.visibilityState = "visible";
+    listeners.get("visibilitychange")!();
+
+    runtime.toggleHandsFree();
+    await settle();
+    expect(enables).toEqual(["enable", "enable"]);
+    runtime.dispose();
+  });
+
   it("reports a detector that fails to load", async () => {
     const { runtime, latestState } = makeRuntime({
       loadWakeDetector: async () => {

@@ -652,11 +652,21 @@ export class CallRuntime {
 
   // --- Hands-free -------------------------------------------------------
 
+  // `handsFreeStartup` covers only loading the detectors and making the
+  // controller, and MODE is refused while it runs. The controller's own
+  // start is outside it: a start that never finishes (a `resume()` WebKit
+  // leaves pending, a microphone prompt left open) used to hold MODE for the
+  // life of the page (#261). The controller is enabled from the first moment
+  // of its start, so a tap during it turns it off.
   private async enableHandsFree(): Promise<void> {
-    if (this.handsFree) {
-      await this.handsFree.enable();
-      return;
+    if (!this.handsFree) {
+      await this.loadHandsFree();
+      if (!this.handsFree) return;
     }
+    await this.handsFree.enable();
+  }
+
+  private loadHandsFree(): Promise<void> {
     if (this.handsFreeStartup) return this.handsFreeStartup;
     this.handsFreeStartup = (async () => {
       this.renderHandsFreeState({
@@ -694,7 +704,6 @@ export class CallRuntime {
         this.handsFree = this.options.createHandsFree
           ? this.options.createHandsFree(handsFreeOptions)
           : new HandsFreeController(handsFreeOptions);
-        await this.handsFree.enable();
       } catch (error) {
         this.handsFree = null;
         this.renderHandsFreeState({

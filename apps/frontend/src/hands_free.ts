@@ -15,6 +15,8 @@ export const SPEECH_END_PROBABILITY = 0.35;
 export const WAKE_SPEECH_GRACE_MS = 2_000;
 export const MAX_HANDS_FREE_UTTERANCE_MS = 30_000;
 export const FOLLOW_UP_LEASE_MS = 8_000;
+/** How long a start waits for a suspended audio context to run. */
+export const AUDIO_RESUME_DEADLINE_MS = 3_000;
 export const PLAYBACK_DRAIN_DEBOUNCE_MS = 400;
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -89,6 +91,27 @@ interface Capture {
 	epoch: number;
 	chunks: Blob[];
 	lease: boolean;
+}
+
+/** A start's audio context did not run by `AUDIO_RESUME_DEADLINE_MS`. */
+class AudioSuspended extends Error {
+	constructor() {
+		super("the audio context did not start");
+		this.name = "AudioSuspended";
+	}
+}
+
+function isRunning(context: AudioContext): boolean {
+	return context.state === "running";
+}
+
+/** Stops what a start made and never installed. */
+function releaseUnused(
+	context: AudioContext | null,
+	stream: MediaStream | null,
+): void {
+	stream?.getTracks().forEach((track) => track.stop());
+	if (context) void context.close().catch(() => undefined);
 }
 
 export class HandsFreeController {
@@ -212,47 +235,58 @@ export class HandsFreeController {
 			"Starting local microphone listening. Ambient audio stays on this device.",
 		);
 		const token = ++this.runtimeToken;
+		// What this start makes stays in locals until its last wait is over.
+		// A start that a newer one overtook (push-to-talk paused and resumed
+		// it, the page was hidden and shown) then releases only what it made,
+		// never the newer start's graph (#261).
+		let context: AudioContext | null = null;
+		let stream: MediaStream | null = null;
+		let installed = false;
 		try {
 			// Two models, one wait: either one failing is the same start
 			// failure, reported by the catch below.
 			await Promise.all([this.detector.load?.(), this.endpointer.load?.()]);
 			if (!this.enabled || token !== this.runtimeToken) return false;
-			this.context = this.createAudioContext();
-			if (typeof this.context.audioWorklet?.addModule !== "function")
+			context = this.createAudioContext();
+			if (typeof context.audioWorklet?.addModule !== "function")
 				throw new Error("audio worklet is unavailable");
-			this.stream = await this.getUserMedia({ audio: true });
+			stream = await this.getUserMedia({ audio: true });
 			if (
 				!this.enabled ||
 				token !== this.runtimeToken ||
 				!this.isForeground()
 			) {
-				this.releaseStream();
+				releaseUnused(context, stream);
 				return false;
 			}
-			if (this.context.state === "suspended") await this.context.resume();
-			await this.context.audioWorklet.addModule(
+			await this.resumeAudio(context);
+			await context.audioWorklet.addModule(
 				this.options.workletUrl || "/vad-worklet.js",
 			);
 			if (!this.enabled || token !== this.runtimeToken) {
-				this.releaseRuntime();
+				releaseUnused(context, stream);
 				return false;
 			}
-			this.source = this.context.createMediaStreamSource(this.stream);
-			this.worklet = this.createWorkletNode(this.context);
+			this.context = context;
+			this.stream = stream;
+			installed = true;
+			this.source = context.createMediaStreamSource(stream);
+			this.worklet = this.createWorkletNode(context);
 			const worklet = this.worklet;
 			worklet.port.onmessage = (event: MessageEvent) => {
 				if (token !== this.runtimeToken || worklet !== this.worklet) return;
 				this.onWorkletMessage(event.data);
 			};
 			this.source.connect(worklet);
-			this.sink = this.context.createGain();
+			this.sink = context.createGain();
 			this.sink.gain.value = 0;
 			worklet.connect(this.sink);
-			this.sink.connect(this.context.destination);
+			this.sink.connect(context.destination);
 			this.resetListening();
 			this.publish("armed", `Listening locally for “${WAKE_PHRASE}”.`);
 			return true;
 		} catch (error) {
+			if (!installed) releaseUnused(context, stream);
 			if (!this.enabled || token !== this.runtimeToken) return false;
 			this.enabled = false;
 			this.releaseRuntime();
@@ -263,6 +297,31 @@ export class HandsFreeController {
 			);
 			return false;
 		}
+	}
+
+	/**
+	 * Resumes a suspended context, but not forever. WebKit can leave
+	 * `resume()` pending while the audio session is interrupted (#183), and a
+	 * start that waited on it never finished (#261). A context that is not
+	 * running by the deadline fails the start, which says so.
+	 */
+	private async resumeAudio(context: AudioContext): Promise<void> {
+		if (context.state !== "suspended") return;
+		const resumed = context.resume();
+		// A rejection after the deadline has nobody waiting for it.
+		resumed.catch(() => undefined);
+		let expire: () => void = () => undefined;
+		const deadline = new Promise<void>((resolve) => {
+			expire = resolve;
+		});
+		const timer = this.setTimer(() => expire(), AUDIO_RESUME_DEADLINE_MS);
+		try {
+			await Promise.race([resumed, deadline]);
+		} finally {
+			this.clearTimer(timer);
+		}
+		// Read again: `resume()` changes the state the check above narrowed.
+		if (!isRunning(context)) throw new AudioSuspended();
 	}
 
 	disable(message = "Hands-free is off."): void {
