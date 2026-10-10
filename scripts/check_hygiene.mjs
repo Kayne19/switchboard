@@ -407,6 +407,8 @@ const machines = [
 	{ file: "apps/host-agent/src/daemon_keeper.ts", writer: /\bthis\.#phase\s*=(?!=)/, max: 1, once: [] },
 	// call-line (#437): `CallLifecycle::step` writes the line; `step_locked` sends every candidate notice.
 	{ file: "apps/backend/src/lifecycle.rs", writer: /\bself\.line\s*=(?!=)/, max: 1, once: [/\bself\.notify_candidate\(/] },
+	// session-turn (#439): `step` is the one writer of a project session's turn phase.
+	{ file: "apps/backend/src/session_turn.rs", writer: /\bself\.phase\s*=(?!=)/, max: 1, once: [] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
@@ -437,7 +439,7 @@ const owners = [
 	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 0 },
 	{ file: "apps/backend/src/lifecycle.rs", owner: "CallLifecycle", fields: 1 },
 	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 6 },
-	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 11 },
+	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 7 },
 	{ file: "apps/backend/src/floor.rs", owner: "FloorState", fields: 1 },
 	{ file: "apps/host-agent/src/sessions.ts", owner: "Tracked", fields: 5 },
 ];
