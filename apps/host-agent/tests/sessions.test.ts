@@ -281,6 +281,195 @@ test("an agent_start nobody caused opens a turn that settles the same way", asyn
 	assert.deepEqual(kinds(s), ["turn_start", "turn_end"]);
 });
 
+// A tracked session's turn, phase by event (lifecycle map, machine
+// `host-session`). Written against the behaviour the turn had before it was
+// one record with one writer; every row must hold across that change.
+//
+// Phases: idle; open with cause input, autonomous or unknown (a busy
+// snapshot); untracked. Each row says what the service hears, how many
+// wait_for_idle requests go out, and the phase after.
+test("turn table: each phase of a tracked session's turn, by event", async () => {
+	type Phase = "idle" | "input" | "autonomous" | "unknown";
+	type Event =
+		| "prompt"
+		| "steer"
+		| "agent_start"
+		| "agent_start during an input"
+		| "tool_start"
+		| "latest wait resolves"
+		| "latest wait fails"
+		| "steer, then the earlier wait resolves"
+		| "abort"
+		| "kill, then the wait answers"
+		| "kill the daemon refuses, then session_closed"
+		| "detach, then the wait answers"
+		| "daemon session_closed, then the wait answers"
+		| "resync, not busy"
+		| "resync, busy snapshot"
+		| "resync, then the earlier wait resolves"
+		| "resync, gone";
+	type After = Phase | "untracked";
+	const rows: [Phase, Event, string[], number, After][] = [
+		// phase, event, what the service hears, wait_for_idle requests sent, phase after
+		["idle", "prompt", ["turn_start input +id"], 1, "input"],
+		["idle", "steer", ["turn_start input +id"], 1, "input"],
+		["idle", "agent_start", ["turn_start autonomous +id"], 1, "autonomous"],
+		["idle", "agent_start during an input", ["turn_start input +id"], 1, "input"],
+		["idle", "tool_start", ["tool_start"], 0, "idle"],
+		["idle", "abort", [], 0, "idle"],
+		["idle", "kill, then the wait answers", ["session_closed killed"], 0, "untracked"],
+		["idle", "kill the daemon refuses, then session_closed", ["session_closed gone"], 0, "untracked"],
+		["idle", "detach, then the wait answers", ["session_closed detached"], 0, "untracked"],
+		["idle", "daemon session_closed, then the wait answers", ["session_closed gone"], 0, "untracked"],
+		["idle", "resync, not busy", [], 0, "idle"],
+		["idle", "resync, busy snapshot", ["turn_start unknown"], 1, "unknown"],
+		["idle", "resync, gone", ["session_closed gone"], 0, "untracked"],
+		["input", "prompt", [], 1, "input"],
+		["input", "steer", [], 1, "input"],
+		["input", "agent_start", [], 0, "input"],
+		["input", "tool_start", ["tool_start same-id"], 0, "input"],
+		["input", "latest wait resolves", ["turn_end same-id"], 0, "idle"],
+		["input", "latest wait fails", ["turn_end error same-id"], 0, "idle"],
+		["input", "steer, then the earlier wait resolves", [], 1, "input"],
+		["input", "abort", [], 1, "input"],
+		["input", "kill, then the wait answers", ["session_closed killed"], 0, "untracked"],
+		["input", "detach, then the wait answers", ["session_closed detached"], 0, "untracked"],
+		["input", "daemon session_closed, then the wait answers", ["session_closed gone"], 0, "untracked"],
+		["input", "resync, not busy", [], 1, "input"],
+		["input", "resync, then the earlier wait resolves", [], 1, "input"],
+		["input", "resync, gone", ["session_closed gone"], 0, "untracked"],
+		["autonomous", "prompt", [], 1, "autonomous"],
+		["autonomous", "agent_start", [], 0, "autonomous"],
+		["autonomous", "latest wait resolves", ["turn_end same-id"], 0, "idle"],
+		["autonomous", "latest wait fails", ["turn_end error same-id"], 0, "idle"],
+		["unknown", "prompt", [], 1, "unknown"],
+		["unknown", "tool_start", ["tool_start"], 0, "unknown"],
+		["unknown", "latest wait resolves", ["turn_end"], 0, "idle"],
+		["unknown", "latest wait fails", ["turn_end error"], 0, "idle"],
+		["unknown", "resync, busy snapshot", [], 1, "unknown"],
+	];
+	for (const [phase, event, heard, waitsSent, after] of rows) {
+		const label = `${phase} x ${event}`;
+		const { daemon, manager, events } = setup();
+		// Every wait_for_idle is answered by hand, one at a time.
+		const waits: { resolve: () => void; reject: (error: Error) => void }[] = [];
+		daemon.waitForIdle = (handle: string) => {
+			daemon.calls.push({ op: "waitForIdle", args: [handle] });
+			return new Promise<void>((resolve, reject) => waits.push({ resolve, reject }));
+		};
+		const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+		if (phase === "input") await manager.prompt(s, "go");
+		if (phase === "autonomous") daemon.emit(s, { type: "agent_start" });
+		if (phase === "unknown") {
+			(daemon.live.get(s) as { busy: boolean }).busy = true;
+			await manager.resync();
+		}
+		await flush();
+		const before = (await manager.describe(s, false)) as Message;
+		assert.equal(before.turn_open, phase !== "idle", label);
+		assert.equal(before.cause, phase === "idle" ? null : phase, label);
+		const openId = before.turn_id as string | null;
+		assert.equal(openId !== null, phase === "input" || phase === "autonomous", `${label}: only an unknown turn has no id`);
+		const heardFrom = events.length;
+		const waitsFrom = daemon.ops().filter((op) => op === "waitForIdle").length;
+		switch (event) {
+			case "prompt":
+				await manager.prompt(s, "more");
+				break;
+			case "steer":
+			case "steer, then the earlier wait resolves":
+				await manager.input(s, "steer", "more");
+				if (event !== "steer") waits.at(-2)?.resolve();
+				break;
+			case "agent_start":
+				daemon.emit(s, { type: "agent_start" });
+				break;
+			case "agent_start during an input": {
+				const prompt = daemon.prompt.bind(daemon);
+				daemon.prompt = async (handle: string, message: string) => {
+					daemon.emit(handle, { type: "agent_start" });
+					return prompt(handle, message);
+				};
+				await manager.prompt(s, "go");
+				break;
+			}
+			case "tool_start":
+				daemon.emit(s, { type: "tool_execution_start", toolName: "bash", toolCallId: "t1" });
+				break;
+			case "latest wait resolves":
+				waits.at(-1)?.resolve();
+				break;
+			case "latest wait fails":
+				waits.at(-1)?.reject(new Error("daemon went away"));
+				break;
+			case "abort":
+				await manager.abort(s);
+				break;
+			case "kill, then the wait answers":
+				await manager.kill(s);
+				for (const wait of waits) wait.resolve();
+				break;
+			case "kill the daemon refuses, then session_closed": {
+				const kill = daemon.kill.bind(daemon);
+				daemon.kill = async (handle: string) => {
+					daemon.calls.push({ op: "kill", args: [handle] });
+					throw new DaemonCommandError("kill", "refused");
+				};
+				await assert.rejects(manager.kill(s));
+				assert.deepEqual(manager.handles(), [s], `${label}: a refused kill keeps the session`);
+				daemon.kill = kill;
+				daemon.closeSession(s, "killed");
+				break;
+			}
+			case "detach, then the wait answers":
+				await manager.detach(s);
+				for (const wait of waits) wait.resolve();
+				break;
+			case "daemon session_closed, then the wait answers":
+				daemon.closeSession(s, "killed");
+				for (const wait of waits) wait.resolve();
+				break;
+			case "resync, not busy":
+			case "resync, then the earlier wait resolves":
+				(daemon.live.get(s) as { busy: boolean }).busy = false;
+				await manager.resync();
+				if (event !== "resync, not busy") waits.at(-2)?.resolve();
+				break;
+			case "resync, busy snapshot":
+				(daemon.live.get(s) as { busy: boolean }).busy = true;
+				await manager.resync();
+				break;
+			case "resync, gone":
+				daemon.live.delete(s);
+				await manager.resync();
+				for (const wait of waits) wait.resolve();
+				break;
+			default:
+				event satisfies never;
+		}
+		await flush();
+		const said = events.slice(heardFrom).map(({ event: e }) => {
+			const id = e.turn_id === undefined ? "" : e.turn_id === openId ? " same-id" : typeof e.turn_id === "string" && /^turn-[0-9a-f]{16}$/.test(e.turn_id) ? " +id" : " other-id";
+			if (e.kind === "turn_start") return `turn_start ${e.cause}${id}`;
+			if (e.kind === "turn_end") return `turn_end${e.error === undefined ? "" : " error"}${id}`;
+			if (e.kind === "session_closed") return `session_closed ${e.reason}`;
+			return `${e.kind}${id}`;
+		});
+		assert.deepEqual(said, heard, label);
+		assert.equal(daemon.ops().filter((op) => op === "waitForIdle").length - waitsFrom, waitsSent, `${label}: wait_for_idle requests`);
+		const info = (await manager.describe(s, false)) as Message | null;
+		const now: After = info === null ? "untracked" : info.turn_open ? (info.cause as Phase) : "idle";
+		assert.equal(now, after, label);
+		const lookup = manager.bySessionId(String(before.session_id));
+		assert.deepEqual(
+			lookup && { turnId: lookup.turnId, turnCause: lookup.turnCause },
+			info && { turnId: info.turn_id, turnCause: info.cause },
+			`${label}: the skill socket reads the same turn`,
+		);
+		if (info?.turn_open && phase !== "idle" && after === phase) assert.equal(info.turn_id, openId, `${label}: the open turn keeps its id`);
+	}
+});
+
 test("a busy session gets follow_up, not prompt; abort is followed by resume_queue", async () => {
 	const { daemon, manager, kinds } = setup();
 	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
