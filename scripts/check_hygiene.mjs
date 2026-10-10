@@ -413,6 +413,8 @@ const machines = [
 	// through the coordinator: `begin_startup` stages, `commit` adopts and ends the
 	// intro, and the rollback is written in `abandon` and in `Drop`, nowhere else.
 	{ file: "apps/backend/src/leg_transitions.rs", writer: /\.rollback_startup\(/, max: 2, once: [/\.begin_candidate\(/, /\.adopt_candidate\(/, /\.finish_intro\(/] },
+	// screen-reports: `transition` writes the report line; `leave` clears the ack deadline.
+	{ file: "apps/frontend/src/app/screenReporter.ts", writer: /\bthis\.state\s*=(?!=)/, max: 1, once: [/clearTimeout\(/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
@@ -441,6 +443,7 @@ const owners = [
 	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 22 },
 	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 2 },
 	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 0 },
+	{ file: "apps/frontend/src/app/screenReporter.ts", owner: "ScreenReporter", fields: 0 },
 	{ file: "apps/backend/src/lifecycle.rs", owner: "CallLifecycle", fields: 1 },
 	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 6 },
 	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 7 },
