@@ -18,7 +18,7 @@ use crate::jev::fake_jev_client;
 use crate::leg_announcer::LegAnnouncer;
 use crate::lifecycle::Coordinator;
 use crate::module_calls::module_call;
-use crate::page_controls::interrupt_active_turn;
+use crate::page_controls::cancel_active_operations;
 #[cfg(test)]
 use crate::pbx::OPERATOR;
 use crate::pbx::{AgentStateCallback, AgentStateNotice, RouteCallback, Switchboard};
@@ -528,7 +528,7 @@ pub async fn shutdown(state: &AppState) {
         return;
     }
     state.0.clear_continuity();
-    interrupt_active_turn(state).await;
+    cancel_active_operations(state).await;
     // Ends the legs first: a project session is ended by a command on its
     // host's link, which has to be queued before the links close.
     state.0.switchboard.lock().await.shutdown().await;

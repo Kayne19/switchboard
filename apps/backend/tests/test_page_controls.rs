@@ -54,7 +54,7 @@ async fn page_rescue_aborts_work_before_waiting_for_the_pbx_lock() {
         .insert(abort.id(), abort);
     locked_rx.await.unwrap();
 
-    let interrupted = timeout(Duration::from_secs(1), interrupt_active_turn(&state))
+    let interrupted = timeout(Duration::from_secs(1), cancel_active_operations(&state))
         .await
         .expect("rescue should not wait for the wedged turn");
     assert_eq!(interrupted.as_deref(), Some(OPERATOR));

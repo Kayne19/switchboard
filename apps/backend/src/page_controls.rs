@@ -97,9 +97,6 @@ impl StaleControl {
 pub(crate) async fn status(State(state): State<AppState>) -> impl IntoResponse {
     Json(ServerMessage::Status(current_status(&state)).to_value())
 }
-pub(crate) async fn interrupt_active_turn(state: &AppState) -> Option<String> {
-    cancel_active_operations(state).await
-}
 pub(crate) async fn cancel_active_operations(state: &AppState) -> Option<String> {
     let generation = state
         .0
