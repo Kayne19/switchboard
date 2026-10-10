@@ -88,7 +88,7 @@ lose speech, never misroute it.
 
 Only an adoption carries the marked clips along. A hangup while the leg is
 connecting rescues the call, and a rescue sends the browser the same two
-signals an adoption does: a clear notice and an epoch one higher. Taken for
+signals an adoption does: a clear notice and a higher epoch. Taken for
 an adoption, it re-stamped the caller's words to alpha and they ran as a turn
 on the operator (#70). So `candidate_cleared` names the candidate's `route`
 and says how it ended (`reason`: `adopted`, `rolled_back`, or `rescued`), and

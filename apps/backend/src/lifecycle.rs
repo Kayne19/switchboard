@@ -666,9 +666,17 @@ impl Coordinator {
     /// rescued candidate must never be adopted, and the browser must stop
     /// showing "connecting".
     fn rescue_locked(&self, state: &mut CallLifecycle, reason: String) -> Rescue {
-        let abandoned_candidate = state.candidate.take().map(|candidate| candidate.route);
-        let next_token = format!("{}-rescue-{}", state.leg.token, state.leg.generation + 1);
-        state.leg = LegIdentity::new(next_token, state.leg.generation + 1);
+        let abandoned = state.candidate.take();
+        // The rescue retires the candidate's generation too, so work stamped
+        // with the abandoned candidate's generation is stale after it.
+        let retired = abandoned
+            .as_ref()
+            .map_or(state.leg.generation, |candidate| {
+                candidate.identity.generation.max(state.leg.generation)
+            });
+        let abandoned_candidate = abandoned.map(|candidate| candidate.route);
+        let next_token = format!("{}-rescue-{}", state.leg.token, retired + 1);
+        state.leg = LegIdentity::new(next_token, retired + 1);
         if state.phase != Phase::Shutdown {
             state.phase = Phase::Quiescing;
             state.operation = None;
