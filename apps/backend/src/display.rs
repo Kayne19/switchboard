@@ -254,7 +254,7 @@ impl DisplayProjection {
         self.order.is_empty() && self.speech.is_none()
     }
 
-    pub(crate) fn clear(&mut self) {
+    fn clear(&mut self) {
         self.objects.clear();
         self.order.clear();
         self.focus_id = None;
@@ -597,7 +597,7 @@ impl ConfirmState {
     /// report from another generation starts that one first, `applied_seq`
     /// raises the watermark, and a rejection is kept. A report without a
     /// rejection clears none.
-    pub(crate) fn fold_report(
+    fn fold_report(
         &mut self,
         generation: u64,
         applied_seq: Option<u64>,
@@ -631,7 +631,7 @@ impl ConfirmState {
     }
 
     /// A new generation: nothing confirmed or rejected in it yet.
-    pub(crate) fn begin_generation(&mut self, generation: u64) {
+    fn begin_generation(&mut self, generation: u64) {
         self.generation = generation;
         self.watermark = None;
         self.rejections.clear();
