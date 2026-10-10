@@ -301,14 +301,47 @@ describe('screen reports: phase x event', () => {
       expect(sent().at(-1)).toMatchObject({ generation: 2, object_ids: [] });
     });
 
-    it('awaiting | no ack: every later report waits behind it', async () => {
+    it('awaiting | no ack by the deadline: the report is taken as ignored, and the queued scene goes', async () => {
+      // The service acknowledges no report it ignores: a tab that is not the
+      // active one, another generation, a view it does not know.
+      await awaiting();
+      const mark = sent().length;
+      await receive(show('b', 2));
+      await act(async () => {
+        vi.advanceTimersByTime(1_999);
+      });
+      expect(sent().length).toBe(mark);
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(shownSince(mark)).toEqual([['a', 'b']]);
+    });
+
+    it('awaiting | no ack by the deadline and nothing queued: back to idle, the next scene goes at once', async () => {
       await awaiting();
       const mark = sent().length;
       await act(async () => {
-        vi.advanceTimersByTime(60_000);
+        vi.advanceTimersByTime(2_000);
       });
-      await receive(show('b', 2));
       expect(sent().length).toBe(mark);
+      await receive(show('b', 2));
+      expect(shownSince(mark)).toEqual([['a', 'b']]);
+    });
+
+    it('awaiting | the deadline of a report already acknowledged: dropped', async () => {
+      await awaiting();
+      const mark = sent().length;
+      await act(async () => {
+        vi.advanceTimersByTime(1_500);
+      });
+      await receive(ack, show('b', 2));
+      expect(shownSince(mark)).toEqual([['a', 'b']]);
+      // `a`'s deadline would have fired here; `b` still waits for its ack.
+      await act(async () => {
+        vi.advanceTimersByTime(1_000);
+      });
+      await receive(show('c', 3));
+      expect(sent().length).toBe(mark + 1);
     });
 
     it('awaiting | line down, then a new connection and its epoch: reports go without the old ack', async () => {

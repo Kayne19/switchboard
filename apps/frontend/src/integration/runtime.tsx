@@ -352,9 +352,10 @@ export function RuntimeIntegration() {
     return () => {
       runtimeForPage.dispose();
       callRuntimeRef.current = null;
+      screenReporter.lineDown();
       setCallRuntime(null);
     };
-  }, []);
+  }, [screenReporter]);
 
   // Every scene the page renders is reported. A declined display bumps
   // `reportNonce`, so the same scene is reported again with the rejection.
