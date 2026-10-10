@@ -429,46 +429,6 @@ impl Switchboard {
             exact_caller_transcript: text.to_owned(),
             derived_intent: String::new(),
         };
-        // Targets from Jev, the utility and the operator are exact ids. An
-        // unknown one must not move the caller or drop the leg on the line.
-        if target != OPERATOR && self.registry.get(target).is_none() {
-            tracing::warn!(%target, "refusing a route to an unregistered project");
-            self.trace_refused(target, text, via.unwrap_or("routing"));
-            return self.reply_transfer_error(
-                self.unknown_project_line(target),
-                Some(format!("unknown project {target:?}")),
-            );
-        }
-        if let Some(via) = via {
-            let leg_gone = self.coordinator.route() == target && self.agent.is_none();
-            if target != OPERATOR && !leg_gone {
-                self.trace_routed(target, text, mode.as_str(), via);
-            }
-        }
-        if target != OPERATOR {
-            self.set_agent_task(target, text);
-        }
-        // An agent already on this call (on the line or in the background)
-        // is brought forward whatever the mode: a live agent is never
-        // refused or silently replaced. Stopping it is the way to start over.
-        if matches!(mode, crate::router::ConversationMode::Fresh)
-            && target != OPERATOR
-            && (self.coordinator.route() == target || self.background_agents.contains_key(target))
-        {
-            tracing::info!(%target, "fresh was asked for a live agent on this call; bringing it forward");
-        }
-        if target != OPERATOR && self.coordinator.route() != target {
-            if self.remove_dead_background(target).await {
-                self.announce_agent_state(target, "finished").await;
-            }
-            if self.background_agents.contains_key(target) {
-                let session = self
-                    .take_background(target)
-                    .await
-                    .expect("background session exists");
-                return self.promote_background(session, context).await;
-            }
-        }
         if target == OPERATOR {
             // The utility may explicitly choose the operator. Do not send
             // that target through the project handler: it has no project
@@ -480,6 +440,31 @@ impl Switchboard {
             }
             return Box::pin(self.handle_operator_ctx(&context)).await;
         }
+        // Targets from Jev, the utility and the operator are exact ids. An
+        // unknown one must not move the caller or drop the leg on the line.
+        let Some(project) = self.registry.get(target).cloned() else {
+            tracing::warn!(%target, "refusing a route to an unregistered project");
+            self.trace_refused(target, text, via.unwrap_or("routing"));
+            return self.reply_transfer_error(
+                self.unknown_project_line(target),
+                Some(format!("unknown project {target:?}")),
+            );
+        };
+        if let Some(via) = via {
+            let leg_gone = self.coordinator.route() == target && self.agent.is_none();
+            if !leg_gone {
+                self.trace_routed(target, text, mode.as_str(), via);
+            }
+        }
+        self.set_agent_task(target, text);
+        // An agent already on this call (on the line or in the background)
+        // is brought forward whatever the mode: a live agent is never
+        // refused or silently replaced. Stopping it is the way to start over.
+        if matches!(mode, crate::router::ConversationMode::Fresh)
+            && (self.coordinator.route() == target || self.background_agents.contains_key(target))
+        {
+            tracing::info!(%target, "fresh was asked for a live agent on this call; bringing it forward");
+        }
         if self.coordinator.route() == target {
             // The utility's opinion can confirm that an unsure utterance is
             // for the project already on the line. Box this back-edge because
@@ -487,9 +472,8 @@ impl Switchboard {
             // operator handler.
             return Box::pin(self.handle_agent_ctx(&context)).await;
         }
-        let Some(project) = self.registry.get(target).cloned() else {
-            unreachable!("a target that is not registered is refused above");
-        };
+        // A resident of `target` is promoted, not started again
+        // (`transfer_ctx`).
         self.transfer_ctx(&context, &project, "", "").await
     }
 
