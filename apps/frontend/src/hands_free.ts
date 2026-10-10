@@ -193,6 +193,11 @@ export class HandsFreeController {
 		if (this.enabled && this.state !== "error" && this.state !== "paused_ptt")
 			return true;
 		if (this.options.isPttActive() || !this.isForeground()) {
+			// A refused resume after push-to-talk was still enabled. The
+			// page shows `error` as hands-free off, so the controller is off
+			// too: otherwise the next MODE tap reads `isEnabled` and turns
+			// "off" what the caller already sees as off (#257).
+			this.enabled = false;
 			this.publish(
 				"error",
 				"Finish push-to-talk and keep this page visible first.",
