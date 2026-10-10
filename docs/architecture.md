@@ -456,6 +456,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `debug.rs` | bounded, in-memory observation: the event and log rings, the debug schema (`DebugEvent`), record scrubbing and clipping, and the debug listener's router and WebSocket framing | call control, routing or lifecycle decisions, awaiting on clients or doing I/O while publishing, disk history |
 | `apps/frontend/` | capture, protocol client, playback, UI | server authority or durable state |
 | `apps/host-agent/src/sessions.ts` | the sessions a host agent tracks on its daemon: provenance and the state file, each session's call, and its turn (`Tracked.turn`, written only by `#turnStep`; `docs/host-link.md`, "Session events") | the host link (`link.ts`), running prepare commands |
+| `apps/host-agent/src/daemon_keeper.ts` | the daemon connection and the resync after it: one phase (`disconnected`, `resyncing`, `retrying` the sessions that would not attach, `attached`), written only by `#step` (`docs/host-link.md`, "Snapshots") | what a session reattach does (`sessions.ts`), starting a daemon |
 | `apps/host-agent/src/prepare.ts` | `run_prepare`: the bounded `sh -c` runner and the join of a run already going in the same folder (`Prepares`) | sessions, the host link |
 | `extensions/` | the operator's Pi-side tool signal | direct route mutation |
 | homelab | deployment and secrets | application implementation |

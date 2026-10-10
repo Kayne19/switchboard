@@ -82,6 +82,13 @@ interface Tracked {
 	killing: boolean;
 }
 
+/** What a resync or a reattach did: sessions attached, sessions gone, and the ones the daemon still lists that would not attach. */
+interface ReattachResult {
+	live: string[];
+	closed: string[];
+	failed: { session: string; error: string }[];
+}
+
 interface StateFile {
 	version: 1;
 	sessions: { handle: string; session_id: string; name: string | null; project: string; cwd: string; provenance: Provenance }[];
@@ -203,13 +210,33 @@ export class SessionManager {
 	 * stop the rest, and the state file is written either way. An attach that
 	 * fails because the session ended after the list is a close (`gone`); one
 	 * the daemon still lists stays tracked, so its provenance is kept and the
-	 * caller's next resync tries it again.
+	 * caller can try it again with `reattach`.
 	 */
-	async resync(): Promise<{ live: string[]; closed: string[]; failed: { session: string; error: string }[] }> {
+	async resync(): Promise<ReattachResult> {
 		const state = this.#readState();
 		for (const n of state.used_names) this.#usedNames.add(n);
 		const recorded = new Map(state.sessions.map((s) => [s.handle, s]));
-		for (const [handle, t] of this.#tracked) if (!recorded.has(handle)) recorded.set(handle, { handle, session_id: t.sessionId, name: t.name, project: t.project, cwd: t.cwd, provenance: t.provenance });
+		for (const [handle, t] of this.#tracked) if (!recorded.has(handle)) recorded.set(handle, this.#recordOf(t));
+		return this.#reattach([...recorded.values()]);
+	}
+
+	/**
+	 * Try again to attach the sessions a resync on this daemon connection
+	 * could not, the same way `resync` does; a session let go since is
+	 * skipped. Sessions already attached are not touched: no new snapshot,
+	 * no new `wait_for_idle`.
+	 */
+	async reattach(handles: string[]): Promise<ReattachResult> {
+		const records = handles.flatMap((handle) => {
+			const t = this.#tracked.get(handle);
+			return t ? [this.#recordOf(t)] : [];
+		});
+		if (records.length === 0) return { live: [], closed: [], failed: [] };
+		return this.#reattach(records);
+	}
+
+	/** Attach each of `records` on its own; the one implementation behind `resync` and `reattach`. */
+	async #reattach(records: StateFile["sessions"]): Promise<ReattachResult> {
 		const live = new Set((await this.#port.list()).map((s) => s.handle));
 		const kept: string[] = [];
 		const closed: string[] = [];
@@ -224,7 +251,7 @@ export class SessionManager {
 			if (t) this.#untrack(t, "gone", { writeState: false });
 			closed.push(handle);
 		};
-		for (const rec of recorded.values()) {
+		for (const rec of records) {
 			if (!live.has(rec.handle)) {
 				gone(rec.handle);
 				continue;
@@ -247,10 +274,10 @@ export class SessionManager {
 			if (t.turn) this.#settle(t);
 			kept.push(rec.handle);
 		}
-		const failed: { session: string; error: string }[] = [];
+		const failed: ReattachResult["failed"] = [];
 		if (refused.length > 0) {
 			// Ask once more which of them the daemon still runs. If it cannot
-			// say, keep them all: a later resync decides.
+			// say, keep them all: a later reattach decides.
 			let still: Set<string> | null = null;
 			try {
 				still = new Set((await this.#port.list()).map((s) => s.handle));
@@ -269,6 +296,11 @@ export class SessionManager {
 		}
 		this.#writeState();
 		return { live: kept, closed, failed };
+	}
+
+	/** A tracked session as the state file records it. */
+	#recordOf(t: Tracked): StateFile["sessions"][number] {
+		return { handle: t.handle, session_id: t.sessionId, name: t.name, project: t.project, cwd: t.cwd, provenance: t.provenance };
 	}
 
 	/** The record of a session this process has not tracked yet: idle, off any call, no inputs sent. */
@@ -742,7 +774,7 @@ export class SessionManager {
 	#writeState(): void {
 		const state: StateFile = {
 			version: 1,
-			sessions: [...this.#tracked.values()].map((t) => ({ handle: t.handle, session_id: t.sessionId, name: t.name, project: t.project, cwd: t.cwd, provenance: t.provenance })),
+			sessions: [...this.#tracked.values()].map((t) => this.#recordOf(t)),
 			used_names: [...this.#usedNames],
 		};
 		mkdirSync(path.dirname(this.#stateFile), { recursive: true, mode: 0o700 });
