@@ -717,6 +717,40 @@ mod wire {
         assert!(closed.is_ok(), "the debug socket closes on shutdown");
         server.abort();
     }
+
+    #[tokio::test]
+    async fn a_snapshot_scrubs_and_clips_the_agents_it_sends() {
+        let agents = || {
+            vec![AgentState {
+                project: "alpha".into(),
+                state: "waiting".into(),
+                pending_request: Some(crate::protocol::AgentRequest {
+                    message: format!(
+                        "api_key=sk-live-1234567890abcdef {}",
+                        "x".repeat(MAX_FIELD_BYTES * 4)
+                    ),
+                    reason: "finished".into(),
+                }),
+            }]
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (_shutdown, shutdown_rx) = watch::channel(false);
+        let app = router(DebugBus::new(), agents, shutdown_rx);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let (mut socket, _) = tokio_tungstenite::connect_async(format!("ws://{address}/ws"))
+            .await
+            .unwrap();
+        let snapshot = next_json(&mut socket).await;
+        let message = snapshot["agents"][0]["pending_request"]["message"]
+            .as_str()
+            .unwrap();
+        assert!(message.contains("[redacted]"), "{}", &message[..80]);
+        assert!(!message.contains("sk-live"));
+        assert!(message.ends_with(CLIP_MARKER));
+        assert!(message.len() <= MAX_FIELD_BYTES + CLIP_MARKER.len());
+        server.abort();
+    }
 }
 
 #[test]

@@ -57,8 +57,8 @@ pub(crate) struct AgentProjection {
     // owner holds its lifecycle mutex while it validates a resident and
     // applies a waiting/display mutation, so the check and write cannot be
     // separated by promotion.
-    pub(crate) states: Arc<StdMutex<Vec<AgentState>>>,
-    pub(crate) displays: Arc<StdMutex<HashMap<String, HeldScene>>>,
+    states: Arc<StdMutex<Vec<AgentState>>>,
+    displays: Arc<StdMutex<HashMap<String, HeldScene>>>,
 }
 
 /// A background agent's held displays: the stage it gets when the caller
@@ -70,8 +70,14 @@ pub(crate) struct HeldScene {
     applied: u64,
 }
 
+/// A change to the agent projection, as each of its mutators returns it.
+/// Only `publish_agents` opens it, so a change cannot reach the caller's page
+/// without reaching the debug bus too (#230).
+#[must_use = "a projection change is sent with `publish_agents`"]
+pub(crate) struct AgentsChange(Vec<AgentState>);
+
 impl AgentProjection {
-    fn notice(&self, notice: &AgentStateNotice) -> Vec<AgentState> {
+    fn notice(&self, notice: &AgentStateNotice) -> AgentsChange {
         if notice.state == "finished" {
             self.displays
                 .lock()
@@ -100,10 +106,10 @@ impl AgentProjection {
             });
             agents.sort_by(|left, right| left.project.cmp(&right.project));
         }
-        agents.clone()
+        AgentsChange(agents.clone())
     }
 
-    pub(crate) fn waiting(&self, project: String, request: AgentRequest) -> Vec<AgentState> {
+    pub(crate) fn waiting(&self, project: String, request: AgentRequest) -> AgentsChange {
         let mut agents = self
             .states
             .lock()
@@ -119,13 +125,13 @@ impl AgentProjection {
             });
             agents.sort_by(|left, right| left.project.cmp(&right.project));
         }
-        agents.clone()
+        AgentsChange(agents.clone())
     }
 
     /// A floor message consumed the pending request. This is distinct from a
     /// normal idle settlement, which deliberately preserves a request that a
     /// turn finished beside.
-    pub(crate) fn floor_released(&self, project: &str) -> Vec<AgentState> {
+    pub(crate) fn floor_released(&self, project: &str) -> AgentsChange {
         let mut agents = self
             .states
             .lock()
@@ -136,7 +142,7 @@ impl AgentProjection {
                 agent.pending_request = None;
             }
         }
-        agents.clone()
+        AgentsChange(agents.clone())
     }
 
     /// Applies a background agent's display to the scene held for it: the
@@ -589,7 +595,12 @@ pub(crate) async fn clear_active_operation(state: &AppState, id: TaskId) {
 /// Updates the page projection for a resident project session. The PBX sends
 /// lifecycle notices; waiting requests are kept until promotion or stop.
 pub(crate) async fn update_agent_state(state: &AppState, notice: AgentStateNotice) {
-    let agents = state.0.projection.notice(&notice);
+    publish_agents(state, state.0.projection.notice(&notice));
+}
+
+/// Sends the agent projection after a change to the caller's page and to the
+/// debug bus. Every change goes through here, so the two cannot disagree.
+pub(crate) fn publish_agents(state: &AppState, AgentsChange(agents): AgentsChange) {
     state.0.debug.publish(DebugEvent::AgentsState {
         agents: agents.clone(),
     });
@@ -604,17 +615,14 @@ pub(crate) async fn update_agent_state_if_current(
     generation: u64,
     notice: AgentStateNotice,
 ) -> bool {
-    let Some(agents) = state
+    let Some(change) = state
         .0
         .coordinator
         .with_generation(generation, || state.0.projection.notice(&notice))
     else {
         return false;
     };
-    state.0.debug.publish(DebugEvent::AgentsState {
-        agents: agents.clone(),
-    });
-    emit_message(state, ServerMessage::AgentsState { agents });
+    publish_agents(state, change);
     true
 }
 

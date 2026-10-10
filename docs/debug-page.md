@@ -141,7 +141,9 @@ A tracing layer copies every log line that passes the service's log filter
 the page. The journal still receives every line unchanged.
 
 Every event and log record is scrubbed before it is kept, in one place
-(`Clip` in `debug.rs`); producers publish raw values. Every string is
+(`Clip` in `debug.rs`); producers publish raw values. A snapshot's `agents`
+come from the live projection, not a ring, and go through the same `Clip`
+when the snapshot is serialized. Every string is
 scrubbed: text, JSON strings and keys, log messages, and names and ids
 (`target`, `to_agent`, `tool`, `call_id`, a module call's `name`).
 
@@ -208,7 +210,7 @@ Rust `DebugEvent` in `apps/backend/src/debug.rs` is the source of truth. The
 - `floor_gate`: `agent`, `answer` (`yes`, `no`, or `failed`), `latency_ms`, optional `floor_id`
 - `floor_rewrite`: `agent`, `original`, `rewritten`, `latency_ms`, optional `floor_id`; the utility's floor rewrite. `rewritten` equals `original` when the rewrite failed or timed out.
 - `floor_released`: `agent`, `how` (`gate_yes`, `quiet_after_hold`, or `dropped_agent_gone`), optional `floor_id`
-- `agents_state`: `agents` (the existing `AgentsState` projection)
+- `agents_state`: `agents` (the existing `AgentsState` projection), on every change to it, including a `request_to_speak` that marks an agent `waiting`; the caller's page gets the same change at the same time (`app_state::publish_agents`)
 - `host_link`: `host`, `connected`; a fenced link closing while its newer link is up is not reported
 - `call_boundary`: `phase` (`started` or `ended`), `call_id` (opaque, minted by the service), optional `reason` for `ended` (`page_closed`, `hangup`, or `shutdown`). A call starts when a caller page connects to no open call. A hangup ends it and, while the page stays connected, starts the next one.
 

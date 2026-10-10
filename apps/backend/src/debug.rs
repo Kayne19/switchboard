@@ -530,6 +530,19 @@ impl Clip {
         }
     }
 
+    /// The agent projection, as an `agents_state` event and a snapshot both
+    /// carry it.
+    fn agents(&mut self, agents: &mut [AgentState]) {
+        for agent in agents {
+            self.name(&mut agent.project);
+            self.name(&mut agent.state);
+            if let Some(request) = &mut agent.pending_request {
+                self.text(&mut request.message);
+                self.text(&mut request.reason);
+            }
+        }
+    }
+
     /// Scrubs and clips every string in `event`. Names and ids come from
     /// hosts and models too, so they are scrubbed like text (`name`). The
     /// match names every field, so a new field does not compile until it is
@@ -805,16 +818,7 @@ impl Clip {
                 self.name(how);
                 self.opt_name(floor_id);
             }
-            DebugEvent::AgentsState { agents } => {
-                for agent in agents {
-                    self.name(&mut agent.project);
-                    self.name(&mut agent.state);
-                    if let Some(request) = &mut agent.pending_request {
-                        self.text(&mut request.message);
-                        self.text(&mut request.reason);
-                    }
-                }
-            }
+            DebugEvent::AgentsState { agents } => self.agents(agents),
             DebugEvent::HostLink { host, connected: _ } => self.name(host),
             DebugEvent::CallBoundary {
                 phase,
@@ -1253,12 +1257,17 @@ async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ()> {
 }
 
 /// Serializes a snapshot on the blocking pool: it can be megabytes, and the
-/// runtime workers also carry audio and turns.
+/// runtime workers also carry audio and turns. The agents are read from the
+/// projection, not the rings, so they are scrubbed and clipped here, as an
+/// `agents_state` record is.
 async fn send_snapshot(socket: &mut WebSocket, site: &Site, snapshot: Snapshot) -> Result<(), ()> {
-    let agents = (site.agents)();
-    let text = tokio::task::spawn_blocking(move || snapshot.to_json(&agents))
-        .await
-        .map_err(|_| ())?;
+    let mut agents = (site.agents)();
+    let text = tokio::task::spawn_blocking(move || {
+        Clip::new().agents(&mut agents);
+        snapshot.to_json(&agents)
+    })
+    .await
+    .map_err(|_| ())?;
     send_text(socket, text).await
 }
 

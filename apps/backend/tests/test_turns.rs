@@ -924,12 +924,9 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
     let agent = state
         .0
         .projection
-        .states
-        .lock()
-        .unwrap()
-        .iter()
+        .snapshot()
+        .into_iter()
         .find(|agent| agent.project == "alpha")
-        .cloned()
         .expect("waiting agent state");
     assert_eq!(agent.state, "waiting");
     assert_eq!(
