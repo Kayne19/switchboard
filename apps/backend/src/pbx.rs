@@ -341,10 +341,6 @@ impl Switchboard {
         }
     }
 
-    pub(crate) fn rollback_startup(&self, reason: impl Into<String>) {
-        self.coordinator.rollback_startup(reason);
-    }
-
     pub fn session_control(&self) -> Arc<Mutex<Option<LegSession>>> {
         Arc::clone(&self.active_session)
     }
