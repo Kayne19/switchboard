@@ -153,8 +153,10 @@ export interface DocumentData {
 }
 
 export interface CodeSourceData {
+  /** Chooses the line-comment marker (`primitives/CodeViewport.tsx`). */
   language?: string;
   text: string;
+  /** Line numbers to light, counted from 1. */
   highlight?: number[];
 }
 
