@@ -75,11 +75,6 @@ type Event =
   | "start fails"
   | "frame";
 
-type Then =
-  | Phase
-  /** Says `lease` while a capture runs. */
-  | "lease over a capture";
-
 interface Seen {
   /** States published by the event, in order. */
   published: HandsFreeState[];
@@ -106,7 +101,7 @@ interface Row {
   from: Phase;
   event: Event;
   seen: Partial<Seen>;
-  then: Then;
+  then: Phase;
 }
 
 const NOTHING: Seen = {
@@ -430,10 +425,10 @@ async function apply(h: Harness, event: Event): Promise<void> {
   }
 }
 
-function expectPhase(h: Harness, then: Then): void {
+function expectPhase(h: Harness, then: Phase): void {
   const { instance } = h;
   const recorder = h.latest()?.state ?? "inactive";
-  const looks: Record<Then, [HandsFreeState, boolean, boolean, RecordingState | null]> = {
+  const looks: Record<Phase, [HandsFreeState, boolean, boolean, RecordingState | null]> = {
     off: ["off", false, false, null],
     error: ["error", false, false, null],
     starting: ["starting", true, false, null],
@@ -446,7 +441,6 @@ function expectPhase(h: Harness, then: Then): void {
     lease: ["lease", true, false, null],
     lease_capturing: ["lease_capturing", true, true, "recording"],
     lease_finishing: ["lease_capturing", true, true, "inactive"],
-    "lease over a capture": ["lease", true, true, null],
   };
   const [state, enabled, capturing, recording] = looks[then];
   expect([instance.currentState, instance.isEnabled, instance.isCapturing]).toEqual([state, enabled, capturing]);
@@ -486,7 +480,8 @@ const rows: Row[] = [
   { from: "starting", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...QUIET }, then: "paused_ptt" },
   { from: "starting", event: "epoch", seen: { published: ["off"], said: CALL_CHANGED, ...QUIET }, then: "off" },
   { from: "starting", event: "detector fails", seen: { published: ["error"], said: DETECTOR_FAILED, ...QUIET }, then: "error" },
-  { from: "starting", event: "follow-up", seen: { published: ["lease"], said: LEASE, resets: [0, 1] }, then: "lease" },
+  // A follow-up lease opens only where hands-free listens and no capture runs.
+  { from: "starting", event: "follow-up", seen: {}, then: "starting" },
   { from: "starting", event: "wake", seen: {}, then: "starting" },
   { from: "starting", event: "speech start", seen: {}, then: "starting" },
 
@@ -542,8 +537,7 @@ const rows: Row[] = [
   { from: "capturing", event: "speech start", seen: {}, then: "capturing" },
   { from: "capturing", event: "no reply", seen: {}, then: "capturing" },
   { from: "capturing", event: "frame", seen: {}, then: "capturing" },
-  // Today a follow-up lease opens over a running capture.
-  { from: "capturing", event: "follow-up", seen: { published: ["lease"], said: LEASE, resets: [0, 1] }, then: "lease over a capture" },
+  { from: "capturing", event: "follow-up", seen: {}, then: "capturing" },
 
   { from: "finishing", event: "recorder stops", seen: { published: ["awaiting_response"], said: SENT, clips: 1 }, then: "awaiting_response" },
   { from: "finishing", event: "recorder stops, clip refused", seen: { published: ["armed"], said: NOT_SENT, clips: 1, ...QUIET }, then: "armed" },
@@ -553,7 +547,7 @@ const rows: Row[] = [
   // event ends the capture and sends its clip.
   { from: "finishing", event: "speech end", seen: {}, then: "finishing" },
   { from: "finishing", event: "capped", seen: {}, then: "finishing" },
-  { from: "finishing", event: "follow-up", seen: { published: ["lease"], said: LEASE, resets: [0, 1] }, then: "lease over a capture" },
+  { from: "finishing", event: "follow-up", seen: {}, then: "finishing" },
   { from: "finishing", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...LET_GO }, then: "paused_ptt" },
 
   { from: "awaiting_response", event: "no reply", seen: { published: ["armed"], said: NO_REPLY, ...QUIET }, then: "armed" },
@@ -588,7 +582,7 @@ const rows: Row[] = [
   { from: "lease_finishing", event: "recorder stops", seen: { published: ["awaiting_response"], said: SENT, clips: 1 }, then: "awaiting_response" },
   { from: "lease_capturing", event: "recorder stops", seen: { published: ["armed"], said: NOTHING_KEPT, ...QUIET }, then: "armed" },
   { from: "lease_capturing", event: "recorder error", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
-  { from: "lease_capturing", event: "follow-up", seen: { published: ["lease"], said: LEASE, resets: [0, 1] }, then: "lease over a capture" },
+  { from: "lease_capturing", event: "follow-up", seen: {}, then: "lease_capturing" },
   { from: "lease_capturing", event: "disable", seen: { published: ["off"], said: OFF, stops: 1, ...LET_GO }, then: "off" },
 ];
 

@@ -353,13 +353,21 @@ export class HandsFreeController {
 		void this.enable();
 	}
 
+	/**
+	 * Opens the follow-up lease. Not over a start, which has no graph to
+	 * listen with and publishes `armed` over the lease when it ends, and not
+	 * over a running capture, which the lease would claim to be waiting for
+	 * and whose expiry would publish `armed` while the recorder still runs.
+	 */
 	openFollowUpLease(generation: number): void {
 		if (
 			!this.enabled ||
 			this.pausedForPtt ||
 			generation !== this.options.currentEpoch() ||
 			!this.options.isSnapshotReady() ||
-			this.state === "error"
+			this.state === "error" ||
+			this.state === "starting" ||
+			this.capture !== null
 		)
 			return;
 		this.clearLeaseTimer();
