@@ -1736,3 +1736,22 @@ async fn an_operator_answer_ends_the_trace_at_the_operator() {
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_route_to_a_project_id_another_project_uses_as_an_alias_goes_to_that_id() {
+    let mut webapp = project("webapp", "");
+    webapp.aliases = vec!["web".into()];
+    let mut board = board_on(vec![project("web", ""), webapp], &[], two_model_catalog());
+    let _log = serve(&board, Box::new(|_, _| says("here")));
+    let on = board
+        .transfer_ctx(&transcript("go to webapp"), "webapp", "", "")
+        .await;
+    assert_eq!(on.route, "webapp", "{on:?}");
+
+    let reply = board
+        .route_project_part("go to web", "web", ConversationMode::Continue, Some("jev"))
+        .await;
+    assert_eq!(reply.route, "web", "{reply:?}");
+    board.shutdown().await;
+}

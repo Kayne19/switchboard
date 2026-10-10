@@ -275,9 +275,11 @@ Edit `switchboard_projects` in `ansible/roles/damocles/defaults/main.yml` and
 open a PR. The deploy re-renders `/etc/switchboard/projects.json`, which the
 service loads into the operator's system-prompt catalog and uses for routing,
 so the operator and switchboard cannot disagree. Aliases are matched against
-a speech-to-text transcript, so be generous with them. An entry carries `id`,
-`description`, `aliases`, `host`, `cwd`, `model` and `prepare`; `host` is the
-id of a host agent and is required.
+a speech-to-text transcript, so be generous with them. An id always names its
+own project: an alias that says another project's id is dropped at load, with
+a warning in the journal. An entry carries `id`, `description`, `aliases`,
+`host`, `cwd`, `model` and `prepare`; `host` is the id of a host agent and is
+required.
 
 A project host needs three things, none of which this repo can do for hosts it
 does not manage:
