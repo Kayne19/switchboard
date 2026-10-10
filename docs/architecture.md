@@ -207,6 +207,21 @@ these additive fields for ordinary caller turns, but its self-wake effects
 and written autonomous output fail closed. Written autonomous replies from
 new hosts use the existing `Reply` event and do not enter the speech worker.
 
+`HostTurn::of` reads each report once, and the application answers it:
+
+| Report | The application |
+|---|---|
+| a start whose token is not the leg on the line's | ignores it |
+| `turn_start`, `input` | binds its turn id to the caller's operation |
+| `turn_start`, `autonomous`, with a turn id | opens an operation for the run if the leg is free, and holds the run (its session instance and operation) until its end; one is held at a time |
+| `turn_start`, `autonomous` or `unknown` without a turn id, `unknown` with one, or any other cause | admits nothing |
+| `turn_end`, `input`, with a turn id | closes the open operation bound to that id (`settle_turn`) |
+| the end of a self-woken run (any other cause) | only for the held run (same session instance and turn id): closes its operation, traces its end, and writes its text, if any, to the transcript |
+
+The table test `a_host_reported_turn_moves_by_its_table`
+(`apps/backend/tests/test_turns.rs`) holds every phase of the line against
+every report.
+
 ### 4. Audio is an adapter boundary
 
 `apps/backend/src/audio.rs` owns speech transport and worker mechanics:
@@ -434,7 +449,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, and the rescue each control starts with | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
 | `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection, who is waiting to speak (`floor.rs`'s) |
 | `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |
-| `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker and a caller turn's one end (`TurnRun`), host-reported turns | speech synthesis, PBX policy |
+| `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker and a caller turn's one end (`TurnRun`), host-reported turns: each report read once (`HostTurn`), and the one self-woken run admitted as an operation (`SelfWokenRun`, written only by `hold_self_woken` and `release_self_woken`) | speech synthesis, PBX policy, a session's turn (`session_turn.rs`'s) |
 | `speech.rs` | the one ordered speech worker, its continuity, audio slots, and reply voice; each request's one completion (`PendingSpeech::complete`, one `SpeechOutcome` per request; `docs/concurrency-and-test-hazards.md`, "How a speech request ends") | the TTS provider's wire format, the audio queue itself, floor policy |
 | `leg_announcer.rs` | announcing a new leg to the browser, once per leg: the speech reset, the `epoch`, the held-scene replay | which leg is current (the coordinator's), the stage's reset (`DisplayGateState::begin_leg`) |
 | `floor.rs` | the background request queue and who is waiting (reported through its `Waiting` hook), the front request's phases (`FrontPhase`, written only by `step`): Jev good-moment holds, stateless rewrites, the release and its retry | lifecycle membership, the agent projection itself, route authority, TTS provider wire format |

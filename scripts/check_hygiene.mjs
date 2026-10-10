@@ -413,6 +413,8 @@ const machines = [
 	// through the coordinator: `begin_startup` stages, `commit` adopts and ends the
 	// intro, and the rollback is written in `abandon` and in `Drop`, nowhere else.
 	{ file: "apps/backend/src/leg_transitions.rs", writer: /\.rollback_startup\(/, max: 2, once: [/\.begin_candidate\(/, /\.adopt_candidate\(/, /\.finish_intro\(/] },
+	// host-turns: `hold_self_woken` holds the admitted self-woken run; `release_self_woken` is its one end.
+	{ file: "apps/backend/src/turns.rs", writer: /\bself_woken\.lock\(\)\.await\s*=(?!=)/, max: 1, once: [/\.take_if\(/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
@@ -446,6 +448,7 @@ const owners = [
 	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 7 },
 	{ file: "apps/backend/src/floor.rs", owner: "FloorState", fields: 1 },
 	{ file: "apps/backend/src/leg_transitions.rs", owner: "Startup", fields: 1 },
+	{ file: "apps/backend/src/turns.rs", owner: "TurnState", fields: 4 },
 	{ file: "apps/host-agent/src/sessions.ts", owner: "Tracked", fields: 5 },
 ];
 function ownerFindings(file, text, row) {
