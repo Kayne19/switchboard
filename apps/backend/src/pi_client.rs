@@ -1775,6 +1775,29 @@ async fn pump(
                     "session_closed" => {
                         inner.ended_on_host.store(true, Ordering::Release);
                         inner.mark_closed().await;
+                        // A closed session never sends the `turn_end` of a
+                        // self-woken run it had open, and that run's
+                        // operation would keep every later caller turn
+                        // waiting. End it here. Its words stay off the
+                        // caller's transcript: the run was cut short, and
+                        // the leg it spoke for is being retired.
+                        if let Some((turn_id, _)) = inner.autonomous_authority() {
+                            if let Some((turn_id, cause, text)) =
+                                inner.finish_autonomous(turn_id.as_deref())
+                            {
+                                inner.publish_final(turn_id.clone(), &text);
+                                inner
+                                    .report_turn(ProjectTurn {
+                                        instance_id: inner.instance_id,
+                                        token: inner.token(),
+                                        turn_id,
+                                        cause,
+                                        ended: true,
+                                        text: String::new(),
+                                    })
+                                    .await;
+                            }
+                        }
                     }
                     "tool_start" => {
                         inner.report_activity("life", "").await;

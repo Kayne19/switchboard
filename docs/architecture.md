@@ -190,7 +190,10 @@ or cancellation side effect inside an unrelated helper.
 Host-reported project turns are admitted through the coordinator
 (`handle_project_turn` in `turns.rs`). A
 `turn_start` with `cause: autonomous` opens a server-owned operation with the
-host's `turn_id`; caller prompts wait behind it. A caller prompt's operation
+host's `turn_id`; caller prompts wait behind it. It closes on that turn's
+`turn_end`, or when the session closes (`session_closed`, which a lost host
+link also sends): a closed session never ends its run, and the operation
+would hold every later caller prompt. A caller prompt's operation
 closes when the host reports its bound turn settled (`turn_end` with that
 `turn_id`), even if the prompt has not returned yet, so a run the host starts
 right behind it gets an operation of its own. Module calls (`module_calls.rs`) must carry the
