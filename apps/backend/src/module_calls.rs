@@ -500,13 +500,12 @@ async fn display(
         seq: None,
     }
     .to_value();
-    let event = Event::Json(value.clone());
+    let event = Event::Json(value);
     let _ = state.0.events.send(event.clone());
     let (delivered, sequence) = state.0.delivery.publish_sequenced(event);
 
     gate.projection.apply(&normalized_action, sequence);
     gate.watermark = sequence;
-    *state.0.last_display.lock().await = Some(value);
     drop(gate);
 
     if !delivered {

@@ -52,7 +52,6 @@ pub(crate) struct DisplayProjection {
     pub(crate) order: Vec<String>,
     pub(crate) focus_id: Option<String>,
     pub(crate) speech: Option<DisplaySpeech>,
-    pub(crate) watermark: u64,
 }
 
 impl DisplayProjection {
@@ -88,7 +87,6 @@ impl DisplayProjection {
     }
 
     pub(crate) fn apply(&mut self, action: &Value, sequence: u64) {
-        self.watermark = sequence;
         let Some(op) = action.get("op").and_then(Value::as_str) else {
             return;
         };
@@ -368,10 +366,12 @@ pub(crate) struct SceneLeg {
 
 pub(crate) struct DisplayGateState {
     pub(crate) projection: DisplayProjection,
+    /// The caller's screen as the page last reported it, marked stale when a
+    /// page connects or retires or a new leg begins. The one copy: `view`
+    /// (`module_calls.rs`), Jev's routing summary (`turns.rs`) and the floor
+    /// gate (`speech.rs`) read it here.
     pub(crate) screen_state: Value,
     pub(crate) active_epoch: Option<u64>,
-    pub(crate) report_epoch: Option<u64>,
-    pub(crate) report_generation: Option<u64>,
     /// The leg the projection was last reset for; `None` until one is
     /// announced.
     pub(crate) scene_leg: Option<SceneLeg>,

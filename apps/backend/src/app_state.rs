@@ -220,8 +220,6 @@ pub struct AppInner {
     pub(crate) speech: SpeechQueue,
     /// Caller audio clips and the state only `caller_input.rs` reads.
     pub(crate) clips: ClipState,
-    pub last_display: Arc<Mutex<Option<Value>>>,
-    pub screen_state: Mutex<Value>,
     pub display_gate: Arc<Mutex<DisplayGateState>>,
     pub display_confirm: watch::Sender<ConfirmState>,
     pub active_session: Arc<Mutex<Option<LegSession>>>,
@@ -320,7 +318,6 @@ impl AppState {
         let speech = SpeechQueue::new();
         let clips = ClipState::new();
         let (shutdown, _) = watch::channel(false);
-        let last_display = Arc::new(Mutex::new(None));
         let background_displays = Arc::new(StdMutex::new(HashMap::new()));
         let agent_states = Arc::new(StdMutex::new(Vec::new()));
         let projection = AgentProjection {
@@ -343,8 +340,6 @@ impl AppState {
                 "generation": 0,
             }),
             active_epoch: None,
-            report_epoch: None,
-            report_generation: None,
             scene_leg: None,
             watermark: 0,
         }));
@@ -362,7 +357,6 @@ impl AppState {
             delivery: delivery.clone(),
             display_gate: display_gate.clone(),
             display_confirm: display_confirm_tx.clone(),
-            last_display: last_display.clone(),
             projection: projection.clone(),
             continuity: continuity.clone(),
             active_speech_group: active_speech_group.clone(),
@@ -491,17 +485,6 @@ impl AppState {
                 speech,
                 clips,
                 turns,
-                last_display,
-                screen_state: Mutex::new(json!({
-                    "view": "auto",
-                    "pinned": false,
-                    "has_visual": false,
-                    "visual_kind": Value::Null,
-                    "object_ids": [],
-                    "title": "",
-                    "stale": false,
-                    "generation": 0,
-                })),
                 display_gate,
                 display_confirm: display_confirm_tx,
                 active_session,
