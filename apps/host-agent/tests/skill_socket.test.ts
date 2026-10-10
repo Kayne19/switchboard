@@ -89,6 +89,8 @@ async function withSocket(fn: (ctx: { ask: (m: unknown) => Promise<Record<string
 }
 
 const CALL = { token: "call-token-1", persona: "Jev", speech_deadline_ms: 25000 };
+/** The hello reply for CALL: its settings, and how long a relayed speak waits. */
+const ON_CALL = { on_call: true, ...CALL, speak_reply_ms: 25000 + SPEAK_REPLY_MARGIN_MS };
 
 test("socket permissions: directory 0700, socket 0600", async () => {
 	await withSocket(async ({ socketPath }) => {
@@ -102,7 +104,7 @@ test("hello: not on call, then settings once the service puts the session on a c
 		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: false });
 		assert.deepEqual(await ask({ op: "hello", session_id: "unknown-session", depth: 0 }), { on_call: false });
 		await manager.handle("join_call", { session: handle, ...CALL, mode: "foreground" });
-		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: true, token: "call-token-1", persona: "Jev", speech_deadline_ms: 25000 });
+		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: true, token: "call-token-1", persona: "Jev", speech_deadline_ms: 25000, speak_reply_ms: 30000 });
 		await manager.handle("detach", { session: handle });
 		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: false });
 	});
@@ -157,7 +159,21 @@ test("calls: token check, then delivery decided from session state", async () =>
 		// the handler and leave every later line on the connection unanswered.
 		assert.deepEqual(await ask("null"), { status: "refused", reason: "bad_request" });
 		assert.deepEqual(await ask("[1]"), { status: "refused", reason: "bad_request" });
-		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: true, ...CALL });
+		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), ON_CALL);
+	});
+});
+
+test("the hello's speak_reply_ms is the wait a relayed speak is given", async () => {
+	await withSocket(async ({ ask, manager, handle, sessionId, relayed }) => {
+		// The module waits the hello's number and its own margin; the relay
+		// waits this number. One number, read from one place.
+		for (const deadline of [200, 25000, 120000]) {
+			await manager.handle("join_call", { session: handle, ...CALL, speech_deadline_ms: deadline, mode: "foreground" });
+			const hello = await ask({ op: "hello", session_id: sessionId, depth: 0 });
+			await ask({ op: "call", session_id: sessionId, depth: 0, token: CALL.token, call: "speak", args: { text: "hi" } });
+			assert.equal(hello.speak_reply_ms, relayed.at(-1)?.timeoutMs, `deadline ${deadline}`);
+			assert.equal(hello.speak_reply_ms, deadline + SPEAK_REPLY_MARGIN_MS);
+		}
 	});
 });
 
@@ -326,12 +342,11 @@ test("a connection that writes requests without reading the answers is refused p
 		}), "relayed call");
 		release();
 		await within(5000, heard.closed, "close after the request past the bound");
-		const onCall = { on_call: true, token: CALL.token, persona: CALL.persona, speech_deadline_ms: CALL.speech_deadline_ms };
 		// In order: the call, the hellos that fit beside it, the refusal; the
 		// hello after it is not read.
 		assert.deepEqual(answers(heard.text()), [
 			{ status: "delivered", reason: null },
-			...Array.from({ length: MAX_WAITING_REQUESTS - 1 }, () => onCall),
+			...Array.from({ length: MAX_WAITING_REQUESTS - 1 }, () => ON_CALL),
 			QUEUE_FULL_ANSWER,
 		]);
 	});
@@ -367,7 +382,7 @@ test("requests waiting on one connection hold at most one line's cap of text bet
 		mod.write(line("C".repeat(half)));
 		await within(5000, one.firstLine, "answer to one line");
 		assert.deepEqual(answers(one.text()), [{ status: "delivered", reason: null }]);
-		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), { on_call: true, ...CALL });
+		assert.deepEqual(await ask({ op: "hello", session_id: sessionId, depth: 0 }), ON_CALL);
 	});
 });
 
