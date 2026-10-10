@@ -20,13 +20,16 @@ export function useElementSize<T extends Element>(ref: RefObject<T | null>): Siz
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element) return;
-    const measure = () => {
-      if (element instanceof HTMLElement) {
-        setSize({ width: element.offsetWidth, height: element.offsetHeight });
-        return;
-      }
+    const read = (): Size => {
+      if (element instanceof HTMLElement) return { width: element.offsetWidth, height: element.offsetHeight };
       const rect = element.getBoundingClientRect();
-      setSize({ width: rect.width, height: rect.height });
+      return { width: rect.width, height: rect.height };
+    };
+    // A report of the size already held commits nothing: every observe()
+    // reports once, and that render would now be synchronous, in the frame.
+    const measure = () => {
+      const next = read();
+      setSize((held) => (held.width === next.width && held.height === next.height ? held : next));
     };
     // The first measure is the layout effect's own; the observer's are
     // committed at once, before the frame they report is painted.
