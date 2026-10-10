@@ -50,7 +50,8 @@ browser mic / page controls
   leg_announcer.rs (a new leg's announcement and scene reset)
           |
           +--> lifecycle.rs: the coordinator -- call identity, the current
-          |       route and leg, phases, freshness, the status
+          |       route and leg, phases, freshness, the status; the call
+          |       line it writes (call_line.rs)
           |
           +--> pbx.rs: the Switchboard -- leg lifecycle and what is behind
           |       each leg, one concern per file: decisions.rs (what a line's
@@ -431,7 +432,8 @@ removes the real coupling; do not create interfaces for ceremony.
 | `leg_announcer.rs` | announcing a new leg to the browser, once per leg: the speech reset, the `epoch`, the held-scene replay | which leg is current (the coordinator's), the stage's reset (`DisplayGateState::begin_leg`) |
 | `floor.rs` | the background request queue and who is waiting (reported through its `Waiting` hook), the front request's phases (`FrontPhase`, written only by `step`): Jev good-moment holds, stateless rewrites, the release and its retry | lifecycle membership, the agent projection itself, route authority, TTS provider wire format |
 | `floor_hooks.rs` | the application side of `floor.rs`'s hooks: whether the page is connected, whether a request is still live (`still_live`, the one check), the Jev good-moment gate, the utility rewrite under its timeout, the release through the speech worker, and mirroring who is waiting into the agent projection (`waiting_hook`) | the floor's queue, order and phases (`floor.rs`'s), the speech worker (`speech.rs`'s) |
-| `lifecycle.rs` | the call line (`Line`, one transition function, one writer; see "Call line"): call identity, the current route and the leg on it, candidate legs, operations, the status | async work or I/O |
+| `lifecycle.rs` | the coordinator: the call line's one writer (`CallLifecycle::step`) and its lock, the candidate notices, the status projection; call identity, the current route and the leg on it, candidate legs, operations, the status | async work or I/O, the phases and their transitions (`call_line.rs`'s) |
+| `call_line.rs` | the call line (`Line`, its phase data and its one transition function, `Line::next`; see "Call line"): pure, it reads the line and returns the next one | the lock, writing the line, sending notices, async work or I/O |
 | `pbx.rs` | the `Switchboard`: its state, construction, callbacks, shared session guard and shutdown; the call types the other files share (`OPERATOR`, `TransferContext`, `AgentStateNotice`) | host setup, browser rendering, TTS encoding, a copy of the route |
 | `decisions.rs` | what a Jev decision does with a caller's line: continue, go to a project, split, take over, stop on confirmation, the utility's second opinion, the operator fallback; the routing trace | Jev's classification (`router.rs`), a second commit path |
 | `leg_transitions.rs` | transfer, background promotion, takeover, return, hangup and stop; the one commit path (`commit_leg`) and its rollbacks | which leg is on the line (the coordinator's), redial decisions |
@@ -464,15 +466,15 @@ removes the real coupling; do not create interfaces for ceremony.
 
 ## Call line
 
-The coordinator holds the call as one value, `Line` in `lifecycle.rs`.
+The coordinator holds the call as one value, `Line` in `call_line.rs`.
 Each phase carries what exists only in it, so a candidate, the leg a
 startup would restore, or a turn cannot outlive its phase. `Line::next`
 is the one transition function: a match of phase by event that returns
 the next line and the candidate notice the move owes the browser, and
-changes nothing when it refuses. `CallLifecycle::step` is the one writer
-of the line, and `Coordinator::step_locked` sends the notice, refreshes
-the status projection and wakes waiting turns for every transition,
-under the state lock. Each public transition (`begin_prompt`,
+changes nothing when it refuses. `CallLifecycle::step` (`lifecycle.rs`)
+is the one writer of the line, and `Coordinator::step_locked` sends the
+notice, refreshes the status projection and wakes waiting turns for every
+transition, under the state lock. Each public transition (`begin_prompt`,
 `begin_candidate`, `adopt_candidate`, `begin_rescue`, ...) is one event
 through them.
 
