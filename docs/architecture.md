@@ -299,11 +299,12 @@ merely ignoring a late result is not sufficient.
 
 ### 8. Signals are separate from actions
 
-Agent tools such as `transfer_to_project`, `return_to_operator`, `speak`, and
-`display` (the operator's Pi extension, and a project agent's `switchboard`
-skill module) emit signals through the established session contract: the
-operator's RPC events, or module calls over the host link.
-The service decides what action those signals cause.
+Agent tools emit signals through the established session contract. The
+operator's Pi extension registers `route` (and the utility's
+`second_opinion`, `rewrite` and `dispatch_parts`), read from its RPC events;
+a project agent's `switchboard` skill module sends `speak`,
+`request_to_speak`, `display` and `view` as module calls over the host link.
+A tool only signals; the service decides what action those signals cause.
 
 This separation keeps tools small, makes failures recoverable, and prevents an
 agent from acquiring hidden authority over the switchboard.
@@ -535,23 +536,9 @@ another callback or flag.
 
 Switchboard is not currently a perfect hexagonal implementation:
 
-    /// The tests' way onto the line without a routing decision: the words go
-    /// to whichever leg holds the route. Production always arrives through
-    /// `handle_decision` with Jev's verdict, so this is test-only; the
-    /// `allow(dead_code)` that used to sit here only hid that.
-    #[cfg(test)]
-    pub(crate) async fn handle(&mut self, text: &str) -> Reply {
-        let context = TransferContext {
-            exact_caller_transcript: text.to_owned(),
-            derived_intent: String::new(),
-        };
-        if self.coordinator.route() == OPERATOR {
-            self.handle_operator_ctx(&context).await
-        } else {
-            self.handle_agent_ctx(&context).await
-        }
-    }
-
+- `Switchboard::handle` (`decisions.rs`) is a test-only way onto the line
+  without a routing decision: the words go to whichever leg holds the route.
+  Production always arrives through `handle_decision` with Jev's verdict.
 - The display precedence rule is implemented twice, in `DisplayProjection`
   (`display.rs`, for `view` and the snapshot) and in the browser's
   `sceneModel.ts`, on purpose: the server answers `view` without asking the

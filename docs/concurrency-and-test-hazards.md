@@ -71,8 +71,9 @@ change is discarded, and the caller has to repeat it. Browser-initiated bumps
 one message delivery away, so the tab is already awake and waiting on that
 exchange. A picker request that is refused bumps nothing.
 
-A new leg bumps the epoch at *adoption*, not at startup, whether an agent's
-`transfer_to_project` started it or a page control did (`/connect`, or a redial
+A new leg bumps the epoch at *adoption*, not at startup, whether a routing
+decision started it (the operator's `route`, or Jev's verdict) or a page
+control did (`/connect`, or a redial
 for `/model` or `/thinking`, which also bump it once at the start with their
 rescue): the generation stays put while the new leg is starting, and the new
 epoch is announced (with the status) the moment the leg is live.
