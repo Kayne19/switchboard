@@ -424,13 +424,13 @@ removes the real coupling; do not create interfaces for ceremony.
 | `app_state.rs` | `AppState`/`AppInner` and their construction (the callbacks installed into the PBX and coordinator), the workers, shutdown, the event fan-out, the operation registry, the resident-agent projection | provider wire formats, PBX policy |
 | `browser.rs` | the `/ws` connection and its size bound: registration, snapshot, the frame multiplexer, which screen reports count, frame writes | what a command does once parsed, the screen report's shape (`display.rs`) |
 | `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, and the rescue each control starts with | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
-| `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection |
+| `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection, who is waiting to speak (`floor.rs`'s) |
 | `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |
 | `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker and a caller turn's one end (`TurnRun`), host-reported turns | speech synthesis, PBX policy |
-| `speech.rs` | the one ordered speech worker, its continuity, audio slots, and reply voice | the TTS provider's wire format, the audio queue itself, floor policy |
+| `speech.rs` | the one ordered speech worker, its continuity, audio slots, and reply voice; each request's one completion (`PendingSpeech::complete`, one `SpeechOutcome` per request; `docs/concurrency-and-test-hazards.md`, "How a speech request ends") | the TTS provider's wire format, the audio queue itself, floor policy |
 | `leg_announcer.rs` | announcing a new leg to the browser, once per leg: the speech reset, the `epoch`, the held-scene replay | which leg is current (the coordinator's), the stage's reset (`DisplayGateState::begin_leg`) |
-| `floor.rs` | ordered background request queue, Jev good-moment holds, stateless rewrites, announce-first release | lifecycle membership, agent-state projection, route authority, TTS provider wire format |
-| `floor_hooks.rs` | the application side of `floor.rs`'s `FloorHooks`: whether the page is connected and a request still live, the Jev good-moment gate, the utility rewrite under its timeout, and the release through the speech worker | the floor's queue and order (`floor.rs`'s), the speech worker (`speech.rs`'s) |
+| `floor.rs` | the background request queue and who is waiting (reported through its `Waiting` hook), the front request's phases (`FrontPhase`, written only by `step`): Jev good-moment holds, stateless rewrites, the release and its retry | lifecycle membership, the agent projection itself, route authority, TTS provider wire format |
+| `floor_hooks.rs` | the application side of `floor.rs`'s hooks: whether the page is connected, whether a request is still live (`still_live`, the one check), the Jev good-moment gate, the utility rewrite under its timeout, the release through the speech worker, and mirroring who is waiting into the agent projection (`waiting_hook`) | the floor's queue, order and phases (`floor.rs`'s), the speech worker (`speech.rs`'s) |
 | `lifecycle.rs` | call identity, the current route and the leg on it, phases, candidate legs, operations, the status | async work or I/O |
 | `pbx.rs` | the `Switchboard`: its state, construction, callbacks, shared session guard and shutdown; the call types the other files share (`OPERATOR`, `TransferContext`, `AgentStateNotice`) | host setup, browser rendering, TTS encoding, a copy of the route |
 | `decisions.rs` | what a Jev decision does with a caller's line: continue, go to a project, split, take over, stop on confirmation, the utility's second opinion, the operator fallback; the routing trace | Jev's classification (`router.rs`), a second commit path |
@@ -441,10 +441,10 @@ removes the real coupling; do not create interfaces for ceremony.
 | `routing_view.rs` | `RoutingView`, what routing reads without the PBX lock, and the desk-session listing | any change to the call |
 | `prompts.rs` | the call's prompt text: the voice block, the voice brief, the foreground and background notices, the utility's rules, the intro prompt | when or to whom a prompt is sent |
 | `reply.rs` | `Reply` and the switchboard's reply and failure builders | routing or lifecycle policy |
-| `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions, module calls | routing decisions, leg lifecycle |
+| `hosts.rs` | the host link: admission by token, heartbeats, commands and replies, session subscriptions (a `Subscription` ends its own delivery when dropped), module calls | routing decisions, leg lifecycle |
 | `prewarm.rs` | per-host setup and launch plans: catalogs, prepare | routing decisions, model policy |
-| `pi_client.rs` | the operator's and the utility's Pi process/RPC transport, process-tree cleanup, `LegSession` (the leg on the line, operator or project, as the controls see it) | project sessions, route authority or deployment registry |
-| `project_session.rs` | a project session over the host link: its commands, the caller turn it collects, the frame pump, self-woken turn reports, module-call answers, and its release on the host | the host link itself (`hosts.rs`), which leg is on the line, route authority |
+| `pi_client.rs` | the operator's and the utility's Pi process/RPC transport and its phase (`ProcessState`: idle, sending, prompting, abandoned, closed; moved only by `PiSession::transition` through the `step` table, with the release on entry to closed), process-tree cleanup, `LegSession` (the leg on the line, operator or project, as the controls see it) | project sessions, route authority or deployment registry |
+| `project_session.rs` | a project session over the host link: its commands, the caller turn it collects, the frame pump, self-woken turn reports, module-call answers, and its end of life (`Lifecycle`, written only by `ProjectInner::end`; `docs/host-link.md`, "A project session's end"): its release on the host and the subscription to its frames | the host link itself (`hosts.rs`), which leg is on the line, route authority |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
 | `display.rs` | the stage projection (`DisplayProjection`); the display gate (`DisplayGateState`: the stage of the leg on the line, the page's `ScreenReport` and its confirmations, whose methods are their only writers); the display-precedence rule for `view` and the snapshot | generation checks, HTTP/WebSocket handling |
 | `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |
@@ -505,6 +505,41 @@ caller line that is still being recognized, so the service does not send
 them. A final result may be claimed only once. A failed or abandoned
 stream must either complete through the complete-clip contract or report a bounded,
 visible failure; it must not silently create a duplicate turn.
+
+## Background updates: the floor
+
+A background agent's `request_to_speak` waits on the floor (`floor.rs`)
+until the caller can hear it. The floor is the one owner of who is waiting:
+it marks an agent waiting when it queues the agent's request, and ends the
+mark when the agent's last request on the floor is spoken. It reports both
+through its `Waiting` hook, under its lock, and `floor_hooks::waiting_hook`
+mirrors them into the agent projection the page and Jev read. The PBX's
+state notices are the projection's other writer: any notice but `idle`
+replaces an agent's waiting mark.
+
+The queue holds the front request and, behind it, at most one waiting
+request per agent; a newer one replaces the agent's waiting one. One worker
+takes the front request through its phases (`FrontPhase`). `step` is the
+only writer of the phase; `Floor::act` does what the phase asks for and
+reports it as an event; every read of the floor and every release listens
+for floor events first (`Floor::listen`), so none is lost between a read and
+a wait.
+
+| phase | what the worker does | next |
+|---|---|---|
+| reading | reads the page and the caller's last words | awaiting the page, awaiting quiet (held), gating (not held), rewriting (held, quiet) |
+| awaiting the page | waits for a floor event | reading |
+| awaiting quiet | waits for the threshold after the hold and after the caller's last words, or a floor event | reading |
+| gating | asks Jev for a good moment | rewriting (yes); reading, held from now (no, or failed) |
+| rewriting | checks the agent is live, asks the utility for words (the agent's own on failure), checks again | releasing; left, agent gone |
+| releasing | speaks the words through the speech worker | left, played; left, agent gone; retrying (no audio, page there); reading (no page) |
+| retrying the release | waits `RETRY_AFTER`, or a floor event | releasing the same words; reading |
+
+A held request (Jev said no, or failed) is never gated again; it is spoken
+at the next quiet moment, and its trace says `quiet_after_hold`. Leaving the
+floor is one teardown, whichever phase the request left from: the
+`floor_released` trace, its place in the queue, and, when it was spoken and
+was its agent's last, the agent's waiting mark.
 
 ## Streaming rules
 

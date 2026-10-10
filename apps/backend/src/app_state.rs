@@ -9,7 +9,7 @@ use crate::debug::{DebugBus, DebugEvent};
 use crate::delivery::{AudioQueue, DeliveryState, Event};
 use crate::display::{DisplayGateState, DisplayProjection};
 use crate::floor::Floor;
-use crate::floor_hooks::spawn_floor_worker;
+use crate::floor_hooks::{spawn_floor_worker, waiting_hook};
 use crate::history::TranscriptLog;
 use crate::hosts::Hosts;
 #[cfg(test)]
@@ -126,9 +126,9 @@ impl AgentProjection {
         AgentsChange(agents.clone())
     }
 
-    /// A floor message consumed the pending request. This is distinct from a
-    /// normal idle settlement, which deliberately preserves a request that a
-    /// turn finished beside.
+    /// The floor spoke the agent's last request (`floor::Waiting::Spoken`).
+    /// This is distinct from a normal idle settlement, which deliberately
+    /// preserves a request that a turn finished beside.
     pub(crate) fn floor_released(&self, project: &str) -> AgentsChange {
         let mut agents = self
             .states
@@ -391,6 +391,7 @@ impl AppState {
         switchboard.set_route_callback(Some(route_callback));
         switchboard.set_debug_bus(debug.clone());
         Self(Arc::new_cyclic(|app: &std::sync::Weak<AppInner>| {
+            let floor = floor.with_waiting(waiting_hook(app.clone()));
             let state_app = app.clone();
             let state_callback: AgentStateCallback = Arc::new(move |notice: AgentStateNotice| {
                 let app = state_app.upgrade();

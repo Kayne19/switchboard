@@ -123,6 +123,37 @@ pub struct CommandReply {
     pub seq: u64,
 }
 
+/// A session's place among its host's subscribers (`Hosts::subscribe`).
+/// Dropping it stops the delivery of the session's frames, and its module
+/// calls are refused; a later subscription to the same session, which
+/// replaced this one, is left alone.
+pub struct Subscription {
+    hosts: Hosts,
+    host: String,
+    session: String,
+    /// Names this subscription's channel without keeping it open.
+    sender: mpsc::WeakUnboundedSender<SessionFrame>,
+}
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        let Ok(mut hosts) = self.hosts.0.hosts.lock() else {
+            return;
+        };
+        let Some(state) = hosts.get_mut(&self.host) else {
+            return;
+        };
+        let current = state.subscribers.get(&self.session).is_some_and(|sender| {
+            self.sender
+                .upgrade()
+                .is_some_and(|mine| mine.same_channel(sender))
+        });
+        if current {
+            state.subscribers.remove(&self.session);
+        }
+    }
+}
+
 /// A command on its way to a host; `reply` waits for the answer.
 pub struct SentCommand {
     hosts: Hosts,
@@ -471,9 +502,20 @@ impl Hosts {
     }
 
     /// Where session `session` of `host` sends its events, snapshots and
-    /// module calls from now on. A later subscription replaces this one.
-    pub fn subscribe(&self, host: &str, session: &str) -> mpsc::UnboundedReceiver<SessionFrame> {
+    /// module calls from now on, for as long as the `Subscription` is held.
+    /// A later subscription to the same session replaces this one.
+    pub fn subscribe(
+        &self,
+        host: &str,
+        session: &str,
+    ) -> (Subscription, mpsc::UnboundedReceiver<SessionFrame>) {
         let (sender, frames) = mpsc::unbounded_channel();
+        let subscription = Subscription {
+            hosts: self.clone(),
+            host: host.to_owned(),
+            session: session.to_owned(),
+            sender: sender.downgrade(),
+        };
         self.0
             .hosts
             .lock()
@@ -482,14 +524,7 @@ impl Hosts {
             .or_default()
             .subscribers
             .insert(session.to_owned(), sender);
-        frames
-    }
-
-    /// Stops delivering `session`'s frames; its module calls are refused.
-    pub fn unsubscribe(&self, host: &str, session: &str) {
-        if let Some(state) = self.0.hosts.lock().unwrap().get_mut(host) {
-            state.subscribers.remove(session);
-        }
+        (subscription, frames)
     }
 
     /// Reads the host tokens file: a JSON object from host id to token.

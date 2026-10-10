@@ -608,13 +608,32 @@ answer: the caller heard the rewrite of an older update, or a line was routed
 by a decision made for other words (#243). The session also stayed `busy`, so
 an idle operator looked like a running turn to steer into.
 
-`prompt_for` holds a `Prompting` guard from the write until the turn settles.
-Dropped before that, it clears `busy`, marks the process abandoned, and closes
-it. `alive()` is false at once, so `ensure_operator` and `ensure_utility` start
-a fresh process for the next prompt. Both get the call state with every prompt,
-so a restart loses only the process's own memory of its earlier prompts.
-Draining the old turn before the next prompt would also work, but it keeps a
-process of unknown state alive.
+`prompt_for` holds a `PromptInFlight` guard from the write until the turn ends.
+Dropped before that, it is the `Cancelled` event: the process's state
+(`ProcessState` in `apps/backend/src/pi_client.rs`) moves to `Abandoned`,
+which is not busy and not alive, and its close runs in the background, since
+a drop cannot await. `alive()` is false at once, so `ensure_operator` and
+`ensure_utility` start a fresh process for the next prompt. Both get the call
+state with every prompt, so a restart loses only the process's own memory of
+its earlier prompts. Draining the old turn before the next prompt would also
+work, but it keeps a process of unknown state alive.
+
+A turn that breaks off any other way before `agent_settled` (its output ends
+or cannot be read, it is silent past its deadline, it sends a line too big to
+read or too much text) is the `Failed` end, and the process is closed before
+the failure returns, for the same reason: what is left of that turn is not
+the next prompt's to read. An agent that closed its output and kept running
+was once left idle, and every later prompt went to it and failed.
+
+The state has one writer, `PiSession::transition`, and one table, `step`.
+Every prompt event carries the prompt's number, so a late one (the guard of a
+prompt whose process its owner closed mid-turn) leaves the state alone. A new
+flag on this process (a second "busy", a "closing") is a new row or phase in
+`step`, not a field beside it. A `close()` that finds the process already
+`Closed` runs the same idempotent release, which waits on one that is under
+way: the path that entered `Closed` may not have taken its first lock yet, and
+an owner that closes and restarts must not find the old process running.
+
 
 ## Prepare reports are final
 
@@ -638,3 +657,33 @@ receiver and waits forever. Of the shared test helpers, `state()`
 the next ordered request may use pending `previous_text`, while a request id is
 committed only after the body reaches EOF. Lifecycle resets reject late drain
 commits.
+
+### How a speech request ends
+
+The worker builds one `PendingSpeech` for each request it takes off the
+queue, and every exit ends in `PendingSpeech::complete` with one
+`SpeechOutcome` (`apps/backend/src/speech.rs`). Nothing else answers the
+requester, writes the spoken line, or shows the page a speech error.
+
+| phase | what happens | outcome | requester is told | page error | spoken line |
+| --- | --- | --- | --- | --- | --- |
+| queued | a rescue retired the generation | `Stopped(Superseded)` | not spoken | no | no |
+| admitting | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
+| admitting | the provider refuses | `Failed` | the provider's error | at the current generation | no |
+| draining | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
+| draining | the generation moves on | `Stopped(Superseded)` | not spoken | no | no |
+| draining | the body fails, or the task panics | `Failed` | the error | at the current generation | no |
+| draining | the body ends, a browser took it | `Spoken` | spoken | no | if `log_spoken` |
+| draining | the body ends, no browser took it | `NotDelivered` | not delivered | no | no |
+
+Only a rescue stops a request, and it retires the generation first, so a
+`Stopped` request never reaches the page (#247). Every end but `Spoken` and
+`NotDelivered` gives back what the request holds, its pending continuity text
+and its audio slot (`Utterance::abandon`). The drain does this the moment its
+own body ends, because the slots queued behind it emit only once it is
+closed: a later drain that finished first would find its audio held back and
+report it undelivered. The completion does it again for the ends the drain
+never sees (admission, an abort, a panic); both steps are no-ops once done.
+`every_end_of_a_speech_request_completes_it_once` in
+`apps/backend/tests/test_speech.rs` drives each row it can reach through the
+real worker.

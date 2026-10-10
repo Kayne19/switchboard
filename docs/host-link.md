@@ -192,7 +192,9 @@ The service stops using a session after any failed command to it (any code
 above, or no reply within its 30 s wait), but it still releases the
 session: it sends `kill` for one it created and `abort` then `detach` for
 one it took over. Only a `session_closed` event tells it the session is
-already gone, and then it sends nothing.
+already gone; then it sends no `kill`, and still sends `abort` then
+`detach` for a session it took over. "A project session's end" has the
+whole table.
 
 ### Commands
 
@@ -378,6 +380,43 @@ credentials before a debug record is kept. The host sends assistant text once
 per message (`text`), not as streamed deltas: one delta per token would fill
 the per-session replay buffer of 1000 events and make a reconnect lose its
 replay.
+
+### A project session's end
+
+The service keeps one end-of-life state per project session:
+`Lifecycle` in `apps/backend/src/project_session.rs`. `Lifecycle::after`
+is its table and `ProjectInner::end` its only writer.
+
+| Phase | Commands | The session's frames | Release owed |
+|---|---|---|---|
+| open | sent | read | yes |
+| unusable (a command failed) | refused by the service | read, so a turn already running can settle | yes |
+| ended on host (`session_closed`) | refused by the service | not read | only by a session it took over |
+| released | refused by the service | not read | no: it went out |
+
+| From | A command fails | `session_closed` | The owner closes it, or its last handle drops |
+|---|---|---|---|
+| open | unusable; the application is told | ended on host; the application is told | released |
+| unusable | unusable | ended on host | released |
+| ended on host | ended on host | ended on host | taken over: released; created: ended on host |
+| released | released | released | released |
+
+A failed command is any error code above, or no reply within the 30 s
+wait. `session_closed` includes the service's own `host_link_closed`.
+"The application is told" is the session-closed callback, which evicts a
+background resident at once; the owner's close is not reported back to
+it. Entering released sends the release: `kill` for a session the service
+created, `abort` then `detach` for one it took over, which is never killed.
+
+The session's frames come through a subscription to its handle
+(`hosts.rs`, `Subscription`) that the open and unusable phases hold:
+leaving them, or dropping the last handle, ends it. A subscription ends
+only itself: the host agent answers a reopen of a session it still
+tracks with the handle it already had, so a newer subscription to the
+same handle may have replaced an old one, and the old one letting go
+leaves the newer in place. The table test
+`a_project_session_ends_by_its_table`
+(`apps/backend/tests/test_project_session.rs`) holds every row.
 
 ### Snapshots
 
