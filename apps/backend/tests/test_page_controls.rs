@@ -69,19 +69,21 @@ async fn page_rescue_aborts_work_before_waiting_for_the_pbx_lock() {
 async fn newer_page_control_supersedes_setup_before_a_session_exists() {
     let state = state();
     let first_state = state.clone();
-    let (first, first_id, _) = spawn_active_operation(&state, async move {
-        hold_turn_lock(&first_state, None).await;
-    })
-    .await
-    .unwrap();
+    let (first, first_id, _) =
+        spawn_active_operation(&state, state.0.coordinator.generation(), async move {
+            hold_turn_lock(&first_state, None).await;
+        })
+        .await
+        .unwrap();
 
     let second_state = state.clone();
-    let (second, second_id, _generation) = spawn_replacing_operation(&state, async move {
-        let _held_second = second_state.0.switchboard.lock().await;
-        7
-    })
-    .await
-    .unwrap();
+    let (second, second_id, _generation) =
+        spawn_replacing_operation(&state, state.0.coordinator.generation(), async move {
+            let _held_second = second_state.0.switchboard.lock().await;
+            7
+        })
+        .await
+        .unwrap();
 
     assert!(first.await.unwrap_err().is_cancelled());
     clear_active_operation(&state, first_id).await;
@@ -203,7 +205,8 @@ done
 async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superseded() {
     let state = state();
     let rescuer = state.clone();
-    let controlled = run_page_control(&state, "connection attempt", async move {
+    let generation = state.0.coordinator.generation();
+    let controlled = run_page_control(&state, "connection attempt", generation, async move {
         rescuer.0.coordinator.begin_rescue("page rescue");
         operator_reply()
     })
@@ -225,7 +228,8 @@ async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superse
 #[tokio::test]
 async fn a_page_control_that_fails_is_refused_as_a_server_error() {
     let state = state();
-    let controlled = run_page_control(&state, "connection attempt", async move {
+    let generation = state.0.coordinator.generation();
+    let controlled = run_page_control(&state, "connection attempt", generation, async move {
         panic!("the PBX operation failed");
     })
     .await;
@@ -328,12 +332,13 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
 
     // The operator puts the caller through, as a turn the rescue can cancel.
     let turn_state = state.clone();
-    let (turn, _id, _generation) = spawn_active_operation(&state, async move {
-        let mut board = turn_state.0.switchboard.lock().await;
-        board.handle("put me through to alpha").await
-    })
-    .await
-    .unwrap();
+    let (turn, _id, _generation) =
+        spawn_active_operation(&state, state.0.coordinator.generation(), async move {
+            let mut board = turn_state.0.switchboard.lock().await;
+            board.handle("put me through to alpha").await
+        })
+        .await
+        .unwrap();
     // Alpha's first sign of life adopts it while its intro is still running.
     frames_until(&mut connection, "status").await;
     assert_eq!(state.0.coordinator.route(), "alpha");
@@ -346,7 +351,13 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
         .expect("the incoming leg is the live session during its intro");
     assert_eq!(incoming.label(), "alpha");
 
-    let (code, body) = request_json(&state, Method::POST, "/hangup", None).await;
+    let (code, body) = request_json(
+        &state,
+        Method::POST,
+        "/hangup",
+        Some(at_generation(&state, json!({}))),
+    )
+    .await;
 
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body, json!({"hungup":true, "left":"alpha"}));
@@ -398,7 +409,13 @@ async fn hanging_up_with_nothing_on_the_line_says_so() {
     let (mut connection, _, _) = state.register_connection().await;
     let before = state.0.coordinator.generation();
 
-    let (code, body) = request_json(&state, Method::POST, "/hangup", None).await;
+    let (code, body) = request_json(
+        &state,
+        Method::POST,
+        "/hangup",
+        Some(at_generation(&state, json!({}))),
+    )
+    .await;
 
     assert_eq!(code, StatusCode::OK);
     assert_eq!(
@@ -438,7 +455,13 @@ async fn hanging_up_the_operator_from_the_page_discards_its_process() {
     queued_frames(&mut connection);
     let before = state.0.coordinator.generation();
 
-    let (code, body) = request_json(&state, Method::POST, "/hangup", None).await;
+    let (code, body) = request_json(
+        &state,
+        Method::POST,
+        "/hangup",
+        Some(at_generation(&state, json!({}))),
+    )
+    .await;
 
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body, json!({"hungup":true, "left":"operator"}));
@@ -487,18 +510,24 @@ async fn hanging_up_a_project_leg_from_the_page_does_not_wait_for_its_turn() {
     // A turn that will never settle holds the PBX lock.
     let (locked_tx, locked_rx) = oneshot::channel();
     let turn_state = state.clone();
-    let (wedged, _, _) = spawn_active_operation(&state, async move {
-        hold_turn_lock(&turn_state, Some(locked_tx)).await;
-    })
-    .await
-    .unwrap();
+    let (wedged, _, _) =
+        spawn_active_operation(&state, state.0.coordinator.generation(), async move {
+            hold_turn_lock(&turn_state, Some(locked_tx)).await;
+        })
+        .await
+        .unwrap();
     locked_rx.await.unwrap();
     let (mut connection, _, _) = state.register_connection().await;
     let before = state.0.coordinator.generation();
 
     let (code, body) = timeout(
         Duration::from_secs(5),
-        request_json(&state, Method::POST, "/hangup", None),
+        request_json(
+            &state,
+            Method::POST,
+            "/hangup",
+            Some(at_generation(&state, json!({}))),
+        ),
     )
     .await
     .expect("a hangup must not wait for the turn it rescues the caller from");
@@ -710,7 +739,12 @@ async fn a_picker_on_the_operator_answers_without_touching_its_turn() {
     ] {
         let (code, answer) = timeout(
             Duration::from_secs(1),
-            request_json(&state, Method::POST, path, Some(body)),
+            request_json(
+                &state,
+                Method::POST,
+                path,
+                Some(at_generation(&state, body)),
+            ),
         )
         .await
         .expect("a picker on the operator must not wait for the operator's turn");
@@ -730,6 +764,104 @@ async fn a_picker_on_the_operator_answers_without_touching_its_turn() {
     operator.close().await;
 }
 
+// #263: a page control acts on the leg the page saw when the caller acted. It
+// carries that generation; one the call has moved on from is refused (a
+// picker) or ignored (a hangup), and one with none is refused outright. It is
+// never defaulted to the current generation: that is how a queued request or
+// a stale tab acted on a leg the caller never chose.
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_page_control_for_a_generation_the_call_has_left_changes_nothing() {
+    let call = call_on_alpha(&[]).await;
+    let state = &call.state;
+    let generation = state.0.coordinator.generation();
+    let stale = generation - 1;
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+
+    for (path, body, detail) in [
+        (
+            "/model",
+            json!({"model":"anthropic/next", "generation":stale}),
+            "model change was refused",
+        ),
+        (
+            "/thinking",
+            json!({"level":"high", "generation":stale}),
+            "thinking change was refused",
+        ),
+        (
+            "/connect",
+            json!({"project":"operator", "generation":stale}),
+            "connection attempt was refused",
+        ),
+        ("/hangup", json!({"generation":stale}), "hangup was ignored"),
+    ] {
+        let (code, answer) = request_json(state, Method::POST, path, Some(body)).await;
+        assert_eq!(code, StatusCode::CONFLICT, "{path}: {answer}");
+        assert_eq!(
+            answer,
+            json!({"detail": format!(
+                "{detail}: the line moved on (the page held generation {stale}, the call is at {generation})"
+            )}),
+        );
+    }
+
+    assert_eq!(
+        state.0.coordinator.generation(),
+        generation,
+        "nothing was rescued"
+    );
+    assert!(call.live.alive().await);
+    let status = state.0.coordinator.status();
+    assert_eq!(
+        (status.route.as_str(), status.model.as_str()),
+        ("alpha", "anthropic/current:medium")
+    );
+    assert!(!types_of(&queued_frames(&mut connection)).contains(&"epoch"));
+    call.assert_next_turn_reaches_alpha().await;
+    call.hang_up().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_page_control_without_a_generation_changes_nothing() {
+    let call = call_on_alpha(&[]).await;
+    let state = &call.state;
+    let generation = state.0.coordinator.generation();
+
+    for (path, body, detail) in [
+        (
+            "/model",
+            json!({"model":"anthropic/next"}),
+            "model change was refused",
+        ),
+        (
+            "/thinking",
+            json!({"level":"high"}),
+            "thinking change was refused",
+        ),
+        (
+            "/connect",
+            json!({"project":"operator"}),
+            "connection attempt was refused",
+        ),
+        ("/hangup", json!({}), "hangup was ignored"),
+    ] {
+        let (code, answer) = request_json(state, Method::POST, path, Some(body)).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{path}: {answer}");
+        assert_eq!(
+            answer,
+            json!({"detail": format!("{detail}: it carries no generation")}),
+        );
+    }
+
+    assert_eq!(state.0.coordinator.generation(), generation);
+    assert!(call.live.alive().await);
+    call.assert_next_turn_reaches_alpha().await;
+    call.hang_up().await;
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_picker_model_change_cancels_a_wedged_turn_and_keeps_the_session() {
@@ -744,7 +876,7 @@ async fn a_picker_model_change_cancels_a_wedged_turn_and_keeps_the_session() {
             state,
             Method::POST,
             "/model",
-            Some(json!({"model":"anthropic/next"})),
+            Some(at_generation(state, json!({"model":"anthropic/next"}))),
         ),
     )
     .await
@@ -807,7 +939,10 @@ async fn a_picker_redial_decided_for_a_leg_the_caller_has_left_cancels_nothing()
             &request_state,
             Method::POST,
             "/model",
-            Some(json!({"model":"anthropic/next"})),
+            Some(at_generation(
+                &request_state,
+                json!({"model":"anthropic/next"}),
+            )),
         )
         .await
     });
@@ -876,7 +1011,7 @@ async fn a_picker_redial_whose_leg_is_left_after_its_rescue_is_refused() {
             state,
             Method::POST,
             "/model",
-            Some(json!({"model":"anthropic/next"})),
+            Some(at_generation(state, json!({"model":"anthropic/next"}))),
         ),
     )
     .await
@@ -1015,6 +1150,13 @@ fn operator_reply() -> crate::reply::Reply {
     }
 }
 
+/// A page control's body as the page sends it: what it asks for, at the
+/// generation the page holds, which is the call's current one (#263).
+fn at_generation(state: &AppState, mut body: Value) -> Value {
+    body["generation"] = json!(state.0.coordinator.generation());
+    body
+}
+
 async fn refusal_of(response: Response) -> (StatusCode, Value) {
     let status = response.status();
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
@@ -1097,7 +1239,7 @@ async fn call_on_alpha(settings: &[(&str, &str)]) -> AlphaCall {
         &state,
         Method::POST,
         "/connect",
-        Some(json!({"project":"alpha"})),
+        Some(at_generation(&state, json!({"project":"alpha"}))),
     )
     .await;
     assert_eq!(
@@ -1137,6 +1279,7 @@ impl AlphaCall {
         let before = state.0.coordinator.status();
         let (mut connection, _snapshot, _watermark) = state.register_connection().await;
 
+        let body = at_generation(state, body);
         let (code, answer) = request_json(state, Method::POST, path, Some(body.clone())).await;
 
         assert_eq!(code, StatusCode::OK, "{path} {body}: {answer}");
