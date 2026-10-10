@@ -283,10 +283,13 @@ export class PushToTalk {
     recorder.onstop = () => {
       releaseMeter(recording);
       releaseStream();
-      this.options.resumeHandsFree();
+      // Let go of the recording before hands-free is asked to take the
+      // microphone back: it refuses while push-to-talk is still active
+      // (#257), as every other exit here already knows.
       if (this.activeRecording?.recorder === recorder)
         this.activeRecording = null;
       if (this.mediaRecorder === recorder) this.mediaRecorder = null;
+      this.options.resumeHandsFree();
       if (recorderFailed) return;
       if (recording.discard) {
         onStatus(this.options.idleText, false);

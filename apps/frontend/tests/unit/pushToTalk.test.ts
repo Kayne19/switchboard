@@ -300,6 +300,24 @@ describe("PushToTalk", () => {
     h.ptt.stop(false);
   });
 
+  // Hands-free asks whether push-to-talk still holds the microphone before it
+  // takes it back; a recording that has not let go yet makes it refuse (#257).
+  it("has let go of the recording when it hands the microphone back", async () => {
+    let activeAtResume: boolean | null = null;
+    let ptt: PushToTalk | null = null;
+    const h = harness({
+      resumeHandsFree: () => {
+        activeAtResume = ptt!.isActive;
+      },
+    });
+    ptt = h.ptt;
+    const start = h.ptt.start();
+    h.resolveMedia(fakeStream());
+    await start;
+    h.ptt.stop(true);
+    expect(activeAtResume).toBe(false);
+  });
+
   // `navigator.mediaDevices` is undefined on a page that is not a secure
   // origin, which reached the caller as "Microphone unavailable (TypeError)".
   it("names https when the browser offers no microphone API", async () => {
