@@ -427,14 +427,17 @@ function trainingContent(
 ): SceneContent | null {
   const charts = objectsOfType<ChartData>(state, 'chart');
   const [firstProgress, ...railProgress] = objectsOfType<ProgressData>(state, 'progress');
-  const primary = charts.find((chart) => chart.role === 'primary') ?? charts[0];
-  if (!primary) return null;
+  // The primary is the composition's, the one the screen state and view()
+  // name: an ambient chart shown first is not it (sceneKind made it a chart).
+  const composition = buildCompositionModel(state);
+  if (composition.primary?.type !== 'chart') return null;
+  const primary = cast.chart(composition.primary);
   // Every chart is drawn here, the primary's neighbours beside it; any other
   // visual goes in the aux row under them. With visuals there, the progress
   // that sits under the charts joins them in the row, as progress does in
   // the composed workspace, so the charts keep the main slot's share of a
   // short stage instead of giving it to the bar and its steps.
-  const besideCharts = besideVisuals(buildCompositionModel(state)).filter((object) => object.type !== 'chart');
+  const besideCharts = besideVisuals(composition).filter((object) => object.type !== 'chart');
   const progress = besideCharts.length > 0 ? undefined : firstProgress;
   // The notes lie over the panel of the chart they annotate rather than in a
   // band that shrinks it; the layer keeps them clear of one another, of the
