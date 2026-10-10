@@ -84,7 +84,10 @@ commit.
   The suite starts its own server on port 4183 (`PLAYWRIGHT_PORT` moves
   it) and fails rather than test a server it finds there. `master`
   requires only `test`; a red `browser` is still a failure to fix, not to
-  merge over.
+  merge over. Every job runs on a named Ubuntu release (`runs-on:
+  ubuntu-24.04`), as the toolchain is pinned: the specs' geometry was
+  measured with that release's fonts. Moving to the next release is its
+  own pull request, which runs the browser suite there.
 - The iPad (iPadOS Safari, WebKit) is a first-class target, not a "should
   also work" one: a change that works in desktop Chromium and breaks there
   is broken. A browser runtime change (audio, capture, playback, gestures)

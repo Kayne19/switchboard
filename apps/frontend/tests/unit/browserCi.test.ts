@@ -36,11 +36,23 @@ describe('the CI browser job', () => {
     expect(scripts['test:browser']).toBe(`${scripts['test:visual']} --grep-invert @golden`);
   });
 
-  it('installs each engine from a cache keyed by the engine and the lockfile that pins it', () => {
+  // The runner image is named, not `ubuntu-latest`: the fonts the specs were
+  // measured with and WebKit's system libraries come from its release, so a
+  // move to a new release is a pull request that runs the suite on it, not a
+  // surprise on one that did not touch the browser.
+  it('runs every job on a named Ubuntu release, not on whatever ubuntu-latest is', () => {
+    expect(workflow).not.toContain('ubuntu-latest');
+    for (const name of ['test', 'browser']) expect(job(name)).toMatch(/^ {4}runs-on: ubuntu-\d+\.\d+$/m);
+  });
+
+  it('installs each engine from a cache keyed by the engine, the image release and the lockfile that pins it', () => {
     const browser = job('browser');
     expect(browser).toMatch(/uses: actions\/cache@v\d+/);
     expect(browser).toContain('~/.cache/ms-playwright');
-    expect(browser).toContain("playwright-${{ matrix.browser }}-${{ runner.os }}-${{ hashFiles('package-lock.json') }}");
+    expect(browser).toContain('. /etc/os-release');
+    expect(browser).toContain(
+      "playwright-${{ matrix.browser }}-${{ runner.os }}-${{ steps.release.outputs.release }}-${{ hashFiles('package-lock.json') }}",
+    );
     expect(browser).toContain('playwright install --with-deps ${{ matrix.browser }}');
   });
 
