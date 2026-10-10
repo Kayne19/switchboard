@@ -442,6 +442,52 @@ test("the host agent never starts a daemon: DaemonPort has no start, and a lost 
 	assert.ok(daemon.ops().every((op) => !/start|launch|spawn|ensure/i.test(op)));
 });
 
+test("resync: a session that ends before its attach is closed, and the others are still reattached", async () => {
+	const { daemon, manager, kinds, stateFile } = setup();
+	const a = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	const b = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	daemon.calls.length = 0;
+	// The daemon lists both, then `a` exits (killed from a desk) before its attach.
+	const attach = daemon.attach.bind(daemon);
+	daemon.attach = async (handle: string) => {
+		if (handle === a) daemon.live.delete(a);
+		return attach(handle);
+	};
+	const { live, closed, failed } = await manager.resync();
+	assert.deepEqual(live, [b]);
+	assert.deepEqual(closed, [a]);
+	assert.deepEqual(failed, []);
+	assert.ok(daemon.calls.some((c) => c.op === "attach" && c.args[0] === b), "the session after the failed one is reattached");
+	assert.equal(kinds(a).at(-1), "session_closed");
+	assert.deepEqual(manager.handles(), [b]);
+	const saved = JSON.parse(readFileSync(stateFile, "utf8")) as { sessions: { handle: string }[] };
+	assert.deepEqual(saved.sessions.map((s) => s.handle), [b], "the state file is rewritten");
+});
+
+test("resync: a session the daemon still lists but will not attach stays tracked and is reported, and the rest go on", async () => {
+	const { daemon, manager, kinds, stateFile } = setup();
+	const a = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	const b = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	const attach = daemon.attach.bind(daemon);
+	let refuse = true;
+	daemon.attach = async (handle: string) => {
+		if (handle === a && refuse) throw new DaemonCommandError("attach", "timed out after 60000ms");
+		return attach(handle);
+	};
+	const first = await manager.resync();
+	assert.deepEqual(first.live, [b]);
+	assert.deepEqual(first.closed, []);
+	assert.deepEqual(first.failed, [{ session: a, error: "attach: timed out after 60000ms" }]);
+	assert.ok(!kinds(a).includes("session_closed"), "a session the daemon still runs is not reported closed");
+	const saved = JSON.parse(readFileSync(stateFile, "utf8")) as { sessions: { handle: string; provenance: string }[] };
+	assert.deepEqual(saved.sessions.map((s) => [s.handle, s.provenance]), [[a, "created"], [b, "created"]], "its provenance is kept");
+	// The next resync reattaches it.
+	refuse = false;
+	const second = await manager.resync();
+	assert.deepEqual(second.live, [a, b]);
+	assert.deepEqual(second.failed, []);
+});
+
 test("rediscovery restores service-created and taken-over provenance", async () => {
 	const dir = mkdtempSync(path.join(os.tmpdir(), "sb-host-"));
 	const stateFile = path.join(dir, "sessions.json");
