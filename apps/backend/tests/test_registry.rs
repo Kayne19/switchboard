@@ -128,6 +128,16 @@ fn prompt_catalog_lists_ids_aliases_and_descriptions_without_paths() {
 }
 
 #[test]
+fn a_project_id_resolves_to_its_project_when_another_uses_it_as_an_alias() {
+    let registry = Registry::new(vec![project("web", &[]), project("webapp", &["web"])]);
+    assert_eq!(exact(&registry, "web").map(|p| p.id.as_str()), Some("web"));
+    assert_eq!(
+        exact(&registry, "webapp").map(|p| p.id.as_str()),
+        Some("webapp")
+    );
+}
+
+#[test]
 fn duplicate_and_overlapping_keys_are_ambiguous() {
     let registry = Registry::new(vec![
         project("proj-a", &["shared-alias"]),

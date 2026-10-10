@@ -92,6 +92,27 @@ impl Registry {
                 project.model = None;
             }
         }
+        // An id names its own project. An alias that says another project's
+        // id would make that id ambiguous, so the alias is dropped.
+        let ids: Vec<String> = projects
+            .iter()
+            .map(|project| normalize(&project.id))
+            .collect();
+        for project in &mut projects {
+            let own = normalize(&project.id);
+            project.aliases.retain(|alias| {
+                let key = normalize(alias);
+                let taken = key != own && ids.contains(&key);
+                if taken {
+                    tracing::warn!(
+                        project = %project.id,
+                        %alias,
+                        "alias names another project's id; dropping it"
+                    );
+                }
+                !taken
+            });
+        }
         let mut by_key: HashMap<String, Vec<usize>> = HashMap::new();
         for (index, project) in projects.iter().enumerate() {
             for key in std::iter::once(project.id.as_str())
