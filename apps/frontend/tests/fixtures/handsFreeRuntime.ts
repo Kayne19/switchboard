@@ -6,6 +6,7 @@
 import { vi } from "vitest";
 import {
   HandsFreeController,
+  type HandsFreeState,
   type SpeechEndpointer,
   type WakeDetector,
 } from "../../src/hands_free";
@@ -110,6 +111,18 @@ export function realHandsFree(createRecorder: () => MediaRecorder) {
     controller: (): HandsFreeController => {
       if (!controller) throw new Error("hands-free was never turned on");
       return controller;
+    },
+    /**
+     * Lets the controller's start run, one microtask at a time, until it is
+     * in `state`. Gives up after 100 microtasks; the test's own expectation
+     * then says what went wrong. A fixed count of microtasks breaks each
+     * time a start gains or loses an await.
+     */
+    reach: async (state: HandsFreeState): Promise<void> => {
+      for (let tick = 0; tick < 100; tick += 1) {
+        if (controller?.currentState === state) return;
+        await Promise.resolve();
+      }
     },
     hear: () => detect(),
     speechStarts: () => speechStart(),

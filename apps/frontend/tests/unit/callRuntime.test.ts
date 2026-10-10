@@ -1062,7 +1062,7 @@ describe("CallRuntime hands-free", () => {
       const { runtime } = makeRuntime(handsFree.options);
       const socket = await connectAt(runtime);
       runtime.toggleHandsFree();
-      await settle();
+      await handsFree.reach("armed");
       expect(handsFree.controller().currentState).toBe("armed");
       handsFree.hear();
       handsFree.speechStarts();
