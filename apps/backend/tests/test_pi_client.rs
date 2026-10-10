@@ -713,3 +713,127 @@ async fn prompting_and_close_ends_the_turn_failed_and_is_gone() {
     assert_eq!(seen(&session).await, Seen::Gone);
     refused_with(session.prompt("two").await, "agent process is not running");
 }
+
+#[test]
+fn the_process_phase_table() {
+    use ProcessEvent as Event;
+    use ProcessState as State;
+    let states = [
+        State::Idle,
+        State::Sending { turn: 1 },
+        State::Prompting { turn: 1 },
+        State::Abandoned,
+        State::Closed,
+    ];
+    let mut events = vec![Event::Close];
+    for turn in [1, 2] {
+        events.extend([
+            Event::Send { turn },
+            Event::Unsent { turn },
+            Event::Sent { turn },
+            Event::Cancelled { turn },
+        ]);
+        for how in [TurnEnd::Settled, TurnEnd::StreamEnded, TurnEnd::Failed] {
+            events.push(Event::Ended { turn, how });
+        }
+    }
+    // Every row that moves the phase. Turn 2 is another prompt's event.
+    let moves = [
+        (
+            State::Idle,
+            Event::Send { turn: 1 },
+            State::Sending { turn: 1 },
+            None,
+        ),
+        (
+            State::Idle,
+            Event::Send { turn: 2 },
+            State::Sending { turn: 2 },
+            None,
+        ),
+        (
+            State::Idle,
+            Event::Close,
+            State::Closed,
+            Some(Teardown::Release),
+        ),
+        (
+            State::Sending { turn: 1 },
+            Event::Unsent { turn: 1 },
+            State::Idle,
+            None,
+        ),
+        (
+            State::Sending { turn: 1 },
+            Event::Sent { turn: 1 },
+            State::Prompting { turn: 1 },
+            None,
+        ),
+        (
+            State::Sending { turn: 1 },
+            Event::Cancelled { turn: 1 },
+            State::Abandoned,
+            Some(Teardown::CloseLater),
+        ),
+        (
+            State::Sending { turn: 1 },
+            Event::Close,
+            State::Closed,
+            Some(Teardown::Release),
+        ),
+        (
+            State::Prompting { turn: 1 },
+            Event::Ended {
+                turn: 1,
+                how: TurnEnd::Settled,
+            },
+            State::Idle,
+            None,
+        ),
+        (
+            State::Prompting { turn: 1 },
+            Event::Ended {
+                turn: 1,
+                how: TurnEnd::StreamEnded,
+            },
+            State::Idle,
+            None,
+        ),
+        (
+            State::Prompting { turn: 1 },
+            Event::Ended {
+                turn: 1,
+                how: TurnEnd::Failed,
+            },
+            State::Closed,
+            Some(Teardown::Release),
+        ),
+        (
+            State::Prompting { turn: 1 },
+            Event::Cancelled { turn: 1 },
+            State::Abandoned,
+            Some(Teardown::CloseLater),
+        ),
+        (
+            State::Prompting { turn: 1 },
+            Event::Close,
+            State::Closed,
+            Some(Teardown::Release),
+        ),
+        (
+            State::Abandoned,
+            Event::Close,
+            State::Closed,
+            Some(Teardown::Release),
+        ),
+    ];
+    for state in states {
+        for event in &events {
+            let expected = moves
+                .iter()
+                .find(|(from, on, _, _)| *from == state && on == event)
+                .map_or((state, None), |(_, _, to, teardown)| (*to, *teardown));
+            assert_eq!(step(state, *event), expected, "{state:?} on {event:?}");
+        }
+    }
+}

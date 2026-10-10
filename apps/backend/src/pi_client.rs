@@ -13,8 +13,8 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex, OnceLock as StdOnceLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock as StdOnceLock, PoisonError};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, Command};
 use tokio::sync::{watch, Mutex};
@@ -92,11 +92,8 @@ struct SessionInner {
     stdin: Mutex<Option<ChildStdin>>,
     stdout: Mutex<BufReader<tokio::process::ChildStdout>>,
     stderr_tail: Arc<StdMutex<Vec<String>>>,
-    busy: AtomicBool,
-    /// Set when a prompt was cancelled before its turn settled. Nothing ties
-    /// an event to the prompt that caused it, so the rest of that turn would
-    /// be read as the next prompt's answer: the process is not reused.
-    abandoned: AtomicBool,
+    /// What the process can do now. Written only by `transition`.
+    state: StdMutex<ProcessState>,
     turn_lock: Mutex<()>,
     label: String,
     leg: String,
@@ -118,33 +115,172 @@ pub struct PiSession {
     inner: Arc<SessionInner>,
 }
 
-/// Marks a prompt as out on the process, and ends it however the prompt
-/// ends. Settled, it clears `busy`. Dropped first (a timeout or an aborted
-/// task cancelled the prompt), it also abandons the process and closes it,
-/// so the next prompt goes to a fresh one and never reads this turn's rest.
-struct Prompting<'a> {
-    session: &'a PiSession,
-    settled: bool,
+/// The phase of a local process: what it can do now. `step` says how an
+/// event moves it, and `PiSession::transition` is the only writer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessState {
+    /// Running between turns: it takes the next prompt.
+    Idle,
+    /// Prompt `turn` is being written. No turn runs yet, so a steer is
+    /// refused; a cancel leaves part of a prompt in the pipe.
+    Sending { turn: u64 },
+    /// Prompt `turn` is out and its turn is read up to `agent_settled`.
+    Prompting { turn: u64 },
+    /// A prompt was cancelled before its turn ended. Nothing ties an event
+    /// to the prompt that caused it, so the rest of that turn would be read
+    /// as the next prompt's answer: the process is never reused, and its
+    /// close is on its way.
+    Abandoned,
+    /// Closed by its owner, by a turn that broke it, or after an abandon.
+    /// Terminal.
+    Closed,
 }
 
-impl Prompting<'_> {
-    fn settle(mut self) {
-        self.settled = true;
+/// Something that happens to a local process. A prompt's events carry the
+/// number of the prompt they belong to, so one that arrives after the
+/// process has moved on (its owner closed it mid-turn) changes nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessEvent {
+    /// `prompt_for` starts writing prompt `turn`.
+    Send { turn: u64 },
+    /// The write failed, so no turn is running. The process is left as it
+    /// is: if it has exited, `alive` says so.
+    Unsent { turn: u64 },
+    /// The prompt is written; its turn runs.
+    Sent { turn: u64 },
+    /// The turn ended, as `how` says.
+    Ended { turn: u64, how: TurnEnd },
+    /// The prompt's future was dropped before its turn ended: a timeout
+    /// around it, or an aborted task.
+    Cancelled { turn: u64 },
+    /// The owner closes the process.
+    Close,
+}
+
+/// How reading a turn ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TurnEnd {
+    /// It read `agent_settled`.
+    Settled,
+    /// The output ended, or could not be read, before `agent_settled`. The
+    /// process is left as it is: if it has exited, `alive` says so.
+    StreamEnded,
+    /// The turn broke the process: silent past its deadline, a line too
+    /// big to read, or too much text. The process is closed before the
+    /// caller hears why.
+    Failed,
+}
+
+/// What entering a phase leaves to do. The transition says which; the
+/// event's caller runs it, in `PiSession::tear_down`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Teardown {
+    /// Entering `Abandoned`: close the process in the background, since a
+    /// dropped prompt cannot await.
+    CloseLater,
+    /// Entering `Closed`: release the process now, before the caller goes
+    /// on.
+    Release,
+}
+
+/// The local process's transition table. An event that does not apply to
+/// the phase (a prompt's late event after its process was closed) leaves
+/// it where it is.
+fn step(state: ProcessState, event: ProcessEvent) -> (ProcessState, Option<Teardown>) {
+    use ProcessEvent as Event;
+    use ProcessState as State;
+    match (state, event) {
+        (State::Idle, Event::Send { turn }) => (State::Sending { turn }, None),
+        (State::Sending { turn }, Event::Unsent { turn: unsent }) if unsent == turn => {
+            (State::Idle, None)
+        }
+        (State::Sending { turn }, Event::Sent { turn: sent }) if sent == turn => {
+            (State::Prompting { turn }, None)
+        }
+        (State::Prompting { turn }, Event::Ended { turn: ended, how }) if ended == turn => {
+            match how {
+                TurnEnd::Settled | TurnEnd::StreamEnded => (State::Idle, None),
+                TurnEnd::Failed => (State::Closed, Some(Teardown::Release)),
+            }
+        }
+        (
+            State::Sending { turn } | State::Prompting { turn },
+            Event::Cancelled { turn: cancelled },
+        ) if cancelled == turn => (State::Abandoned, Some(Teardown::CloseLater)),
+        (
+            State::Idle | State::Sending { .. } | State::Prompting { .. } | State::Abandoned,
+            Event::Close,
+        ) => (State::Closed, Some(Teardown::Release)),
+        (
+            State::Idle
+            | State::Sending { .. }
+            | State::Prompting { .. }
+            | State::Abandoned
+            | State::Closed,
+            Event::Send { .. }
+            | Event::Unsent { .. }
+            | Event::Sent { .. }
+            | Event::Ended { .. }
+            | Event::Cancelled { .. }
+            | Event::Close,
+        ) => (state, None),
     }
 }
 
-impl Drop for Prompting<'_> {
+/// A prompt out on the process, from the start of its write until its
+/// turn ends. Its exits are the prompt's events: `sent`, then `end`.
+/// Dropped before `end`, it is the `Cancelled` event.
+struct PromptInFlight<'a> {
+    session: &'a PiSession,
+    turn: u64,
+    ended: bool,
+}
+
+impl<'a> PromptInFlight<'a> {
+    fn begin(session: &'a PiSession, turn: u64) -> Self {
+        session.transition(ProcessEvent::Send { turn });
+        Self {
+            session,
+            turn,
+            ended: false,
+        }
+    }
+
+    fn sent(&self) {
+        self.session
+            .transition(ProcessEvent::Sent { turn: self.turn });
+    }
+
+    fn unsent(mut self) {
+        self.ended = true;
+        self.session
+            .transition(ProcessEvent::Unsent { turn: self.turn });
+    }
+
+    async fn end(mut self, how: TurnEnd) {
+        self.ended = true;
+        let teardown = self.session.transition(ProcessEvent::Ended {
+            turn: self.turn,
+            how,
+        });
+        self.session.tear_down(teardown).await;
+    }
+}
+
+impl Drop for PromptInFlight<'_> {
     fn drop(&mut self) {
-        let inner = &self.session.inner;
-        if !self.settled {
-            inner.abandoned.store(true, Ordering::Release);
-            tracing::warn!(label = %inner.label, "a prompt was cancelled mid-turn; dropping the leg");
+        if self.ended {
+            return;
+        }
+        let teardown = self
+            .session
+            .transition(ProcessEvent::Cancelled { turn: self.turn });
+        if teardown.is_some() {
             let session = self.session.clone();
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                runtime.spawn(async move { session.close().await });
+                runtime.spawn(async move { session.tear_down(teardown).await });
             }
         }
-        inner.busy.store(false, Ordering::Release);
     }
 }
 
@@ -211,8 +347,7 @@ impl PiSession {
             stdin: Mutex::new(Some(stdin)),
             stdout: Mutex::new(BufReader::new(stdout)),
             stderr_tail,
-            busy: AtomicBool::new(false),
-            abandoned: AtomicBool::new(false),
+            state: StdMutex::new(ProcessState::Idle),
             turn_lock: Mutex::new(()),
             label,
             leg: leg.into(),
@@ -261,8 +396,69 @@ impl PiSession {
         ))
     }
 
+    fn state(&self) -> ProcessState {
+        *self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Moves the process's phase by `event`: the only writer of its state.
+    /// Returns what entering the new phase leaves to do; the caller runs it
+    /// with `tear_down`.
+    fn transition(&self, event: ProcessEvent) -> Option<Teardown> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let from = *state;
+        let (to, teardown) = step(from, event);
+        *state = to;
+        drop(state);
+        if to != from {
+            tracing::debug!(label = %self.inner.label, ?from, ?event, ?to, "agent leg phase");
+            if to == ProcessState::Abandoned {
+                tracing::warn!(label = %self.inner.label, "a prompt was cancelled mid-turn; dropping the leg");
+            }
+        }
+        teardown
+    }
+
+    /// Runs what entering a phase left to do. Closing an abandoned process
+    /// is the `Close` event, whose entry into `Closed` releases it.
+    async fn tear_down(&self, mut teardown: Option<Teardown>) {
+        while let Some(next) = teardown {
+            teardown = match next {
+                Teardown::CloseLater => self.transition(ProcessEvent::Close),
+                Teardown::Release => {
+                    self.release().await;
+                    None
+                }
+            };
+        }
+    }
+
+    /// Releases the process: its input, the process tree, and the stderr
+    /// drain. Run once, on entry to `Closed`.
+    async fn release(&self) {
+        self.inner.stdin.lock().await.take();
+        if let Some(mut child) = self.inner.child.lock().await.take() {
+            tracing::info!(label = %self.inner.label, "closing agent leg");
+            terminate_process(&mut child).await;
+        }
+        self.inner.process_guard.disarm();
+        if let Ok(mut task) = self.inner.stderr_task.lock() {
+            if let Some(task) = task.take() {
+                task.abort();
+            }
+        }
+    }
+
+    /// True while a prompt's turn runs: a steer is written into it.
     pub fn busy(&self) -> bool {
-        self.inner.busy.load(Ordering::Acquire)
+        matches!(self.state(), ProcessState::Prompting { .. })
     }
     pub fn label(&self) -> &str {
         &self.inner.label
@@ -303,8 +499,9 @@ impl PiSession {
     /// True while the process runs and can take a prompt. A process whose
     /// prompt was cancelled mid-turn is not: its owner restarts it.
     pub async fn alive(&self) -> bool {
-        if self.inner.abandoned.load(Ordering::Acquire) {
-            return false;
+        match self.state() {
+            ProcessState::Idle | ProcessState::Sending { .. } | ProcessState::Prompting { .. } => {}
+            ProcessState::Abandoned | ProcessState::Closed => return false,
         }
         let mut child = self.inner.child.lock().await;
         child
@@ -327,20 +524,18 @@ impl PiSession {
             .unwrap_or_default()
     }
 
+    /// Closes the process: its owner is done with it, or is replacing it.
+    /// Returns once the process is gone, also when another path (a turn
+    /// that broke it, an abandoned prompt) is already closing it.
     pub async fn close(&self) {
-        self.inner.busy.store(false, Ordering::Release);
-        self.inner.stdin.lock().await.take();
-        if let Some(mut child) = self.inner.child.lock().await.take() {
-            // Only when a child was actually still there. `close` is
-            // idempotent and called on every teardown path, so logging
-            // unconditionally would report tear-downs that did nothing.
-            tracing::info!(label = %self.inner.label, "closing agent leg");
-            terminate_process(&mut child).await;
-        }
-        self.inner.process_guard.disarm();
-        if let Ok(mut task) = self.inner.stderr_task.lock() {
-            if let Some(task) = task.take() {
-                task.abort();
+        match self.transition(ProcessEvent::Close) {
+            Some(teardown) => self.tear_down(Some(teardown)).await,
+            // A release already under way holds `stdin`, then `child`;
+            // both locks are fair, so taking them in that order waits for
+            // it to finish.
+            None => {
+                drop(self.inner.stdin.lock().await);
+                drop(self.inner.child.lock().await);
             }
         }
     }
@@ -360,18 +555,15 @@ impl PiSession {
         if !self.alive().await {
             return Err(self.exited_error().await);
         }
-        // From the write until the turn settles, a dropped future leaves the
-        // process mid-turn.
-        let prompting = Prompting {
-            session: self,
-            settled: false,
-        };
+        // Prompts are numbered under the turn lock, so this is the number
+        // this one takes once it is written.
+        let turn = self.inner.prompts.load(Ordering::Acquire) + 1;
+        let prompting = PromptInFlight::begin(self, turn);
         if let Err(error) = self
             .write(json!({"type":"prompt", "message":message}), false)
             .await
         {
-            // The prompt did not go out, so no turn is left running.
-            prompting.settle();
+            prompting.unsent();
             // A process that stops reading has usually failed; its exit and
             // stderr say why, and the broken pipe is only the symptom.
             if self.settle_exit().await {
@@ -379,7 +571,7 @@ impl PiSession {
             }
             return Err(error);
         }
-        self.inner.prompts.fetch_add(1, Ordering::AcqRel);
+        self.inner.prompts.store(turn, Ordering::Release);
         let turn_id = self.debug_turn_id();
         self.publish(DebugEvent::AgentInput {
             agent: self.inner.leg.clone(),
@@ -388,9 +580,10 @@ impl PiSession {
             source: local_prompt_source(&self.inner.leg, message).into(),
             utterance_id: utterance_id.map(str::to_owned),
         });
-        self.inner.busy.store(true, Ordering::Release);
-        let result = self.collect(&turn_id).await;
-        prompting.settle();
+        prompting.sent();
+        let (how, result) = self.collect(&turn_id).await;
+        // A failed turn closes the process before the caller hears why.
+        prompting.end(how).await;
         result
     }
 
@@ -453,7 +646,8 @@ impl PiSession {
             .map_err(|error| PiSessionError(format!("agent process closed its input: {error}")))
     }
 
-    async fn collect(&self, turn_id: &str) -> Result<Turn, PiSessionError> {
+    /// Reads the prompt's turn up to `agent_settled`, and says how it ended.
+    async fn collect(&self, turn_id: &str) -> (TurnEnd, Result<Turn, PiSessionError>) {
         let mut chunks = Vec::new();
         let mut signals = Vec::new();
         let mut error = String::new();
@@ -481,28 +675,28 @@ impl PiSession {
                         "agent stream ended mid-turn"
                     );
                     self.publish_delta(turn_id, deltas.take());
-                    return Ok(Turn {
+                    let turn = Turn {
                         text: chunks.join("\n"),
                         signals,
                         failed: true,
                         error,
-                    });
+                    };
+                    return (TurnEnd::StreamEnded, Ok(turn));
                 }
                 Ok(Ok(LimitedLine::TooLong)) => {
                     tracing::error!(%label, limit = STREAM_LIMIT, "oversized RPC event; dropping the leg");
-                    self.close().await;
-                    return Ok(Turn {
+                    let turn = Turn {
                         text: String::new(),
                         signals,
                         failed: true,
                         error: "the agent sent something too big to read".into(),
-                    });
+                    };
+                    return (TurnEnd::Failed, Ok(turn));
                 }
                 Ok(Err(error)) => {
                     tracing::error!(%label, %error, "could not read agent output");
-                    return Err(PiSessionError(format!(
-                        "could not read agent output: {error}"
-                    )));
+                    let error = PiSessionError(format!("could not read agent output: {error}"));
+                    return (TurnEnd::StreamEnded, Err(error));
                 }
                 Err(_) => {
                     // The most common wedged-agent symptom in production, and
@@ -513,13 +707,13 @@ impl PiSession {
                         stderr_lines = self.stderr_tail(5).lines().count(),
                         "agent went silent past the turn deadline; dropping the leg"
                     );
-                    self.close().await;
-                    return Ok(Turn {
+                    let turn = Turn {
                         text: String::new(),
                         signals,
                         failed: true,
                         error: "the agent stopped responding".into(),
-                    });
+                    };
+                    return (TurnEnd::Failed, Ok(turn));
                 }
             };
             let line = String::from_utf8_lossy(&line);
@@ -576,13 +770,13 @@ impl PiSession {
                                     limit = STREAM_LIMIT,
                                     "agent produced too much text in one turn; dropping the leg"
                                 );
-                                self.close().await;
-                                return Ok(Turn {
+                                let turn = Turn {
                                     text: String::new(),
                                     signals,
                                     failed: true,
                                     error: "the agent produced too much text in one turn".into(),
-                                });
+                                };
+                                return (TurnEnd::Failed, Ok(turn));
                             }
                             chunks.push(content.trim().to_owned());
                         }
@@ -694,12 +888,13 @@ impl PiSession {
                 final_: true,
             });
         }
-        Ok(Turn {
+        let turn = Turn {
             text,
             signals,
             failed: !error.is_empty(),
             error,
-        })
+        };
+        (TurnEnd::Settled, Ok(turn))
     }
 
     fn publish_delta(&self, turn_id: &str, text: Option<String>) {
