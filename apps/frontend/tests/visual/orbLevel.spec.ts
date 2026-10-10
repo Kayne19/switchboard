@@ -8,31 +8,11 @@ import { expect, test } from "@playwright/test";
 // server with a clip that is loud, then silent, then loud again, and reads
 // the level the orb would draw.
 //
-// CI runs this in Chromium (the `browser` job). WebKit is the engine the
-// deleted analyser path could never serve, so run it there too before a
-// change to playback, with an untracked config of your own:
+// It runs in both projects of `playwright.config.ts`, and CI's `browser`
+// legs run both: Chromium, and WebKit, the engine the deleted analyser path
+// could never serve. To run one engine locally:
 //
-//   // playwright.webkit.local.config.ts  (ignored by .gitignore)
-//   import { defineConfig, devices } from '@playwright/test';
-//   import base from './apps/frontend/playwright.config';
-//   const port = Number(process.env.PLAYWRIGHT_PORT || 4183);
-//   export default defineConfig({
-//     ...base,
-//     testDir: './apps/frontend/tests/visual',
-//     use: { ...base.use, ...devices['Desktop Safari'], launchOptions: {} },
-//     webServer: {
-//       command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
-//       url: `http://127.0.0.1:${port}`,
-//       reuseExistingServer: false,
-//       timeout: 120_000,
-//     },
-//   });
-//
-//   npx playwright test --config playwright.webkit.local.config.ts \
-//     --grep "the orb level"
-//
-// Both engines pass it; the WebKit run is local because this host's CI image
-// has no WebKit libraries.
+//   npm run test:browser -- --project=webkit --grep "the orb level"
 
 /**
  * 1.6s of 300Hz tone, loud for 400ms and silent for 400ms, twice:

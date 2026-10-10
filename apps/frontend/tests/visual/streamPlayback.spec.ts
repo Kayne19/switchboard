@@ -14,13 +14,12 @@ import { expect, test } from "@playwright/test";
 //
 // What this holds, in whichever engine runs it and with no test of which one
 // that is: the caller hears the clip, and if streaming could not carry it,
-// the failure named itself and the whole replay did. CI runs it in Chromium,
-// where the stream itself plays. Run it in WebKit, where the stream is
-// accepted and never sounds, with the untracked local config named in
-// apps/frontend/tests/visual/orbLevel.spec.ts:
+// the failure named itself and the whole replay did. It runs in both
+// projects of `playwright.config.ts`, and CI's `browser` legs run both:
+// Chromium, where the stream itself plays, and WebKit, where it may be
+// accepted and never sound. To run one engine locally:
 //
-//   npx playwright test --config playwright.webkit.local.config.ts \
-//     --grep "streaming playback"
+//   npm run test:browser -- --project=webkit --grep "streaming playback"
 
 /** The same 1.6s voice clip the orb level is read from. */
 const clip = readFileSync(

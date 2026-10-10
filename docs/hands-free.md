@@ -20,9 +20,11 @@ shell draws in every page's bottom-left corner (#180,
 the registered voice runtime and switches it by calling `toggleHandsFree()`;
 while listening it names the wake word (`MODE / HANDS-FREE · HEY JARVIS`).
 The page holds no listening state of its own, and the refusals below stay the
-runtime's: a switch while the line is down, during startup, or with
-push-to-talk active is refused there and reported in `handsFreeStatus`. The
-demo page registers no runtime, so the control is disabled there.
+runtime's. A switch while the line is down, or while a start is still under
+way, does nothing and says nothing (`toggleHandsFree` returns at once). A
+switch with push-to-talk active is refused by the controller and reported in
+`handsFreeStatus`. The demo page registers no runtime, so the control is
+disabled there.
 
 ## Real wake-word detector
 
