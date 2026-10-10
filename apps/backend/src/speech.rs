@@ -610,13 +610,13 @@ async fn drain_speech_stream(
 async fn complete_speech_request(
     state: &AppState,
     text: String,
-    route: String,
+    generation: u64,
     result: oneshot::Sender<Result<(), String>>,
     synthesized: Result<(usize, bool), crate::audio::AudioError>,
     started: std::time::Instant,
-    // The utterance's sequence when the line is written to the spoken
-    // transcript; None when it is not.
-    spoken_as: Option<u64>,
+    // The utterance's sequence, and the route it is logged under, when the
+    // line is written to the spoken transcript; None when it is not.
+    spoken_as: Option<(u64, String)>,
 ) {
     match synthesized {
         Ok((bytes, delivered)) => {
@@ -627,7 +627,7 @@ async fn complete_speech_request(
                 "synthesized a speech line"
             );
             if delivered {
-                if let Some(sequence) = spoken_as {
+                if let Some((sequence, route)) = spoken_as {
                     if let Some(entry) = state
                         .0
                         .transcript_log
@@ -656,6 +656,13 @@ async fn complete_speech_request(
         Err(error) => {
             let detail = error.to_string();
             let _ = result.send(Err(detail.clone()));
+            // A rescue retires the generation before it stops that
+            // generation's speech, so speech it cancelled or superseded went
+            // as meant: the caller is not shown it as an error.
+            if generation != state.0.coordinator.generation() {
+                tracing::info!(%error, chars = text.chars().count(), "speech for a retired generation was not spoken");
+                return;
+            }
             tracing::error!(%error, chars = text.chars().count(), "speech synthesis failed");
             emit_message(state, ServerMessage::error(detail));
         }
@@ -753,11 +760,11 @@ async fn process_speech(state: AppState) {
                 complete_speech_request(
                     &state,
                     text,
-                    route,
+                    generation,
                     result,
                     Err(error),
                     started,
-                    log_spoken.then_some(sequence),
+                    log_spoken.then_some((sequence, route)),
                 )
                 .await;
                 continue;
@@ -791,13 +798,13 @@ async fn process_speech(state: AppState) {
             complete_speech_request(
                 &state,
                 text,
-                route,
+                generation,
                 result,
                 Err(crate::audio::AudioError::Tts(
                     "speech generation was superseded".into(),
                 )),
                 started,
-                log_spoken.then_some(sequence),
+                log_spoken.then_some((sequence, route)),
             )
             .await;
             continue;
@@ -830,11 +837,11 @@ async fn process_speech(state: AppState) {
             complete_speech_request(
                 &completion_state,
                 text,
-                route,
+                generation,
                 result,
                 synthesized,
                 started,
-                log_spoken.then_some(sequence),
+                log_spoken.then_some((sequence, route)),
             )
             .await;
         });
@@ -1400,7 +1407,11 @@ async fn synthesize_reply_if_current(
         )
         .await
         {
-            tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
+            if generation == state.0.coordinator.generation() {
+                tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
+            } else {
+                tracing::info!(%error, "a rescue stopped this reply's speech");
+            }
             success = false;
             break;
         }
