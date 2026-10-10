@@ -2,10 +2,16 @@
 //
 // Replies arrive as `audio_start`, binary chunks, and `audio_done`. When the
 // backend and browser agree on streaming MP3, each utterance plays through its
-// own MediaSource as it arrives; otherwise (or when streaming fails) the
-// complete utterance is replayed from a Blob. One element plays one clip at a
-// time, and every event handler is bound to the clip that installed it, so a
-// late event from a replaced clip can never advance or requeue the new one.
+// own MediaSource as it arrives (`mseStream.ts`); otherwise (or when streaming
+// fails) the complete utterance is replayed from a Blob.
+//
+// One element plays one clip at a time, and who holds it is one value,
+// `holder`, written in one place (`enter`): nothing, the pause between
+// messages, a whole replay, a stream, or a stream cut off while its bytes are
+// still arriving. Leaving a clip takes everything it put on the element back
+// off. Every event handler, timer and `play()` callback names the clip it
+// belongs to, and does nothing once that clip no longer holds the element, so
+// a late event from a replaced clip can never advance or requeue the new one.
 
 import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
 import { errorName, mediaErrorName } from "./errors";
@@ -43,35 +49,104 @@ export const NO_PROGRESS_MS = 3000;
  */
 const END_SLACK_S = 0.25;
 
-interface PlaybackOwner {
-  blob: Blob;
-  url: string;
-  token: number;
-  consumed: boolean;
-  requeued: boolean;
-  paused: boolean;
-  seeked: boolean;
-  awaitingEnded: boolean;
-  pendingAttempt: number | null;
-  handlers: Array<[string, EventListener]>;
-}
+/**
+ * Whether utterances stream. `off` until the backend and this browser agree
+ * (`hello_ack`), `on` while they do, and `refused` once this browser has
+ * taken a stream it could not sound. The engine does not change mid-call, so
+ * neither does the answer: later utterances go straight to the whole replay,
+ * and a reconnect's `hello_ack` cannot offer streaming again. Otherwise every
+ * utterance pays `NO_PROGRESS_MS` and the caller reads the same failure over
+ * and over (#203). Written only by `setMode`.
+ */
+type StreamingMode = "off" | "on" | "refused";
 
-interface MseUtterance {
-  generation: number;
-  sequence: number;
-  mime: string;
-  parts: Blob[];
+/** An utterance, from its `audio_start` to its `audio_done`. */
+interface Utterance {
+  readonly generation: number;
+  readonly sequence: number;
+  readonly mime: string;
+  /** Every byte that arrived, kept for the whole replay. */
+  readonly parts: Blob[];
   bytes: number;
+  /** Its `audio_done` came and said it is complete. */
   done: boolean;
+  /** Its MediaSource while it streams; `null` once it goes whole. */
+  stream: MseSource | null;
+  /** Its failure was reported (`streamFailed` says it once). */
   failed: boolean;
   fallbackQueued: boolean;
-  /** Its MediaSource, when it arrived while streaming was on. */
-  source: MseSource | null;
   /** This utterance's level, decoded from its chunks as they arrive. */
-  envelope: StreamingEnvelope | null;
-  /** What this utterance put on the element, taken off by `mseDetach`. */
-  handlers: Array<[string, EventListener]>;
+  readonly envelope: StreamingEnvelope | null;
 }
+
+type ElementHandlers = Array<[string, EventListener]>;
+
+/** A whole replay on the element. */
+interface ReplayClip {
+  readonly blob: Blob;
+  readonly url: string;
+  handlers: ElementHandlers;
+  /** The element seeked since the last `play()`; see `atEnd`. */
+  seeked: boolean;
+  /** Its level, once its blob is decoded (`meterReplay`). */
+  meter: EnvelopeMeter | null;
+}
+
+/** A stream on the element. */
+interface StreamClip {
+  readonly utterance: Utterance;
+  readonly source: MseSource;
+  readonly meter: EnvelopeMeter | null;
+  handlers: ElementHandlers;
+}
+
+/** One `play()` call; its settling is dropped once another call follows. */
+type PlayAttempt = symbol;
+
+type ReplayPhase =
+  /** Its source is being set; nothing has been asked of the element yet. */
+  | { kind: "attaching" }
+  /** `play()` was called and has not settled. */
+  | { kind: "starting"; attempt: PlayAttempt; watch: ProgressWatch }
+  | { kind: "playing"; watch: ProgressWatch }
+  /**
+   * Something outside the page paused it. `attempt` is a `play()` that has
+   * not settled yet. `atEnd`: paused at its end after a seek, so its `ended`
+   * is due and a tap does not start it again.
+   */
+  | { kind: "paused"; attempt: PlayAttempt | null; atEnd: boolean };
+
+type StreamPhase =
+  /** Its source is being set on the element. */
+  | { kind: "attaching" }
+  /** Attached: waiting for the source to open and the first bytes. */
+  | { kind: "opening"; watch: ProgressWatch }
+  | { kind: "playing"; watch: ProgressWatch }
+  /** Something outside the page paused it: the next tap or append plays it. */
+  | { kind: "paused" }
+  /** `play()` was refused: the next tap or append plays it. */
+  | { kind: "blocked" };
+
+/** Who holds the element. */
+type Holder =
+  | { kind: "idle" }
+  /** The pause between two messages; nothing starts while it runs. */
+  | { kind: "gap"; timer: ReturnType<typeof setTimeout> }
+  | { kind: "replay"; clip: ReplayClip; phase: ReplayPhase }
+  | { kind: "stream"; clip: StreamClip; phase: StreamPhase }
+  /**
+   * A stream taken off the element while its bytes were still arriving. The
+   * element is free, but nothing plays before its whole replay, which is
+   * queued when its `audio_done` comes.
+   */
+  | { kind: "cutOff"; utterance: Utterance };
+
+/**
+ * What leaving a clip does to the element: take its source off (`unload`),
+ * or leave it there for the next clip's `src` to replace (a stream that
+ * played to its end; a reset, which unloads once itself).
+ */
+type Exit = "unload" | "keep source";
 
 export interface AudioPlaybackOptions {
   /** The element replies play through. Defaults to a detached `new Audio()`. */
@@ -103,40 +178,34 @@ export interface AudioPlaybackOptions {
 
 export class AudioPlayback {
   readonly player: HTMLAudioElement;
-  /** Complete utterances waiting for the element, oldest first. */
+  /**
+   * Complete utterances waiting for the element, oldest first. Every one is
+   * older than every stream in `streamQueue`, so they go first.
+   */
   readonly audioQueue: Blob[] = [];
   /** The utterance each complete replay voices. */
   private readonly replaySequences = new WeakMap<Blob, number>();
   private readonly options: AudioPlaybackOptions;
-  private playing = false;
-  private playbackOwner: PlaybackOwner | null = null;
-  private playbackToken = 0;
-  private playAttemptToken = 0;
-  private audioEpoch = 0;
-  private mseEnabled = false;
-  /**
-   * Set once this browser has taken a stream it could not sound. The engine
-   * does not change mid-call, so neither does the answer: later utterances go
-   * straight to the whole replay, and a reconnect's `hello_ack` cannot offer
-   * streaming again. Otherwise every utterance pays `NO_PROGRESS_MS` and the
-   * caller reads the same failure over and over (#203).
-   */
-  private mseRefused = false;
-  private mseQueue: MseUtterance[] = [];
-  private mseActive: MseUtterance | null = null;
-  private msePending: MseUtterance | null = null;
-  private mseReplayBytes = 0;
+  /** Who holds the element; written only by `enter`. */
+  private holder: Holder = { kind: "idle" };
+  private mode: StreamingMode = "off";
+  /** Streams waiting for the element, oldest first. */
+  private streamQueue: Utterance[] = [];
+  /** The utterance whose bytes are arriving now. */
+  private arriving: Utterance | null = null;
+  /** The bytes this leg has kept for whole replays. */
+  private replayBytes = 0;
+  /** The leg whose audio plays; audio stamped with another is ignored. */
+  private generation = 0;
   /**
    * Set while a pause or a blocked `play()` is on screen as an error the
    * caller has to act on. The clip sounding again takes it down
    * (`reportResumed`): nothing else would until the next turn's status, and
    * a stream that recovered left the red card over the conversation (#260).
+   * It belongs to the status line, not to a clip: a blocked replay goes back
+   * to the queue, and the clip a tap then starts is a new one.
    */
   private awaitingTap = false;
-  /** The pause before the next message; nothing starts while it runs. */
-  private gapTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Watches an accepted clip for sound; see `NO_PROGRESS_MS`. */
-  private progressTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * The one reader of the agent's playback level, in every engine (#194):
    * the utterance's own bytes, decoded off to the side, read at the
@@ -144,8 +213,6 @@ export class AudioPlayback {
    * so no engine has to be asked whether it survives that (#189).
    */
   private envelopeDecoder: EnvelopeDecoder | null = null;
-  private envelopeMeter: EnvelopeMeter | null = null;
-  private envelopeToken = 0;
   private envelopeDecoderAttempted = false;
 
   constructor(options: AudioPlaybackOptions) {
@@ -153,53 +220,707 @@ export class AudioPlayback {
     this.player = options.player ?? new Audio();
   }
 
-  /** Run `next` after the pause between messages. */
-  private afterGap(next: () => void): void {
-    const gap = this.options.gapMs ?? INTER_UTTERANCE_GAP_MS;
-    this.clearGap();
-    if (gap <= 0) {
-      next();
-      return;
-    }
-    this.gapTimer = setTimeout(() => {
-      this.gapTimer = null;
-      next();
-      this.notifyPlaybackChange();
-    }, gap);
+  get isPlaying(): boolean {
+    return sounding(this.holder);
+  }
+
+  get streamingEnabled(): boolean {
+    return this.mode === "on";
+  }
+
+  /** True when nothing is playing and nothing is waiting to play. */
+  isDrained(): boolean {
+    return (
+      this.holder.kind === "idle" &&
+      this.audioQueue.length === 0 &&
+      this.streamQueue.length === 0 &&
+      this.arriving === null
+    );
+  }
+
+  /** Streams MP3 through MediaSource when the backend and this browser agree. */
+  setStreamingEnabled(requested: boolean): void {
+    const enabled =
+      requested && this.mode !== "refused" && mseRuntimeSupported();
+    // A repeat of what is already set retires nothing: every reconnect's
+    // `hello_ack` arrives here, and clearing would cut the clip playing.
+    if (enabled === (this.mode === "on")) return;
+    this.setMode(enabled ? "on" : "off");
   }
 
   /**
-   * Watches the clip that owns the element for as long as it is meant to be
-   * sounding: every `stallMs` its `currentTime` has to have moved. One that
-   * has not is stalled, whether before its first sound (WebKit leaving a
-   * MediaSource it cannot play pending, #203) or partway (#213), and
-   * `onStall` is told which. `stillArriving` lets a stream hold the watch
-   * while its bytes are still landing. Every way a clip stops sounding --
-   * `ended`, `pause`, `error`, a fallback, a reset -- clears the watch.
+   * Retires everything queued or playing from the previous leg. Audio stamped
+   * with an older generation is ignored from here on.
+   */
+  resetForGeneration(generation: number): void {
+    this.generation = generation;
+    this.awaitingTap = false;
+    this.retire();
+  }
+
+  /**
+   * Moves to `generation` on a handoff (a transfer this tab saw adopted, or a
+   * return to the operator): the goodbye already here keeps playing, and the
+   * new leg's audio queues behind it. A clip from another leg that is still
+   * arriving could never finish, so that case retires everything instead.
+   */
+  handOffToGeneration(generation: number): void {
+    if (this.arriving && this.arriving.generation !== generation) {
+      this.resetForGeneration(generation);
+      return;
+    }
+    this.generation = generation;
+  }
+
+  /** Stops playback for good; used when the runtime is torn down. */
+  dispose(): void {
+    this.retire();
+  }
+
+  // The status message promises that a page interaction resumes blocked
+  // audio. This is that gesture path, so blocked audio does not wait for a
+  // later clip to arrive.
+  handleGesture(target?: EventTarget | null): void {
+    if (target === this.player) return;
+    const holder = this.holder;
+    switch (holder.kind) {
+      case "idle":
+        if (this.audioQueue.length) this.startReplay();
+        return;
+      case "gap":
+      case "cutOff":
+        return;
+      case "replay": {
+        const phase = holder.phase;
+        if (phase.kind === "paused" && phase.attempt === null && !phase.atEnd)
+          this.attemptPlay(holder.clip);
+        return;
+      }
+      case "stream":
+        // A stream that still holds the element keeps it, whether or not it
+        // is sounding: the replays behind it wait for its end.
+        this.playStream(holder.clip);
+        return;
+      default:
+        unreachable(holder);
+    }
+  }
+
+  /**
+   * Starts the head of `audioQueue` now, in place of whatever holds the
+   * element. The tests put their blobs on the element through here.
+   */
+  playNext(): void {
+    this.enter({ kind: "idle" });
+    if (this.audioQueue.length) this.startReplay();
+    else this.say(this.options.idleText, false);
+  }
+
+  receiveAudioStart(
+    message: Pick<AudioStartMessage, "generation" | "sequence" | "mime">,
+  ): void {
+    const generation = message.generation;
+    const sequence = message.sequence;
+    if (typeof generation !== "number" || typeof sequence !== "number") return;
+    if (generation !== this.generation) {
+      // Audio from a leg the call has left never plays.
+      this.options.onUtterance?.(sequence);
+      return;
+    }
+    const mime = message.mime === "audio/mpeg" ? message.mime : "audio/mpeg";
+    const streaming = this.mode === "on";
+    const utterance: Utterance = {
+      generation,
+      sequence,
+      mime,
+      parts: [],
+      bytes: 0,
+      done: false,
+      stream: null,
+      failed: false,
+      fallbackQueued: false,
+      // A stream's level is its own chunks, decoded as they arrive; a
+      // replay's is the whole blob (`meterReplay`).
+      envelope: streaming ? this.newStreamEnvelope() : null,
+    };
+    if (streaming)
+      utterance.stream = new MseSource(mime, {
+        appended: () => this.streamAppended(utterance),
+        failed: (error) => this.streamFailed(utterance, error),
+      });
+    this.arriving = utterance;
+    if (streaming) {
+      this.streamQueue.push(utterance);
+      this.startNext();
+    }
+    this.notifyPlaybackChange();
+  }
+
+  receiveAudioChunk(data: ArrayBuffer): void {
+    const utterance = this.arriving;
+    if (!utterance || utterance.generation !== this.generation) return;
+    if (
+      utterance.bytes + data.byteLength > MAX_AUDIO_UTTERANCE ||
+      this.replayBytes + data.byteLength > MAX_AUDIO_REPLAY
+    ) {
+      this.streamFailed(utterance, new Error("audio replay limit"));
+      return;
+    }
+    utterance.bytes += data.byteLength;
+    this.replayBytes += data.byteLength;
+    utterance.parts.push(new Blob([data], { type: utterance.mime }));
+    utterance.envelope?.append(data);
+    utterance.stream?.receive(data);
+    this.notifyPlaybackChange();
+  }
+
+  receiveAudioDone(
+    message: Pick<AudioDoneMessage, "generation" | "sequence" | "done">,
+  ): void {
+    if (
+      message.generation !== this.generation ||
+      typeof message.sequence !== "number"
+    )
+      return;
+    const utterance = this.arriving;
+    if (!utterance || utterance.sequence !== message.sequence) return;
+    utterance.done = message.done === true;
+    this.arriving = null;
+    if (utterance.stream) utterance.stream.finish(utterance.done);
+    else {
+      this.queueReplay(utterance);
+      const holder = this.holder;
+      if (holder.kind === "cutOff" && holder.utterance === utterance)
+        this.enter({ kind: "idle" });
+      this.startNext();
+    }
+    this.notifyPlaybackChange();
+  }
+
+  // --- The holder -------------------------------------------------------
+
+  /**
+   * The one writer of `holder`. Moving to another clip, or to none, takes
+   * everything the old holder put on the element back off (`release`).
+   * Within one clip, a progress watch the next phase does not carry is
+   * stopped, and the level meter runs exactly while the clip is sounding.
+   */
+  private enter(next: Holder, exit: Exit = "unload"): void {
+    const previous = this.holder;
+    this.holder = next;
+    const watch = watchOf(previous);
+    if (watch && watch !== watchOf(next)) watch.cancel();
+    const sameOccupant = occupant(previous) === occupant(next);
+    if (!sameOccupant) this.release(previous, exit);
+    else if (sounding(previous) && !sounding(next)) meterOf(next)?.stop();
+    if (sounding(next) && !(sameOccupant && sounding(previous)))
+      meterOf(next)?.start();
+    this.notifyPlaybackChange();
+  }
+
+  /** Takes what `holder` put on the element back off. */
+  private release(holder: Holder, exit: Exit): void {
+    switch (holder.kind) {
+      case "idle":
+      case "cutOff":
+        return;
+      case "gap":
+        clearTimeout(holder.timer);
+        return;
+      case "replay":
+        this.detach(holder.clip.handlers);
+        holder.clip.meter?.stop();
+        if (exit === "unload") this.unloadElement();
+        URL.revokeObjectURL(holder.clip.url);
+        return;
+      case "stream":
+        this.detach(holder.clip.handlers);
+        holder.clip.meter?.stop();
+        if (exit === "unload") this.unloadElement();
+        holder.clip.source.release();
+        return;
+      default:
+        unreachable(holder);
+    }
+  }
+
+  private detach(handlers: ElementHandlers): void {
+    for (const [name, handler] of handlers)
+      this.player.removeEventListener(name, handler);
+  }
+
+  private attach(handlers: ElementHandlers): void {
+    for (const [name, handler] of handlers)
+      this.player.addEventListener(name, handler);
+  }
+
+  private unloadElement(): void {
+    const player = this.player;
+    player.pause();
+    player.removeAttribute("src");
+    player.load();
+  }
+
+  /**
+   * Starts what waits for the element, if nothing holds it: the oldest whole
+   * replay, or else the next stream.
+   */
+  private startNext(): void {
+    if (this.holder.kind !== "idle") return;
+    if (this.audioQueue.length) this.startReplay();
+    else if (this.mode === "on" && this.streamQueue.length) this.startStream();
+  }
+
+  /**
+   * A clip played to its end, failed, or went silent, and the element is
+   * free: what waits follows after the pause between messages. When nothing
+   * waits, the idle line, so no error the clip reported outlives it (#260).
+   */
+  private afterClip(): void {
+    if (!this.audioQueue.length && !this.streamQueue.length) {
+      this.say(this.options.idleText, false);
+      return;
+    }
+    const gap = this.options.gapMs ?? INTER_UTTERANCE_GAP_MS;
+    if (gap <= 0) {
+      this.startNext();
+      return;
+    }
+    const timer = setTimeout(() => this.gapElapsed(timer), gap);
+    this.enter({ kind: "gap", timer });
+  }
+
+  private gapElapsed(timer: ReturnType<typeof setTimeout>): void {
+    const holder = this.holder;
+    if (holder.kind !== "gap" || holder.timer !== timer) return;
+    this.enter({ kind: "idle" });
+    this.startNext();
+  }
+
+  /** Everything queued, arriving or playing is dropped. */
+  private retire(): void {
+    this.audioQueue.length = 0;
+    this.streamQueue = [];
+    this.arriving = null;
+    this.replayBytes = 0;
+    // One unload, whatever held the element: a stream that played out left
+    // its source there.
+    this.enter({ kind: "idle" }, "keep source");
+    this.unloadElement();
+    this.notifyPlaybackChange();
+  }
+
+  // --- Whole replays ----------------------------------------------------
+
+  /** The head of `audioQueue` takes the element. */
+  private startReplay(): void {
+    const blob = this.audioQueue.shift();
+    if (!blob) return;
+    const player = this.player;
+    const clip: ReplayClip = {
+      blob,
+      url: URL.createObjectURL(blob),
+      handlers: [],
+      seeked: false,
+      meter: null,
+    };
+    this.enter({ kind: "replay", clip, phase: { kind: "attaching" } });
+    this.meterReplay(clip);
+    const sequence = this.replaySequences.get(blob);
+    if (sequence !== undefined) this.options.onUtterance?.(sequence);
+    const resetTerminal = () => {
+      const phase = this.replayPhase(clip);
+      if (
+        !phase ||
+        (Number.isFinite(player.duration) &&
+          Number.isFinite(player.currentTime) &&
+          player.currentTime >= player.duration)
+      )
+        return;
+      clip.seeked = false;
+      if (phase.kind === "paused" && phase.atEnd)
+        this.enter({
+          kind: "replay",
+          clip,
+          phase: { ...phase, atEnd: false },
+        });
+    };
+    clip.handlers = [
+      ["ended", () => this.replayEnded(clip)],
+      ["pause", () => this.replayPaused(clip)],
+      ["error", () => this.replayError(clip)],
+      [
+        "seeking",
+        () => {
+          clip.seeked = true;
+          resetTerminal();
+        },
+      ],
+      ["seeked", resetTerminal],
+      ["timeupdate", resetTerminal],
+    ];
+    this.attach(clip.handlers);
+    player.src = clip.url;
+    this.attemptPlay(clip);
+  }
+
+  private replayPhase(clip: ReplayClip): ReplayPhase | null {
+    const holder = this.holder;
+    return holder.kind === "replay" && holder.clip === clip
+      ? holder.phase
+      : null;
+  }
+
+  private attemptPlay(clip: ReplayClip): void {
+    if (!this.replayPhase(clip)) return;
+    clip.seeked = false;
+    const attempt: PlayAttempt = Symbol("play");
+    // Armed on the attempt, for the same reason as the stream's: a `play()`
+    // that never settles is a clip that produced no sound, and the caller
+    // has to be told about it either way (#203).
+    const watch = this.watchProgress((heard) =>
+      this.replayStalled(clip, heard),
+    );
+    this.enter({
+      kind: "replay",
+      clip,
+      phase: { kind: "starting", attempt, watch },
+    });
+    let result: Promise<void>;
+    try {
+      result = this.player.play();
+    } catch (error) {
+      this.replayRefused(clip, attempt, error);
+      return;
+    }
+    Promise.resolve(result).then(
+      () => this.replayStarted(clip, attempt),
+      (error) => this.replayRefused(clip, attempt, error),
+    );
+  }
+
+  private replayStarted(clip: ReplayClip, attempt: PlayAttempt): void {
+    const phase = this.replayPhase(clip);
+    if (phase?.kind === "starting" && phase.attempt === attempt) {
+      this.enter({
+        kind: "replay",
+        clip,
+        phase: { kind: "playing", watch: phase.watch },
+      });
+      this.reportResumed();
+    } else if (phase?.kind === "paused" && phase.attempt === attempt)
+      this.enter({
+        kind: "replay",
+        clip,
+        phase: { ...phase, attempt: null },
+      });
+  }
+
+  /**
+   * Autoplay rejection is recoverable: the clip goes back to the front of the
+   * queue, so the next user gesture retries it instead of silently losing it.
+   */
+  private replayRefused(
+    clip: ReplayClip,
+    attempt: PlayAttempt,
+    error: unknown,
+  ): void {
+    const phase = this.replayPhase(clip);
+    if (
+      (phase?.kind !== "starting" && phase?.kind !== "paused") ||
+      phase.attempt !== attempt
+    )
+      return;
+    this.audioQueue.unshift(clip.blob);
+    this.enter({ kind: "idle" });
+    this.reportBlocked(error);
+  }
+
+  private replayEnded(clip: ReplayClip): void {
+    if (!this.replayPhase(clip) || this.player.ended === false) return;
+    this.replayFinished(clip);
+  }
+
+  private replayPaused(clip: ReplayClip): void {
+    const phase = this.replayPhase(clip);
+    const player = this.player;
+    if (!phase || player.ended || player.paused === false) return;
+    const atEnd = clip.seeked && this.terminalSeek();
+    this.enter({
+      kind: "replay",
+      clip,
+      phase: { kind: "paused", attempt: attemptOf(phase), atEnd },
+    });
+    this.reportPaused(atEnd);
+  }
+
+  private replayError(clip: ReplayClip): void {
+    const player = this.player;
+    if (!this.replayPhase(clip) || !player.error) return;
+    // The element refused the clip. Say so: a browser that cannot decode
+    // what was sent used to drop every utterance in silence, with nothing
+    // on screen for the caller to report (#189).
+    this.say(
+      "Audio failed to play (" + mediaErrorName(player.error) + ").",
+      true,
+    );
+    this.replayFinished(clip);
+  }
+
+  /**
+   * The element stopped advancing: before any sound, or partway. A clip
+   * standing at its end whose `ended` never came is simply over.
+   */
+  private replayStalled(clip: ReplayClip, heard: boolean): void {
+    if (!this.replayPhase(clip)) return;
+    if (!this.playedOut()) this.say(this.silentText(heard), true);
+    this.replayFinished(clip);
+  }
+
+  private replayFinished(clip: ReplayClip): void {
+    if (!this.replayPhase(clip)) return;
+    this.enter({ kind: "idle" });
+    this.afterClip();
+  }
+
+  // --- Streams ----------------------------------------------------------
+
+  /** The head of `streamQueue` takes the element. */
+  private startStream(): void {
+    const utterance = this.streamQueue.shift();
+    const source = utterance?.stream;
+    if (!utterance || !source) return;
+    const player = this.player;
+    const onLevel = this.options.onAudioLevel;
+    const clip: StreamClip = {
+      utterance,
+      source,
+      // A stream is metered against the envelope its chunks are decoded into.
+      meter:
+        onLevel && utterance.envelope
+          ? new EnvelopeMeter(player, utterance.envelope, onLevel)
+          : null,
+      handlers: [],
+    };
+    this.enter({ kind: "stream", clip, phase: { kind: "attaching" } });
+    this.options.onUtterance?.(utterance.sequence);
+    const url = source.attach();
+    // The element can refuse what was appended -- a SourceBuffer WebKit
+    // cannot parse sets a MediaError and stops. Without this the clip stayed
+    // "playing" for the rest of the call: no sound, no fallback, no message
+    // (#189).
+    const error: EventListener = () => {
+      if (this.streamPhase(clip) && player.error)
+        this.streamFailed(utterance, player.error);
+    };
+    // Something outside the page stopped the element partway (an iPad's
+    // audio session taken for the microphone, a lock-screen control). It is
+    // paused, not playing, and a tap resumes it, as with a replay; without
+    // this the call stayed "speaking" over silence (#213). The `pause` a
+    // clip fires as it reaches its end is not this.
+    const pause: EventListener = () => {
+      if (
+        this.streamPhase(clip)?.kind !== "playing" ||
+        player.ended ||
+        player.paused === false
+      )
+        return;
+      this.enter({ kind: "stream", clip, phase: { kind: "paused" } });
+      this.reportPaused(false);
+    };
+    clip.handlers = [
+      ["ended", () => this.streamFinished(clip)],
+      ["error", error],
+      ["pause", pause],
+    ];
+    this.attach(clip.handlers);
+    // Attaching the source is what opens it (`MseSource.attach`). The
+    // element's `error` handler is already on, so an engine that refuses the
+    // source says so and the whole replay follows.
+    player.src = url;
+    // An engine can also leave the source `closed` and set no error (WebKit
+    // with a bare page, #203). Nothing appends then, so the stream's own
+    // watch (`playStream`) never starts, and the call heard nothing with
+    // nothing said (#259). This one holds once the source is open and
+    // waiting for bytes; the first append replaces it with the stream's own.
+    if (this.streamPhase(clip)?.kind !== "attaching") return;
+    const watch = this.watchProgress(
+      () => {
+        if (this.streamPhase(clip)?.kind === "opening")
+          this.streamFailed(utterance, new Error("MediaSource did not open"));
+      },
+      () => source.opened,
+    );
+    this.enter({ kind: "stream", clip, phase: { kind: "opening", watch } });
+  }
+
+  private streamPhase(clip: StreamClip): StreamPhase | null {
+    const holder = this.holder;
+    return holder.kind === "stream" && holder.clip === clip
+      ? holder.phase
+      : null;
+  }
+
+  /** An append went into `utterance`'s source: it plays, if it holds the element. */
+  private streamAppended(utterance: Utterance): void {
+    const holder = this.holder;
+    if (holder.kind === "stream" && holder.clip.utterance === utterance)
+      this.playStream(holder.clip);
+  }
+
+  /** The stream that holds the element plays: on an append, or a tap. */
+  private playStream(clip: StreamClip): void {
+    const phase = this.streamPhase(clip);
+    if (!phase || phase.kind === "playing") return;
+    const source = clip.source;
+    // The watch is armed on the attempt, not on `play()` resolving: a
+    // WebKit element given a MediaSource of MP3 buffers it, never reaches
+    // `canplay`, and leaves `play()` pending for good -- no sound, no
+    // rejection, nothing to notice (#203). It stays on until the stream ends:
+    // one that stops partway and never resumes is the same failure, and used
+    // to leave the call "speaking" with nothing sounding (#213). Either way
+    // it says so and the whole replay follows. An append that landed since
+    // the last look holds it: the element may be waiting for those bytes.
+    source.takeFreshAppends();
+    const watch = this.watchProgress(
+      (heard) => this.streamStalled(clip, heard),
+      () => source.takeFreshAppends(),
+    );
+    this.enter({ kind: "stream", clip, phase: { kind: "playing", watch } });
+    Promise.resolve(this.player.play()).then(
+      () => {
+        if (this.streamPhase(clip)?.kind === "playing") this.reportResumed();
+      },
+      (error) => {
+        // A rejection that arrives after this stream was replaced or failed
+        // belongs to a clip that is already gone: falling back aborts the
+        // pending `play()` itself when it reloads the element, and that
+        // used to reach the caller as "Audio blocked by the browser" while
+        // the whole replay was already playing (#203).
+        if (!this.streamPhase(clip)) return;
+        this.enter({ kind: "stream", clip, phase: { kind: "blocked" } });
+        this.reportBlocked(error);
+      },
+    );
+  }
+
+  /** The stream stopped advancing; see `watchProgress`. */
+  private streamStalled(clip: StreamClip, heard: boolean): void {
+    if (!this.streamPhase(clip)) return;
+    // Every byte went in, the source was ended, and the element stands at
+    // its end: the stream played out and `ended` never came.
+    if (clip.source.ended && this.playedOut()) {
+      this.streamFinished(clip);
+      return;
+    }
+    this.streamFailed(
+      clip.utterance,
+      new Error(heard ? "playback stalled" : "no playback progress"),
+    );
+  }
+
+  /** The stream played to its end; what waits follows. */
+  private streamFinished(clip: StreamClip): void {
+    if (!this.streamPhase(clip)) return;
+    // Its finished source stays on the element until the next clip's `src`
+    // replaces it, as it always has.
+    this.enter({ kind: "idle" }, "keep source");
+    this.afterClip();
+  }
+
+  private streamFailed(utterance: Utterance, error: unknown): void {
+    if (utterance.failed) return;
+    utterance.failed = true;
+    this.say(
+      "Streaming audio failed; using the complete replay (" +
+        mediaErrorName(error) +
+        ").",
+      true,
+    );
+    this.setMode("refused", utterance);
+  }
+
+  /**
+   * The one writer of `mode`. Every move to `off` or `refused` stops
+   * streaming (`stopStreaming`); `failed` names the utterance whose failure
+   * moved it.
+   */
+  private setMode(next: StreamingMode, failed: Utterance | null = null): void {
+    this.mode = next;
+    if (next !== "on") this.stopStreaming(failed);
+  }
+
+  /**
+   * Streaming stops here, because `failed` could not be streamed or because
+   * the service turned it off, and nothing it held is lost (#259): every
+   * utterance goes on as a whole replay, in order. One that is complete is
+   * queued now; one still arriving falls back on its `audio_done`. A
+   * complete stream that did not fail plays out, and the replays follow it.
+   * A replay that holds the element is left alone.
+   */
+  private stopStreaming(failed: Utterance | null): void {
+    const holder = this.holder;
+    if (holder.kind === "stream") {
+      const utterance = holder.clip.utterance;
+      if (utterance === failed || !utterance.done) {
+        // Its bytes can no longer go in: take it off the element. Whatever
+        // waits in the replay queue came after it.
+        utterance.failed = true;
+        utterance.stream = null;
+        if (utterance.done) {
+          this.queueReplay(utterance, true);
+          this.enter({ kind: "idle" });
+        } else this.enter({ kind: "cutOff", utterance });
+      }
+    }
+    for (const utterance of this.streamQueue) {
+      utterance.stream = null;
+      if (utterance.done) this.queueReplay(utterance);
+    }
+    this.streamQueue = [];
+    this.startNext();
+    this.notifyPlaybackChange();
+  }
+
+  /**
+   * Queues `utterance` as a whole replay. `first` is for the stream that
+   * held the element: whatever waits in the replay queue came after it.
+   */
+  private queueReplay(utterance: Utterance, first = false): void {
+    if (utterance.fallbackQueued) return;
+    utterance.fallbackQueued = true;
+    if (utterance.bytes > MAX_AUDIO_UTTERANCE) {
+      this.say(
+        "Audio exceeded the replay limit and was stopped.",
+        true,
+      );
+      this.options.onUtterance?.(utterance.sequence);
+      return;
+    }
+    const replay = new Blob(utterance.parts, { type: utterance.mime });
+    this.replaySequences.set(replay, utterance.sequence);
+    if (first) this.audioQueue.unshift(replay);
+    else this.audioQueue.push(replay);
+    this.notifyPlaybackChange();
+  }
+
+  // --- Watch, level, status ---------------------------------------------
+
+  /**
+   * Watches the clip that holds the element for as long as it is meant to
+   * be sounding; see `ProgressWatch`. The phase that carries it stops it on
+   * the way out (`enter`).
    */
   private watchProgress(
     onStall: (heard: boolean) => void,
     stillArriving?: () => boolean,
-  ): void {
-    this.clearProgressWatch();
-    const ms = this.options.stallMs ?? NO_PROGRESS_MS;
-    if (ms <= 0) return;
-    let heard = false;
-    let last = this.position();
-    const check = () => {
-      this.progressTimer = null;
-      const now = this.position();
-      const arriving = stillArriving?.() ?? false;
-      if (now > last) {
-        heard = true;
-        last = now;
-      } else if (!arriving) {
-        onStall(heard);
-        return;
-      }
-      this.progressTimer = setTimeout(check, ms);
-    };
-    this.progressTimer = setTimeout(check, ms);
+  ): ProgressWatch {
+    return new ProgressWatch(
+      () => this.position(),
+      this.options.stallMs ?? NO_PROGRESS_MS,
+      onStall,
+      stillArriving,
+    );
   }
 
   private position(): number {
@@ -217,9 +938,52 @@ export class AudioPlayback {
     );
   }
 
-  private clearProgressWatch(): void {
-    if (this.progressTimer !== null) clearTimeout(this.progressTimer);
-    this.progressTimer = null;
+  private terminalSeek(): boolean {
+    const player = this.player;
+    return (
+      Number.isFinite(player.duration) &&
+      player.duration > 0 &&
+      Number.isFinite(player.currentTime) &&
+      player.currentTime >= player.duration
+    );
+  }
+
+  /**
+   * The decoder the level is read through, made once. `null` on a browser
+   * with no `OfflineAudioContext`: that is a flat level, which is what a
+   * caller with no level should see.
+   */
+  private meterDecoder(): EnvelopeDecoder | null {
+    if (!this.options.onAudioLevel) return null;
+    if (!this.envelopeDecoderAttempted) {
+      this.envelopeDecoderAttempted = true;
+      this.envelopeDecoder = createEnvelopeDecoder();
+    }
+    return this.envelopeDecoder;
+  }
+
+  /** Decodes the replay aside and meters the element against its envelope. */
+  private meterReplay(clip: ReplayClip): void {
+    const onLevel = this.options.onAudioLevel;
+    const decoder = this.meterDecoder();
+    if (!onLevel || !decoder) return;
+    void clip.blob
+      .arrayBuffer()
+      .then((bytes) => decodeEnvelope(bytes, decoder))
+      .then((envelope) => {
+        const holder = this.holder;
+        if (!envelope || holder.kind !== "replay" || holder.clip !== clip)
+          return;
+        clip.meter = new EnvelopeMeter(this.player, envelope, onLevel);
+        if (sounding(holder)) clip.meter.start();
+      })
+      .catch(() => undefined);
+  }
+
+  /** The timeline a streamed utterance's chunks are decoded into. */
+  private newStreamEnvelope(): StreamingEnvelope | null {
+    const decoder = this.meterDecoder();
+    return decoder ? new StreamingEnvelope(decoder) : null;
   }
 
   /** The text a clip that stopped advancing is reported with. */
@@ -274,733 +1038,106 @@ export class AudioPlayback {
     this.say("Audio resumed.", false);
   }
 
-  private clearGap(): void {
-    if (this.gapTimer !== null) clearTimeout(this.gapTimer);
-    this.gapTimer = null;
-  }
-
-  get isPlaying(): boolean {
-    return this.playing;
-  }
-
-  get streamingEnabled(): boolean {
-    return this.mseEnabled;
-  }
-
-  /** True when nothing is playing and nothing is waiting to play. */
-  isDrained(): boolean {
-    return (
-      this.audioQueue.length === 0 &&
-      this.playbackOwner === null &&
-      !this.playing &&
-      this.mseActive === null &&
-      this.mseQueue.length === 0 &&
-      this.msePending === null &&
-      this.gapTimer === null
-    );
-  }
-
-  /** Streams MP3 through MediaSource when the backend and this browser agree. */
-  setStreamingEnabled(requested: boolean): void {
-    const enabled = requested && !this.mseRefused && mseRuntimeSupported();
-    // A repeat of what is already set retires nothing: every reconnect's
-    // `hello_ack` arrives here, and clearing would cut the clip playing.
-    if (enabled === this.mseEnabled) return;
-    if (enabled) this.mseEnabled = true;
-    else this.mseStop(null);
-  }
-
-  /**
-   * Retires everything queued or playing from the previous leg. Audio stamped
-   * with an older generation is ignored from here on.
-   */
-  resetForGeneration(generation: number): void {
-    this.clearGap();
-    this.audioEpoch = generation;
-    this.awaitingTap = false;
-    this.audioQueue.length = 0;
-    this.clearMsePlayback();
-    if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
-    this.playing = false;
-  }
-
-  /**
-   * Moves to `generation` on a handoff (a transfer this tab saw adopted, or a
-   * return to the operator): the goodbye already here keeps playing, and the
-   * new leg's audio queues behind it. A clip from another leg that is still
-   * arriving could never finish, so that case retires everything instead.
-   */
-  handOffToGeneration(generation: number): void {
-    if (this.msePending && this.msePending.generation !== generation) {
-      this.resetForGeneration(generation);
-      return;
-    }
-    this.audioEpoch = generation;
-  }
-
-  /** Stops playback for good; used when the runtime is torn down. */
-  dispose(): void {
-    this.clearGap();
-    this.clearProgressWatch();
-    this.audioQueue.length = 0;
-    this.clearMsePlayback();
-    if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
-    this.stopEnvelopeMeter();
-    this.playing = false;
-  }
-
-  // The status message promises that a page interaction resumes blocked
-  // audio. This is that gesture path, so blocked audio does not wait for a
-  // later clip to arrive.
-  handleGesture(target?: EventTarget | null): void {
-    if (target === this.player || this.gapTimer !== null) return;
-    const owner = this.playbackOwner;
-    if (!owner) {
-      // A stream that still holds the element keeps it: the replays behind
-      // it wait for its end, whether or not it is sounding.
-      if (this.mseActive) {
-        if (!this.playing) this.msePlay();
-      } else if (this.audioQueue.length) this.playNext();
-      return;
-    }
-    if (this.playing || owner.awaitingEnded || owner.pendingAttempt !== null)
-      return;
-    this.attemptPlay(owner);
-  }
-
-  /**
-   * The decoder the level is read through, made once. `null` on a browser
-   * with no `OfflineAudioContext`: that is a flat level, which is what a
-   * caller with no level should see.
-   */
-  private meterDecoder(): EnvelopeDecoder | null {
-    if (!this.options.onAudioLevel) return null;
-    if (!this.envelopeDecoderAttempted) {
-      this.envelopeDecoderAttempted = true;
-      this.envelopeDecoder = createEnvelopeDecoder();
-    }
-    return this.envelopeDecoder;
-  }
-
-  /** Decodes the clip aside and meters the element against its envelope. */
-  private startEnvelopeMeter(blob: Blob): void {
-    const onLevel = this.options.onAudioLevel;
-    const decoder = this.meterDecoder();
-    if (!onLevel || !decoder) return;
-    const token = ++this.envelopeToken;
-    void blob
-      .arrayBuffer()
-      .then((bytes) => decodeEnvelope(bytes, decoder))
-      .then((envelope) => {
-        if (!envelope || this.envelopeToken !== token) return;
-        const meter = new EnvelopeMeter(this.player, envelope, onLevel);
-        this.envelopeMeter = meter;
-        if (this.playing) meter.start();
-      })
-      .catch(() => undefined);
-  }
-
-  /** The timeline a streamed utterance's chunks are decoded into. */
-  private newStreamEnvelope(): StreamingEnvelope | null {
-    const decoder = this.meterDecoder();
-    return decoder ? new StreamingEnvelope(decoder) : null;
-  }
-
-  /** Meters a stream against the envelope its chunks are decoded into. */
-  private startStreamEnvelopeMeter(utterance: MseUtterance): void {
-    const onLevel = this.options.onAudioLevel;
-    if (!onLevel || !utterance.envelope) return;
-    this.envelopeToken += 1;
-    this.envelopeMeter = new EnvelopeMeter(
-      this.player,
-      utterance.envelope,
-      onLevel,
-    );
-  }
-
-  private startMeter(): void {
-    this.envelopeMeter?.start();
-  }
-
-  private stopMeter(): void {
-    this.envelopeMeter?.stop();
-  }
-
-  private stopEnvelopeMeter(): void {
-    this.envelopeToken += 1;
-    this.envelopeMeter?.stop();
-    this.envelopeMeter = null;
-  }
-
-  playNext(): void {
-    if (this.playbackOwner) this.cleanupOwner(this.playbackOwner);
-    const blob = this.audioQueue.shift();
-    if (!blob) {
-      this.playing = false;
-      this.say(this.options.idleText, false);
-      this.notifyPlaybackChange();
-      return;
-    }
-    const player = this.player;
-    const owner: PlaybackOwner = {
-      blob,
-      url: URL.createObjectURL(blob),
-      token: ++this.playbackToken,
-      consumed: false,
-      requeued: false,
-      paused: false,
-      seeked: false,
-      awaitingEnded: false,
-      pendingAttempt: null,
-      handlers: [],
-    };
-    this.playbackOwner = owner;
-    this.startEnvelopeMeter(blob);
-    const sequence = this.replaySequences.get(blob);
-    if (sequence !== undefined) this.options.onUtterance?.(sequence);
-    this.notifyPlaybackChange();
-    const ended: EventListener = () => {
-      if (
-        this.playbackOwner !== owner ||
-        owner.consumed ||
-        player.ended === false
-      )
-        return;
-      this.consumeOwner(owner);
-    };
-    const pause: EventListener = () => {
-      if (
-        this.playbackOwner !== owner ||
-        owner.consumed ||
-        player.ended ||
-        player.paused === false
-      )
-        return;
-      owner.paused = true;
-      this.clearProgressWatch();
-      this.stopMeter();
-      owner.awaitingEnded = owner.seeked && this.terminalSeek();
-      this.playing = false;
-      this.notifyPlaybackChange();
-      this.reportPaused(owner.awaitingEnded);
-    };
-    const error: EventListener = () => {
-      if (this.playbackOwner !== owner || owner.consumed || !player.error)
-        return;
-      // The element refused the clip. Say so: a browser that cannot decode
-      // what was sent used to drop every utterance in silence, with nothing
-      // on screen for the caller to report (#189).
-      this.say(
-        "Audio failed to play (" + mediaErrorName(player.error) + ").",
-        true,
-      );
-      this.consumeOwner(owner);
-    };
-    const resetTerminal = () => {
-      if (
-        this.playbackOwner === owner &&
-        (!Number.isFinite(player.duration) ||
-          !Number.isFinite(player.currentTime) ||
-          player.currentTime < player.duration)
-      ) {
-        owner.awaitingEnded = false;
-        owner.seeked = false;
-      }
-    };
-    owner.handlers = [
-      ["ended", ended],
-      ["pause", pause],
-      ["error", error],
-      [
-        "seeking",
-        () => {
-          owner.seeked = true;
-          resetTerminal();
-        },
-      ],
-      ["seeked", resetTerminal],
-      ["timeupdate", resetTerminal],
-    ];
-    for (const [name, handler] of owner.handlers) {
-      player.addEventListener(name, handler);
-    }
-    player.src = owner.url;
-    this.attemptPlay(owner);
-  }
-
-  receiveAudioStart(
-    message: Pick<AudioStartMessage, "generation" | "sequence" | "mime">,
-  ): void {
-    const generation = message.generation;
-    const sequence = message.sequence;
-    if (typeof generation !== "number" || typeof sequence !== "number") return;
-    if (generation !== this.audioEpoch) {
-      // Audio from a leg the call has left never plays.
-      this.options.onUtterance?.(sequence);
-      return;
-    }
-    const mime = message.mime === "audio/mpeg" ? message.mime : "audio/mpeg";
-    const utterance: MseUtterance = {
-      generation,
-      sequence,
-      mime,
-      parts: [],
-      bytes: 0,
-      done: false,
-      failed: false,
-      fallbackQueued: false,
-      source: null,
-      // A stream's level is its own chunks, decoded as they arrive; a
-      // replay's is the whole blob (`startEnvelopeMeter`).
-      envelope: this.mseEnabled ? this.newStreamEnvelope() : null,
-      handlers: [],
-    };
-    if (this.mseEnabled)
-      utterance.source = new MseSource(mime, {
-        appended: () => this.msePlay(),
-        failed: (error) => this.mseFail(utterance, error),
-      });
-    this.msePending = utterance;
-    if (this.mseEnabled) {
-      this.mseQueue.push(utterance);
-      this.mseStartNext();
-    }
-    this.notifyPlaybackChange();
-  }
-
-  receiveAudioChunk(data: ArrayBuffer): void {
-    const utterance = this.msePending;
-    if (!utterance || utterance.generation !== this.audioEpoch) return;
-    if (
-      utterance.bytes + data.byteLength > MAX_AUDIO_UTTERANCE ||
-      this.mseReplayBytes + data.byteLength > MAX_AUDIO_REPLAY
-    ) {
-      this.mseFail(utterance, new Error("audio replay limit"));
-      return;
-    }
-    utterance.bytes += data.byteLength;
-    this.mseReplayBytes += data.byteLength;
-    utterance.parts.push(new Blob([data], { type: utterance.mime }));
-    utterance.envelope?.append(data);
-    if (this.mseEnabled && !utterance.failed) utterance.source?.receive(data);
-    this.notifyPlaybackChange();
-  }
-
-  receiveAudioDone(
-    message: Pick<AudioDoneMessage, "generation" | "sequence" | "done">,
-  ): void {
-    if (
-      message.generation !== this.audioEpoch ||
-      typeof message.sequence !== "number"
-    )
-      return;
-    const utterance = this.msePending;
-    if (!utterance || utterance.sequence !== message.sequence) return;
-    utterance.done = message.done === true;
-    if (!this.mseEnabled || utterance.failed) {
-      this.queueMseFallback(utterance);
-      if (this.mseActive === utterance) this.mseActive = null;
-      this.msePending = null;
-      this.playReplayIfIdle();
-      this.notifyPlaybackChange();
-      return;
-    }
-    utterance.source?.finish(utterance.done);
-    this.msePending = null;
-    this.notifyPlaybackChange();
-  }
-
   private notifyPlaybackChange(): void {
     this.options.onChange();
   }
+}
 
-  private cleanupOwner(owner: PlaybackOwner): void {
-    const player = this.player;
-    this.clearProgressWatch();
-    this.stopEnvelopeMeter();
-    if (this.playbackOwner === owner) this.playbackOwner = null;
-    owner.pendingAttempt = null;
-    for (const [name, handler] of owner.handlers) {
-      player.removeEventListener(name, handler);
-    }
-    owner.handlers = [];
-    this.stopMeter();
-    player.pause();
-    player.removeAttribute("src");
-    player.load();
-    URL.revokeObjectURL(owner.url);
-    this.playing = false;
-    this.notifyPlaybackChange();
-  }
+/**
+ * Watches the element's `currentTime` while a clip is meant to be sounding:
+ * every `ms` it has to have moved. One that has not is stalled, whether
+ * before its first sound (WebKit leaving a MediaSource it cannot play
+ * pending, #203) or partway (#213), and `onStall` is told which.
+ * `stillArriving` lets a stream hold the watch while its bytes are still
+ * landing. `ms` 0 turns the watch off.
+ */
+class ProgressWatch {
+  private timer: ReturnType<typeof setTimeout> | null = null;
 
-  /**
-   * Starts the next whole replay if nothing holds the element: no replay, no
-   * stream still playing out, no pause between messages.
-   */
-  private playReplayIfIdle(): void {
-    if (
-      this.audioQueue.length &&
-      !this.playing &&
-      !this.playbackOwner &&
-      !this.mseActive &&
-      this.gapTimer === null
-    )
-      this.playNext();
-  }
-
-  private consumeOwner(owner: PlaybackOwner): void {
-    if (this.playbackOwner !== owner || owner.consumed) return;
-    owner.consumed = true;
-    this.cleanupOwner(owner);
-    if (this.audioQueue.length === 0 && this.mseQueue.length === 0) {
-      this.playNext();
-      return;
-    }
-    this.afterGap(() => {
-      if (this.playing || this.playbackOwner) return;
-      if (this.audioQueue.length) this.playNext();
-      else this.mseStartNext();
-    });
-  }
-
-  private playFailed(
-    owner: PlaybackOwner,
-    attempt: number,
-    error: unknown,
-  ): void {
-    if (
-      this.playbackOwner !== owner ||
-      owner.consumed ||
-      owner.pendingAttempt !== attempt ||
-      owner.requeued
-    )
-      return;
-    owner.pendingAttempt = null;
-    owner.requeued = true;
-    this.cleanupOwner(owner);
-    // Autoplay rejection is recoverable: keep this clip at the front so the
-    // next user gesture retries it instead of silently losing it.
-    this.audioQueue.unshift(owner.blob);
-    this.reportBlocked(error);
-  }
-
-  /**
-   * The element stopped advancing: before any sound, or partway. A clip
-   * standing at its end whose `ended` never came is simply over.
-   */
-  private replayStalled(owner: PlaybackOwner, heard: boolean): void {
-    if (this.playbackOwner !== owner || owner.consumed) return;
-    if (!this.playedOut()) this.say(this.silentText(heard), true);
-    this.consumeOwner(owner);
-  }
-
-  private attemptPlay(owner: PlaybackOwner): void {
-    if (
-      this.playbackOwner !== owner ||
-      owner.consumed ||
-      owner.pendingAttempt !== null
-    )
-      return;
-    owner.paused = false;
-    owner.seeked = false;
-    this.startMeter();
-    this.playing = true;
-    this.notifyPlaybackChange();
-    const attempt = ++this.playAttemptToken;
-    owner.pendingAttempt = attempt;
-    // Armed on the attempt, for the same reason as the stream's: a `play()`
-    // that never settles is a clip that produced no sound, and the caller
-    // has to be told about it either way (#203).
-    this.watchProgress((heard) => this.replayStalled(owner, heard));
-    let result: Promise<void>;
-    try {
-      result = this.player.play();
-    } catch (error) {
-      this.playFailed(owner, attempt, error);
-      return;
-    }
-    Promise.resolve(result).then(
-      () => {
-        if (
-          this.playbackOwner !== owner ||
-          owner.consumed ||
-          owner.pendingAttempt !== attempt
-        )
-          return;
-        owner.pendingAttempt = null;
-        this.playing = !owner.paused;
-        if (!this.playing) this.clearProgressWatch();
-        else this.reportResumed();
-        this.notifyPlaybackChange();
-      },
-      (error) => this.playFailed(owner, attempt, error),
-    );
-  }
-
-  private terminalSeek(): boolean {
-    const player = this.player;
-    return (
-      Number.isFinite(player.duration) &&
-      player.duration > 0 &&
-      Number.isFinite(player.currentTime) &&
-      player.currentTime >= player.duration
-    );
-  }
-
-  /**
-   * Queues `utterance` as a whole replay. `first` is for the stream that
-   * holds the element: whatever waits in the replay queue then came after it.
-   */
-  private queueMseFallback(utterance: MseUtterance, first = false): void {
-    if (utterance.fallbackQueued) return;
-    utterance.fallbackQueued = true;
-    if (utterance.bytes > MAX_AUDIO_UTTERANCE) {
-      this.say(
-        "Audio exceeded the replay limit and was stopped.",
-        true,
-      );
-      this.options.onUtterance?.(utterance.sequence);
-      return;
-    }
-    const replay = new Blob(utterance.parts, { type: utterance.mime });
-    this.replaySequences.set(replay, utterance.sequence);
-    if (first) this.audioQueue.unshift(replay);
-    else this.audioQueue.push(replay);
-    this.notifyPlaybackChange();
-  }
-
-  private msePlay(): void {
-    if (!this.mseActive || this.mseActive.failed || this.playing) return;
-    const utterance = this.mseActive;
-    this.startMeter();
-    this.playing = true;
-    this.notifyPlaybackChange();
-    // The watch is armed on the attempt, not on `play()` resolving: a
-    // WebKit element given a MediaSource of MP3 buffers it, never reaches
-    // `canplay`, and leaves `play()` pending for good -- no sound, no
-    // rejection, nothing to notice (#203). It stays on until the stream ends:
-    // one that stops partway and never resumes is the same failure, and used
-    // to leave the call "speaking" with nothing sounding (#213). Either way
-    // it says so and the whole replay follows. An append that landed since
-    // the last look holds it: the element may be waiting for those bytes.
-    const source = utterance.source;
-    source?.takeFreshAppends();
-    this.watchProgress(
-      (heard) => this.mseStalled(utterance, heard),
-      () => source?.takeFreshAppends() ?? false,
-    );
-    Promise.resolve(this.player.play()).then(
-      () => {
-        if (this.mseActive === utterance && !utterance.failed && this.playing)
-          this.reportResumed();
-      },
-      (error) => {
-        // A rejection that arrives after this utterance was replaced or
-        // failed belongs to a clip that is already gone: `mseFail` aborts
-        // the pending `play()` itself when it reloads the element, and that
-        // used to reach the caller as "Audio blocked by the browser" while
-        // the whole replay was already playing (#203).
-        if (this.mseActive !== utterance || utterance.failed) return;
-        this.clearProgressWatch();
-        this.stopMeter();
-        this.playing = false;
-        this.notifyPlaybackChange();
-        this.reportBlocked(error);
-      },
-    );
-  }
-
-  /** The stream stopped advancing; see `watchProgress`. */
-  private mseStalled(utterance: MseUtterance, heard: boolean): void {
-    if (this.mseActive !== utterance || utterance.failed) return;
-    // Every byte went in, the source was ended, and the element stands at
-    // its end: the stream played out and `ended` never came.
-    if (utterance.source?.ended && this.playedOut()) {
-      this.mseFinished(utterance);
-      return;
-    }
-    this.mseFail(
-      utterance,
-      new Error(heard ? "playback stalled" : "no playback progress"),
-    );
-  }
-
-  /** The stream played to its end; the next one, if any, follows. */
-  private mseFinished(utterance: MseUtterance): void {
-    if (this.mseActive !== utterance) return;
-    this.clearProgressWatch();
-    this.mseDetach(utterance);
-    this.mseActive = null;
-    this.stopEnvelopeMeter();
-    this.playing = false;
-    utterance.source?.release();
-    // After the pause: the next stream, or the whole replays `mseStop` left
-    // when streaming stopped. Both are asked once the pause is over, since
-    // streaming can stop during it too.
-    if (this.mseQueue.length || this.audioQueue.length)
-      this.afterGap(() => {
-        this.playReplayIfIdle();
-        this.mseStartNext();
-      });
-    // The last one ended: the idle line, as a replay's end gives it
-    // (`playNext`), so no error a stream reported outlives it (#260).
-    else if (!this.playbackOwner) this.say(this.options.idleText, false);
-    this.notifyPlaybackChange();
-  }
-
-  private mseFail(utterance: MseUtterance, error: unknown): void {
-    if (utterance.failed) return;
-    utterance.failed = true;
-    this.say(
-      "Streaming audio failed; using the complete replay (" +
-        mediaErrorName(error) +
-        ").",
-      true,
-    );
-    this.mseRefused = true;
-    this.mseStop(utterance);
-  }
-
-  /**
-   * Streaming stops here, because `failed` could not be streamed or because
-   * the service turned it off. This is the one place that happens, and
-   * nothing it held is lost (#259): every utterance goes on as a whole
-   * replay, in order. One that is complete is queued now; one still
-   * arriving falls back on its `audio_done`. A complete stream that did not
-   * fail plays out, and the replays follow it (`mseFinished`). A replay that
-   * owns the element is left alone.
-   */
-  private mseStop(failed: MseUtterance | null): void {
-    this.mseEnabled = false;
-    const active = this.mseActive;
-    if (active && (active === failed || !active.done)) {
-      // Its bytes can no longer go in: take it off the element.
-      active.failed = true;
-      this.clearProgressWatch();
-      this.stopEnvelopeMeter();
-      this.playing = false;
-      this.notifyPlaybackChange();
-      this.mseDetach(active);
-      const player = this.player;
-      player.pause();
-      player.removeAttribute("src");
-      player.load();
-      active.source?.release();
-      if (active.done) {
-        this.queueMseFallback(active, true);
-        this.mseActive = null;
-      }
-    }
-    for (const utterance of this.mseQueue)
-      if (utterance.done) this.queueMseFallback(utterance);
-    this.mseQueue = [];
-    this.playReplayIfIdle();
-    this.notifyPlaybackChange();
-  }
-
-  private mseStartNext(): void {
-    // A stream waits for the element like any clip: while a replay holds it,
-    // and while older replays wait for it (the replay queue only ever holds
-    // utterances older than every stream still queued).
-    if (
-      !this.mseEnabled ||
-      this.mseActive ||
-      this.playbackOwner ||
-      this.audioQueue.length ||
-      !this.mseQueue.length ||
-      this.gapTimer !== null
-    )
-      return;
-    const utterance = this.mseQueue.shift()!;
-    // Every queued utterance arrived while streaming was on, so it has one.
-    const source = utterance.source;
-    if (!source) return;
-    const player = this.player;
-    this.mseActive = utterance;
-    this.startStreamEnvelopeMeter(utterance);
-    this.options.onUtterance?.(utterance.sequence);
-    const url = source.attach();
-    const ended: EventListener = () => this.mseFinished(utterance);
-    // The element can refuse what was appended -- a SourceBuffer WebKit
-    // cannot parse sets a MediaError and stops. Without this the clip stayed
-    // "playing" for the rest of the call: no sound, no fallback, no message
-    // (#189).
-    const error: EventListener = () => {
-      if (this.mseActive !== utterance || !player.error) return;
-      this.mseFail(utterance, player.error);
-    };
-    // Something outside the page stopped the element partway (an iPad's
-    // audio session taken for the microphone, a lock-screen control). It is
-    // paused, not playing, and a tap resumes it, as with a replay; without
-    // this the call stayed "speaking" over silence (#213). The `pause` a
-    // clip fires as it reaches its end is not this.
-    const pause: EventListener = () => {
-      if (
-        this.mseActive !== utterance ||
-        utterance.failed ||
-        !this.playing ||
-        player.ended ||
-        player.paused === false
-      )
+  constructor(
+    position: () => number,
+    ms: number,
+    onStall: (heard: boolean) => void,
+    stillArriving?: () => boolean,
+  ) {
+    if (ms <= 0) return;
+    let heard = false;
+    let last = position();
+    const check = () => {
+      this.timer = null;
+      const now = position();
+      const arriving = stillArriving?.() ?? false;
+      if (now > last) {
+        heard = true;
+        last = now;
+      } else if (!arriving) {
+        onStall(heard);
         return;
-      this.clearProgressWatch();
-      this.stopMeter();
-      this.playing = false;
-      this.notifyPlaybackChange();
-      this.reportPaused(false);
+      }
+      this.timer = setTimeout(check, ms);
     };
-    utterance.handlers = [
-      ["ended", ended],
-      ["error", error],
-      ["pause", pause],
-    ];
-    for (const [name, handler] of utterance.handlers)
-      player.addEventListener(name, handler);
-    // Attaching the source is what opens it (`MseSource.attach`). The
-    // element's `error` handler is already on, so an engine that refuses the
-    // source says so and the whole replay follows.
-    player.src = url;
-    // An engine can also leave the source `closed` and set no error (WebKit
-    // with a bare page, #203). Nothing appends then, so the watch `msePlay`
-    // arms never starts, and the call heard nothing with nothing said
-    // (#259). This one holds once the source is open and waiting for bytes;
-    // the first append re-arms it as the stream's own.
-    this.watchProgress(
-      () => {
-        if (this.mseActive === utterance && !utterance.failed)
-          this.mseFail(utterance, new Error("MediaSource did not open"));
-      },
-      () => source.opened,
-    );
+    this.timer = setTimeout(check, ms);
   }
 
-  /** Takes an utterance's element handlers back off the element. */
-  private mseDetach(utterance: MseUtterance): void {
-    for (const [name, handler] of utterance.handlers)
-      this.player.removeEventListener(name, handler);
-    utterance.handlers = [];
+  cancel(): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
   }
+}
 
-  private clearMsePlayback(): void {
-    this.clearGap();
-    this.clearProgressWatch();
-    const player = this.player;
-    for (const utterance of [this.mseActive, ...this.mseQueue].filter(
-      Boolean,
-    ) as MseUtterance[]) {
-      this.mseDetach(utterance);
-      utterance.source?.release();
-    }
-    this.mseActive = null;
-    this.mseQueue = [];
-    this.msePending = null;
-    this.mseReplayBytes = 0;
-    this.stopEnvelopeMeter();
-    this.playing = false;
-    this.notifyPlaybackChange();
-    player.pause();
-    player.removeAttribute("src");
-    player.load();
-    this.notifyPlaybackChange();
+/** Whether the page is told playback is sounding. */
+function sounding(holder: Holder): boolean {
+  switch (holder.kind) {
+    case "idle":
+    case "gap":
+    case "cutOff":
+      return false;
+    case "replay":
+      return (
+        holder.phase.kind === "starting" || holder.phase.kind === "playing"
+      );
+    case "stream":
+      return holder.phase.kind === "playing";
+    default:
+      return unreachable(holder);
   }
+}
+
+/** What holds the element: a clip, a pause, a cut-off utterance, or nothing. */
+function occupant(holder: Holder): object | null {
+  switch (holder.kind) {
+    case "idle":
+      return null;
+    case "gap":
+      return holder;
+    case "replay":
+    case "stream":
+      return holder.clip;
+    case "cutOff":
+      return holder.utterance;
+    default:
+      return unreachable(holder);
+  }
+}
+
+function watchOf(holder: Holder): ProgressWatch | null {
+  if (holder.kind !== "replay" && holder.kind !== "stream") return null;
+  const phase = holder.phase;
+  return "watch" in phase ? phase.watch : null;
+}
+
+function meterOf(holder: Holder): EnvelopeMeter | null {
+  return holder.kind === "replay" || holder.kind === "stream"
+    ? holder.clip.meter
+    : null;
+}
+
+function attemptOf(phase: ReplayPhase): PlayAttempt | null {
+  return phase.kind === "starting" || phase.kind === "paused"
+    ? phase.attempt
+    : null;
+}
+
+function unreachable(holder: never): never {
+  throw new Error("unknown playback holder: " + (holder as Holder).kind);
 }
