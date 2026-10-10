@@ -15,7 +15,7 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 
@@ -111,6 +111,88 @@ struct AutonomousTurn {
     text: Vec<String>,
 }
 
+/// How the service came to hold a session, which decides its release: one
+/// it created is killed, one it took over from a desk is aborted and then
+/// detached, never killed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Provenance {
+    Created,
+    TakenOver,
+}
+
+impl Provenance {
+    /// The host's word for it (`docs/host-link.md`); any word but
+    /// `taken_over` is a session the service created.
+    fn from_host(word: &str) -> Self {
+        if word == "taken_over" {
+            Self::TakenOver
+        } else {
+            Self::Created
+        }
+    }
+}
+
+/// Where a project session is in its end of life. `ProjectInner::end` is
+/// its only writer, and `Lifecycle::after` its table (`docs/architecture.md`,
+/// "A project session's end").
+enum Lifecycle {
+    /// In use: commands go out.
+    Open,
+    /// A command to it failed. The handle is not used again, but the
+    /// session may still run on its host, so its release is still owed
+    /// (#291).
+    Unusable,
+    /// The host reported it closed (`session_closed`, the service's own
+    /// `host_link_closed` included). Nothing is left to kill; a session
+    /// taken over from a desk is still owed its abort and detach.
+    EndedOnHost,
+    /// Its release went out: a kill, or an abort and a detach. Final.
+    Released,
+}
+
+/// What moves a project session through its end of life.
+#[derive(Clone, Copy, Debug)]
+enum LifecycleEvent {
+    /// A command to the session failed (any error, the command's wait
+    /// included).
+    CommandFailed,
+    /// The host reported the session closed.
+    HostEnded,
+    /// Its owner closed the handle, or the handle's last clone dropped.
+    Closed,
+}
+
+/// What entering a phase leaves to do once the lifecycle lock is released.
+enum Entry {
+    Nothing,
+    /// The handle stopped being usable without its owner closing it: the
+    /// application is told (`on_closed`), so it can evict it.
+    ReportClosed,
+    /// The session's release goes out on its host.
+    Release,
+}
+
+impl Lifecycle {
+    /// The end-of-life table: the phase `event` moves this one to, and what
+    /// entering it does. A phase an event does not move comes back as it
+    /// was, with `Entry::Nothing`.
+    fn after(self, event: LifecycleEvent, provenance: Provenance) -> (Self, Entry) {
+        use LifecycleEvent::{Closed, CommandFailed, HostEnded};
+        match (self, event) {
+            (Self::Open, CommandFailed) => (Self::Unusable, Entry::ReportClosed),
+            (Self::Open, HostEnded) => (Self::EndedOnHost, Entry::ReportClosed),
+            (Self::Open | Self::Unusable, Closed) => (Self::Released, Entry::Release),
+            (Self::Unusable, HostEnded) => (Self::EndedOnHost, Entry::Nothing),
+            (Self::EndedOnHost, Closed) if provenance == Provenance::TakenOver => {
+                (Self::Released, Entry::Release)
+            }
+            (phase @ (Self::Unusable | Self::EndedOnHost | Self::Released), _) => {
+                (phase, Entry::Nothing)
+            }
+        }
+    }
+}
+
 struct ProjectInner {
     hosts: crate::hosts::Hosts,
     host: String,
@@ -121,8 +203,8 @@ struct ProjectInner {
     /// Unique for each live service handle, even when it resumes the same id.
     instance_id: u64,
     label: String,
-    /// Provenance controls whether hangup kills or detaches the session.
-    provenance: String,
+    /// Whether a release kills the session or detaches it.
+    provenance: Provenance,
     /// The call token the session was last joined with; module calls must
     /// carry it.
     token: StdMutex<String>,
@@ -135,15 +217,8 @@ struct ProjectInner {
     debug: Option<DebugBus>,
     turn_lock: Mutex<()>,
     busy: AtomicBool,
-    /// The handle is no longer used: closed by its owner, ended on the host,
-    /// or left unusable by a failed command.
-    closed: AtomicBool,
-    released: AtomicBool,
-    /// The host reported the session closed (`session_closed`, the
-    /// service's own `host_link_closed` included), so there is nothing left
-    /// for a release to end. A failed command does not set it: the session
-    /// is still on its host, and `close` or the last drop ends it (#291).
-    ended_on_host: AtomicBool,
+    /// Where the session is in its end of life; written only by `end`.
+    lifecycle: StdMutex<Lifecycle>,
     brief: String,
     brief_due: AtomicBool,
     /// Where the events of the caller turn being collected go.
@@ -274,31 +349,62 @@ impl ProjectInner {
         }
     }
 
-    /// Whether the session still needs a release on its host. A taken-over
-    /// session is always detached; one the service created is killed unless
-    /// the host already reported it closed. Release is separate from
-    /// `closed`: a failed host command marks a handle closed before its
-    /// lifecycle owner gets a chance to release the session.
-    fn release_owed(&self) -> bool {
-        self.provenance == "taken_over" || !self.ended_on_host.load(Ordering::Acquire)
+    fn alive(&self) -> bool {
+        matches!(
+            *self
+                .lifecycle
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            Lifecycle::Open
+        )
     }
 
-    /// Queues release for this session exactly once; true when this call
-    /// queued it. A session taken over from a desk is never killed: abort its
-    /// active turn first, then detach it so the desk can keep owning it.
-    fn release_in_background(&self) -> bool {
-        if self.released.swap(true, Ordering::AcqRel) {
-            return false;
+    /// Moves the session's end of life on `event`: the only writer of
+    /// `lifecycle`. Entering `Released` queues the release here; true when
+    /// the application is to be told the session closed (`lose`).
+    fn end(&self, event: LifecycleEvent) -> bool {
+        let entry = {
+            let mut lifecycle = self
+                .lifecycle
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            let phase = std::mem::replace(&mut *lifecycle, Lifecycle::Released);
+            let (next, entry) = phase.after(event, self.provenance);
+            *lifecycle = next;
+            entry
+        };
+        match entry {
+            Entry::Nothing => false,
+            Entry::ReportClosed => true,
+            Entry::Release => {
+                self.release_in_background();
+                false
+            }
         }
+    }
+
+    /// Ends the handle's use for a reason other than its owner's close, and
+    /// tells the application the first time.
+    async fn lose(&self, event: LifecycleEvent) {
+        if self.end(event) {
+            self.report_closed().await;
+        }
+    }
+
+    /// Queues the session's release on its host, on entry to `Released`. A
+    /// session taken over from a desk is never killed: abort its active
+    /// turn first, then detach it so the desk can keep owning it.
+    fn release_in_background(&self) {
         self.hosts.unsubscribe(&self.host, &self.session);
         let host = self.host.clone();
         let session = self.session.clone();
         let label = self.label.clone();
-        let taken_over = self.provenance == "taken_over";
+        let taken_over = self.provenance == Provenance::TakenOver;
         let hosts = self.hosts.clone();
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            return false;
+            return;
         };
+        tracing::info!(%label, "closing the project session");
         runtime.spawn(async move {
             if taken_over {
                 if let Ok(abort) = hosts.send_command(&host, "abort", json!({"session": session})) {
@@ -325,7 +431,6 @@ impl ProjectInner {
                 }
             }
         });
-        true
     }
 
     async fn report_closed(&self) {
@@ -341,12 +446,6 @@ impl ProjectInner {
             {
                 tracing::error!(label = %self.label, panic = %panic_message(&panic), "session closed callback panicked");
             }
-        }
-    }
-
-    async fn mark_closed(&self) {
-        if !self.closed.swap(true, Ordering::AcqRel) {
-            self.report_closed().await;
         }
     }
 
@@ -445,10 +544,7 @@ impl Drop for ProjectInner {
     /// A session the service created dies with its last handle, so one whose
     /// transfer was cancelled half way is not left running on its host.
     fn drop(&mut self) {
-        self.closed.store(true, Ordering::Release);
-        if self.release_owed() {
-            self.release_in_background();
-        }
+        self.end(LifecycleEvent::Closed);
     }
 }
 
@@ -510,7 +606,7 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not start a session: {error}")))?;
-        Self::from_open_reply(hosts, launch, reply, None, "created", "created", None).await
+        Self::from_open_reply(hosts, launch, reply, None, "created", None).await
     }
 
     /// Reopens a saved resident session after a service restart. The host
@@ -534,16 +630,7 @@ impl ProjectSession {
             )
             .await
             .map_err(|error| PiSessionError(format!("could not open a session: {error}")))?;
-        Self::from_open_reply(
-            hosts,
-            launch,
-            reply,
-            Some(session_id),
-            "opened",
-            "created",
-            None,
-        )
-        .await
+        Self::from_open_reply(hosts, launch, reply, Some(session_id), "opened", None).await
     }
 
     /// Attaches to a live desk session in the registered folder. This never
@@ -573,8 +660,7 @@ impl ProjectSession {
             reply,
             None,
             "attached",
-            "taken_over",
-            Some("taken_over"),
+            Some(Provenance::TakenOver),
         )
         .await;
         if result.is_err() {
@@ -607,8 +693,7 @@ impl ProjectSession {
         reply: crate::hosts::CommandReply,
         requested_session_id: Option<&str>,
         verb: &str,
-        default_provenance: &str,
-        forced_provenance: Option<&str>,
+        forced_provenance: Option<Provenance>,
     ) -> Result<(Self, SessionState), PiSessionError> {
         let Some(session) = reply.result["session"].as_str().map(str::to_owned) else {
             return Err(PiSessionError(
@@ -627,9 +712,12 @@ impl ProjectSession {
             instance_id: NEXT_PROJECT_INSTANCE_ID.fetch_add(1, Ordering::Relaxed),
             label: launch.project,
             provenance: forced_provenance
-                .or_else(|| reply.result["provenance"].as_str())
-                .unwrap_or(default_provenance)
-                .to_owned(),
+                .or_else(|| {
+                    reply.result["provenance"]
+                        .as_str()
+                        .map(Provenance::from_host)
+                })
+                .unwrap_or(Provenance::Created),
             token: StdMutex::new(String::new()),
             turn_timeout: launch.turn_timeout,
             on_activity: launch.on_activity,
@@ -639,9 +727,7 @@ impl ProjectSession {
             debug: launch.debug,
             turn_lock: Mutex::new(()),
             busy: AtomicBool::new(false),
-            closed: AtomicBool::new(false),
-            released: AtomicBool::new(false),
-            ended_on_host: AtomicBool::new(false),
+            lifecycle: StdMutex::new(Lifecycle::Open),
             brief: launch.brief,
             brief_due: AtomicBool::new(true),
             turn: StdMutex::new(None),
@@ -666,7 +752,7 @@ impl ProjectSession {
     }
 
     pub fn is_taken_over(&self) -> bool {
-        self.inner.provenance == "taken_over"
+        self.inner.provenance == Provenance::TakenOver
     }
 
     pub fn instance_id(&self) -> u64 {
@@ -677,7 +763,7 @@ impl ProjectSession {
         self.inner.busy.load(Ordering::Acquire)
     }
     pub fn alive(&self) -> bool {
-        !self.inner.closed.load(Ordering::Acquire)
+        self.inner.alive()
     }
     pub fn same_session(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
@@ -705,7 +791,7 @@ impl ProjectSession {
                 sent,
             }),
             Err(error) => {
-                self.inner.mark_closed().await;
+                self.inner.lose(LifecycleEvent::CommandFailed).await;
                 Err(PiSessionError(error.to_string()))
             }
         }
@@ -773,10 +859,7 @@ impl ProjectSession {
 
     /// Ends the session on its host. Idempotent; nothing waits for the host.
     pub fn close(&self) {
-        self.inner.closed.store(true, Ordering::Release);
-        if self.inner.release_owed() && self.inner.release_in_background() {
-            tracing::info!(label = %self.inner.label, "closing the project session");
-        }
+        self.inner.end(LifecycleEvent::Closed);
     }
 
     /// Aborts the running turn, if any; the session stays. The abort is
@@ -1078,8 +1161,7 @@ async fn pump(
                         inner.brief_due.store(true, Ordering::Release);
                     }
                     "session_closed" => {
-                        inner.ended_on_host.store(true, Ordering::Release);
-                        inner.mark_closed().await;
+                        inner.lose(LifecycleEvent::HostEnded).await;
                         // A closed session never sends the `turn_end` of a
                         // self-woken run it had open, and that run's
                         // operation would keep every later caller turn
@@ -1320,7 +1402,7 @@ impl HostCommand {
                 // A failed host command means this resident is no longer
                 // usable. Mark it closed before returning so its owner can
                 // evict it instead of publishing a misleading idle state.
-                self.session.inner.mark_closed().await;
+                self.session.inner.lose(LifecycleEvent::CommandFailed).await;
                 Err(PiSessionError(error.to_string()))
             }
         }

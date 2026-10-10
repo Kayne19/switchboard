@@ -24,7 +24,7 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         persistent_session_id: "saved-1".into(),
         instance_id: 1,
         label: "alpha".into(),
-        provenance: "taken_over".into(),
+        provenance: Provenance::TakenOver,
         token: StdMutex::new("call-token".into()),
         turn_timeout: Duration::from_secs(1),
         on_activity: None,
@@ -34,16 +34,14 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         debug: None,
         turn_lock: Mutex::new(()),
         busy: AtomicBool::new(true),
-        closed: AtomicBool::new(false),
-        released: AtomicBool::new(false),
-        ended_on_host: AtomicBool::new(false),
+        lifecycle: StdMutex::new(Lifecycle::Open),
         brief: String::new(),
         brief_due: AtomicBool::new(false),
         turn: StdMutex::new(None),
         autonomous_turn: StdMutex::new(None),
         ignored_autonomous: StdMutex::new(None),
     });
-    inner.mark_closed().await;
+    inner.lose(LifecycleEvent::CommandFailed).await;
     ProjectSession { inner }.close();
     assert_eq!(
         within("command_rx", command_rx.recv()).await.as_deref(),
@@ -143,7 +141,7 @@ async fn takeover_reply_cannot_make_release_kill_a_desk_session() {
     let (session, _) = ProjectSession::attach(&hosts, launch, "desk-alpha")
         .await
         .expect("valid attach reply");
-    assert_eq!(session.inner.provenance, "taken_over");
+    assert_eq!(session.inner.provenance, Provenance::TakenOver);
     session.close();
     assert_eq!(
         within("command_rx", command_rx.recv()).await.as_deref(),
