@@ -52,7 +52,11 @@ The source is `apps/frontend/src/debug/` (entry `apps/frontend/debug/index.html`
   after 2 seconds makes the page reconnect for a fresh snapshot. A trace that
   a `pbx_branch` `dropped_stale` or `failed` ends is drawn as ended, not as
   still routing.
-- `connection.ts` reconnects with backoff from 0.5 s up to 10 s.
+- `connection.ts` reconnects with backoff from 0.5 s up to 10 s. The backoff
+  starts again from 0.5 s only once a socket has received its snapshot and
+  stayed open 10 s more; opening is not enough, since the listener closes a
+  client that lags or cannot take a frame after the open, and each reconnect
+  costs it a full snapshot.
 - The page looks like the main page because it is drawn with it: it loads
   `src/styles/index.css` before its own `debug.css`, and takes the tokens,
   type and frames from there. Agent text goes through `RichText`, latencies
@@ -73,7 +77,9 @@ listener. `&instant=1` applies it all at once, `&speed=N` changes the pace,
 ## WebSocket framing
 
 The page connects to `/ws` on the debug listener. The page sends nothing; the
-listener ignores anything it receives, and refuses a frame over 4 KiB. The
+listener ignores anything it receives, and closes a client that sends a frame
+over 4 KiB, judged on the frame's header before its payload is read. At most
+8 debug sockets are open at once; one more gets a 503 until one closes. The
 first frame is a JSON `snapshot`:
 
 ```json
