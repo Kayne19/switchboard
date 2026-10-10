@@ -606,7 +606,7 @@ async fn display_refuses_a_show_past_the_stage_bound_and_takes_updates_and_hides
     let image = |id: &str| json!({"op": "show", "id": id, "type": "image", "data": {"format": "png", "bytes": "iVBORw0KGgoAAAAA", "alt": id}});
     let on_stage = || {
         let state = state.clone();
-        async move { state.0.display_gate.lock().await.projection.objects.len() }
+        async move { state.0.display_gate.lock().await.projection().objects.len() }
     };
 
     for n in 0..MAX_STAGE_IMAGES {
@@ -731,11 +731,11 @@ async fn display_projection_hide_clears_focus() {
     // Verify projection state under gate
     {
         let gate = state.0.display_gate.lock().await;
-        assert_eq!(gate.projection.order, vec!["chart-1", "doc-1"]);
-        assert_eq!(gate.projection.focus_id.as_deref(), Some("chart-1"));
-        assert!(gate.projection.speech.is_some());
+        assert_eq!(gate.projection().order, vec!["chart-1", "doc-1"]);
+        assert_eq!(gate.projection().focus_id.as_deref(), Some("chart-1"));
+        assert!(gate.projection().speech.is_some());
         assert_eq!(
-            gate.projection.speech.as_ref().unwrap().target.as_deref(),
+            gate.projection().speech.as_ref().unwrap().target.as_deref(),
             Some("chart-1")
         );
     }
@@ -754,19 +754,20 @@ async fn display_projection_hide_clears_focus() {
 
     {
         let gate = state.0.display_gate.lock().await;
-        assert_eq!(gate.projection.order, vec!["doc-1"]);
-        assert!(!gate.projection.objects.contains_key("chart-1"));
-        assert!(gate.projection.objects.contains_key("doc-1"));
+        assert_eq!(gate.projection().order, vec!["doc-1"]);
+        assert!(!gate.projection().objects.contains_key("chart-1"));
+        assert!(gate.projection().objects.contains_key("doc-1"));
         assert_eq!(
-            gate.projection.focus_id, None,
+            gate.projection().focus_id,
+            None,
             "hide must clear focus when focused object is hidden"
         );
         assert!(
-            gate.projection.speech.is_none(),
+            gate.projection().speech.is_none(),
             "hide must clear speech targeting the hidden object"
         );
 
-        let snapshot = gate.projection.snapshot_actions();
+        let snapshot = gate.projection().snapshot_actions();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0]["id"], "doc-1");
     }
@@ -783,7 +784,7 @@ async fn display_projection_hide_clears_focus() {
     assert_eq!(code, StatusCode::OK);
     {
         let gate = state.0.display_gate.lock().await;
-        assert_eq!(gate.projection.order, vec!["doc-1"]);
+        assert_eq!(gate.projection().order, vec!["doc-1"]);
     }
 
     // 7. General say without target: hiding doc-1 should NOT clear speech that is not targeted at doc-1
@@ -811,13 +812,13 @@ async fn display_projection_hide_clears_focus() {
 
     {
         let gate = state.0.display_gate.lock().await;
-        assert!(gate.projection.objects.is_empty());
+        assert!(gate.projection().objects.is_empty());
         assert!(
-            gate.projection.speech.is_some(),
+            gate.projection().speech.is_some(),
             "non-targeted speech must be preserved when an object is hidden"
         );
         assert_eq!(
-            gate.projection.speech.as_ref().unwrap().text,
+            gate.projection().speech.as_ref().unwrap().text,
             "General announcement."
         );
     }
@@ -872,7 +873,7 @@ async fn display_projection_generation_race() {
     // Verify stale display DID NOT mutate projection
     {
         let gate = state.0.display_gate.lock().await;
-        assert!(!gate.projection.objects.contains_key("chart-stale"));
+        assert!(!gate.projection().objects.contains_key("chart-stale"));
     }
 
     // Stale token on /view must also be rejected with 409 CONFLICT!
@@ -1124,7 +1125,7 @@ async fn a_module_call_carrying_a_retired_token_is_refused() {
         .display_gate
         .lock()
         .await
-        .projection
+        .projection()
         .snapshot_actions()
         .is_empty());
 }
@@ -1303,7 +1304,7 @@ async fn every_background_display_is_held_and_replayed_on_promotion() {
         .display_gate
         .lock()
         .await
-        .projection
+        .projection()
         .snapshot_actions()
         .iter()
         .filter_map(|action| action["id"].as_str().map(String::from))

@@ -2,14 +2,13 @@
 //! and the route callback, with the once-per-leg scene reset they share.
 use crate::app_state::AgentProjection;
 use crate::delivery::{DeliveryState, Event};
-use crate::display::{ConfirmState, DisplayGateState, SceneLeg};
+use crate::display::{DisplayGateState, SceneLeg};
 use crate::lifecycle::{ActivityDisposition, Coordinator};
 use crate::pi_client::Activity;
 use crate::protocol::ServerMessage;
 use crate::speech::{SpeechContinuity, SpeechGroup};
-use serde_json::json;
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::{broadcast, watch, Mutex};
+use tokio::sync::{broadcast, Mutex};
 
 /// Tells the browser the call has moved to a new leg.
 ///
@@ -24,7 +23,6 @@ pub(crate) struct LegAnnouncer {
     pub(crate) events: broadcast::Sender<Event>,
     pub(crate) delivery: DeliveryState,
     pub(crate) display_gate: Arc<Mutex<DisplayGateState>>,
-    pub(crate) display_confirm: watch::Sender<ConfirmState>,
     pub(crate) projection: AgentProjection,
     pub(crate) continuity: Arc<StdMutex<SpeechContinuity>>,
     pub(crate) active_speech_group: Arc<StdMutex<Option<SpeechGroup>>>,
@@ -102,13 +100,14 @@ impl LegAnnouncer {
         self.publish(ServerMessage::Status(self.coordinator.status()));
     }
 
-    /// Clears the scene for `leg` and sends the epoch that tells the browser
-    /// to do the same, once per leg. Whichever announcement arrives second
-    /// finds the scene already belongs to that leg and leaves it alone: by
-    /// then it may hold the new agent's first drawing, and the browser may be
-    /// playing its first words.
+    /// Resets the stage for `leg` (`DisplayGateState::begin_leg`) and the
+    /// speech that belonged to the last one, and sends the epoch that tells
+    /// the browser to do the same, once per leg. Whichever announcement
+    /// arrives second finds the stage already belongs to that leg and leaves
+    /// it alone: by then it may hold the new agent's first drawing, and the
+    /// browser may be playing its first words.
     pub(crate) async fn begin_scene(&self, gate: &mut DisplayGateState, leg: SceneLeg) {
-        if gate.scene_leg.as_ref() == Some(&leg) {
+        if !gate.begin_leg(leg.clone()) {
             tracing::debug!(route = %leg.route, generation = leg.generation, "leg already announced; restating its status only");
             return;
         }
@@ -126,14 +125,9 @@ impl LegAnnouncer {
             .foreground_audio_generation
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        gate.projection.clear();
-        gate.screen_state["stale"] = json!(true);
-        self.display_confirm
-            .send_modify(|confirm| confirm.begin_generation(leg.generation));
         self.publish(ServerMessage::Epoch {
             generation: leg.generation,
         });
-        gate.scene_leg = Some(leg.clone());
         if leg.route != crate::pbx::OPERATOR {
             // The scene the agent built while in the background is replayed
             // into the cleared stage as the actions a reconnecting page is
@@ -142,18 +136,7 @@ impl LegAnnouncer {
                 let actions = held.snapshot_actions();
                 let mut delivered = false;
                 for action in &actions {
-                    let event = Event::Json(
-                        ServerMessage::Display {
-                            action: action.clone(),
-                            seq: None,
-                        }
-                        .to_value(),
-                    );
-                    let sequence;
-                    (delivered, sequence) = self.delivery.publish_sequenced(event.clone());
-                    let _ = self.events.send(event);
-                    gate.projection.apply(action, sequence);
-                    gate.watermark = sequence;
+                    (delivered, _) = gate.publish(action, &self.delivery, &self.events);
                 }
                 tracing::info!(route = %leg.route, actions = actions.len(), delivered, "released the background scene on foreground");
             }

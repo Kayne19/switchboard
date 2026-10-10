@@ -8,14 +8,14 @@ use crate::caller_input::{
     parse_typed_turn, route_typed_turn, start_stream_clip, ClipHeader, StreamChunkHeader,
 };
 use crate::delivery::{DeliveryConnection, DeliveryFrame, Event};
-use crate::display::{is_display_event, stamp_display_seq};
+use crate::display::{is_display_event, stamp_display_seq, ScreenReport};
 use crate::page_controls::current_status;
 use crate::protocol::{CandidateEnd, ServerMessage};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{State, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::Value;
 #[cfg(test)]
 use tokio::time::{timeout, Duration};
 use tracing::Instrument;
@@ -24,11 +24,10 @@ impl AppState {
     pub async fn register_connection(&self) -> (DeliveryConnection, Vec<Value>, u64) {
         let mut gate = self.0.display_gate.lock().await;
         let connection = self.0.delivery.register();
-        gate.screen_state["stale"] = json!(true);
+        gate.mark_stale();
         self.0.floor.set_page_connected(true).await;
         self.start_debug_call();
-        let snapshot_actions = gate.projection.snapshot_actions();
-        let watermark = gate.watermark;
+        let (snapshot_actions, watermark) = gate.reconnect_snapshot();
         (connection, snapshot_actions, watermark)
     }
 
@@ -40,7 +39,7 @@ impl AppState {
             let mut gate = self.0.display_gate.lock().await;
             let active = self.0.delivery.active_epoch();
             if active == Some(epoch) || active.is_none() {
-                gate.screen_state["stale"] = json!(true);
+                gate.mark_stale();
             }
             self.0.delivery.retire(epoch);
         }
@@ -216,28 +215,10 @@ async fn apply_screen_state(
     epoch: u64,
     command: crate::protocol::ScreenState,
 ) -> Result<(), ()> {
-    let Some(view) = command.view.filter(|view| {
-        matches!(
-            view.as_str(),
-            "auto" | "system" | "visual" | "comms" | "theater"
-        )
-    }) else {
+    let current_gen = state.0.coordinator.generation();
+    let Some(report) = ScreenReport::from_page(&command, current_gen) else {
         return send_message(state, epoch, ServerMessage::error("Invalid screen view.")).await;
     };
-    let title = command
-        .title
-        .unwrap_or_default()
-        .chars()
-        .take(200)
-        .collect::<String>();
-    let visual_kind = command
-        .visual_kind
-        .filter(|kind| crate::visual_protocol::CONTENT_TYPES.contains(&kind.as_str()))
-        .map_or(Value::Null, Value::String);
-    let object_ids = command.object_ids.unwrap_or_default();
-    let pinned = command.pinned.unwrap_or(false);
-    let has_visual = command.has_visual.unwrap_or(false);
-    let stale = command.stale.unwrap_or(false);
     // A report without a generation is ignored, never taken as one on the
     // call current when it arrives: it confirms display seqs and replaces the
     // screen `view` reads, so a page that has not seen a transfer would act on
@@ -247,27 +228,10 @@ async fn apply_screen_state(
         return Ok(());
     };
 
-    let current_gen = state.0.coordinator.generation();
     let active_ep = state.0.delivery.active_epoch();
     if active_ep != Some(epoch) || report_gen != current_gen {
         return Ok(());
     }
-    let mut gate = state.0.display_gate.lock().await;
-
-    let report = json!({
-        "view": view,
-        "pinned": pinned,
-        "has_visual": has_visual,
-        "visual_kind": visual_kind,
-        "object_ids": object_ids,
-        "title": title,
-        "stale": stale,
-        "generation": current_gen,
-    });
-    gate.screen_state = report;
-    drop(gate);
-
-    let applied_seq = command.applied_seq;
     let rejected = command.rejected.map(|rejection| {
         let reason = rejection
             .reason
@@ -276,8 +240,10 @@ async fn apply_screen_state(
     });
     state
         .0
-        .display_confirm
-        .send_modify(|c| c.fold_report(current_gen, applied_seq, rejected));
+        .display_gate
+        .lock()
+        .await
+        .report(report, command.applied_seq, rejected);
 
     send_message(state, epoch, ServerMessage::ScreenStateAck).await
 }

@@ -4,7 +4,6 @@
 use crate::app_state::AppState;
 use crate::app_state::{emit_message, publish_agents};
 use crate::browser::MAX_WEBSOCKET_MESSAGE_BYTES;
-use crate::delivery::Event;
 use crate::display::DISPLAY_CONFIRM_DEADLINE_MS;
 use crate::floor::FloorRequest;
 use crate::project_session::AgentCall;
@@ -486,7 +485,7 @@ async fn display(
     }
     // Checked under the gate, so no other display fills the stage between
     // this answer and the apply below.
-    if let Some(detail) = gate.projection.refusal(&normalized_action) {
+    if let Some(detail) = gate.projection().refusal(&normalized_action) {
         tracing::info!(%detail, "refused: the stage is full");
         return (
             axum::http::StatusCode::BAD_REQUEST,
@@ -495,17 +494,9 @@ async fn display(
             .into_response();
     }
 
-    let value = ServerMessage::Display {
-        action: normalized_action.clone(),
-        seq: None,
-    }
-    .to_value();
-    let event = Event::Json(value);
-    let _ = state.0.events.send(event.clone());
-    let (delivered, sequence) = state.0.delivery.publish_sequenced(event);
-
-    gate.projection.apply(&normalized_action, sequence);
-    gate.watermark = sequence;
+    let (delivered, sequence) =
+        gate.publish(&normalized_action, &state.0.delivery, &state.0.events);
+    let mut confirm_rx = gate.confirmations();
     drop(gate);
 
     if !delivered {
@@ -517,7 +508,6 @@ async fn display(
         return Json(json!({"delivered": false, "reason": "no browser connected"})).into_response();
     }
 
-    let mut confirm_rx = state.0.display_confirm.subscribe();
     let deadline = tokio::time::sleep(std::time::Duration::from_millis(
         DISPLAY_CONFIRM_DEADLINE_MS,
     ));
@@ -644,21 +634,10 @@ async fn view(
     }
 
     if target.is_empty() {
-        let (has_visual, kind, title, object_ids) = gate.projection.summary();
-        let view = gate
-            .screen_state
-            .get("view")
-            .and_then(Value::as_str)
-            .unwrap_or("auto")
-            .to_string();
+        let (has_visual, kind, title, object_ids) = gate.projection().summary();
+        let view = gate.screen().view().to_owned();
         let connected = state.0.delivery.connected();
-        let confirm = state.0.display_confirm.borrow().clone();
-        // Nothing is on screen, so there is nothing outstanding to confirm:
-        // a fresh call or an emptied stage is trivially "confirmed" without
-        // ever having heard from the browser in this generation.
-        let confirmed = !has_visual
-            || (confirm.generation == permit_generation
-                && confirm.watermark.is_some_and(|w| w >= gate.watermark));
+        let confirmed = gate.stage_confirmed(permit_generation);
         tracing::info!(
             %view,
             has_visual,
