@@ -49,6 +49,13 @@ test('a second note about a diagram whose first is a callout carries no badge', 
     { op: 'show', id: 'gate-note', type: 'note', data: { tag: 'GATE', anchor: { target: 'flow', node: 'gate' }, segments: [{ text: 'The gate stamps each action.' }] } },
   ]);
   await expect(page.locator('.diagram-callout')).toBeVisible();
+  // The rail draws the note until the diagram says it placed the callout,
+  // then lets the card go; the leaving card stays in the page, unseen
+  // (opacity 0 in every frame sampled), for some 300 ms. A second note sent
+  // before it went was a second card, and the count below could pass on the
+  // leaving one alone, before the new one was drawn: the tag read then found
+  // GATE and PLANNER in WebKit on a loaded runner (#341).
+  await expect(page.locator('.content-rail .annotation-card')).toHaveCount(0);
   await runActions(page, [{ op: 'show', id: 'planner-note', type: 'note', data: { tag: 'PLANNER', anchor: { target: 'flow', node: 'planner' }, segments: [{ text: 'The planner writes the plan.' }] } }]);
   const card = page.locator('.content-rail .annotation-card');
   await expect(card).toHaveCount(1);
