@@ -193,11 +193,12 @@ sees is `view()` of the phase, and nothing else.
 Every phase but `off`, `error` and `loading` also leaves for `off` (MODE, a
 hidden or left page, a disconnect, a hangup, a route change, a rescue
 `epoch`), for `paused_ptt` (a push-to-talk press) and for `error` (a detector
-failure). A hand-off `epoch` moves every phase that holds the graph to
+or recorder failure). A hand-off `epoch` moves every phase that holds the graph to
 `armed` on the same graph, saying "The line changed"; `starting` and
 `paused_ptt` hold no graph and stay as they are. A
 recorder that cannot be made, started or stopped, or that reports an error,
-publishes `error` and then turns hands-free `off`. Before the first load
+ends in `error` with its own message, as a detector failure does, and
+hands-free stays there until MODE starts it again. Before the first load
 nothing stops: the runtime keeps its own line ("Standby") until the first
 MODE.
 
