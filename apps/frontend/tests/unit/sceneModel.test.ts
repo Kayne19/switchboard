@@ -135,7 +135,7 @@ describe('the view a screen-state report names is the one the page draws', () =>
     auto: { empty: ['idle', 'auto'], chart: ['training', 'auto'] },
     visual: { empty: ['idle', 'auto'], chart: ['training', 'visual'] },
     comms: { empty: ['conversation', 'comms'], chart: ['conversation', 'comms'] },
-    system: { empty: ['idle', 'auto'], chart: ['training', 'auto'] },
+    system: { empty: ['system', 'system'], chart: ['system', 'system'] },
     theater: { empty: ['idle', 'auto'], chart: ['theater', 'theater'] },
   };
   // The older names the service and the page still take for the five.
