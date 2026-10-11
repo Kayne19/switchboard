@@ -413,6 +413,9 @@ const machines = [
 	// through the coordinator: `begin_startup` stages, `commit` adopts and ends the
 	// intro, and the rollback is written in `abandon` and in `Drop`, nowhere else.
 	{ file: "apps/backend/src/leg_transitions.rs", writer: /\.rollback_startup\(/, max: 2, once: [/\.begin_candidate\(/, /\.adopt_candidate\(/, /\.finish_intro\(/] },
+	// mic-hf (#366): `transition` writes the phase; `releaseGraph` is the one place tracks
+	// stop, and `publish` the one call of `onState`, from the phase.
+	{ file: "apps/frontend/src/hands_free.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/, /\.onState\(/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
@@ -435,8 +438,8 @@ function machineFindings(file, text, machine) {
 //     row here at what is left beside the machine, 0 included: a flag
 //     added next to a machine is the same mistake.
 const owners = [
-	{ file: "apps/frontend/src/hands_free.ts", owner: "HandsFreeController", fields: 13 },
-	{ file: "apps/frontend/src/hands_free.ts", owner: "Capture", fields: 3 },
+	{ file: "apps/frontend/src/hands_free.ts", owner: "HandsFreeController", fields: 0 },
+	{ file: "apps/frontend/src/hands_free_machine.ts", owner: "Capture", fields: 1 },
 	{ file: "apps/frontend/src/runtime/pushToTalk.ts", owner: "PushToTalk", fields: 0 },
 	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 22 },
 	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 2 },

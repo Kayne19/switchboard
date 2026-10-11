@@ -1,8 +1,40 @@
+import {
+	type Attempt,
+	type Capture,
+	type Countdown,
+	type Effect,
+	type Graph,
+	type GraphParts,
+	type HandsFreeEvent,
+	type PageReads,
+	type Phase,
+	type Timer,
+	OFF_MESSAGE,
+	WAKE_PHRASE,
+	captureOf,
+	countdown,
+	graceOf,
+	graphOf,
+	isEnabled,
+	leaseOf,
+	next,
+	tickOf,
+	view,
+} from "./hands_free_machine.js";
+
+// The wake phrase and the lifecycle's own timings are written in the machine
+// that uses them; the rest of the page reads them from here.
+export {
+	FOLLOW_UP_LEASE_MS,
+	MAX_HANDS_FREE_UTTERANCE_MS,
+	WAKE_PHRASE,
+	WAKE_SPEECH_GRACE_MS,
+} from "./hands_free_machine.js";
+
 function normalizeAudioEnergy(energy: number): number {
 	return Number.isFinite(energy) ? Math.max(0, Math.min(1, energy * 8)) : 0;
 }
 
-export const WAKE_PHRASE = "Damocles";
 export const WAKE_SAMPLE_RATE = 16_000;
 export const WAKE_FRAME_SAMPLES = 1_280;
 export const VAD_TRAILING_SILENCE_MS = 900;
@@ -12,14 +44,9 @@ export const VAD_WINDOW_MS = (VAD_WINDOW_SAMPLES / WAKE_SAMPLE_RATE) * 1_000;
 /** Speech starts at the first threshold and only ends below the second. */
 export const SPEECH_START_PROBABILITY = 0.5;
 export const SPEECH_END_PROBABILITY = 0.35;
-export const WAKE_SPEECH_GRACE_MS = 2_000;
-export const MAX_HANDS_FREE_UTTERANCE_MS = 30_000;
-export const FOLLOW_UP_LEASE_MS = 8_000;
 /** How long a start waits for a suspended audio context to run. */
 export const AUDIO_RESUME_DEADLINE_MS = 3_000;
 export const PLAYBACK_DRAIN_DEBOUNCE_MS = 400;
-
-type Timer = ReturnType<typeof setTimeout>;
 
 type DetectorCallback = () => void;
 type DetectorErrorCallback = (error: unknown) => void;
@@ -85,14 +112,6 @@ export interface HandsFreeControllerOptions {
 	onState: (detail: HandsFreeStateDetail) => void;
 }
 
-interface Capture {
-	recorder: MediaRecorder;
-	token: number;
-	epoch: number;
-	chunks: Blob[];
-	lease: boolean;
-}
-
 /** A start's audio context did not run by `AUDIO_RESUME_DEADLINE_MS`. */
 class AudioSuspended extends Error {
 	constructor() {
@@ -105,56 +124,34 @@ function isRunning(context: AudioContext): boolean {
 	return context.state === "running";
 }
 
-/** Stops what a start made and never installed. */
-function releaseUnused(
-	context: AudioContext | null,
-	stream: MediaStream | null,
-): void {
-	stream?.getTracks().forEach((track) => track.stop());
-	if (context) void context.close().catch(() => undefined);
+/** Takes down what a graph, or a start that did not finish one, holds. */
+function releaseGraph(parts: GraphParts): void {
+	parts.worklet?.port.close();
+	parts.worklet?.disconnect();
+	parts.source?.disconnect();
+	parts.sink?.disconnect();
+	parts.stream?.getTracks().forEach((track) => track.stop());
+	if (parts.context) void parts.context.close().catch(() => undefined);
 }
+
+/** An option the controller always has, its default filled in. */
+type Option<Name extends keyof HandsFreeControllerOptions> = NonNullable<
+	HandsFreeControllerOptions[Name]
+>;
 
 export class HandsFreeController {
 	private readonly options: HandsFreeControllerOptions;
-	private readonly getUserMedia: NonNullable<
-		HandsFreeControllerOptions["getUserMedia"]
-	>;
-	private readonly createAudioContext: NonNullable<
-		HandsFreeControllerOptions["createAudioContext"]
-	>;
-	private readonly createRecorder: NonNullable<
-		HandsFreeControllerOptions["createRecorder"]
-	>;
-	private readonly createWorkletNode: NonNullable<
-		HandsFreeControllerOptions["createWorkletNode"]
-	>;
-	private readonly now: NonNullable<HandsFreeControllerOptions["now"]>;
-	private readonly setTimer: NonNullable<
-		HandsFreeControllerOptions["setTimeout"]
-	>;
-	private readonly clearTimer: NonNullable<
-		HandsFreeControllerOptions["clearTimeout"]
-	>;
-	private readonly isForeground: NonNullable<
-		HandsFreeControllerOptions["isForeground"]
-	>;
+	private readonly getUserMedia: Option<"getUserMedia">;
+	private readonly createAudioContext: Option<"createAudioContext">;
+	private readonly createRecorder: Option<"createRecorder">;
+	private readonly createWorkletNode: Option<"createWorkletNode">;
+	private readonly setTimer: Option<"setTimeout">;
+	private readonly clearTimer: Option<"clearTimeout">;
+	private readonly isForeground: Option<"isForeground">;
 	private readonly detector: WakeDetector | null;
 	private readonly endpointer: SpeechEndpointer | null;
-	private state: HandsFreeState = "off";
-	private enabled = false;
-	private runtimeToken = 0;
-	private wakeTimer: Timer | null = null;
-	private leaseTimer: Timer | null = null;
-	private leaseTickTimer: Timer | null = null;
-	private leaseDeadline = 0;
-	private leaseUsed = false;
-	private capture: Capture | null = null;
-	private stream: MediaStream | null = null;
-	private context: AudioContext | null = null;
-	private source: MediaStreamAudioSourceNode | null = null;
-	private worklet: AudioWorkletNode | null = null;
-	private sink: GainNode | null = null;
-	private pausedForPtt = false;
+	private readonly page: PageReads;
+	private phase: Phase = { kind: "off", message: OFF_MESSAGE };
 
 	constructor(options: HandsFreeControllerOptions) {
 		this.options = options;
@@ -173,129 +170,292 @@ export class HandsFreeController {
 		this.createWorkletNode =
 			options.createWorkletNode ||
 			((context) => new AudioWorkletNode(context, "hands-free-vad"));
-		this.detector = options.wakeDetector || null;
-		this.endpointer = options.speechEndpointer || null;
-		this.detector?.onDetect(() => {
-			if (this.enabled && this.state === "armed") this.beginWakeGrace();
-		});
-		this.detector?.onError?.((error) => this.failListening("detector", error));
-		this.endpointer?.onSpeechStart(() => {
-			if (!this.enabled) return;
-			if (this.state === "wake_grace") this.beginCapture(false);
-			else if (this.state === "lease") this.beginCapture(true);
-		});
-		this.endpointer?.onSpeechEnd(() => {
-			if (this.enabled && this.capture) this.stopCapture(false);
-		});
-		this.endpointer?.onError?.((error) =>
-			this.failListening("speech detector", error),
-		);
-		this.now = options.now || (() => Date.now());
+		const now = options.now || (() => Date.now());
 		this.setTimer =
 			options.setTimeout ||
 			((handler, timeout) => setTimeout(handler, timeout));
 		this.clearTimer = options.clearTimeout || ((timer) => clearTimeout(timer));
 		this.isForeground =
 			options.isForeground || (() => document.visibilityState === "visible");
-		this.publish("off", "Hands-free is off.");
+		this.page = {
+			snapshotReady: () => options.isSnapshotReady(),
+			epoch: () => options.currentEpoch(),
+			pttActive: () => options.isPttActive(),
+			refusal: () => this.refusal(),
+			now,
+		};
+		this.detector = options.wakeDetector || null;
+		this.endpointer = options.speechEndpointer || null;
+		this.detector?.onDetect(() => this.transition({ kind: "wake" }));
+		this.detector?.onError?.((error) =>
+			this.transition({ kind: "detectorFailed", what: "detector", error }),
+		);
+		this.endpointer?.onSpeechStart(() =>
+			this.transition({ kind: "speechStart" }),
+		);
+		this.endpointer?.onSpeechEnd(() => this.transition({ kind: "speechEnd" }));
+		this.endpointer?.onError?.((error) =>
+			this.transition({
+				kind: "detectorFailed",
+				what: "speech detector",
+				error,
+			}),
+		);
+		this.publish();
 	}
 
 	get currentState(): HandsFreeState {
-		return this.state;
+		return view(this.phase, this.page.now()).state;
 	}
 
 	get isEnabled(): boolean {
-		return this.enabled;
+		return isEnabled(this.phase);
 	}
 
 	get isCapturing(): boolean {
-		return this.capture !== null;
+		return captureOf(this.phase) !== null;
 	}
 
-	async enable(): Promise<boolean> {
-		if (this.enabled && this.state !== "error" && this.state !== "paused_ptt")
-			return true;
+	/** Settles once the start this call began ends: true when hands-free is listening. */
+	enable(): Promise<boolean> {
+		const before = this.phase;
+		this.transition({ kind: "enable" });
+		const after = this.phase;
+		if (after.kind === "starting" && after !== before)
+			return after.attempt.result;
+		return Promise.resolve(isEnabled(after));
+	}
+
+	disable(message = OFF_MESSAGE): void {
+		this.transition({ kind: "turnOff", message });
+	}
+
+	pauseForPtt(): void {
+		this.transition({ kind: "pttActive", active: true });
+	}
+
+	resumeAfterPtt(): void {
+		this.transition({ kind: "pttActive", active: false });
+	}
+
+	openFollowUpLease(generation: number): void {
+		this.transition({ kind: "followUp", generation });
+	}
+
+	/**
+	 * The turn hands-free is waiting on will bring no reply: the server
+	 * refused the clip, or the reply could not be produced. Only a successful
+	 * reply opens the follow-up lease, so without this the controller would
+	 * wait in `awaiting_response`, where no wake word is heard (#258).
+	 */
+	endAwaitedTurn(): void {
+		this.transition({
+			kind: "noReply",
+			message: `No reply is coming; listening locally for “${WAKE_PHRASE}”.`,
+		});
+	}
+
+	epochChanged(): void {
+		this.transition({ kind: "callChanged" });
+	}
+
+	/**
+	 * The only writer of `phase`. The new phase is written before anything
+	 * is done about it, so a callback that fires at once (a recorder's `stop`)
+	 * sees the phase it belongs to, or is dropped. Then what the old phase
+	 * held and the new one does not is released, the step's effects run (no
+	 * more once one of them has moved the machine on), and the phase is
+	 * published.
+	 */
+	private transition(event: HandsFreeEvent): void {
+		const from = this.phase;
+		const step = next(from, event, this.page);
+		if (!step) return;
+		const to = step.to;
+		this.phase = to;
+		this.leave(from, to);
+		for (const effect of step.effects) {
+			if (this.phase !== to) return;
+			this.run(effect);
+		}
+		if (this.phase !== to) return;
+		if (step.publish) this.publish();
+		if (step.then) this.transition(step.then);
+	}
+
+	/** The one teardown: release what `from` holds and `to` does not. */
+	private leave(from: Phase, to: Phase): void {
+		const grace = graceOf(from);
+		if (grace && grace !== graceOf(to)) this.disarm(grace);
+		const tick = tickOf(from);
+		if (tick && tick !== tickOf(to)) this.disarm(tick);
+		const lease = leaseOf(from);
+		if (lease && lease !== leaseOf(to)) this.disarm(lease.expiry);
+		const capture = captureOf(from);
+		if (capture && capture !== captureOf(to)) {
+			this.disarm(capture.cap);
+			// A capture left by any other way than its recorder's `stop` is
+			// discarded: that event, if it comes, names a capture no phase
+			// holds (#256).
+			if (capture.recorder.state !== "inactive") {
+				try {
+					capture.recorder.stop();
+				} catch {
+					/* the recorder is gone with its capture */
+				}
+			}
+		}
+		const graph = graphOf(from);
+		if (graph && graph !== graphOf(to)) releaseGraph(graph);
+	}
+
+	private run(effect: Effect): void {
+		switch (effect.kind) {
+			case "resetDetectors":
+				// Both detectors forget the audio before this moment, so audio
+				// from before cannot open the next turn.
+				this.detector?.reset();
+				this.endpointer?.reset();
+				return;
+			case "resetEndpointer":
+				this.endpointer?.reset();
+				return;
+			case "silence":
+				this.options.onAudioLevel?.(0);
+				return;
+			case "start":
+				void this.buildGraph(effect.attempt);
+				return;
+			case "arm": {
+				const { countdown, event } = effect;
+				countdown.handle = this.setTimer(() => {
+					countdown.handle = null;
+					this.transition(event);
+				}, effect.ms);
+				return;
+			}
+			case "openCapture":
+				return this.openCapture(effect.graph);
+			case "startRecorder":
+				try {
+					effect.capture.recorder.start();
+				} catch (error) {
+					this.transition({
+						kind: "recorderFailed",
+						capture: effect.capture,
+						error,
+					});
+				}
+				return;
+			case "stopRecorder": {
+				const { capture } = effect;
+				// A recorder that stopped by itself has its `stop` event on
+				// the way, and that event ends the capture.
+				if (capture.recorder.state === "inactive") return;
+				try {
+					capture.recorder.stop();
+				} catch (error) {
+					this.transition({ kind: "recorderFailed", capture, error });
+				}
+				return;
+			}
+			case "keep":
+				effect.capture.chunks.push(effect.blob);
+				return;
+			case "deliver":
+				return this.deliver(effect.capture);
+			default: {
+				const exhaustive: never = effect;
+				return exhaustive;
+			}
+		}
+	}
+
+	private disarm(countdown: Countdown): void {
+		if (countdown.handle !== null) this.clearTimer(countdown.handle);
+		countdown.handle = null;
+	}
+
+	private publish(): void {
+		this.options.onState(view(this.phase, this.page.now()));
+	}
+
+	/** Why a start cannot begin now, or null when it can. */
+	private refusal(): string | null {
 		if (this.options.isPttActive() || !this.isForeground())
-			return this.refuseStart(
-				"Finish push-to-talk and keep this page visible first.",
-			);
+			return "Finish push-to-talk and keep this page visible first.";
 		if (!this.supported())
-			return this.refuseStart(
-				"Hands-free needs a secure browser with local audio worklet support.",
-			);
+			return "Hands-free needs a secure browser with local audio worklet support.";
 		if (!this.detector || !this.endpointer)
-			return this.refuseStart(
-				this.detector
-					? "Hands-free speech detector is unavailable."
-					: "Hands-free wake detector is unavailable.",
-			);
-		this.enabled = true;
-		this.publish(
-			"starting",
-			"Starting local microphone listening. Ambient audio stays on this device.",
-		);
-		const token = ++this.runtimeToken;
-		// What this start makes stays in locals until its last wait is over.
-		// A start that a newer one overtook (push-to-talk paused and resumed
-		// it, the page was hidden and shown) then releases only what it made,
-		// never the newer start's graph (#261).
-		let context: AudioContext | null = null;
-		let stream: MediaStream | null = null;
-		let installed = false;
+			return this.detector
+				? "Hands-free speech detector is unavailable."
+				: "Hands-free wake detector is unavailable.";
+		return null;
+	}
+
+	/** Whether `attempt` is the start hands-free still waits on. */
+	private isCurrent(attempt: Attempt): boolean {
+		return this.phase.kind === "starting" && this.phase.attempt === attempt;
+	}
+
+	/**
+	 * Builds the listening graph for `attempt`. What it makes stays in its
+	 * own `parts` until it hands the graph over in `graphReady`. A start that
+	 * a newer one overtook (push-to-talk paused and resumed it, the page was
+	 * hidden and shown) then releases only what it made, never the newer
+	 * start's graph (#261).
+	 */
+	private async buildGraph(attempt: Attempt): Promise<void> {
+		const parts: GraphParts = {
+			context: null,
+			stream: null,
+			source: null,
+			worklet: null,
+			sink: null,
+		};
 		try {
 			// Two models, one wait: either one failing is the same start
 			// failure, reported by the catch below.
-			await Promise.all([this.detector.load?.(), this.endpointer.load?.()]);
-			if (!this.enabled || token !== this.runtimeToken) return false;
-			context = this.createAudioContext();
+			await Promise.all([this.detector?.load?.(), this.endpointer?.load?.()]);
+			if (!this.isCurrent(attempt)) return attempt.finish(false);
+			const context = this.createAudioContext();
+			parts.context = context;
 			if (typeof context.audioWorklet?.addModule !== "function")
 				throw new Error("audio worklet is unavailable");
-			stream = await this.getUserMedia({ audio: true });
-			if (
-				!this.enabled ||
-				token !== this.runtimeToken ||
-				!this.isForeground()
-			) {
-				releaseUnused(context, stream);
-				return false;
+			const stream = await this.getUserMedia({ audio: true });
+			parts.stream = stream;
+			if (!this.isCurrent(attempt) || !this.isForeground()) {
+				releaseGraph(parts);
+				return attempt.finish(false);
 			}
 			await this.resumeAudio(context);
 			await context.audioWorklet.addModule(
 				this.options.workletUrl || "/vad-worklet.js",
 			);
-			if (!this.enabled || token !== this.runtimeToken) {
-				releaseUnused(context, stream);
-				return false;
+			if (!this.isCurrent(attempt)) {
+				releaseGraph(parts);
+				return attempt.finish(false);
 			}
-			this.context = context;
-			this.stream = stream;
-			installed = true;
-			this.source = context.createMediaStreamSource(stream);
-			this.worklet = this.createWorkletNode(context);
-			const worklet = this.worklet;
+			const source = context.createMediaStreamSource(stream);
+			parts.source = source;
+			const worklet = this.createWorkletNode(context);
+			parts.worklet = worklet;
+			source.connect(worklet);
+			const sink = context.createGain();
+			parts.sink = sink;
+			sink.gain.value = 0;
+			worklet.connect(sink);
+			sink.connect(context.destination);
+			const graph: Graph = { context, stream, source, worklet, sink };
 			worklet.port.onmessage = (event: MessageEvent) => {
-				if (token !== this.runtimeToken || worklet !== this.worklet) return;
-				this.onWorkletMessage(event.data);
+				if (graphOf(this.phase) === graph) this.onWorkletMessage(event.data);
 			};
-			this.source.connect(worklet);
-			this.sink = context.createGain();
-			this.sink.gain.value = 0;
-			worklet.connect(this.sink);
-			this.sink.connect(context.destination);
-			this.resetListening();
-			this.publish("armed", `Listening locally for “${WAKE_PHRASE}”.`);
-			return true;
+			this.transition({ kind: "graphReady", attempt, graph });
+			attempt.finish(true);
 		} catch (error) {
-			if (!installed) releaseUnused(context, stream);
-			if (!this.enabled || token !== this.runtimeToken) return false;
-			this.enabled = false;
-			this.releaseRuntime();
-			this.resetListening();
-			this.publish(
-				"error",
-				`Hands-free could not start (${this.errorName(error)}).`,
-			);
-			return false;
+			releaseGraph(parts);
+			this.transition({ kind: "startFailed", attempt, error });
+			attempt.finish(false);
 		}
 	}
 
@@ -322,75 +482,6 @@ export class HandsFreeController {
 		}
 		// Read again: `resume()` changes the state the check above narrowed.
 		if (!isRunning(context)) throw new AudioSuspended();
-	}
-
-	disable(message = "Hands-free is off."): void {
-		this.enabled = false;
-		this.pausedForPtt = false;
-		this.runtimeToken++;
-		this.clearWakeTimer();
-		this.clearLeaseTimer();
-		this.stopCapture(true);
-		this.releaseRuntime();
-		this.resetListening();
-		this.publish("off", message);
-	}
-
-	pauseForPtt(): void {
-		if (!this.enabled) return;
-		this.pausedForPtt = true;
-		this.runtimeToken++;
-		this.clearWakeTimer();
-		this.stopCapture(true);
-		this.releaseRuntime();
-		this.resetListening();
-		this.publish("paused_ptt", "Hands-free paused for push-to-talk.");
-	}
-
-	resumeAfterPtt(): void {
-		if (!this.pausedForPtt || !this.enabled) return;
-		this.pausedForPtt = false;
-		void this.enable();
-	}
-
-	openFollowUpLease(generation: number): void {
-		if (
-			!this.enabled ||
-			this.pausedForPtt ||
-			generation !== this.options.currentEpoch() ||
-			!this.options.isSnapshotReady() ||
-			this.state === "error"
-		)
-			return;
-		this.clearLeaseTimer();
-		this.endpointer?.reset();
-		this.leaseUsed = false;
-		this.leaseDeadline = this.now() + FOLLOW_UP_LEASE_MS;
-		this.leaseTimer = this.setTimer(
-			() => this.expireLease(),
-			FOLLOW_UP_LEASE_MS,
-		);
-		this.scheduleLeaseUpdate();
-		this.publish(
-			"lease",
-			"Follow-up listening is open for 8 seconds. No wake word needed.",
-		);
-	}
-
-	/**
-	 * The turn hands-free is waiting on will bring no reply: the server
-	 * refused the clip, or the reply could not be produced. Only a successful
-	 * reply opens the follow-up lease, so without this the controller would
-	 * wait in `awaiting_response`, where no wake word is heard (#258).
-	 */
-	endAwaitedTurn(): void {
-		if (!this.enabled || this.state !== "awaiting_response") return;
-		this.rearm(`No reply is coming; listening locally for “${WAKE_PHRASE}”.`);
-	}
-
-	epochChanged(): void {
-		if (!this.enabled) return;
-		this.disable("Hands-free stopped because the call changed.");
 	}
 
 	private supported(): boolean {
@@ -431,254 +522,45 @@ export class HandsFreeController {
 			// The endpointer scores every frame; the wake detector only runs
 			// while a wake word could still open a turn.
 			this.endpointer?.process(message.samples);
-			if (this.state === "armed" || this.state === "wake_grace")
+			if (this.phase.kind === "armed" || this.phase.kind === "wake_grace")
 				this.detector?.process(message.samples);
 		}
 	}
 
-	private beginWakeGrace(): void {
-		if (this.state !== "armed") return;
-		this.endpointer?.reset();
-		this.clearWakeTimer();
-		this.wakeTimer = this.setTimer(() => {
-			this.wakeTimer = null;
-			if (this.state === "wake_grace")
-				this.rearm(
-					`Wake heard; speak within ${WAKE_SPEECH_GRACE_MS / 1000} seconds.`,
-				);
-		}, WAKE_SPEECH_GRACE_MS);
-		this.publish("wake_grace", "Wake word heard. Speak now.");
-	}
-
-	private beginCapture(lease: boolean): void {
-		if (!this.enabled || this.capture || !this.options.isSnapshotReady())
-			return;
-		if (this.options.isPttActive()) return;
+	/**
+	 * Makes the recorder for an utterance and wires its events to name the
+	 * capture. A recorder that cannot be made is reported, not recorded.
+	 */
+	private openCapture(graph: Graph): void {
 		const epoch = this.options.currentEpoch();
-		const token = this.runtimeToken;
 		let recorder: MediaRecorder;
 		try {
 			const mime = this.recordingMime();
 			if (!mime) throw new Error("no supported recording MIME type");
-			recorder = this.createRecorder(this.stream!, mime);
+			recorder = this.createRecorder(graph.stream, mime);
 		} catch (error) {
-			this.publish(
-				"error",
-				`Hands-free recording is unavailable (${this.errorName(error)}).`,
-			);
-			this.disable();
+			this.transition({ kind: "recorderUnavailable", error });
 			return;
 		}
-		const capture: Capture = {
-			recorder,
-			token,
-			epoch,
-			chunks: [],
-			lease,
-		};
-		this.capture = capture;
-		if (lease) this.leaseUsed = true;
-		recorder.ondataavailable = (event) => {
-			if (this.capture !== capture || token !== this.runtimeToken) return;
-			if (event.data.size) capture.chunks.push(event.data);
-		};
-		recorder.onstop = () => {
-			if (this.capture !== capture || token !== this.runtimeToken) return;
-			this.capture = null;
-			// Nothing was sent, so no reply will come: listen for the wake
-			// word again, after a follow-up as after a wake word (#258).
-			if (!capture.chunks.length) {
-				this.rearm("No utterance was retained.");
-				return;
-			}
-			const blob = new Blob(capture.chunks, {
-				type: recorder.mimeType || "audio/webm",
-			});
-			capture.chunks.length = 0;
-			if (!this.options.onClip(blob, blob.type, capture.epoch)) {
-				this.rearm("The utterance could not be sent; say the wake word again.");
-				return;
-			}
-			this.publish(
-				"awaiting_response",
-				"Utterance sent; waiting for the response.",
-			);
-		};
-		recorder.onerror = (event) => {
-			if (this.capture !== capture || token !== this.runtimeToken) return;
-			this.capture = null;
-			this.publish(
-				"error",
-				`Hands-free recording failed (${this.errorName(event.error)}).`,
-			);
-			this.disable();
-		};
-		try {
-			recorder.start();
-		} catch (error) {
-			this.capture = null;
-			this.publish(
-				"error",
-				`Hands-free recording failed (${this.errorName(error)}).`,
-			);
-			this.disable();
-			return;
-		}
-		this.clearWakeTimer();
-		this.publish(
-			lease ? "lease_capturing" : "capturing",
-			"Capturing speech locally; silence will end it.",
-		);
-		this.setTimer(() => {
-			if (this.capture === capture && token === this.runtimeToken)
-				this.stopCapture(false);
-		}, MAX_HANDS_FREE_UTTERANCE_MS);
+		const capture: Capture = { recorder, epoch, chunks: [], cap: countdown() };
+		recorder.ondataavailable = (event) =>
+			this.transition({ kind: "data", capture, blob: event.data });
+		recorder.onstop = () => this.transition({ kind: "recorderStopped", capture });
+		recorder.onerror = (event) =>
+			this.transition({ kind: "recorderFailed", capture, error: event.error });
+		this.transition({ kind: "captureOpened", capture });
 	}
 
-	/**
-	 * Ends the current capture. A discarded capture is retired here, before
-	 * the recorder is asked to stop: every caller that discards has already
-	 * moved `runtimeToken` on, so the recorder's `onstop` would see a stale
-	 * token and leave the capture in place for good (#256). A capture that is
-	 * no longer `this.capture` is retired: its recorder's events are ignored.
-	 */
-	private stopCapture(discard: boolean): void {
-		const capture = this.capture;
-		if (!capture) return;
-		if (discard) this.capture = null;
-		if (capture.recorder.state !== "inactive") {
-			try {
-				capture.recorder.stop();
-			} catch {
-				this.capture = null;
-			}
-		} else {
-			this.capture = null;
-		}
-	}
-
-	private expireLease(): void {
-		this.leaseTimer = null;
-		if (this.leaseTickTimer !== null) this.clearTimer(this.leaseTickTimer);
-		this.leaseTickTimer = null;
-		this.leaseDeadline = 0;
-		if (this.capture) this.capture.lease = false;
-		this.leaseUsed = true;
-		if (this.state === "lease") {
-			this.publish(
-				"armed",
-				"Follow-up window closed; wake word required again.",
-			);
-		} else if (this.state === "lease_capturing") {
-			this.publish(
-				"capturing",
-				"Follow-up window closed; finishing the current utterance.",
-			);
-		}
-	}
-
-	private clearWakeTimer(): void {
-		if (this.wakeTimer !== null) this.clearTimer(this.wakeTimer);
-		this.wakeTimer = null;
-	}
-
-	private clearLeaseTimer(): void {
-		if (this.leaseTimer !== null) this.clearTimer(this.leaseTimer);
-		if (this.leaseTickTimer !== null) this.clearTimer(this.leaseTickTimer);
-		this.leaseTimer = null;
-		this.leaseTickTimer = null;
-		this.leaseDeadline = 0;
-	}
-
-	private scheduleLeaseUpdate(): void {
-		this.leaseTickTimer = this.setTimer(() => {
-			this.leaseTickTimer = null;
-			if (this.leaseDeadline <= 0 || this.leaseUsed) return;
-			if (this.state === "lease" || this.state === "lease_capturing") {
-				this.publish(
-					this.state,
-					"Follow-up listening is open for 8 seconds. No wake word needed.",
-				);
-				this.scheduleLeaseUpdate();
-			}
-		}, 250);
-	}
-
-	private releaseStream(): void {
-		this.stream?.getTracks().forEach((track) => track.stop());
-		this.stream = null;
-	}
-
-	private releaseRuntime(): void {
-		this.worklet?.port.close();
-		this.worklet?.disconnect();
-		this.source?.disconnect();
-		this.sink?.disconnect();
-		this.worklet = null;
-		this.source = null;
-		this.sink = null;
-		this.releaseStream();
-		this.options.onAudioLevel?.(0);
-		const context = this.context;
-		this.context = null;
-		if (context) void context.close().catch(() => undefined);
-	}
-
-	private publish(state: HandsFreeState, message: string): void {
-		this.state = state;
-		this.options.onState({
-			state,
-			message,
-			leaseRemainingMs: Math.max(0, this.leaseDeadline - this.now()),
+	/** Hands the finished utterance to the page; one it cannot send brings no reply. */
+	private deliver(capture: Capture): void {
+		const blob = new Blob(capture.chunks, {
+			type: capture.recorder.mimeType || "audio/webm",
 		});
-	}
-
-	/**
-	 * A start that cannot begin leaves the controller off. A refused resume
-	 * after push-to-talk was still enabled, and the page shows `error` as
-	 * hands-free off: unless the controller is off too, the next MODE tap
-	 * reads `isEnabled` and turns "off" what the caller already sees as off
-	 * (#257).
-	 */
-	private refuseStart(message: string): false {
-		this.enabled = false;
-		this.publish("error", message);
-		return false;
-	}
-
-	/** A detector that failed stops hands-free and says which one it was. */
-	private failListening(what: string, error: unknown): void {
-		if (!this.enabled) return;
-		this.enabled = false;
-		this.runtimeToken++;
-		this.clearWakeTimer();
-		this.clearLeaseTimer();
-		this.stopCapture(true);
-		this.releaseRuntime();
-		this.resetListening();
-		this.publish(
-			"error",
-			`Hands-free ${what} failed (${this.errorName(error)}).`,
-		);
-	}
-
-	/**
-	 * Back to waiting for the wake word after a turn, or a wake word, that
-	 * came to nothing. The detectors start from silence, so audio from before
-	 * cannot open the next turn.
-	 */
-	private rearm(message: string): void {
-		this.resetListening();
-		this.publish("armed", message);
-	}
-
-	/** Both detectors forget the audio before this moment. */
-	private resetListening(): void {
-		this.detector?.reset();
-		this.endpointer?.reset();
-	}
-
-	private errorName(error: unknown): string {
-		return error instanceof Error ? error.name : "unknown error";
+		capture.chunks.length = 0;
+		if (!this.options.onClip(blob, blob.type, capture.epoch))
+			this.transition({
+				kind: "noReply",
+				message: "The utterance could not be sent; say the wake word again.",
+			});
 	}
 }

@@ -75,7 +75,8 @@ asynchronous and queued, as the wake detector's is, and a reset stamps a new
 generation so a window scored before a reset cannot start or end a turn after
 it. The endpointer is reset where the wake detector is: on enable, on a wake
 grace period, when an expired grace period re-arms, when a turn brings no
-reply, on a follow-up lease, on a PTT pause, and on disable or an epoch change.
+reply, on a follow-up lease, when a follow-up lease expires unused (#367), on
+a PTT pause, and on disable or an epoch change.
 
 The two detectors share one ONNX Runtime Web instance, and its `run` is not
 re-entrant across sessions: a session that runs while another session's run
@@ -113,8 +114,10 @@ The local VAD uses 900 ms trailing silence, a 2 s wake-to-speech grace period,
 and a 30 s utterance ceiling. A window above `SPEECH_START_PROBABILITY` (0.5)
 starts speech and only a window below `SPEECH_END_PROBABILITY` (0.35) counts
 towards the trailing silence, so a quiet syllable does not cut the caller off.
-Those two thresholds and every timing here are written once, in
-`apps/frontend/src/hands_free.ts`. A settled response opens one browser-local 8,000
+Those two thresholds and every timing here are written once: the three
+lifecycle timings (wake grace, utterance ceiling, lease) in
+`apps/frontend/src/hands_free_machine.ts`, the rest in
+`apps/frontend/src/hands_free.ts`, which re-exports them all. A settled response opens one browser-local 8,000
 ms follow-up lease after the server barrier and playback queue have both
 settled, with a 400 ms drain debounce. The lease admits one no-wake utterance; a
 later utterance needs a wake word again.
@@ -142,11 +145,54 @@ the start with an `error` that the page shows. A start keeps the context,
 microphone and nodes it makes to itself until its last wait is over. A start
 that a newer one overtook releases only those, never the newer start's graph.
 
-Capture is discarded on permission failure, hidden/pagehide, disconnect,
-hangup, route/epoch change, or push-to-talk interruption. Secure contexts with
+A page hidden or left, a disconnect, a hangup, a route change and every new
+`epoch` turn hands-free off; a push-to-talk press pauses it. Each discards a
+running capture and releases the microphone. Secure contexts with
 `getUserMedia`, a 16-kHz `AudioContext`, `AudioWorkletNode`, and a supported
 `MediaRecorder` MIME are required. Reduced-motion settings do not change
 listening behavior or accessibility announcements.
+
+## The controller as one machine
+
+`HandsFreeController` is one machine (#366). `apps/frontend/src/hands_free_machine.ts`
+names its phases, and each phase holds what exists only in it. `next()` there
+is the phase x event table, pinned by `tests/unit/handsFreeLifecycle.test.ts`:
+it reads the page (snapshot, epoch, push-to-talk) and returns the next phase,
+the effects to run and whether to publish, and does nothing itself.
+`transition()` in `hands_free.ts` is the only writer of the phase. It writes
+the phase before anything else, so a recorder that fires `stop` at once sees
+the phase it belongs to; then `leave()` releases what the old phase held and
+the new one does not (a timer, a discarded capture, the graph); then the
+effects run; then the phase is published. What the page sees is `view()` of
+the phase, and nothing else.
+
+| phase (published as) | holds | left by |
+|---|---|---|
+| `off`, `error` | the status line | MODE: `starting`, or `error` when refused (push-to-talk active, page hidden, no secure context, worklet or recorder MIME, no detector) |
+| `starting` | the start (`Attempt`); what it makes stays its own until it hands the graph over | the graph (`armed`), a failed start or a `resume()` past 3 s (`error`) |
+| `paused_ptt` | nothing | push-to-talk ends: a full restart (`starting`), or `error` when refused |
+| `armed` | the graph | the wake word (`wake_grace`), a follow-up lease (`lease`) |
+| `wake_grace` | the graph, the 2 s timer | speech (`capturing`), the timer (`armed`), a follow-up lease (`lease`) |
+| `capturing` (`lease_capturing` with a lease) | the graph, the capture (recorder, chunks, epoch stamp, 30 s cap), the lease it began in | a speech end or the cap (`finishing`), the recorder stopping by itself (`awaiting_response`, or `armed` when nothing was kept), the lease expiring (stays, without the lease) |
+| `finishing` (published as the capture it ends) | the same | the recorder's `stop` event: `awaiting_response`, or `armed` when nothing was kept or the page could not send it |
+| `awaiting_response` | the graph | a turn with no reply (`armed`), a follow-up lease (`lease`) |
+| `lease` | the graph, the lease deadline, its expiry and 250 ms tick | speech (`lease_capturing`), expiry (`armed`) |
+
+Every phase but `off` and `error` also leaves for `off` (MODE, a hidden or
+left page, a disconnect, a hangup, a route change, an `epoch`), for
+`paused_ptt` (a push-to-talk press) and for `error` (a detector failure). A
+recorder that cannot be made, started or stopped, or that reports an error,
+publishes `error` and then turns hands-free `off`.
+
+A follow-up lease opens only from `armed`, `wake_grace`, `awaiting_response`
+or `lease`: never over a start or a running capture. A second stop while
+`finishing` changes nothing; the recorder's `stop` event ends the capture.
+Every way into `armed` resets both detectors; `wake_grace` and `lease` reset
+the endpointer.
+
+An event from a start, a recorder or a timer names its attempt, capture,
+lease or timer, and `next()` drops one the current phase does not hold. A
+start that a newer one overtook therefore releases only what it made.
 
 ## Asset provenance and licenses
 
