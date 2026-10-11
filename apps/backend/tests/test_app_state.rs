@@ -284,12 +284,7 @@ async fn the_agent_projection_moves_by_its_table() {
             Some("second"),
         ),
         (&[Asked("first")], Left, Some("idle"), None),
-        (
-            &[Asked("first")],
-            LeftOther,
-            Some("waiting"),
-            Some("first"),
-        ),
+        (&[Asked("first")], LeftOther, Some("waiting"), Some("first")),
         (
             &[Busy, Asked("first")],
             Busy,
