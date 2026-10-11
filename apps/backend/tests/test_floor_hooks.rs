@@ -621,6 +621,101 @@ async fn a_request_dropped_as_its_agent_gone_ends_the_waiting_mark() {
     assert_eq!(shown(&state, "alpha"), ("busy".into(), None));
 }
 
+/// A resident promoted while its request waits for its moment (the page is
+/// away, so the floor holds it): its token leaves the background, the floor
+/// lets the request go at once, unspoken, and the agent on the line is shown
+/// busy, not waiting with a request it no longer has (#421, #388). Before,
+/// the request stayed until its moment came, and so did the mark.
+#[tokio::test]
+async fn a_promoted_resident_with_a_waiting_request_is_shown_busy_not_waiting() {
+    let (client, _, _) = fake_jev_client();
+    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
+    state.0.floor.set_page_connected(false).await;
+    spawn_floor_worker(state.clone());
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        state.0.floor.queue_len().await,
+        1,
+        "the request waits for the page"
+    );
+    assert_eq!(
+        shown(&state, "alpha"),
+        ("waiting".into(), Some("alpha finished".into()))
+    );
+
+    // What a promotion does: the resident leaves the background
+    // (`take_out` retires its token), and the bring-up says it is busy.
+    state.0.coordinator.remove_background("alpha-token");
+    crate::app_state::update_agent_state(
+        &state,
+        crate::pbx::AgentStateNotice {
+            project: "alpha".into(),
+            state: crate::pbx::AgentNotice::Busy,
+        },
+    )
+    .await;
+
+    timeout(
+        Duration::from_secs(2),
+        until_floor_released(&state, "floor-1"),
+    )
+    .await
+    .expect("the promoted resident's request leaves the floor at once");
+    assert_eq!(shown(&state, "alpha"), ("busy".into(), None));
+}
+
+/// A resident that leaves the background while its request waits behind
+/// another agent's: its request leaves the floor at once, and its mark ends,
+/// while the other agent's request, at the front, still waits (#421).
+#[tokio::test]
+async fn a_request_behind_the_front_leaves_when_its_agent_leaves_the_background() {
+    let (client, _, _) = fake_jev_client();
+    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
+    state.0.floor.set_page_connected(false).await;
+    state
+        .0
+        .coordinator
+        .register_background("beta", "beta-token");
+    state
+        .0
+        .floor
+        .enqueue(FloorRequest {
+            floor_id: 0,
+            project: "beta".into(),
+            token: "beta-token".into(),
+            generation: state.0.coordinator.generation(),
+            context: "caller: previous line".into(),
+            message: "beta finished".into(),
+            reason: "finished".into(),
+            held_display: false,
+        })
+        .await;
+    spawn_floor_worker(state.clone());
+    assert_eq!(
+        shown(&state, "beta"),
+        ("waiting".into(), Some("beta finished".into()))
+    );
+
+    state.0.coordinator.remove_background("beta-token");
+
+    timeout(
+        Duration::from_secs(2),
+        until_floor_released(&state, "floor-2"),
+    )
+    .await
+    .expect("the request behind the front leaves the floor at once");
+    assert_eq!(shown(&state, "beta"), ("idle".into(), None));
+    assert_eq!(
+        shown(&state, "alpha"),
+        ("waiting".into(), Some("alpha finished".into()))
+    );
+    assert_eq!(
+        state.0.floor.queue_len().await,
+        1,
+        "alpha's request still waits"
+    );
+}
+
 /// The mark an older resident's dropped request ends is that resident's:
 /// a newer resident of the same project that is waiting keeps its request.
 #[tokio::test]
@@ -650,6 +745,9 @@ async fn an_older_residents_dropped_request_keeps_a_newer_residents_mark() {
         shown(&state, "alpha"),
         ("waiting".into(), Some("new update".into()))
     );
+    // The page is away, so the newer request waits at the front once the
+    // older one has left, and is not spoken before the mark is read.
+    state.0.floor.set_page_connected(false).await;
     spawn_floor_worker(state.clone());
 
     until_floor_released(&state, "floor-1").await;
