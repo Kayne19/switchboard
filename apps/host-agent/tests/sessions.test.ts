@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { DaemonCommandError } from "../src/daemon_port.ts";
 import { HostLink } from "../src/link.ts";
-import { clipDetail, type LinkEvent, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
+import { clipDetail, type LinkEvent, type SentInput, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
 import { SkillSocket } from "../src/skill_socket.ts";
 import { FakeDaemon, flush } from "./fake_daemon.ts";
 import { command, FakeService, type Message } from "./fake_service.ts";
@@ -322,7 +322,7 @@ test("turn table: each phase of a tracked session's turn, by event", async () =>
 		["idle", "detach, then the wait answers", ["session_closed detached"], 0, "untracked"],
 		["idle", "daemon session_closed, then the wait answers", ["session_closed gone"], 0, "untracked"],
 		["idle", "resync, not busy", [], 0, "idle"],
-		["idle", "resync, busy snapshot", ["turn_start unknown"], 1, "unknown"],
+		["idle", "resync, busy snapshot", ["turn_start unknown +id"], 1, "unknown"],
 		["idle", "resync, gone", ["session_closed gone"], 0, "untracked"],
 		["input", "prompt", [], 1, "input"],
 		["input", "steer", [], 1, "input"],
@@ -343,9 +343,9 @@ test("turn table: each phase of a tracked session's turn, by event", async () =>
 		["autonomous", "latest wait resolves", ["turn_end same-id"], 0, "idle"],
 		["autonomous", "latest wait fails", ["turn_end error same-id"], 0, "idle"],
 		["unknown", "prompt", [], 1, "unknown"],
-		["unknown", "tool_start", ["tool_start"], 0, "unknown"],
-		["unknown", "latest wait resolves", ["turn_end"], 0, "idle"],
-		["unknown", "latest wait fails", ["turn_end error"], 0, "idle"],
+		["unknown", "tool_start", ["tool_start same-id"], 0, "unknown"],
+		["unknown", "latest wait resolves", ["turn_end same-id"], 0, "idle"],
+		["unknown", "latest wait fails", ["turn_end error same-id"], 0, "idle"],
 		["unknown", "resync, busy snapshot", [], 1, "unknown"],
 	];
 	for (const [phase, event, heard, waitsSent, after] of rows) {
@@ -369,16 +369,18 @@ test("turn table: each phase of a tracked session's turn, by event", async () =>
 		assert.equal(before.turn_open, phase !== "idle", label);
 		assert.equal(before.cause, phase === "idle" ? null : phase, label);
 		const openId = before.turn_id as string | null;
-		assert.equal(openId !== null, phase === "input" || phase === "autonomous", `${label}: only an unknown turn has no id`);
+		assert.equal(openId !== null, phase !== "idle", `${label}: every open turn has an id, an unknown one too`);
 		const heardFrom = events.length;
 		const waitsFrom = daemon.ops().filter((op) => op === "waitForIdle").length;
+		// The reply to an input names the turn it went into.
+		let sent: SentInput | null = null;
 		switch (event) {
 			case "prompt":
-				await manager.prompt(s, "more");
+				sent = await manager.prompt(s, "more");
 				break;
 			case "steer":
 			case "steer, then the earlier wait resolves":
-				await manager.input(s, "steer", "more");
+				sent = await manager.input(s, "steer", "more");
 				if (event !== "steer") waits.at(-2)?.resolve();
 				break;
 			case "agent_start":
@@ -390,7 +392,7 @@ test("turn table: each phase of a tracked session's turn, by event", async () =>
 					daemon.emit(handle, { type: "agent_start" });
 					return prompt(handle, message);
 				};
-				await manager.prompt(s, "go");
+				sent = await manager.prompt(s, "go");
 				break;
 			}
 			case "tool_start":
@@ -467,14 +469,17 @@ test("turn table: each phase of a tracked session's turn, by event", async () =>
 			`${label}: the skill socket reads the same turn`,
 		);
 		if (info?.turn_open && phase !== "idle" && after === phase) assert.equal(info.turn_id, openId, `${label}: the open turn keeps its id`);
+		if (sent !== null) assert.equal(sent.turn_id, info?.turn_id, `${label}: the reply names the turn the input went into`);
 	}
 });
 
 test("a busy session gets follow_up, not prompt; abort is followed by resume_queue", async () => {
 	const { daemon, manager, kinds } = setup();
 	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
-	assert.deepEqual(await manager.prompt(s, "one"), { sent_as: "prompt" });
-	assert.deepEqual(await manager.prompt(s, "two"), { sent_as: "follow_up" });
+	const first = await manager.prompt(s, "one");
+	assert.equal(first.sent_as, "prompt");
+	// A follow_up goes into the turn the prompt opened, and says so.
+	assert.deepEqual(await manager.prompt(s, "two"), { sent_as: "follow_up", turn_id: first.turn_id });
 	assert.deepEqual(
 		daemon.ops().filter((o) => o === "prompt" || o === "followUp"),
 		["prompt", "followUp"],
@@ -488,7 +493,7 @@ test("a busy session gets follow_up, not prompt; abort is followed by resume_que
 	assert.equal(kinds(s).at(-1), "turn_end");
 	// a prompt that the daemon refuses as busy is resent as follow_up
 	daemon.busy.add(s);
-	assert.deepEqual(await manager.prompt(s, "three"), { sent_as: "follow_up" });
+	assert.equal((await manager.prompt(s, "three")).sent_as, "follow_up");
 });
 
 test("set_thinking reports the effective (clamped) level; set_model reads back the model", async () => {
@@ -539,7 +544,7 @@ test("a daemon that reports one command unsupported fails that command cleanly; 
 	daemon.unsupported.add("setThinking");
 	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
 	await assert.rejects(manager.handle("set_thinking", { session: s, level: "low" }), (e: unknown) => e instanceof DaemonCommandError && e.unsupported);
-	assert.deepEqual(await manager.handle("prompt", { session: s, message: "still works" }), { sent_as: "prompt" });
+	assert.equal(((await manager.handle("prompt", { session: s, message: "still works" })) as SentInput).sent_as, "prompt");
 	assert.ok(((await manager.handle("list_sessions", {})) as { sessions: unknown[] }).sessions.length === 1);
 });
 

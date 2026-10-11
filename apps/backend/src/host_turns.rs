@@ -38,13 +38,13 @@ impl HostTurns {
     async fn release_self_woken(
         &self,
         instance_id: u64,
-        turn_id: Option<&str>,
+        turn_id: &str,
     ) -> Option<OperationIdentity> {
         self.self_woken
             .lock()
             .await
             .take_if(|run| {
-                run.instance_id == instance_id && run.operation.turn_id.as_deref() == turn_id
+                run.instance_id == instance_id && run.operation.turn_id.as_deref() == Some(turn_id)
             })
             .map(|run| run.operation)
     }
@@ -78,26 +78,23 @@ enum HostTurn {
     /// The host settled a caller's (`input`) turn. The operation bound to
     /// its id closes now, not when the prompt returns, so a run the host
     /// starts right behind it is admitted (#107, #109).
-    CallerSettled { turn_id: Option<String> },
+    CallerSettled { turn_id: String },
     /// A self-woken run the session held ended (any cause but `input`):
     /// settled by its host, or cut short by its session's close.
-    RunEnded {
-        turn_id: Option<String>,
-        text: String,
-    },
+    RunEnded { turn_id: String, text: String },
+    /// A boundary that names no turn. Every turn a host on this protocol
+    /// opens has an id (`docs/host-link.md`, "Session events"), so this is
+    /// a malformed report: it is refused, and nothing is fabricated for it.
+    Unnamed { cause: String },
 }
 
 /// What a turn the host opened is to the application.
 enum TurnStart {
     /// A caller's turn: its id is bound to the caller's operation.
-    Caller { turn_id: Option<String> },
+    Caller { turn_id: String },
     /// A run the session woke on its own, with its delivery authority:
     /// admitted as an operation of its own while the leg is free.
     SelfWoken { turn_id: String },
-    /// A self-woken run with no delivery authority: an old host's, which
-    /// stamps no turn id. Nothing is fabricated for it, so its module calls
-    /// stay refused and its written text stays off the caller's transcript.
-    WithoutAuthority { cause: String },
     /// A run a reconnect snapshot found open (`unknown`): it stays
     /// fail-closed.
     Reconnected,
@@ -107,20 +104,21 @@ enum TurnStart {
 
 impl HostTurn {
     fn of(turn: &ProjectTurn) -> Self {
-        let turn_id = turn.turn_id.clone();
+        let Some(turn_id) = turn.turn_id.clone() else {
+            return Self::Unnamed {
+                cause: turn.cause.clone(),
+            };
+        };
         match (turn.ended, turn.cause.as_str()) {
             (true, "input") => Self::CallerSettled { turn_id },
             (true, _) => Self::RunEnded {
                 turn_id,
                 text: turn.text.clone(),
             },
-            (false, cause) => Self::Opened(match (cause, turn_id) {
-                ("input", turn_id) => TurnStart::Caller { turn_id },
-                ("autonomous" | "unknown", None) => TurnStart::WithoutAuthority {
-                    cause: cause.to_owned(),
-                },
-                ("autonomous", Some(turn_id)) => TurnStart::SelfWoken { turn_id },
-                ("unknown", Some(_)) => TurnStart::Reconnected,
+            (false, cause) => Self::Opened(match cause {
+                "input" => TurnStart::Caller { turn_id },
+                "autonomous" => TurnStart::SelfWoken { turn_id },
+                "unknown" => TurnStart::Reconnected,
                 _ => TurnStart::Other,
             }),
         }
@@ -152,11 +150,20 @@ async fn act_on_turn(state: &AppState, turn: ProjectTurn) -> bool {
     match HostTurn::of(&turn) {
         HostTurn::Opened(start) => open_host_turn(state, &turn, start).await,
         HostTurn::CallerSettled { turn_id } => {
-            settle_caller_turn(state, &turn, turn_id.as_deref());
+            settle_caller_turn(state, &turn, &turn_id);
             false
         }
         HostTurn::RunEnded { turn_id, text } => {
-            end_self_woken_run(state, turn.instance_id, turn_id.as_deref(), text).await;
+            end_self_woken_run(state, turn.instance_id, &turn_id, text).await;
+            false
+        }
+        HostTurn::Unnamed { cause } => {
+            tracing::warn!(
+                instance = turn.instance_id,
+                %cause,
+                ended = turn.ended,
+                "refusing a turn boundary that names no turn"
+            );
             false
         }
     }
@@ -176,19 +183,13 @@ async fn open_host_turn(state: &AppState, turn: &ProjectTurn, start: TurnStart) 
         return false;
     }
     match start {
-        TurnStart::Caller {
-            turn_id: Some(turn_id),
-        } => {
+        TurnStart::Caller { turn_id } => {
             if let Err(error) = state.0.coordinator.bind_turn(&turn.token, &turn_id) {
                 tracing::info!(%error, "caller turn authority was stale");
             }
             false
         }
-        TurnStart::Caller { turn_id: None } | TurnStart::Other => false,
-        TurnStart::WithoutAuthority { cause } => {
-            tracing::info!(instance = turn.instance_id, %cause, "autonomous turn has no delivery authority");
-            false
-        }
+        TurnStart::Other => false,
         TurnStart::Reconnected => {
             tracing::info!(
                 instance = turn.instance_id,
@@ -202,11 +203,8 @@ async fn open_host_turn(state: &AppState, turn: &ProjectTurn, start: TurnStart) 
     }
 }
 
-/// The host settled the caller's turn `turn_id` (an old host names none).
-fn settle_caller_turn(state: &AppState, turn: &ProjectTurn, turn_id: Option<&str>) {
-    let Some(turn_id) = turn_id else {
-        return;
-    };
+/// The host settled the caller's turn `turn_id`.
+fn settle_caller_turn(state: &AppState, turn: &ProjectTurn, turn_id: &str) {
     if state.0.coordinator.settle_turn(&turn.token, turn_id) {
         tracing::info!(
             instance = turn.instance_id,
@@ -265,12 +263,7 @@ async fn admit_self_woken_run(
 /// operation closes, it is traced to its end, and its written words reach
 /// the caller's transcript. The end of a run not held, or of one whose
 /// operation a rescue already closed, ends nothing.
-async fn end_self_woken_run(
-    state: &AppState,
-    instance_id: u64,
-    turn_id: Option<&str>,
-    text: String,
-) {
+async fn end_self_woken_run(state: &AppState, instance_id: u64, turn_id: &str, text: String) {
     let Some(operation) = state
         .0
         .host_turns

@@ -406,7 +406,7 @@ impl Coordinator {
     }
 
     /// Binds the host's turn id to an operation opened for a caller prompt.
-    /// Older hosts do not report a turn id and keep the legacy token check.
+    /// Until it is bound, a module call needs only the leg's token.
     pub fn bind_turn(&self, token: &str, turn_id: &str) -> Result<(), LifecycleError> {
         self.step(Event::BindTurn { token, turn_id }).map(drop)
     }
@@ -635,9 +635,9 @@ impl Coordinator {
                 return Err(LifecycleError::StaleLeg);
             };
             // A self-woken call without a host turn authority must never use a
-            // caller operation that happened to win the race. Older hosts do
-            // not report a cause, so their ordinary caller calls retain the
-            // old token-only behavior.
+            // caller operation that happened to win the race. A call made
+            // outside any host turn names no cause: it needs the turn the
+            // operation is bound to, if any, and otherwise the token alone.
             if turn_cause.is_some_and(|cause| cause == "autonomous" || cause == "unknown") {
                 let Some(turn_id) = turn_id else {
                     return Err(LifecycleError::StaleLeg);

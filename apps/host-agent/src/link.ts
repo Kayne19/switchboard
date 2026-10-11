@@ -12,7 +12,12 @@ import { randomBytes } from "node:crypto";
 import { DaemonCommandError } from "./daemon_port.ts";
 import { CommandError, type LinkEvent } from "./sessions.ts";
 
-export const HOST_LINK_PROTOCOL = 1;
+/**
+ * The host-link protocol this host agent speaks. Version 2: every turn has a
+ * `turn_id` (an `unknown` one too), and the `prompt` and `steer` replies name
+ * the turn the input went into. The service refuses an older one at hello.
+ */
+export const HOST_LINK_PROTOCOL = 2;
 
 export type ModuleStatus = "delivered" | "accepted" | "refused" | "failed";
 export const MODULE_STATUSES: readonly ModuleStatus[] = ["delivered", "accepted", "refused", "failed"];
