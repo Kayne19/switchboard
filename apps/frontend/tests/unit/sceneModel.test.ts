@@ -122,3 +122,51 @@ describe('the title a screen-state report gives', () => {
     expect(deriveScreenState(state, 1).title).toBe('ETA');
   });
 });
+
+// What the page draws for each view an agent may ask for (`view(target)`,
+// every name `module_calls.rs` takes), and what its screen-state report
+// says it shows: the report names the view the page draws, never one it
+// was asked for and does not draw (#277). One row per request and stage.
+describe('the view a screen-state report names is the one the page draws', () => {
+  const chart: ControllerAction = { op: 'show', id: 'loss', type: 'chart', role: 'primary', data: { title: 'Loss', series: [] } };
+  const stages = { empty: [] as ControllerAction[], chart: [chart] };
+  // request -> stage -> [scene kind drawn, view reported]
+  const table: Record<string, Record<keyof typeof stages, [string, string]>> = {
+    auto: { empty: ['idle', 'auto'], chart: ['training', 'auto'] },
+    visual: { empty: ['idle', 'auto'], chart: ['training', 'visual'] },
+    comms: { empty: ['conversation', 'comms'], chart: ['conversation', 'comms'] },
+    system: { empty: ['idle', 'auto'], chart: ['training', 'auto'] },
+    theater: { empty: ['idle', 'auto'], chart: ['training', 'auto'] },
+  };
+  // The older names the service and the page still take for the five.
+  const aliases: Record<string, keyof typeof table> = {
+    overview: 'auto', grid: 'auto', split: 'auto',
+    stage: 'visual', bay2: 'visual',
+    transcript: 'comms', bay3: 'comms',
+    magi: 'system', routing: 'system', bay1: 'system',
+  };
+  const requests = [...Object.keys(table).map((view) => [view, view] as const), ...Object.entries(aliases)];
+
+  for (const [request, view] of requests) {
+    for (const stage of Object.keys(stages) as Array<keyof typeof stages>) {
+      const [kind, reported] = table[view][stage];
+      it(`${request} on the ${stage} stage draws ${kind} and reports ${reported}`, () => {
+        const state = reduceActions(createInitialState(), [...stages[stage], { op: 'set_view', view: request }]);
+        expect([sceneKindOf(state), deriveScreenState(state, 1).view]).toEqual([kind, reported]);
+      });
+    }
+  }
+
+  // The reported view, asked for on the same stage, draws what is on
+  // screen: an agent that asks for the view it was told it has changes
+  // nothing.
+  it('draws the same scene when the reported view is asked for', () => {
+    for (const [request] of requests) {
+      for (const stage of Object.values(stages)) {
+        const state = reduceActions(createInitialState(), [...stage, { op: 'set_view', view: request }]);
+        const again = reduceActions(createInitialState(), [...stage, { op: 'set_view', view: deriveScreenState(state, 1).view }]);
+        expect(sceneKindOf(again), request).toBe(sceneKindOf(state));
+      }
+    }
+  });
+});

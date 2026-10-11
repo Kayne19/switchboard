@@ -421,10 +421,10 @@ describe('controller reducer & ownership', () => {
     expect(afterAgentLeg.workspace.effectiveView).toBe('auto');
     expect(afterAgentLeg.focusId).toBeNull();
 
-    const pinned = controllerReducer(agentDirected, { op: 'pin_view', view: 'system' });
+    const pinned = controllerReducer(agentDirected, { op: 'pin_view', view: 'comms' });
     const afterPinnedLeg = controllerReducer(pinned, { op: 'epoch_reset' });
     expect(afterPinnedLeg.workspace.callerPinned).toBe(true);
-    expect(afterPinnedLeg.workspace.effectiveView).toBe('system');
+    expect(afterPinnedLeg.workspace.effectiveView).toBe('comms');
   });
 
   it('routes IDs prefixed with __runtime/ into runtime namespace', () => {
