@@ -206,10 +206,12 @@ closes when the host reports its bound turn settled (`turn_end` with that
 `turn_id`), even if the prompt has not returned yet, so a run the host starts
 right behind it gets an operation of its own. Module calls (`module_calls.rs`) must carry the
 same authority, and a stale or authority-less self-wake call is refused rather
-than attached to whichever caller operation won the race. An old host may omit
-these additive fields for ordinary caller turns, but its self-wake effects
-and written autonomous output fail closed. Written autonomous replies from
-new hosts use the existing `Reply` event and do not enter the speech worker.
+than attached to whichever caller operation won the race. Every turn the
+host opens carries its `turn_id`, and the reply to a `prompt` names the turn
+the prompt went into: the prompt ends only on that turn's `turn_end`
+(host-link protocol 2). A host agent from before that is refused at hello.
+Written autonomous replies use the existing `Reply` event and do not enter
+the speech worker.
 
 `HostTurn::of` reads each report once, and the application answers it:
 
@@ -218,8 +220,10 @@ new hosts use the existing `Reply` event and do not enter the speech worker.
 | a start whose token is not the leg on the line's | ignores it |
 | `turn_start`, `input` | binds its turn id to the caller's operation |
 | `turn_start`, `autonomous`, with a turn id | opens an operation for the run if the leg is free, and holds the run (its session instance and operation) until its end; one is held at a time |
-| `turn_start`, `autonomous` or `unknown` without a turn id, `unknown` with one, or any other cause | admits nothing |
-| `turn_end`, `input`, with a turn id | closes the open operation bound to that id (`settle_turn`) |
+| `turn_start`, `unknown` (a turn a reconnect snapshot found open), or any other cause | admits nothing |
+| a start that replaces a held run (`ProjectTurn::replaces`) | takes the held run's end first, then the start, under one gate, so the operation passes to the new run |
+| any report that names no turn | refuses it: every turn has an id |
+| `turn_end`, `input` | closes the open operation bound to that id (`settle_turn`) |
 | the end of a self-woken run (any other cause) | only for the held run (same session instance and turn id): closes its operation, traces its end, and writes its text, if any, to the transcript |
 
 The table test `a_host_reported_turn_moves_by_its_table`

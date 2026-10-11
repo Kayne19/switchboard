@@ -406,9 +406,10 @@ Two rules close the window:
   had just started itself. The collector's end leaves `busy` set while an
   autonomous turn runs (`docs/host-link.md`, "A project session's turn").
 
-A host that sends no turn ids gets the old behavior. Without an id the
-caller's operation is never bound to a host turn, so no settle report can
-close it.
+Both rules rest on turn ids. Every turn the host opens carries one, and the
+reply to a `prompt` names the turn the prompt went into, so the prompt ends
+only on that turn's `turn_end`, never on another's (host-link protocol 2).
+A host agent that predates this is refused at hello.
 
 `a_turn_resumed_after_an_external_abort_can_speak` and
 `a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles` in
