@@ -323,14 +323,37 @@ Every failure the runtime cannot recover from is reported as status text with
 that stopped, a line that will not connect. `runtime.tsx` puts that text on
 screen through `runtime_say` to `RUNTIME_LINE_ERROR_ID`, as a server `error`
 is, once per text; the rail draws it as `LINE / ERROR`, in red, never as
-Damocles's explanation. Every status says whether it is an error
-(`setStatus`'s flag is not optional), and the first that is not one withdraws
-the error (`runtime_unsay`). Ordinary status -- the idle line, a turn under
-way -- is never drawn: the presence itself shows what the line is doing. A
-status that kept the flag of an error before it was drawn as that error, so
-the turn after a failure put "Connected. Tap Talk and speak." beside the
-visual (#213). An error with nowhere to go is a browser that fails silently,
-which is what a caller tapping Damocles on an iPad saw.
+Damocles's explanation. Ordinary status -- the idle line, a turn under way --
+is never drawn: the presence itself shows what the line is doing. A status
+that kept the flag of an error before it was drawn as that error, so the turn
+after a failure put "Connected. Tap Talk and speak." beside the visual
+(#213). An error with nowhere to go is a browser that fails silently, which
+is what a caller tapping Damocles on an iPad saw.
+
+Every status names its source and says whether it is an error
+(`setStatus(source, text, error)`; neither is optional). `StatusLine`
+(`src/runtime/statusLine.ts`) keeps the newest status said and each source's
+standing error, and `say` is its one writer. An error stands until its own
+source says something that is not one, or withdraws it; the page is given the
+newest error still standing, and with none the newest status, as text, so the
+card leaves (`runtime_unsay`). When the newest error is taken down, an older
+one still standing is drawn again. One slot that any status cleared let
+playback's idle line, at the end of the agent's audio, take down a server
+error or a lost connection (#354). The runtime binds each part's sink to its
+source where it builds the part, so playback, push-to-talk and the link never
+name one:
+
+| source | who says it | its errors | what takes them down |
+|---|---|---|---|
+| `connection` | `CallLink`; `lineUp`, `lineDown`, `retry()` | "Connection error", "Keepalive missed", "Disconnected. Reconnecting..." | a socket opening (the idle line), `retry()` |
+| `line` | the route, model and thinking pickers; hangup; `candidate`, `candidate_cleared` | "That did not go through", "Could not hang up" | the next pick, a line request starting, a hangup tried again, a transfer starting |
+| `turn` | the outbox and its clips; `epoch`'s clip notices; `thinking`, `queued`, `reply`; the server's `error` and `routing_unavailable` | "Error: ...", routing unavailable, "Waiting to send", "Too many unsent voice clips", "The line changed before N clip(s) went out" | the turn's next step: a clip going out or accepted, `thinking`, `queued`, `reply` |
+| `playback` | `PlaybackStatus` | paused, blocked, refused, silent, stream failed | the clip sounding again after a pause or block ("Audio resumed."), the queue emptying (the idle line) |
+| `microphone` | `PushToTalk`; hands-free's published `error` | no microphone, cannot record, recording failed or taken, any hands-free failure | a recording starting or a press ending without one; hands-free turning on (published `starting`) |
+
+`candidate_cleared` puts the idle line back only when the newest status said,
+drawn or not, is the transfer's "Connecting to ...". The writer-by-report
+table in `tests/unit/statusSource.test.ts` pins each row through the runtime.
 
 Playback is in `src/runtime/audioPlayback.ts`, and every way it can fail is
 reported the same way. A clip the element refuses, a stream it will not take,
