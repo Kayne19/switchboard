@@ -412,7 +412,13 @@ impl TurnState {
                 (phase, effects)
             }
             "turn_end" if phase.run().is_some_and(|run| run.owns(turn_id.as_deref())) => {
-                phase.ending_run(RunEnding::Settled { last_text: "" })
+                // The end also reaches a caller's prompt: one sent into the
+                // held run as a `follow_up` waits for exactly this end
+                // (#512). Any other prompt's `collect` passes it over, since
+                // it names another turn.
+                let (next, mut effects) = phase.ending_run(RunEnding::Settled { last_text: "" });
+                effects.extend(next.forward(frame));
+                (next, effects)
             }
             "turn_end" if phase.run().is_some() => (phase, Vec::new()),
             "turn_end" => {
