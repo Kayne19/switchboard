@@ -970,16 +970,21 @@ enum TurnAt {
     /// A second self-woken start came while `auto-1` was held: `auto-2` is
     /// held in its place, with text collected.
     Replaced,
+    /// A caller's prompt went into the held run `auto-1` as a `follow_up`:
+    /// the application did not admit the run, so no operation kept the
+    /// prompt out, and the prompt's reply names `auto-1`.
+    CallerInRun,
 }
 
 impl TurnAt {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
         Self::Idle,
         Self::Caller,
         Self::SelfWoken,
         Self::CallerAndSelfWoken,
         Self::CallerSettled,
         Self::Replaced,
+        Self::CallerInRun,
     ];
 
     /// Whether a caller's prompt is being collected: only then can it be
@@ -988,7 +993,7 @@ impl TurnAt {
     fn collecting(self) -> bool {
         matches!(
             self,
-            Self::Caller | Self::CallerAndSelfWoken | Self::CallerSettled
+            Self::Caller | Self::CallerAndSelfWoken | Self::CallerSettled | Self::CallerInRun
         )
     }
 }
@@ -1213,14 +1218,15 @@ impl TurnRig {
     }
 
     async fn prompt(&mut self, message: &'static str) {
+        self.prompt_into(message, json!({"sent_as": "prompt", "turn_id": "t-in"}))
+            .await;
+    }
+
+    /// A prompt the host answers with `reply`: the turn it went into.
+    async fn prompt_into(&mut self, message: &'static str, reply: Value) {
         let session = self.session.clone();
         self.prompting = Some(tokio::spawn(async move { session.prompt(message).await }));
-        Self::answer(
-            &mut self.link,
-            "prompt",
-            json!({"sent_as": "prompt", "turn_id": "t-in"}),
-        )
-        .await;
+        Self::answer(&mut self.link, "prompt", reply).await;
     }
 
     async fn reach(&mut self, at: TurnAt) {
@@ -1253,6 +1259,14 @@ impl TurnRig {
                 Box::pin(self.reach(TurnAt::SelfWoken)).await;
                 self.event(start("auto-2", "autonomous"));
                 self.event(json!({"kind": "text", "text": "second words", "turn_id": "auto-2"}));
+            }
+            TurnAt::CallerInRun => {
+                Box::pin(self.reach(TurnAt::SelfWoken)).await;
+                self.prompt_into(
+                    "hello",
+                    json!({"sent_as": "follow_up", "turn_id": "auto-1"}),
+                )
+                .await;
             }
         }
         self.settle().await;
@@ -1471,6 +1485,22 @@ Replaced           | SnapshotIdle            | end autonomous auto-2 «second wo
 Replaced           | SnapshotOpen            | end autonomous auto-2 «second words»; start autonomous snap-1 | busy | autonomous | -                                     | auto-2: second words
 Replaced           | SessionCloses           | end autonomous auto-2                                         | -    | gone       | -                                     | auto-2: second words
 Replaced           | PromptStarts            | -                                                             | busy | autonomous | running «»                            | -
+
+# A prompt sent into the held run as a `follow_up`: the run swallows its frames, but the run's end reaches
+# the prompt too, which waits for it (#512).
+CallerInRun        | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
+CallerInRun        | StartsSelfWokenAdmitted | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
+CallerInRun        | StartsInput             | start input t-2                                               | busy | autonomous | running «»                            | -
+CallerInRun        | RunText                 | -                                                             | busy | autonomous | running «»                            | -
+CallerInRun        | SecondText              | -                                                             | busy | autonomous | running «»                            | -
+CallerInRun        | CallerText              | -                                                             | busy | autonomous | running «»                            | -
+CallerInRun        | RunEnds                 | end autonomous auto-1 «run words»                             | -    | -          | returned «»                           | auto-1: run words
+CallerInRun        | SecondEnds              | -                                                             | busy | autonomous | running «»                            | -
+CallerInRun        | CallerEnds              | -                                                             | busy | autonomous | running «»                            | -
+CallerInRun        | SnapshotIdle            | end autonomous auto-1 «run words»                             | -    | -          | returned «last words»                 | auto-1: run words; -: last words
+CallerInRun        | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | running «»                            | auto-1: run words
+CallerInRun        | SessionCloses           | end autonomous auto-1                                         | -    | gone       | failed «the project session ended» «» | auto-1: run words
+CallerInRun        | PromptCancelled         | -                                                             | busy | autonomous | -                                     | -
 ";
 
 #[tokio::test]
