@@ -28,7 +28,6 @@ export interface Clip {
   // reconnect does not clear it: the server keeps the first stamp it saw for
   // a clip id, so from then on the clip belongs to that stamp for good.
   transmitted?: boolean;
-  accepted?: boolean;
   streaming?: boolean;
   chunks?: Blob[];
 }

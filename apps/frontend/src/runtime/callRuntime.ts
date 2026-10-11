@@ -697,44 +697,43 @@ export class CallRuntime {
         this.playback.setStreamingEnabled(message.mse_mp3);
         this.flushOutbox();
         break;
-      case "epoch":
+      case "epoch": {
         // Adopt the server's epoch immediately and retire every queued or
         // currently playing clip from the old leg. Do this before allowing
         // reconnect retry, otherwise a pre-rescue clip can cross the barrier.
-        if (typeof message.generation === "number") {
-          const epoch = message.generation;
-          const { carry, expected } = this.followIdentity(message);
-          // A handoff on a live connection lets the goodbye already playing
-          // finish: a transfer this tab saw adopted, or a return to the
-          // operator (same generation, new route). A hangup, a rescue or a
-          // reconnect's first epoch still cuts playback off at once.
-          const handoff = this.link.ready && expected;
-          const resubmitted = carry ? this.outbox.carry(carry) : 0;
-          this.handsFree.epochChanged();
-          const neverSent = this.outbox.retireOtherEpochs(epoch);
-          this.link.snapshot(socket);
-          if (resubmitted > 0) {
-            this.setStatus(
-              `The line changed while you were talking; ` +
-                `sending ${resubmitted} clip(s) along...`,
-              false,
-            );
-          }
-          this.flushOutbox();
-          if (neverSent > 0) {
-            this.setStatus(
-              `The line changed before ${neverSent} clip(s) went out. Please repeat that.`,
-              true,
-            );
-          }
-          if (handoff) {
-            this.playback.handOffToGeneration(epoch);
-          } else {
-            this.playback.resetForGeneration(epoch);
-            this.spokenLines.retire();
-          }
+        const epoch = message.generation;
+        const { carry, expected } = this.followIdentity(message);
+        // A handoff on a live connection lets the goodbye already playing
+        // finish: a transfer this tab saw adopted, or a return to the
+        // operator (same generation, new route). A hangup, a rescue or a
+        // reconnect's first epoch still cuts playback off at once.
+        const handoff = this.link.ready && expected;
+        const resubmitted = carry ? this.outbox.carry(carry) : 0;
+        this.handsFree.epochChanged();
+        const neverSent = this.outbox.retireOtherEpochs(epoch);
+        this.link.snapshot(socket);
+        if (resubmitted > 0) {
+          this.setStatus(
+            `The line changed while you were talking; ` +
+              `sending ${resubmitted} clip(s) along...`,
+            false,
+          );
+        }
+        this.flushOutbox();
+        if (neverSent > 0) {
+          this.setStatus(
+            `The line changed before ${neverSent} clip(s) went out. Please repeat that.`,
+            true,
+          );
+        }
+        if (handoff) {
+          this.playback.handOffToGeneration(epoch);
+        } else {
+          this.playback.resetForGeneration(epoch);
+          this.spokenLines.retire();
         }
         break;
+      }
       case "candidate": {
         const { candidate } = this.followIdentity(message).identity;
         if (candidate) this.setStatus(`Connecting to ${candidate}…`, false);
@@ -774,7 +773,6 @@ export class CallRuntime {
       case "accepted": {
         const clip = this.outbox.find(message.id);
         if (clip) {
-          clip.accepted = true;
           this.setStatus("Transcribing...", false);
           this.flushOutbox();
         }
