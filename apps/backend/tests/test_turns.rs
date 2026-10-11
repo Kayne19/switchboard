@@ -716,6 +716,9 @@ async fn a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles() {
         "what branch are you on?".into(),
     )
     .await;
+    // The host's answer is awaited off the caller's line (#295): it is in
+    // once the line is reported steered.
+    let queued = next_event_of(&mut events, "queued").await;
     assert_eq!(
         host.named("steer")
             .iter()
@@ -724,7 +727,6 @@ async fn a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles() {
         vec!["what branch are you on?".to_owned()],
         "the message was queued behind the woken turn, not steered into it"
     );
-    let queued = next_event_of(&mut events, "queued").await;
     assert_eq!(queued["id"], "steer-woken");
     assert_eq!(queued["steered"], true);
     worker.abort();

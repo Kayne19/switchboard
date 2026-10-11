@@ -13,6 +13,7 @@ use crate::debug::DebugEvent;
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
 use crate::lifecycle::{LifecycleError, OperationIdentity};
 use crate::pbx::{AgentStateNotice, Switchboard};
+use crate::pi_client::LegSteer;
 use crate::protocol::ServerMessage;
 use crate::reply::Reply;
 use crate::router::{jev_outcome, Action, CallSummary, Decision, RouteRule};
@@ -260,7 +261,7 @@ pub(crate) async fn dispatch_routed_transcript(
         refuse_stale(state, id, generation);
         return;
     }
-    let steered = if can_steer {
+    if can_steer {
         let transition = state.0.operation_transition.lock().await;
         if generation != state.0.coordinator.generation() {
             refuse_stale(state, id, generation);
@@ -295,20 +296,25 @@ pub(crate) async fn dispatch_routed_transcript(
         // The steer is checked and queued under both guards, so it reaches
         // the host ahead of any close or abort a rescue queues after it. The
         // host's answer can take its whole command wait; a rescue, a project
-        // turn's end, transcript logging and reply admission must not wait
-        // for it (#250).
+        // turn's end, transcript logging, reply admission and the caller's
+        // next line must not wait for it (#250, #295).
         let steered_into = state.0.coordinator.route();
         drop(active);
         drop(transition);
-        match queued {
-            None => None,
-            Some(queued) => match queued.sent().await {
-                Ok(()) => Some(steered_into),
-                Err(error) => {
-                    tracing::warn!(%error, clip = id, "steering failed; queueing routed utterance");
-                    None
-                }
-            },
+        if let Some(queued) = queued {
+            let line = RoutedLine {
+                id: id.to_owned(),
+                generation,
+                transcript,
+                routed,
+                can_steer,
+            };
+            state
+                .0
+                .turns
+                .line_order
+                .answer_steer(state, line, queued, steered_into);
+            return;
         }
     } else {
         // A non-steer action still needs the same short session guard. A
@@ -321,41 +327,156 @@ pub(crate) async fn dispatch_routed_transcript(
             return;
         }
         drop(active);
-        None
-    };
-    if let Some(to_agent) = steered {
-        // Steering is this utterance's destination: the live turn on the line.
-        state.0.debug.publish(DebugEvent::Routed {
-            utterance_id: id.to_owned(),
-            to_agent,
-            text_part: transcript,
-            mode: "steer".into(),
-            via: "jev".into(),
-        });
-        emit_message(
-            state,
-            ServerMessage::Queued {
-                id: id.to_owned(),
-                waiting: 0,
-                steered: true,
-            },
-        );
-        return;
     }
-    // If the decision could not attach to a live turn, the queued worker will
-    // use the same decision and deliver it to the project. This includes an
-    // explicit continue on a route with no steerable session: Jev must not be
-    // called again for the same utterance.
+    let line = RoutedLine {
+        id: id.to_owned(),
+        generation,
+        transcript,
+        routed,
+        can_steer,
+    };
+    state.0.turns.line_order.queue(state, line).await;
+}
+
+/// A routed caller line on its way to the live turn or the turn queue.
+struct RoutedLine {
+    id: String,
+    /// The generation the line was stamped with when it was recorded.
+    generation: u64,
+    transcript: String,
+    routed: RoutedDecision,
+    can_steer: bool,
+}
+
+/// The order routed caller lines reach the turn queue in. A steer is
+/// queued on the host link at once, but the host's answer can take its
+/// whole command wait (a half-open link), and the caller's next line must
+/// not wait for it (#295). So the answer is awaited off the caller's line,
+/// and a steer that fails is queued as a turn only after every line spoken
+/// before it has been steered or queued; a line that goes straight to the
+/// queue while such an answer is pending waits behind it the same way.
+/// `tail` is the newest line still waiting, and only these two methods
+/// write it, under its lock, so two lines routed at once take their places
+/// in turn.
+pub(crate) struct LineOrder {
+    tail: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl LineOrder {
+    fn new() -> Self {
+        Self {
+            tail: std::sync::Mutex::new(None),
+        }
+    }
+
+    fn tail(&self) -> std::sync::MutexGuard<'_, Option<tokio::task::JoinHandle<()>>> {
+        self.tail
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Waits for the host's answer to `queued` off the caller's line: a
+    /// steer the host takes is reported steered, one it refuses is queued as
+    /// a turn, each once the lines ahead of it have left the line.
+    fn answer_steer(
+        &self,
+        state: &AppState,
+        line: RoutedLine,
+        queued: LegSteer,
+        steered_into: String,
+    ) {
+        let mut tail = self.tail();
+        let ahead = tail.take();
+        let answering = state.clone();
+        *tail = Some(tokio::spawn(
+            async move {
+                let answer = queued.sent().await;
+                if let Some(ahead) = ahead {
+                    // A line ahead that failed has still left the line.
+                    let _ = ahead.await;
+                }
+                match answer {
+                    Ok(()) => report_steered(&answering, &line.id, steered_into, line.transcript),
+                    Err(error) => {
+                        tracing::warn!(%error, clip = %line.id, "steering failed; queueing routed utterance");
+                        queue_routed_line(&answering, line).await;
+                    }
+                }
+            }
+            .in_current_span(),
+        ));
+    }
+
+    /// Queues `line` as a turn: now, or, behind a line ahead whose steer
+    /// the host has not answered yet, off the caller's line.
+    async fn queue(&self, state: &AppState, line: RoutedLine) {
+        let now = {
+            let mut tail = self.tail();
+            match tail.take().filter(|ahead| !ahead.is_finished()) {
+                None => Some(line),
+                Some(ahead) => {
+                    let queueing = state.clone();
+                    *tail = Some(tokio::spawn(
+                        async move {
+                            let _ = ahead.await;
+                            queue_routed_line(&queueing, line).await;
+                        }
+                        .in_current_span(),
+                    ));
+                    None
+                }
+            }
+        };
+        if let Some(line) = now {
+            queue_routed_line(state, line).await;
+        }
+    }
+}
+
+/// The host took the steer: the line's destination is the live turn.
+fn report_steered(state: &AppState, id: &str, to_agent: String, transcript: String) {
+    state.0.debug.publish(DebugEvent::Routed {
+        utterance_id: id.to_owned(),
+        to_agent,
+        text_part: transcript,
+        mode: "steer".into(),
+        via: "jev".into(),
+    });
+    emit_message(
+        state,
+        ServerMessage::Queued {
+            id: id.to_owned(),
+            waiting: 0,
+            steered: true,
+        },
+    );
+}
+
+/// Queues a line that could not attach to a live turn: the turn worker uses
+/// the same decision and delivers it to the project. This includes an
+/// explicit continue on a route with no steerable session, and a steer the
+/// host refused: Jev must not be called again for the same utterance. The
+/// worker checks the line's generation, so a line whose steer failed after
+/// the line changed is refused as stale.
+async fn queue_routed_line(state: &AppState, line: RoutedLine) {
+    let RoutedLine {
+        id,
+        generation,
+        transcript,
+        routed,
+        can_steer,
+    } = line;
+    let decision = routed.decision.clone();
     state
         .0
         .turns
         .routed_decisions
         .lock()
         .await
-        .insert(id.to_owned(), routed.clone());
+        .insert(id.clone(), routed);
     if !can_steer {
         tracing::info!(
-            clip = id,
+            clip = %id,
             action = decision.action.as_str(),
             confidence = decision.confidence,
             unsure = decision.unsure,
@@ -367,7 +488,7 @@ pub(crate) async fn dispatch_routed_transcript(
         .0
         .turns
         .sender
-        .send((id.to_owned(), transcript, generation))
+        .send((id.clone(), transcript, generation))
         .await
         .is_ok()
     {
@@ -375,7 +496,7 @@ pub(crate) async fn dispatch_routed_transcript(
             emit_message(
                 state,
                 ServerMessage::Queued {
-                    id: id.to_owned(),
+                    id,
                     waiting,
                     steered: false,
                 },
@@ -383,11 +504,11 @@ pub(crate) async fn dispatch_routed_transcript(
         }
     } else {
         state.0.turns.queued.fetch_sub(1, Ordering::AcqRel);
-        state.0.turns.routed_decisions.lock().await.remove(id);
+        state.0.turns.routed_decisions.lock().await.remove(&id);
         emit_clip_verdict(
             state,
-            id,
-            ServerMessage::error_for(id, "The call worker is unavailable."),
+            &id,
+            ServerMessage::error_for(id.clone(), "The call worker is unavailable."),
         );
     }
 }
@@ -416,6 +537,9 @@ pub(crate) struct TurnState {
     /// `TurnRun::finish` clears it. A turn routed meanwhile is told it
     /// waits.
     in_flight: AtomicBool,
+    /// The order routed lines reach the turn queue in, while a steer's
+    /// answer is awaited off the caller's line (#295).
+    line_order: LineOrder,
 }
 
 impl TurnState {
@@ -428,6 +552,7 @@ impl TurnState {
             routed_decisions: Mutex::new(HashMap::new()),
             queued: AtomicU64::new(0),
             in_flight: AtomicBool::new(false),
+            line_order: LineOrder::new(),
         }
     }
 
