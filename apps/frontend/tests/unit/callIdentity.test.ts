@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandsFreeController } from "../../src/hands_free";
 import { AudioPlayback } from "../../src/runtime/audioPlayback";
+import {
+  follow,
+  NO_EPOCH_YET,
+  type CallIdentity,
+  type IdentityMessage,
+} from "../../src/runtime/callIdentity";
 import { CallRuntime, IDLE_TEXT } from "../../src/runtime/callRuntime";
 import { ClipOutbox, type Clip } from "../../src/runtime/outbox";
 import { helloAck, statusMessage } from "../fixtures/serverMessages";
@@ -481,5 +487,79 @@ afterEach(() => {
 describe("the call's identity, phase by event", () => {
   it.each(rows.map((row) => [`${row.from} | ${row.event}`, row] as const))("%s", async (_name, row) => {
     expect(await play(row)).toEqual(row.seen);
+  });
+});
+
+// The value alone: what `follow` gives for each message, without a runtime.
+describe("follow", () => {
+  const at3: CallIdentity = { epoch: 3, candidate: null, adoption: null };
+  const alphaStarting: CallIdentity = { ...at3, candidate: "alpha" };
+  const alphaAdopted: CallIdentity = { ...at3, adoption: { route: "alpha", generation: 4 } };
+  const epoch = (generation: number): IdentityMessage => ({ type: "epoch", generation });
+  const clearedAlpha = (reason: "adopted" | "rolled_back" | "rescued", generation = 4): IdentityMessage => ({
+    type: "candidate_cleared",
+    route: "alpha",
+    generation,
+    reason,
+  });
+
+  it("starts before any epoch", () => {
+    expect(NO_EPOCH_YET).toEqual({ epoch: 0, candidate: null, adoption: null });
+  });
+
+  it("carries the marked clips only on the epoch the adoption names (#70)", () => {
+    expect(follow(alphaAdopted, epoch(4))).toEqual({
+      identity: { epoch: 4, candidate: null, adoption: null },
+      carry: { route: "alpha", generation: 4 },
+      unmark: null,
+      expected: true,
+    });
+    // A hangup while connecting moves the epoch on further: nothing goes along.
+    expect(follow(alphaAdopted, epoch(5))).toMatchObject({ carry: null, expected: false });
+    // Any epoch ends the wait, the one it names or not.
+    expect(follow(alphaAdopted, epoch(3)).identity.adoption).toBeNull();
+  });
+
+  it("expects its own epoch again, and an unannounced one is a cut", () => {
+    expect(follow(at3, epoch(3))).toMatchObject({ carry: null, expected: true });
+    expect(follow(alphaStarting, epoch(4))).toMatchObject({
+      identity: { epoch: 4, candidate: null, adoption: null },
+      carry: null,
+      expected: false,
+    });
+  });
+
+  it("marks takes for a starting leg, but not for the operator", () => {
+    expect(follow(at3, { type: "candidate", route: "alpha", generation: 3 }).identity.candidate).toBe("alpha");
+    expect(follow(alphaStarting, { type: "candidate", route: "operator", generation: 3 }).identity.candidate).toBeNull();
+    expect(follow(alphaAdopted, { type: "candidate", route: "beta", generation: 3 }).identity).toEqual({
+      ...alphaAdopted,
+      candidate: "beta",
+    });
+  });
+
+  it("holds an adoption until its epoch, and strips the mark of any other end", () => {
+    expect(follow(alphaStarting, clearedAlpha("adopted"))).toEqual({
+      identity: alphaAdopted,
+      carry: null,
+      unmark: null,
+      expected: false,
+    });
+    for (const [reason, generation] of [["rolled_back", 3], ["rescued", 4]] as const) {
+      expect(follow(alphaAdopted, clearedAlpha(reason, generation))).toEqual({
+        identity: at3,
+        carry: null,
+        unmark: "alpha",
+        expected: false,
+      });
+    }
+  });
+
+  // Lifecycle map finding 10, kept as today: a reply or a status ends the
+  // mark for later takes, though no notice ended the candidate.
+  it("ends the mark on a reply or a status, and keeps the adoption", () => {
+    const reply: IdentityMessage = { type: "reply", text: "Done.", route: "operator", voiced: false };
+    expect(follow(alphaStarting, reply).identity).toEqual(at3);
+    expect(follow({ ...alphaAdopted, candidate: "beta" }, statusMessage()).identity).toEqual(alphaAdopted);
   });
 });

@@ -467,7 +467,7 @@ const owners = [
 	{ file: "apps/frontend/src/hands_free.ts", owner: "HandsFreeController", fields: 0 },
 	{ file: "apps/frontend/src/hands_free_machine.ts", owner: "Capture", fields: 1 },
 	{ file: "apps/frontend/src/runtime/pushToTalk.ts", owner: "PushToTalk", fields: 0 },
-	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 8 },
+	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 5 },
 	{ file: "apps/frontend/src/runtime/callLink.ts", owner: "CallLink", fields: 0 },
 	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 2 },
 	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 0 },

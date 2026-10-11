@@ -31,6 +31,13 @@ import {
 import type { ScreenStateReport } from "../controller/types";
 import { AudioPlayback } from "./audioPlayback";
 import { selectVoiceLevel } from "./audioLevel";
+import {
+  follow,
+  NO_EPOCH_YET,
+  type CallIdentity,
+  type IdentityMessage,
+  type IdentityStep,
+} from "./callIdentity";
 import { CallLink } from "./callLink";
 import { errorText } from "./errors";
 import {
@@ -40,13 +47,7 @@ import {
   type LineState,
   type SelectOption,
 } from "./lineStatus";
-import {
-  ClipOutbox,
-  forgetTransfer,
-  restampStaleClips,
-  type Adoption,
-  type Clip,
-} from "./outbox";
+import { ClipOutbox, type Clip } from "./outbox";
 import { PushToTalk, type PushToTalkOptions } from "./pushToTalk";
 import { SpokenLines, type HeardLine } from "./spokenLines";
 
@@ -152,16 +153,11 @@ export class CallRuntime {
   private line: LineState = OPERATOR_LINE;
   private clipSequence = 0;
 
-  // The server's turn epoch, as last announced. A clip is stamped with
-  // whatever this held when its recording started, so speech begun before a
-  // transfer is discarded rather than delivered to the leg that replaced it.
-  private turnEpoch = 0;
-  // The destination route the browser has been told is connecting, or null.
-  // Clips recorded while this is set are addressed to the incoming leg.
-  private transferEra: string | null = null;
-  // The candidate the server last said was adopted, until the epoch it was
-  // adopted at arrives. Only that epoch carries the transfer's clips along.
-  private adoption: Adoption | null = null;
+  // Which call this page is on: the epoch, the candidate starting, and the
+  // adoption waiting for its epoch (`callIdentity.ts`). Every take, clip,
+  // typed turn and line control is stamped from it. `followIdentity` is its
+  // only writer.
+  private identity: CallIdentity = NO_EPOCH_YET;
 
   private lineRequestsPending = 0;
   private lineRequestChain: Promise<void> | null = null;
@@ -233,8 +229,8 @@ export class CallRuntime {
       onAudioLevel: (level) => this.setCallerLevel(level),
       newClipId: () => this.newClipId(),
       context: () => ({
-        epoch: this.turnEpoch,
-        transferEra: this.transferEra,
+        epoch: this.identity.epoch,
+        transferEra: this.identity.candidate,
         streamingSelected: this.link.streaming,
       }),
       openSocket: () => this.link.socket(),
@@ -250,7 +246,7 @@ export class CallRuntime {
     const handsFreeOptions: HandsFreeControllerOptions = {
       loadDetectors: () => loadDetectors(options),
       isSnapshotReady: () => this.link.ready,
-      currentEpoch: () => this.turnEpoch,
+      currentEpoch: () => this.identity.epoch,
       isPttActive: () => this.pushToTalk.isActive,
       isPlaybackDrained: () => this.playback.isDrained(),
       onClip: (audio, mime, epoch) => this.submitHandsFreeClip(audio, mime, epoch),
@@ -351,7 +347,7 @@ export class CallRuntime {
     );
     void this.requestLineChange("route", "/connect", {
       project: route,
-      generation: this.turnEpoch,
+      generation: this.identity.epoch,
     });
   }
 
@@ -359,7 +355,7 @@ export class CallRuntime {
     this.setStatus("Switching to " + model + "...", false);
     void this.requestLineChange("model", "/model", {
       model,
-      generation: this.turnEpoch,
+      generation: this.identity.epoch,
     });
   }
 
@@ -367,7 +363,7 @@ export class CallRuntime {
     this.setStatus("Setting thinking to " + level + "...", false);
     void this.requestLineChange("thinking", "/thinking", {
       level,
-      generation: this.turnEpoch,
+      generation: this.identity.epoch,
     });
   }
 
@@ -381,7 +377,7 @@ export class CallRuntime {
     this.handsFree.stop("hangup");
     this.hangupPending = true;
     try {
-      await this.postJson("/hangup", { generation: this.turnEpoch });
+      await this.postJson("/hangup", { generation: this.identity.epoch });
     } catch (err) {
       this.setStatus("Could not hang up: " + errorText(err), true);
     } finally {
@@ -403,7 +399,7 @@ export class CallRuntime {
     const socket = this.link.socket();
     if (!socket) return false;
     try {
-      socket.send(typedTurnMessage({ id: this.newClipId(), epoch: this.turnEpoch, text: body }));
+      socket.send(typedTurnMessage({ id: this.newClipId(), epoch: this.identity.epoch, text: body }));
       return true;
     } catch {
       return false;
@@ -617,14 +613,14 @@ export class CallRuntime {
 
   /** The id the clip went out under, or null when it was not taken. */
   private submitHandsFreeClip(audio: Blob, mime: string, epoch: number): string | null {
-    if (!this.link.ready || epoch !== this.turnEpoch) return null;
+    if (!this.link.ready || epoch !== this.identity.epoch) return null;
     const clip: Clip = {
       id: this.newClipId(),
       audio,
       mime: mime || audio.type || "audio/webm",
       created: Date.now(),
       epoch,
-      transferEra: this.transferEra ?? undefined,
+      transferEra: this.identity.candidate ?? undefined,
       sent: false,
       streaming: false,
     };
@@ -687,6 +683,13 @@ export class CallRuntime {
     }
   }
 
+  /** The one writer of `identity`: the value `message` moves it to. */
+  private followIdentity(message: IdentityMessage): IdentityStep {
+    const step = follow(this.identity, message);
+    this.identity = step.identity;
+    return step;
+  }
+
   private handleText(message: ServerMessage, socket: WebSocket): void {
     switch (message.type) {
       case "hello_ack":
@@ -700,35 +703,16 @@ export class CallRuntime {
         // reconnect retry, otherwise a pre-rescue clip can cross the barrier.
         if (typeof message.generation === "number") {
           const epoch = message.generation;
-          // A hangup while connecting moves the epoch too; only the epoch
-          // the candidate was adopted at carries its clips along.
-          const adoption =
-            this.adoption?.generation === epoch ? this.adoption : null;
-          this.adoption = null;
+          const { carry, expected } = this.followIdentity(message);
           // A handoff on a live connection lets the goodbye already playing
           // finish: a transfer this tab saw adopted, or a return to the
           // operator (same generation, new route). A hangup, a rescue or a
           // reconnect's first epoch still cuts playback off at once.
-          const handoff =
-            this.link.ready && (adoption !== null || epoch === this.turnEpoch);
-          const resubmitted = adoption
-            ? restampStaleClips(this.outbox.all, adoption)
-            : 0;
-          // Clips from a retired epoch that never went out are dropped here,
-          // and the caller is told here, because the server never saw them.
-          // A clip that did go out stays until the server answers for it:
-          // after a reconnect it is sent again under the stamp it went out
-          // with, and the server replies with the verdict the tab missed.
-          const neverSent = this.outbox.all.filter(
-            (clip) => clip.epoch !== epoch && !clip.transmitted,
-          ).length;
+          const handoff = this.link.ready && expected;
+          const resubmitted = carry ? this.outbox.carry(carry) : 0;
           this.handsFree.epochChanged();
-          this.outbox.retain(
-            (clip) => clip.epoch === epoch || clip.transmitted === true,
-          );
-          this.turnEpoch = epoch;
+          const neverSent = this.outbox.retireOtherEpochs(epoch);
           this.link.snapshot(socket);
-          this.transferEra = null;
           if (resubmitted > 0) {
             this.setStatus(
               `The line changed while you were talking; ` +
@@ -751,34 +735,19 @@ export class CallRuntime {
           }
         }
         break;
-      case "candidate":
-        // A new leg is being started. Speech recorded from here until the
-        // epoch moves is addressed to that leg, not to the one on screen.
-        this.transferEra =
-          message.route && message.route !== "operator" ? message.route : null;
-        if (this.transferEra) {
-          this.setStatus(`Connecting to ${this.transferEra}…`, false);
-        }
+      case "candidate": {
+        const { candidate } = this.followIdentity(message).identity;
+        if (candidate) this.setStatus(`Connecting to ${candidate}…`, false);
         break;
-      case "candidate_cleared":
-        // The epoch that follows an adoption is the new leg's, and speech
-        // recorded for it is carried along. A rollback leaves the epoch
-        // where it was, and a rescue (a hangup while connecting) moves it
-        // exactly as an adoption would, so neither may carry anything.
-        this.transferEra = null;
-        if (message.reason === "adopted") {
-          this.adoption = {
-            route: message.route,
-            generation: message.generation,
-          };
-        } else {
-          this.adoption = null;
-          forgetTransfer(this.outbox.all, message.route);
-        }
+      }
+      case "candidate_cleared": {
+        const { unmark } = this.followIdentity(message);
+        if (unmark !== null) this.outbox.unmark(unmark);
         if (this.state.status.startsWith("Connecting to ")) {
           this.setStatus(IDLE_TEXT, false);
         }
         break;
+      }
       case "audio_start":
         this.playback.receiveAudioStart(message);
         break;
@@ -851,12 +820,12 @@ export class CallRuntime {
       }
       case "reply":
         this.setStatus(IDLE_TEXT, false);
-        this.transferEra = null;
+        this.followIdentity(message);
         break;
       case "status":
         // A settled status means any in-flight transfer is over, one way or
         // the other.
-        this.transferEra = null;
+        this.followIdentity(message);
         this.line = lineStateFromStatus(message);
         for (const control of Object.keys(this.lineRequestIds) as LineControl[])
           this.lineRequestIds[control] += 1;

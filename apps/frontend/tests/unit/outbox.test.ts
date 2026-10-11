@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  ClipOutbox,
-  MAX_OUTBOX_CLIPS,
-  forgetTransfer,
-  restampStaleClips,
-  type Clip,
-} from "../../src/runtime/outbox";
+import { ClipOutbox, MAX_OUTBOX_CLIPS, type Clip } from "../../src/runtime/outbox";
 
 function clip(id: string, overrides: Partial<Clip> = {}): Clip {
   return {
@@ -19,12 +13,18 @@ function clip(id: string, overrides: Partial<Clip> = {}): Clip {
   };
 }
 
-describe("restampStaleClips", () => {
+function holding(...clips: Clip[]): ClipOutbox {
+  const outbox = new ClipOutbox();
+  for (const held of clips) outbox.add(held);
+  return outbox;
+}
+
+describe("ClipOutbox.carry", () => {
   it("moves only transfer-era clips onto the new leg", () => {
     const transferClip = clip("a", { epoch: 3, transferEra: "alpha" });
     const preClip = clip("b", { epoch: 3 });
     const currentClip = clip("c", { epoch: 4 });
-    const resubmitted = restampStaleClips([transferClip, preClip, currentClip], {
+    const resubmitted = holding(transferClip, preClip, currentClip).carry({
       route: "alpha",
       generation: 4,
     });
@@ -41,7 +41,7 @@ describe("restampStaleClips", () => {
     const onTheWire = clip("a", { epoch: 3, transferEra: "alpha", sent: true, transmitted: true });
     const afterReconnect = clip("b", { epoch: 3, transferEra: "alpha", sent: false, transmitted: true });
     expect(
-      restampStaleClips([onTheWire, afterReconnect], { route: "alpha", generation: 4 }),
+      holding(onTheWire, afterReconnect).carry({ route: "alpha", generation: 4 }),
     ).toBe(0);
     expect(onTheWire.epoch).toBe(3);
     expect(afterReconnect.epoch).toBe(3);
@@ -52,26 +52,37 @@ describe("restampStaleClips", () => {
   it("moves a clip only onto the adoption of the candidate it was recorded for", () => {
     const forAlpha = () => clip("a", { epoch: 3, transferEra: "alpha" });
     const otherRoute = forAlpha();
-    expect(restampStaleClips([otherRoute], { route: "beta", generation: 4 })).toBe(0);
+    expect(holding(otherRoute).carry({ route: "beta", generation: 4 })).toBe(0);
     expect(otherRoute.epoch).toBe(3);
     // Adopted later than the candidate it was recorded for: a rescue came
     // between, and this is a leg the words were never addressed to.
     const laterLeg = forAlpha();
-    expect(restampStaleClips([laterLeg], { route: "alpha", generation: 5 })).toBe(0);
+    expect(holding(laterLeg).carry({ route: "alpha", generation: 5 })).toBe(0);
     expect(laterLeg.epoch).toBe(3);
   });
 
   it("forgets the transfer a clip was recorded for once it ends unadopted", () => {
     const forAlpha = clip("a", { epoch: 3, transferEra: "alpha" });
     const forBeta = clip("b", { epoch: 3, transferEra: "beta" });
-    forgetTransfer([forAlpha, forBeta], "alpha");
+    const outbox = holding(forAlpha, forBeta);
+    outbox.unmark("alpha");
     expect(forAlpha.transferEra).toBeUndefined();
     expect(forBeta.transferEra).toBe("beta");
-    expect(restampStaleClips([forAlpha], { route: "alpha", generation: 4 })).toBe(0);
+    expect(outbox.carry({ route: "alpha", generation: 4 })).toBe(0);
   });
 });
 
 describe("ClipOutbox", () => {
+  it("drops the clips of other epochs that never went out, and counts them", () => {
+    const current = clip("current", { epoch: 4 });
+    const neverSent = clip("never-sent", { epoch: 3 });
+    const onTheWire = clip("on-the-wire", { epoch: 3, transmitted: true });
+    const outbox = holding(current, neverSent, onTheWire);
+    expect(outbox.retireOtherEpochs(4)).toBe(1);
+    expect(outbox.find("never-sent")).toBeUndefined();
+    expect(outbox.size).toBe(2);
+  });
+
   it("refuses clips beyond its cap", () => {
     const outbox = new ClipOutbox();
     for (let index = 0; index < MAX_OUTBOX_CLIPS; index += 1) {
