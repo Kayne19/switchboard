@@ -62,13 +62,22 @@ pub(crate) struct AgentProjection {
     displays: Arc<StdMutex<HashMap<String, HeldScene>>>,
 }
 
-/// The phase the page shows for one project agent (`agents_state`).
+/// The page's view of one project agent (`agents_state`): what it is
+/// doing, and whether it waits to speak. The two are independent: an agent
+/// whose request the floor holds can start or end a turn without losing the
+/// request, and the floor speaking it shows what the agent is doing.
 #[derive(Clone, Debug)]
-enum AgentPhase {
+struct AgentPhase {
+    activity: AgentActivity,
+    /// The request the floor holds for it, while it holds one.
+    waiting: Option<AgentRequest>,
+}
+
+/// What a project agent is doing, as the PBX and turn settlement report it.
+#[derive(Clone, Copy, Debug)]
+enum AgentActivity {
     Busy,
     Idle,
-    /// It asked to speak, and the floor holds its request.
-    Waiting(AgentRequest),
     Finished,
 }
 
@@ -85,35 +94,59 @@ enum AgentEvent {
 impl AgentPhase {
     /// The phase `event` moves an agent to from `from` (`None`: an agent the
     /// page does not list yet); `None` when it stays where it is.
+    ///
+    /// | from        | busy, idle         | finished                | asked             | spoken        |
+    /// |-------------|--------------------|-------------------------|-------------------|---------------|
+    /// | not listed  | that, not waiting  | finished                | idle, waiting     | stays         |
+    /// | not waiting | that               | finished                | waiting           | stays         |
+    /// | waiting     | that, still waits  | finished, the wait ends | the newer request | stops waiting |
     fn on(from: Option<&AgentPhase>, event: AgentEvent) -> Option<AgentPhase> {
-        match (from, event) {
-            // A turn that settles beside a waiting request does not end the
-            // wait: only the floor speaking it does.
-            (Some(AgentPhase::Waiting(_)), AgentEvent::Notice(AgentNotice::Idle)) => None,
-            (_, AgentEvent::Notice(AgentNotice::Idle)) => Some(AgentPhase::Idle),
-            (_, AgentEvent::Notice(AgentNotice::Busy)) => Some(AgentPhase::Busy),
-            (_, AgentEvent::Notice(AgentNotice::Finished)) => Some(AgentPhase::Finished),
-            (_, AgentEvent::Asked(request)) => Some(AgentPhase::Waiting(request)),
-            (Some(AgentPhase::Waiting(_)), AgentEvent::Spoken) => Some(AgentPhase::Idle),
-            (
-                None | Some(AgentPhase::Busy | AgentPhase::Idle | AgentPhase::Finished),
-                AgentEvent::Spoken,
-            ) => None,
+        let current = from.cloned();
+        match event {
+            AgentEvent::Notice(notice) => {
+                let activity = match notice {
+                    AgentNotice::Busy => AgentActivity::Busy,
+                    AgentNotice::Idle => AgentActivity::Idle,
+                    AgentNotice::Finished => AgentActivity::Finished,
+                };
+                // A finished agent waits for nothing: the floor drops its
+                // requests as the agent gone.
+                let waiting = match activity {
+                    AgentActivity::Finished => None,
+                    AgentActivity::Busy | AgentActivity::Idle => {
+                        current.and_then(|phase| phase.waiting)
+                    }
+                };
+                Some(AgentPhase { activity, waiting })
+            }
+            AgentEvent::Asked(request) => Some(AgentPhase {
+                activity: current.map_or(AgentActivity::Idle, |phase| phase.activity),
+                waiting: Some(request),
+            }),
+            AgentEvent::Spoken => {
+                let phase = current?;
+                phase.waiting.as_ref()?;
+                Some(AgentPhase {
+                    waiting: None,
+                    ..phase
+                })
+            }
         }
     }
 
-    /// The agent as the page and the debug page receive it.
+    /// The agent as the page and the debug page receive it: `waiting`, with
+    /// its request, while the floor holds one; what it is doing otherwise.
     fn to_wire(&self, project: &str) -> AgentState {
-        let (state, pending_request) = match self {
-            AgentPhase::Busy => ("busy", None),
-            AgentPhase::Idle => ("idle", None),
-            AgentPhase::Waiting(request) => ("waiting", Some(request.clone())),
-            AgentPhase::Finished => ("finished", None),
+        let state = match (&self.waiting, self.activity) {
+            (Some(_), _) => "waiting",
+            (None, AgentActivity::Busy) => "busy",
+            (None, AgentActivity::Idle) => "idle",
+            (None, AgentActivity::Finished) => "finished",
         };
         AgentState {
             project: project.to_owned(),
             state: state.into(),
-            pending_request,
+            pending_request: self.waiting.clone(),
         }
     }
 }
@@ -149,8 +182,9 @@ impl AgentProjection {
             .phases
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let finishes = matches!(event, AgentEvent::Notice(AgentNotice::Finished));
         if let Some(next) = AgentPhase::on(phases.get(project), event) {
-            if matches!(next, AgentPhase::Finished) {
+            if finishes {
                 self.displays
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
