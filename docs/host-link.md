@@ -190,7 +190,11 @@ Error codes:
 
 A refusal of one command (`refused`, `unsupported`, `daemon_error`,
 `bad_request`, `unknown_command`) fails that command alone: the session
-stays usable, and other commands keep working (#423). The service stops
+stays usable, and other commands keep working (#423). A refused caller
+prompt keeps the caller on the leg (they hear that it could not take that,
+with the host's words on screen); a refused background prompt keeps the
+resident, published idle; a refused model change keeps the leg as it was,
+and a level refused after the model changed keeps the new model. The service stops
 using a session after any other failed command to it (`stale_epoch`,
 `not_found`, `failed`, a failure on its own side: `not_connected`,
 `link_lost`, `unreadable_reply`, or no reply within its 30 s wait), but it
