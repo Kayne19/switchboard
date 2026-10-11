@@ -590,10 +590,10 @@ const rows: Row[] = [
   { from: "off", event: "hangup", seen: { ...STOPPED, said: HANGUP } },
   { from: "off", event: "socket drops", seen: { ...STOPPED, said: DISCONNECTED } },
   { from: "off", event: "epoch, new generation", seen: { ...STOPPED, said: OFF } },
-  { from: "off", event: "retry", seen: { ...STOPPED, said: OFF } },
+  { from: "off", event: "retry", seen: { ...STOPPED, said: DISCONNECTED } },
   { from: "off", event: "reply closed", seen: { ...STOPPED, said: OFF }, lease: false },
 
-  // Armed: every page stop turns it off and says why.
+  // Armed: every page stop turns it off and says why; a replaced socket is a disconnect.
   { from: "armed", event: "MODE", seen: { ...STOPPED, said: OFF } },
   { from: "armed", event: "page hidden", seen: { ...STOPPED, said: HIDDEN } },
   { from: "armed", event: "pagehide", seen: { ...STOPPED, said: LEFT } },
@@ -601,7 +601,7 @@ const rows: Row[] = [
   { from: "armed", event: "route", seen: { ...STOPPED, said: ROUTE } },
   { from: "armed", event: "hangup", seen: { ...STOPPED, said: HANGUP } },
   { from: "armed", event: "socket drops", seen: { ...STOPPED, said: DISCONNECTED } },
-  { from: "armed", event: "retry", seen: { ...ON, said: LISTENING } },
+  { from: "armed", event: "retry", seen: { ...STOPPED, said: DISCONNECTED } },
   { from: "armed", event: "epoch, new generation", seen: { ...STOPPED, said: CALL_CHANGED } },
   // A hand-off epoch keeps listening; a rescue turns hands-free off.
   { from: "armed", event: "epoch, same generation", seen: { ...ON, said: HANDED_OFF } },
@@ -645,8 +645,8 @@ const rows: Row[] = [
   { from: "reply playing", event: "page hidden, shown, MODE", seen: { ...ON, said: LISTENING, asked: 1 }, lease: false },
   // A hand-off keeps listening but drops the old leg's reply.
   { from: "reply playing", event: "epoch, same generation", seen: { ...ON, said: HANDED_OFF }, lease: false },
-  // A reconnect waits for the snapshot's epoch, which drops the reply.
-  { from: "reply playing", event: "retry", seen: { ...ON, said: LISTENING }, lease: false },
+  // A replaced socket takes the line down, which drops the reply.
+  { from: "reply playing", event: "retry", seen: { ...STOPPED, said: DISCONNECTED }, lease: false },
   { from: "reply playing", event: "ptt press", seen: { ...ON, said: PAUSED }, lease: false },
   { from: "reply playing", event: "ptt press, ptt end", seen: { ...ON, said: LISTENING, asked: 1 }, lease: true },
 
