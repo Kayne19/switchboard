@@ -1,4 +1,6 @@
 import { expect, type Page } from '@playwright/test';
+import { fixtures } from '../../src/fixtures/scenes';
+import type { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
 
 // What the browser specs share, written once: the geometries the goldens are
 // drawn at, opening a fixture scene, running actions through the page's
@@ -33,6 +35,22 @@ export async function openScene(page: Page, scene: string): Promise<void> {
   await expect
     .poll(() => page.evaluate(() => window.SwitchboardController?.state().revision ?? 0))
     .toBeGreaterThan(0);
+}
+
+/**
+ * Opens the page on the fixture socket, shows a fixture scene as an agent's
+ * displays arrive, and asks for the theater view as an agent's `view` does
+ * (theater.spec.ts, and its goldens in visual.spec.ts).
+ */
+export async function openTheater(page: Page, server: DisplayFixtureServer, scene: keyof typeof fixtures = 'training'): Promise<void> {
+  const { wsUrl } = await server.start();
+  await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+  await expect.poll(() => server.frames.some((frame) => frame.type === 'hello')).toBe(true);
+  for (const action of fixtures[scene]) server.broadcast({ type: 'display', action });
+  await expect(page.locator('.stage')).not.toHaveAttribute('data-scene-kind', 'idle');
+  server.broadcast({ type: 'view', target: 'theater', reason: '' });
+  await expect(page.locator('.stage')).toHaveAttribute('data-view', 'theater');
+  await expect(page.locator('[data-scene="theater"]')).toBeVisible();
 }
 
 /** Runs actions through the page's controller, in order, as an agent's display calls arrive. */
