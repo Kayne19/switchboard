@@ -569,7 +569,9 @@ const rows: Row[] = [
   { from: "replacing", event: "talk, send, new socket greeted", seen: { ...READY, frames: ["hello", "clip"], status: "Waiting for the server to accept your clip..." } },
   { from: "replacing, streaming", event: "talk, send, new socket greeted", seen: { ...READY, frames: ["hello", "stt_start", "stt_chunk", "stt_end"], status: "Waiting for the server to accept your clip..." } },
   { from: "replace failed", event: "1.5 s", seen: { ...REPLACING, status: CANNOT_CONNECT, error: true, sockets: 1 } },
-  { from: "replace failed", event: "talk", seen: { ...REPLACING, ready: true, status: RECORDING, recording: true, reconnects: 1 } },
+  // The link's error stands over the recording's routine status: only the
+  // link takes its own error down (#354).
+  { from: "replace failed", event: "talk", seen: { ...REPLACING, ready: true, status: CANNOT_CONNECT, error: true, recording: true, reconnects: 1 } },
 
   // disposed
   { from: "disposed", event: "start", seen: DISPOSED },

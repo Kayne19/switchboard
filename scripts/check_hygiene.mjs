@@ -436,6 +436,9 @@ const machines = [
 	// call-identity: the page's call identity is a value, not a machine. `followIdentity` is the one
 	// writer, and `follow` (callIdentity.ts) the one place it moves.
 	{ file: "apps/frontend/src/runtime/callRuntime.ts", writer: /\bthis\.identity\s*=(?!=)/, max: 1, once: [/\bfollow\(this\.identity,/] },
+	// status-source (#354): the status line's errors are keyed by their source, not a machine.
+	// `say` is the one writer of the newest status and the one place an error is set.
+	{ file: "apps/frontend/src/runtime/statusLine.ts", writer: /\bthis\.said\s*=(?!=)/, max: 1, once: [/\.errors\.set\(/] },
 	// operator-utility (#386): a local process slot, not a machine. `LocalProcess::ensure` is the
 	// one place the operator or the utility is started; `close` is the one place a slot is emptied.
 	{ file: "apps/backend/src/operator.rs", writer: /\bself\.session\s*=(?!=)/, max: 1, once: [/\.session\.take\(\)/] },
