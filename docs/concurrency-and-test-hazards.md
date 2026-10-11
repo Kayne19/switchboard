@@ -294,10 +294,22 @@ behind a slow one would pick up the epoch of a leg the caller never chose.
 After its rescue a control acts at the generation that rescue left, never at
 the current one read again: a newer control can rescue while this one is
 still closing the old leg (a `/connect` pressed right after a hangup, a second
-tab). `/connect` registers its dial at the rescue's generation, so
-`spawn_registered_operation` refuses it, and `/hangup` checks that generation
-under the PBX lock before `force_hangup`, so it does not drop the leg the newer
-control dials. Either answers 409 "superseded".
+tab). The rescue returns a token (`lifecycle::Rescued`), and every later step
+of the control takes its generation from it (`PageControl` in
+`page_controls.rs`; `docs/architecture.md`, "A page control"). `/connect`
+registers its dial at the token's generation, so `spawn_registered_operation`
+refuses it (409 "cancelled"), and `/hangup` checks the token under the PBX
+lock before `force_hangup` (`Rescued::lock_pbx`), so it does not drop the leg
+the newer control dials (409 "superseded").
+
+The quiet a rescue begins ends only where that rescue is named. A control
+settles with its token (`Coordinator::settle`), and a reply delivery at the
+generation it delivered at (`settle_at`); the settle is one call-line event
+(`Event::Settle { generation }`) that brings a `Quiescing` call to rest only
+at that generation. A newer rescue that lands after a control's PBX step, or
+between a delivery's generation check and its settle (a rescue does not take
+`operation_transition`), keeps its quiet: an older control's settle, or a
+status publication, no longer ends it (#369).
 
 ### A swap is decided before its rescue
 
