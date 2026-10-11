@@ -1,6 +1,6 @@
 //! Turn dispatch: routing a caller's transcript through Jev without the PBX
-//! lock, the turn worker that steers or prompts the leg and settles its
-//! operation, and the turns a project host reports on its own.
+//! lock, and the turn worker that steers or prompts the leg and settles its
+//! operation. The turns a project host reports are `host_turns.rs`'s.
 #[cfg(test)]
 use crate::app_state::state_with_agents_and_jev;
 use crate::app_state::AppState;
@@ -9,12 +9,10 @@ use crate::app_state::{
 };
 use crate::caller_input::{emit_clip_verdict, emit_stale_clip};
 use crate::debug::DebugEvent;
-use crate::history::AGENT;
 #[cfg(test)]
 use crate::hosts::{FakeHostAgent, FakeLog, Step};
 use crate::lifecycle::{LifecycleError, OperationIdentity};
 use crate::pbx::{AgentStateNotice, Switchboard};
-use crate::project_session::ProjectTurn;
 use crate::protocol::ServerMessage;
 use crate::reply::Reply;
 use crate::router::{jev_outcome, Action, CallSummary, Decision, RouteRule};
@@ -396,10 +394,9 @@ pub(crate) async fn dispatch_routed_transcript(
 
 /// Queued caller turns and the state only this module reads: the turn
 /// channel and the receiver the turn worker takes once, what routing reads
-/// about the call, the decisions made for turns still in the queue, the
-/// autonomous turns in flight, how many caller turns wait, and whether one
-/// is open. `AppInner` holds one so the fields are the
-/// turns module's own.
+/// about the call, the decisions made for turns still in the queue, how
+/// many caller turns wait, and whether one is open. `AppInner` holds one
+/// so the fields are the turns module's own.
 pub(crate) struct TurnState {
     sender: mpsc::Sender<(String, String, u64)>,
     receiver: Mutex<Option<mpsc::Receiver<(String, String, u64)>>>,
@@ -412,9 +409,6 @@ pub(crate) struct TurnState {
     /// decision with the clip prevents a second Jev request while preserving
     /// steering for a turn that was already active.
     routed_decisions: Mutex<HashMap<String, RoutedDecision>>,
-    /// Autonomous host turns admitted by the lifecycle, keyed by resident
-    /// instance so a stale turn_end cannot finish a newer operation.
-    autonomous_operations: Mutex<HashMap<u64, OperationIdentity>>,
     /// Caller turns sent to the worker and not yet taken: the `waiting`
     /// count the page is shown.
     queued: AtomicU64,
@@ -432,7 +426,6 @@ impl TurnState {
             receiver: Mutex::new(Some(receiver)),
             routing,
             routed_decisions: Mutex::new(HashMap::new()),
-            autonomous_operations: Mutex::new(HashMap::new()),
             queued: AtomicU64::new(0),
             in_flight: AtomicBool::new(false),
         }
@@ -762,157 +755,11 @@ impl TurnRun {
     }
 }
 
-/// Admit and settle host-reported turns through the one lifecycle owner:
-/// autonomous turns get an operation of their own, and a caller turn's
-/// operation closes when the host reports it settled. Written self-wake
-/// replies are transcript-only: `Reply` updates the caller's view without
-/// entering the speech worker. True when an autonomous start was admitted.
-pub(crate) async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
-    // Admission, settlement, and the transcript reply share the same turn
-    // gate as caller prompt admission. This prevents a queued caller from
-    // entering between autonomous finish and its written reply.
-    let _transition = state.0.operation_transition.lock().await;
-    if turn.ended && turn.cause == "input" {
-        // The prompt that owns this operation returns when its collector
-        // reads the same `turn_end`, but the host can start the next run
-        // first: a resume after an external abort, or a wake queued behind
-        // the turn. Closing here lets that run be admitted (#107, #109).
-        if let Some(turn_id) = turn.turn_id.as_deref() {
-            if state.0.coordinator.settle_turn(&turn.token, turn_id) {
-                tracing::info!(
-                    instance = turn.instance_id,
-                    turn_id,
-                    "the host settled the caller's turn"
-                );
-            }
-        }
-        return false;
-    }
-    if turn.ended {
-        let mut operations = state.0.turns.autonomous_operations.lock().await;
-        let Some(operation) = operations.get(&turn.instance_id).cloned() else {
-            return false;
-        };
-        // A late end from an older host turn must not settle a replacement
-        // operation on the same resident instance.
-        if operation.turn_id.as_deref() != turn.turn_id.as_deref() {
-            return false;
-        }
-        let operation = operations
-            .remove(&turn.instance_id)
-            .expect("operation was checked above");
-        drop(operations);
-        if !state.0.coordinator.finish_operation(&operation) {
-            tracing::info!(
-                instance = turn.instance_id,
-                "ignoring autonomous turn end from a stale leg"
-            );
-            return false;
-        }
-        if let Some(turn_id) = operation.turn_id.clone() {
-            state.0.debug.publish(DebugEvent::TurnEnd {
-                agent: state.0.coordinator.route(),
-                turn_id,
-                generation: operation.leg.generation,
-                utterance_id: None,
-            });
-        }
-        if !turn.text.trim().is_empty() {
-            let route = state.0.coordinator.route();
-            state.0.transcript_log.lock().await.add_with_id_and_voiced(
-                AGENT,
-                &turn.text,
-                route.clone(),
-                None,
-                false,
-            );
-            emit_message(
-                state,
-                ServerMessage::Reply {
-                    text: turn.text,
-                    route,
-                    voiced: false,
-                    sequence: None,
-                },
-            );
-        }
-        return false;
-    }
-
-    let current = state.0.coordinator.current_identity();
-    if current.token != turn.token {
-        // The leg's call token stays out of the log: the debug page copies
-        // log lines to an unauthenticated listener.
-        tracing::info!(
-            instance = turn.instance_id,
-            "ignoring turn start from a leg that is no longer on the call"
-        );
-        return false;
-    }
-    if turn.cause == "input" {
-        if let Some(turn_id) = turn.turn_id.as_deref() {
-            if let Err(error) = state.0.coordinator.bind_turn(&turn.token, turn_id) {
-                tracing::info!(%error, "caller turn authority was stale");
-            }
-        }
-        return false;
-    }
-    if !matches!(turn.cause.as_str(), "autonomous" | "unknown") {
-        return false;
-    }
-    // An old host or a reconnect snapshot has no delivery authority. Do not
-    // fabricate one: its module calls remain refused and its written text is
-    // not attached to the caller's transcript.
-    let Some(turn_id) = turn.turn_id else {
-        tracing::info!(instance = turn.instance_id, cause = %turn.cause, "autonomous turn has no delivery authority");
-        return false;
-    };
-    if turn.cause == "unknown" {
-        tracing::info!(
-            instance = turn.instance_id,
-            "unknown reconnect turn remains fail-closed"
-        );
-        return false;
-    }
-    match state
-        .0
-        .coordinator
-        .begin_autonomous(&current, turn_id.clone())
-    {
-        Ok(operation) => {
-            // A self-woken turn answers no caller line.
-            state.0.debug.publish(DebugEvent::TurnStart {
-                agent: state.0.coordinator.route(),
-                turn_id,
-                generation: current.generation,
-                utterance_id: None,
-            });
-            state
-                .0
-                .turns
-                .autonomous_operations
-                .lock()
-                .await
-                .insert(turn.instance_id, operation);
-            true
-        }
-        Err(LifecycleError::OperationActive | LifecycleError::CandidateActive) => {
-            tracing::info!(
-                instance = turn.instance_id,
-                "caller operation won the autonomous-turn race"
-            );
-            false
-        }
-        Err(error) => {
-            tracing::info!(instance = turn.instance_id, %error, "autonomous turn was not admitted");
-            false
-        }
-    }
-}
-
+/// Puts alpha on the line through the PBX, and returns its call token and
+/// its session instance.
 #[cfg(test)]
 #[cfg(unix)]
-async fn foreground_alpha_turn(state: &AppState) -> (String, u64) {
+pub(crate) async fn foreground_alpha_turn(state: &AppState) -> (String, u64) {
     let mut board = state.0.switchboard.lock().await;
     let reply = board
         .transfer_to(
