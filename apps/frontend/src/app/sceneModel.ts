@@ -173,8 +173,8 @@ export function besideVisuals(comp: CompositionModel): SceneObject[] {
   return [...comp.compare, ...comp.secondary, ...comp.ambient].filter((object) => VISUAL_TYPES.has(object.type));
 }
 
-/** The composition a scene is drawn as: one per visual type that can be the primary, named for its type but for the two the page drew first (a chart's training run, a diagram's architecture), and the three that are not a visual's. */
-export type SceneKind = 'idle' | 'conversation' | 'composed' | 'training' | 'architecture' | Exclude<VisualType, 'chart' | 'diagram'>;
+/** The composition a scene is drawn as: one per visual type that can be the primary, named for its type but for the two the page drew first (a chart's training run, a diagram's architecture), the three that are not a visual's, and the theater view's, which draws the primary alone. */
+export type SceneKind = 'idle' | 'conversation' | 'composed' | 'theater' | 'training' | 'architecture' | Exclude<VisualType, 'chart' | 'diagram'>;
 
 /**
  * The scene a composition is drawn as, in the view the workspace is in
@@ -185,6 +185,11 @@ export type SceneKind = 'idle' | 'conversation' | 'composed' | 'training' | 'arc
 export function sceneKind(comp: CompositionModel, view: string): SceneKind {
   if (view === 'comms') {
     return 'conversation';
+  }
+  // The theater view is drawn only while something is on stage
+  // (`computeEffectiveView`), and gives the stage to the primary.
+  if (view === 'theater' && comp.primary) {
+    return 'theater';
   }
   if (comp.isGenericComposed) {
     return 'composed';

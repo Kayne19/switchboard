@@ -107,6 +107,7 @@ describe('primary metric cluster rendering', () => {
           onFocus={() => {}}
           setTranscriptOpen={() => {}}
           handsFree={false}
+          onExitView={() => {}}
         />
       </ControllerProvider>,
     );
@@ -137,7 +138,7 @@ describe('primary metric cluster rendering', () => {
 
     const host = mount(
       <ControllerProvider>
-        <SceneShell kind="composed" composition={buildCompositionModel(state)} state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} />
+        <SceneShell kind="composed" composition={buildCompositionModel(state)} state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} onExitView={() => {}} />
       </ControllerProvider>,
     );
 

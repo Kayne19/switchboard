@@ -92,6 +92,15 @@ nothing to switch and the control is disabled. No composition labels that
 corner: a per-page `DISPLAY / ...` label stood there before, and the
 conversation page carried a static stack that always read PUSH-TO-TALK.
 
+The theater view (`theater`, #277) is one more layout of the shell, not a
+composition: the primary alone, in the focus box (`StagedObject` in
+`src/components/FocusLayer.tsx`, the one the focus layer draws over the
+scene), with the notes about it, a `THEATER / <TYPE>` header and `EXIT / ESC`;
+the corner stack, and Damocles at its compact size in a column at the box's
+right, so push-to-talk still works. It has no rail, aux row, heading or
+footer. `EXIT` and Esc dispatch `auto_view`. The page draws it only while
+something is on stage (`computeEffectiveView`).
+
 The shell also owns the main column (`MainWithAux`): a composition's main
 slot over the aux row. A composition names the objects its slot does not
 draw (`SceneContent.aux`), and the shell gives each a framed cell in the row
@@ -326,10 +335,14 @@ candidate's adoption names. The phase x event table in
 | `candidate` R | same | R, none for `operator` | same | "Connecting to R…" |
 | `candidate_cleared` adopted R at N | same | none | R at N | the adoption waits for N |
 | `candidate_cleared` rolled back or rescued R | same | none | none | clips marked for R lose the mark (`outbox.unmark`) |
-| `reply`, `status` | same | none | same | a take begun after it is not marked |
 
 Any `candidate_cleared` puts the idle line back while "Connecting to …" is
 shown. Any `epoch` ends the wait for an adoption, the one it names or not.
+Only these two end the candidate mark: a `reply` or a `status` that arrives
+while a candidate starts (the reply to the turn that started the transfer)
+leaves it, and the service sends a `candidate_cleared` or an `epoch` for
+every way a candidacy ends (`a_candidacy_ends_only_with_a_notice_that_says_so`
+in `apps/backend/tests/test_lifecycle.rs`).
 
 The reports themselves belong to `ScreenReporter` (`src/app/screenReporter.ts`);
 `runtime.tsx` only forwards it events. It sends with stop-and-wait: one

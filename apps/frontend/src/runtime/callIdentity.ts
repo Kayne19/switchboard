@@ -9,16 +9,14 @@
 // The rule it keeps is #70's (docs/concurrency-and-test-hazards.md): a take
 // recorded while a candidate starts is marked for that candidate's route, and
 // is carried to the new leg only on the epoch that candidate's `adopted`
-// notice names. A rollback or a rescue strips the mark. The phase x event
+// notice names. A rollback or a rescue strips the mark. Only the service's
+// explicit ends end a candidacy here: `candidate_cleared` and `epoch` (the
+// service sends one for every way a candidacy ends, pinned by
+// `a_candidacy_ends_only_with_a_notice_that_says_so` in
+// apps/backend/tests/test_lifecycle.rs). The phase x event
 // table in tests/unit/callIdentity.test.ts pins each row through CallRuntime.
 
-import type {
-  CandidateClearedMessage,
-  CandidateMessage,
-  EpochMessage,
-  ReplyMessage,
-  StatusMessage,
-} from "../protocol";
+import type { CandidateClearedMessage, CandidateMessage, EpochMessage } from "../protocol";
 
 /** A candidate leg that became the leg on the line: its route, and the epoch it was adopted at. */
 export interface Adoption {
@@ -49,12 +47,7 @@ export interface CallIdentity {
 export const NO_EPOCH_YET: CallIdentity = { epoch: 0, candidate: null, adoption: null };
 
 /** The server messages that move the identity. */
-export type IdentityMessage =
-  | EpochMessage
-  | CandidateMessage
-  | CandidateClearedMessage
-  | ReplyMessage
-  | StatusMessage;
+export type IdentityMessage = EpochMessage | CandidateMessage | CandidateClearedMessage;
 
 export interface IdentityStep {
   readonly identity: CallIdentity;
@@ -116,11 +109,6 @@ export function follow(identity: CallIdentity, message: IdentityMessage): Identi
         unmark: message.route,
         expected: false,
       };
-    case "reply":
-    case "status":
-      // A settled status or a reply ends the mark for later takes, though no
-      // notice ended the candidate. The adoption still waits for its epoch.
-      return moved({ ...identity, candidate: null });
     default: {
       const exhaustive: never = message;
       return exhaustive;

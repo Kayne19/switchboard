@@ -43,8 +43,8 @@ export function normalizeViewTarget(target: string | null | undefined): string |
  * scene is drawn in it (`sceneKind`) and the screen-state report names it
  * (`deriveScreenState`), so the report never names a view the page does not
  * draw (#277). A view the page cannot draw now, or does not draw at all,
- * is drawn as `auto`: `visual` with nothing on stage, and `system` and
- * `theater`, which have no scene yet.
+ * is drawn as `auto`: `visual` or `theater` with nothing on stage, and
+ * `system`, which has no scene yet.
  */
 function computeEffectiveView(requested: string | null, hasVisual: boolean): string {
   switch (requested) {
@@ -52,6 +52,8 @@ function computeEffectiveView(requested: string | null, hasVisual: boolean): str
       return 'comms';
     case 'visual':
       return hasVisual ? 'visual' : 'auto';
+    case 'theater':
+      return hasVisual ? 'theater' : 'auto';
     default:
       return 'auto';
   }

@@ -136,7 +136,7 @@ describe('the view a screen-state report names is the one the page draws', () =>
     visual: { empty: ['idle', 'auto'], chart: ['training', 'visual'] },
     comms: { empty: ['conversation', 'comms'], chart: ['conversation', 'comms'] },
     system: { empty: ['idle', 'auto'], chart: ['training', 'auto'] },
-    theater: { empty: ['idle', 'auto'], chart: ['training', 'auto'] },
+    theater: { empty: ['idle', 'auto'], chart: ['theater', 'theater'] },
   };
   // The older names the service and the page still take for the five.
   const aliases: Record<string, keyof typeof table> = {

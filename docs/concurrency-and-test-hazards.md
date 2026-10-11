@@ -131,6 +131,12 @@ the stamp it was recorded under. Any other ending strips the mark. A tab that
 was disconnected through the whole change sees no notice, only the snapshot's
 epoch, so the snapshot sends an `adopted` notice ahead of its epoch while the
 adopted leg is still the one on the line (`Coordinator::generation_and_adoption`).
+Only those two signals end a candidacy on the page: a `reply` or a `status`
+that arrives while the candidate starts does not, because the service sends
+a `candidate_cleared` for every way a candidacy ends (pinned by
+`a_candidacy_ends_only_with_a_notice_that_says_so` in
+`apps/backend/tests/test_lifecycle.rs`), and a reconnect's snapshot `epoch`
+covers a tab that missed it (#480).
 On the page, the rule is `follow` in `apps/frontend/src/runtime/callIdentity.ts`
 and `ClipOutbox.carry`/`unmark` in `outbox.ts`.
 A rescue and a return to the operator each give the line a new identity, and
