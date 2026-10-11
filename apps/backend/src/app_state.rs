@@ -20,6 +20,7 @@ use crate::jev::fake_jev_client;
 use crate::leg_announcer::LegAnnouncer;
 use crate::lifecycle::Coordinator;
 use crate::module_calls::module_call;
+use crate::operator::RoutingUtility;
 use crate::page_controls::cancel_active_operations;
 #[cfg(test)]
 use crate::pbx::OPERATOR;
@@ -224,6 +225,9 @@ pub struct AppInner {
     /// Decides the pickers' redials without the PBX lock. Only
     /// `page_controls.rs` asks for it, through `redial_planner`.
     redials: RedialPlanner,
+    /// The routing utility, reached without the PBX lock. Only
+    /// `floor_hooks.rs` asks for it, through `routing_utility`.
+    utility: RoutingUtility,
     /// The speech worker's queue and the state only `speech.rs` reads.
     pub(crate) speech: SpeechQueue,
     /// Caller audio clips and the state only `caller_input.rs` reads.
@@ -252,6 +256,12 @@ impl AppInner {
     /// `page_controls.rs` is its one caller.
     pub(crate) fn redial_planner(&self) -> RedialPlanner {
         self.redials.clone()
+    }
+
+    /// The routing utility the floor rewrites updates with, without the
+    /// PBX lock (#386). `floor_hooks.rs` is its one caller.
+    pub(crate) fn routing_utility(&self) -> RoutingUtility {
+        self.utility.clone()
     }
 }
 
@@ -387,6 +397,7 @@ impl AppState {
         let floor = Floor::new(switchboard.floor_quiet_threshold()).with_debug(debug.clone());
         let active_session = switchboard.session_control();
         let redials = switchboard.redial_planner();
+        let utility = switchboard.routing_utility();
         let hosts = switchboard.hosts();
         hosts.set_debug_bus(debug.clone());
         let turns = TurnState::new(switchboard.routing_view());
@@ -473,6 +484,7 @@ impl AppState {
                 events,
                 coordinator,
                 redials,
+                utility,
                 speech,
                 clips,
                 turns,

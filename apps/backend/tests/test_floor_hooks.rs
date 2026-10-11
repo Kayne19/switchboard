@@ -106,8 +106,16 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
 async fn floor_update_queued_on_a_quiet_line(
     client: crate::jev::JevClient,
 ) -> (AppState, DeliveryConnection) {
+    floor_update_queued_with_utility(client, "/bin/sh").await
+}
+
+/// The same, with `utility` as the `pi` binary.
+async fn floor_update_queued_with_utility(
+    client: crate::jev::JevClient,
+    utility: &str,
+) -> (AppState, DeliveryConnection) {
     let config = crate::Config::for_tests(&[
-        ("SWITCHBOARD_PI_BINARY", "/bin/sh"),
+        ("SWITCHBOARD_PI_BINARY", utility),
         ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
     ]);
     let registry = Registry::new(vec![]);
@@ -158,35 +166,44 @@ async fn floor_good_moment_gate_does_not_wait_for_the_pbx_lock() {
         .expect("the floor gate asks Jev while a foreground turn runs");
 }
 
+/// The utility has its own lock, so a foreground turn holding the PBX lock
+/// for its whole prompt does not keep a background update from being
+/// rewritten (#386). Before, the rewrite waited for the PBX lock until its
+/// timeout and the update was spoken as the agent wrote it.
+#[cfg(unix)]
 #[tokio::test]
-async fn floor_rewrite_waits_for_the_pbx_lock_only_within_its_timeout() {
+async fn floor_rewrite_reaches_the_utility_while_a_turn_holds_the_pbx_lock() {
+    let root = crate::pbx::scratch_dir("floor-rewrite-unlocked");
+    let utility = root.join("fake-utility");
+    crate::pi_client::write_executable_script(
+        &utility,
+        r##"while IFS= read -r line; do
+printf '%s\n' '{"type":"tool_execution_start","toolName":"rewrite","args":{"text":"alpha is done"}}'
+printf '%s\n' '{"type":"agent_settled"}'
+done
+"##,
+    );
     let (client, _, _) = fake_jev_client();
-    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
-    let _turn = state.0.switchboard.lock().await;
+    let (state, _connection) =
+        floor_update_queued_with_utility(client, &utility.to_string_lossy()).await;
+    let turn = state.0.switchboard.lock().await;
     spawn_floor_worker(state.clone());
 
-    // The utility is behind the lock the turn holds; the rewrite gives up at
-    // its timeout and the update goes on as the agent wrote it.
     let rewrite = timeout(
-        crate::floor::REWRITE_TIMEOUT + Duration::from_secs(3),
-        async {
-            loop {
-                if let Some(event) = debug_events(&state)
-                    .into_iter()
-                    .find(|event| matches!(event, crate::debug::DebugEvent::FloorRewrite { .. }))
-                {
-                    return event;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        },
+        crate::floor::REWRITE_TIMEOUT / 2,
+        until_debug(&state, |event| {
+            matches!(event, crate::debug::DebugEvent::FloorRewrite { .. })
+        }),
     )
     .await
-    .expect("the floor rewrite gives up within its timeout while a foreground turn runs");
+    .expect("the floor rewrite does not wait for the PBX lock");
     assert!(matches!(
         rewrite,
-        crate::debug::DebugEvent::FloorRewrite { ref rewritten, .. } if rewritten == "alpha finished"
+        crate::debug::DebugEvent::FloorRewrite { ref rewritten, .. } if rewritten == "alpha is done"
     ));
+    drop(turn);
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[cfg(unix)]

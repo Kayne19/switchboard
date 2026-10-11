@@ -370,7 +370,7 @@ async fn slot_row(slot: Slot, phase: SlotPhase, event: SlotEvent) -> SlotOutcome
 async fn ensure_slot(board: &mut Switchboard, slot: Slot) -> Result<PiSession, PiSessionError> {
     match slot {
         Slot::Operator => board.ensure_operator().await,
-        Slot::Utility => board.ensure_utility().await,
+        Slot::Utility => board.utility.session(&board.debug).await,
     }
 }
 
@@ -378,6 +378,6 @@ async fn ensure_slot(board: &mut Switchboard, slot: Slot) -> Result<PiSession, P
 async fn slot_session(board: &Switchboard, slot: Slot) -> Option<PiSession> {
     match slot {
         Slot::Operator => board.operator.session().cloned(),
-        Slot::Utility => board.utility.session().cloned(),
+        Slot::Utility => board.utility.held().await,
     }
 }

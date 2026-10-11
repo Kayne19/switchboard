@@ -13,12 +13,15 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::time::Duration;
 
 /// What the switchboard launches the operator and the routing utility with:
 /// the `pi` binary, the model, the operator's system prompt file, the
 /// extension, and the environment the processes inherit. Read from `Config`
 /// once; only this module uses it.
+#[derive(Clone)]
 pub(crate) struct OperatorLaunch {
     pi_binary: String,
     model: Option<String>,
@@ -198,16 +201,6 @@ impl Switchboard {
         Ok(session)
     }
 
-    async fn ensure_utility(&mut self) -> Result<PiSession, PiSessionError> {
-        // The registry is fixed for the life of the service, so the
-        // catalog lives in the system prompt once.
-        let start = self
-            .launch
-            .start_utility(self.utility_system_prompt(), self.debug.clone());
-        let (session, _) = self.utility.ensure(start).await?;
-        Ok(session)
-    }
-
     /// A routing request is data only: Jev's first read, the call state and
     /// the caller's words. The rules and the catalog are in the utility's
     /// system prompt.
@@ -272,7 +265,7 @@ impl Switchboard {
         &mut self,
         request: &str,
     ) -> Result<Option<UtilityDecision>, PiSessionError> {
-        let session = self.ensure_utility().await?;
+        let session = self.utility.session(&self.debug).await?;
         let turn = session.prompt(request).await?;
         if turn.failed {
             return Err(PiSessionError(if turn.error.is_empty() {
@@ -284,17 +277,68 @@ impl Switchboard {
         Ok(utility_decision(&turn.signals))
     }
 
-    /// Take a clone of the utility session while the PBX lock is held. The
-    /// caller must prompt the clone after releasing that lock: utility work is
-    /// allowed to take seconds and must not block caller turns.
-    pub async fn floor_rewrite_session(&mut self) -> Result<PiSession, PiSessionError> {
-        self.ensure_utility().await
+    pub(crate) async fn recover_operator(&mut self, error: String) -> Reply {
+        tracing::warn!(%error, "dropping and rebuilding the operator leg");
+        self.operator.close().await;
+        self.name_leg_on_line(None, || {}).await;
+        tracing::error!(%error, "operator unavailable after a failed turn");
+        self.routing_unavailable()
+    }
+}
+
+/// The routing utility, shared. The switchboard asks it for second
+/// opinions and split dispatch under the PBX lock; the floor asks it to
+/// rewrite a background update without that lock, which a foreground turn
+/// holds for its whole prompt (#386). Its own lock covers only finding or
+/// starting the process: a prompt runs on the session it hands out.
+#[derive(Clone)]
+pub(crate) struct RoutingUtility(Arc<UtilityInner>);
+
+struct UtilityInner {
+    launch: OperatorLaunch,
+    /// The registry is fixed for the life of the service, so the catalog
+    /// lives in the system prompt once.
+    system_prompt: String,
+    process: Mutex<LocalProcess>,
+}
+
+impl RoutingUtility {
+    pub(crate) fn new(launch: OperatorLaunch, system_prompt: String) -> Self {
+        Self(Arc::new(UtilityInner {
+            launch,
+            system_prompt,
+            process: Mutex::new(LocalProcess::new("routing utility")),
+        }))
     }
 
-    pub async fn rewrite_floor_with_session(
-        session: &PiSession,
+    /// The live utility, started if it is absent or has died.
+    pub(crate) async fn session(&self, debug: &DebugBus) -> Result<PiSession, PiSessionError> {
+        let start = self
+            .0
+            .launch
+            .start_utility(self.0.system_prompt.clone(), debug.clone());
+        let (session, _) = self.0.process.lock().await.ensure(start).await?;
+        Ok(session)
+    }
+
+    /// The process the utility holds, live or not.
+    #[cfg(test)]
+    pub(crate) async fn held(&self) -> Option<PiSession> {
+        self.0.process.lock().await.session().cloned()
+    }
+
+    pub(crate) async fn close(&self) {
+        self.0.process.lock().await.close().await;
+    }
+
+    /// The utility's wording of a background update, or `None` when it
+    /// gave none.
+    pub(crate) async fn rewrite_floor(
+        &self,
+        debug: &DebugBus,
         input: &FloorRewriteInput,
     ) -> Result<Option<String>, PiSessionError> {
+        let session = self.session(debug).await?;
         let context = if input.context.trim().is_empty() {
             "(none)"
         } else {
@@ -331,14 +375,6 @@ impl Switchboard {
                     .filter(|text| !text.is_empty())
                     .map(str::to_owned)
             }))
-    }
-
-    pub(crate) async fn recover_operator(&mut self, error: String) -> Reply {
-        tracing::warn!(%error, "dropping and rebuilding the operator leg");
-        self.operator.close().await;
-        self.name_leg_on_line(None, || {}).await;
-        tracing::error!(%error, "operator unavailable after a failed turn");
-        self.routing_unavailable()
     }
 }
 
