@@ -159,6 +159,37 @@ owns no DOM. `runtime.tsx` validates
 incoming display actions, dispatches them, and reports the rendered scene back
 to the backend. Neither contains layout logic.
 
+The reports themselves belong to `ScreenReporter` (`src/app/screenReporter.ts`);
+`runtime.tsx` only forwards it events. It sends with stop-and-wait: one
+`screen_state` is on the wire until its `screen_state_ack`, and the newest
+scene waits behind it. Its state is one value written only by `transition`:
+the phase (`line`), the queued report, the generation of the last `epoch`,
+the highest applied display `seq`, and the one rejection not yet sent.
+
+| phase | holds | event | next | effect |
+|---|---|---|---|---|
+| `unready` | — | scene | `unready` | the report is queued |
+| `unready` | — | ack | `unready` | none: an ack answers a report sent after the epoch |
+| any | — | `epoch` | `idle` | the generation is the new one; the report on the wire and the queued one are given up |
+| any but `unready` | — | line down | `unready` | the report on the wire is given up |
+| `idle` | — | scene | `awaiting` | the report goes; a socket that refuses it leaves it queued, in `idle` |
+| `idle` | — | ack | `idle`, or `awaiting` | the queued report, if any, goes |
+| `awaiting` | the report, its deadline | scene equal to the report on the wire | `awaiting` | the queued report is dropped |
+| `awaiting` | the report, its deadline | another scene | `awaiting` | it replaces the queued report |
+| `awaiting` | the report, its deadline | ack, or `ACK_DEADLINE_MS` (2 s) without one | `idle`, or `awaiting` | the queued report, if any, goes |
+| any | — | display applied / declined | same | the applied `seq` rises / the rejection is recorded, and the next report carries it |
+
+The service does not acknowledge a report it ignores (a tab that is not the
+active one, another generation, a view it does not know), so the deadline is
+what lets an older tab report again once it becomes the active one. The
+deadline names its report and is cleared on leaving `awaiting`, so one that
+fires late is dropped. A report that goes clears the queue: nothing older
+than the report on the wire is sent after it. A rejection is cleared only by
+the report that carries that same object out, and a newer one replaces it:
+two declined before a report goes keep only the newer (#378). The phase-by-event
+table in `tests/unit/screenReporter.test.tsx` pins each row through the
+adapter.
+
 Every failure the runtime cannot recover from is reported as status text with
 `statusError` set -- no microphone, a browser that cannot record, a recorder
 that stopped, a line that will not connect. `runtime.tsx` puts that text on
