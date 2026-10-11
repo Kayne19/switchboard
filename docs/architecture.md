@@ -201,7 +201,11 @@ Host-reported project turns are admitted through the coordinator
 host's `turn_id`; caller prompts wait behind it. It closes on that turn's
 `turn_end`, or when the session closes (`session_closed`, which a lost host
 link also sends): a closed session never ends its run, and the operation
-would hold every later caller prompt. A caller prompt's operation
+would hold every later caller prompt. If the closed session's leg is still
+on the line, the operation closes only once the PBX has retired that leg,
+under the PBX lock (the foreground-closed callback in `app_state.rs`), so a
+caller prompt waiting behind the run runs on the leg that replaced it,
+never against the dead one (#270). A caller prompt's operation
 closes when the host reports its bound turn settled (`turn_end` with that
 `turn_id`), even if the prompt has not returned yet, so a run the host starts
 right behind it gets an operation of its own. Module calls (`module_calls.rs`) must carry the
@@ -225,6 +229,7 @@ the speech worker.
 | any report that names no turn | refuses it: every turn has an id |
 | `turn_end`, `input` | closes the open operation bound to that id (`settle_turn`) |
 | the end of a self-woken run (any other cause) | only for the held run (same session instance and turn id): closes its operation, traces its end, and writes its text, if any, to the transcript |
+| the end of a self-woken run its session's close cut short | while that leg is on the line, nothing: the leg's retirement ends the run, under the PBX lock, after the leg is off the line (`end_run_of_closed_session`); otherwise as any end |
 
 The table test `a_host_reported_turn_moves_by_its_table`
 (`apps/backend/tests/test_host_turns.rs`) holds every phase of the line against

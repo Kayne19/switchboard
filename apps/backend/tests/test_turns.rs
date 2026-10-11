@@ -720,6 +720,7 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
             cause: "autonomous".into(),
             ended: true,
             text: String::new(),
+            cut_short: false,
             replaces: None,
         },
     )
@@ -800,6 +801,84 @@ async fn a_caller_turn_runs_after_an_autonomous_turn_whose_session_closed() {
     );
     worker.abort();
     let _ = worker.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A self-woken run whose session closes holds its operation until the
+/// closed leg is retired, under the PBX lock (#270). A caller turn that
+/// waits behind the run then runs on the operator, never against the dead
+/// leg. Here the PBX lock is held, so the retirement cannot run: the run's
+/// operation stays open and the line still names alpha until it can.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_run_whose_session_closed_holds_its_operation_until_the_leg_is_retired() {
+    use crate::debug::DebugEvent;
+    let root = scratch_root("autonomous-closed-retire-first");
+    let (state, _host) = state_with_agents_and_jev(
+        &root,
+        FakeHostAgent::new(Box::new(|_, _| {
+            vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+        })),
+    );
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-closed"}),
+    );
+    until_autonomous(&state, instance_id).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"text","text":"half done","turn_id":"auto-closed"}),
+    );
+
+    let board = state.0.switchboard.lock().await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"session_closed","reason":"host_link_closed"}),
+    );
+    // The pump publishes the run's final text, then reports its end.
+    until_debug(&state, |event| {
+        matches!(
+            event,
+            DebugEvent::AgentText { turn_id: Some(turn_id), final_: true, .. }
+                if turn_id == "auto-closed"
+        )
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(state.0.coordinator.route(), "alpha", "not retired yet");
+    assert!(
+        matches!(
+            state
+                .0
+                .coordinator
+                .begin_prompt(&state.0.coordinator.current_identity()),
+            Err(crate::lifecycle::LifecycleError::OperationActive)
+        ),
+        "a caller turn must not be admitted on the closed leg before it is retired"
+    );
+    drop(board);
+
+    within("the closed leg to be retired and its run to end", async {
+        while state.0.coordinator.route() != OPERATOR
+            || state
+                .0
+                .host_turns
+                .holds_self_woken_for_test(instance_id)
+                .await
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    let operation = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("the caller turn is admitted once the run has ended");
+    assert_eq!(state.0.coordinator.route(), OPERATOR);
+    assert!(state.0.coordinator.finish_operation(&operation));
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }

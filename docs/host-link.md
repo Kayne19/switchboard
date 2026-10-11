@@ -428,7 +428,7 @@ waits under the lock.
 | self-woken, caller and self-woken | `turn_end` of the run | idle, caller settled | final text published; end reported with it |
 | self-woken, caller and self-woken | an idle snapshot (it names no turn) | idle, caller settled | final text published; end reported with it (the snapshot's `last_text` stands in for none); the snapshot goes to the prompt |
 | self-woken, caller and self-woken | a snapshot with another turn open | unchanged, that turn held in the run's place | as for another self-woken start |
-| self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it; goes to the prompt |
+| self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it, marked cut short (the application ends the run when it retires the leg); goes to the prompt |
 | caller, caller settled | `turn_end` | unchanged | goes to the prompt, which it ends only when it names the turn the prompt's reply named; reported as an `input` turn's end |
 | idle | `turn_end` | idle | reported as an `input` turn's end |
 | idle | a snapshot with a turn open | self-woken | start reported, with the snapshot's cause |
