@@ -25,11 +25,13 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot, watch};
 
-/// The host-link protocol version this service speaks.
-pub const HOST_LINK_PROTOCOL: u64 = 1;
+/// The host-link protocol version this service speaks. Version 2: every
+/// turn carries a `turn_id` (an `unknown` one too), and the `prompt` and
+/// `steer` replies name the turn the input went into.
+pub const HOST_LINK_PROTOCOL: u64 = 2;
 /// The oldest host-link protocol version this service still accepts. A host
 /// between this and `HOST_LINK_PROTOCOL` links but is reported as outdated.
-pub const OLDEST_HOST_LINK_PROTOCOL: u64 = 1;
+pub const OLDEST_HOST_LINK_PROTOCOL: u64 = 2;
 
 /// Largest frame a host may send; a snapshot is the biggest one.
 const MAX_HOST_FRAME_BYTES: usize = 16 * 1024 * 1024;
@@ -368,7 +370,7 @@ impl Refusal {
             Refusal::IncompatibleProtocol(protocol) => json!({
                 "type": "refused",
                 "reason": "incompatible_protocol",
-                "message": format!("host-link protocol {protocol} is not supported"),
+                "message": format!("host-link protocol {protocol} is not supported; reinstall the host agent from this service's commit (apps/host-agent/install.mjs)"),
             }),
         }
     }

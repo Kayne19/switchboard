@@ -966,16 +966,31 @@ impl ProjectSession {
                 return Err(error);
             }
         };
-        Ok(self.collect(&mut frames, sent.seq).await)
+        // The reply names the host turn the prompt went into: a new one, or
+        // the one already open when the host sent it as a `follow_up`. Only
+        // that turn's `turn_end` ends the prompt.
+        let Some(turn_id) = sent.result["turn_id"].as_str() else {
+            tracing::error!(label = %self.inner.label, "the host's prompt reply names no turn");
+            self.interrupt();
+            return Ok(Turn {
+                text: String::new(),
+                signals: Vec::new(),
+                failed: true,
+                error: "the host did not say which turn the prompt went into".into(),
+            });
+        };
+        Ok(self.collect(&mut frames, sent.seq, turn_id).await)
     }
 
-    /// Collects the turn's text and signals until `turn_end`. Frames the
-    /// host sent before the prompt's reply (`from`) belong to an earlier
-    /// turn, such as the tail of one that was aborted, and are skipped.
+    /// Collects the turn's text and signals until the `turn_end` of the
+    /// prompt's turn, `turn_id`. Frames the host sent before the prompt's
+    /// reply (`from`) belong to an earlier turn, such as the tail of one
+    /// that was aborted, and are skipped; so is another turn's end.
     async fn collect(
         &self,
         frames: &mut tokio::sync::mpsc::UnboundedReceiver<TurnFrame>,
         from: u64,
+        turn_id: &str,
     ) -> Turn {
         let label = &self.inner.label;
         let mut texts: Vec<String> = Vec::new();
@@ -1043,6 +1058,9 @@ impl ProjectSession {
                 Some("error") => {
                     error = spoken_error(event.get("message"));
                     tracing::error!(%label, error = %error, "the agent's model call failed");
+                }
+                Some("turn_end") if event["turn_id"].as_str() != Some(turn_id) => {
+                    tracing::info!(%label, ended = event["turn_id"].as_str().unwrap_or_default(), "another turn's end does not end the prompt");
                 }
                 Some("turn_end") => {
                     if let Some(failure) = event.get("error").filter(|value| !value.is_null()) {
