@@ -50,6 +50,7 @@ import {
 import { ClipOutbox, type Clip } from "./outbox";
 import { PushToTalk, type PushToTalkOptions } from "./pushToTalk";
 import { SpokenLines, type HeardLine } from "./spokenLines";
+import { StatusLine, type StatusSource } from "./statusLine";
 
 export const IDLE_TEXT = "Connected. Tap Talk and speak.";
 
@@ -149,6 +150,7 @@ export class CallRuntime {
   private readonly pushToTalk: PushToTalk;
   private readonly outbox = new ClipOutbox();
   private state: RuntimeState = { ...INITIAL_RUNTIME_STATE };
+  private readonly statusLine = new StatusLine(INITIAL_RUNTIME_STATE.status);
   private statePublishQueued = false;
   private line: LineState = OPERATOR_LINE;
   private clipSequence = 0;
@@ -194,7 +196,7 @@ export class CallRuntime {
       createSocket: options.createSocket ?? ((url) => new WebSocket(url)),
       lineUp: () => this.lineUp(),
       lineDown: () => this.lineDown(),
-      status: (text, error) => this.setStatus(text, error),
+      status: (text, error) => this.setStatus("connection", text, error),
       message: (message, socket) => this.receive(message, socket),
       audio: (bytes) => this.playback.receiveAudioChunk(bytes),
     });
@@ -203,7 +205,7 @@ export class CallRuntime {
     this.playback = new AudioPlayback({
       player: options.player,
       idleText: IDLE_TEXT,
-      onStatus: (text, error) => this.setStatus(text, error),
+      onStatus: (text, error) => this.setStatus("playback", text, error),
       onAudioLevel: (level) => {
         this.agentVoiceLevel = level;
         if (!this.agentLevelAvailable) {
@@ -237,7 +239,7 @@ export class CallRuntime {
       enqueue: (clip) => this.enqueueOutbox(clip),
       flush: () => this.flushOutbox(),
       onRecordingChange: (recording) => this.update({ recording }),
-      onStatus: (text, error) => this.setStatus(text, error),
+      onStatus: (text, error) => this.setStatus("microphone", text, error),
       onActive: (active) =>
         active
           ? this.handsFree.pauseForPtt()
@@ -329,7 +331,7 @@ export class CallRuntime {
   retry(): void {
     if (!this.link.started) return;
     this.outbox.markAllUnsent();
-    this.setStatus("Forcing a fresh connection and retrying...", false);
+    this.setStatus("connection", "Forcing a fresh connection and retrying...", false);
     this.link.retry();
   }
 
@@ -340,6 +342,7 @@ export class CallRuntime {
   selectRoute(route: string): void {
     this.handsFree.stop("route");
     this.setStatus(
+      "line",
       route === "operator"
         ? "Going back to the operator..."
         : "Connecting to " + route + "...",
@@ -352,7 +355,7 @@ export class CallRuntime {
   }
 
   selectModel(model: string): void {
-    this.setStatus("Switching to " + model + "...", false);
+    this.setStatus("line", "Switching to " + model + "...", false);
     void this.requestLineChange("model", "/model", {
       model,
       generation: this.identity.epoch,
@@ -360,7 +363,7 @@ export class CallRuntime {
   }
 
   selectThinking(level: string): void {
-    this.setStatus("Setting thinking to " + level + "...", false);
+    this.setStatus("line", "Setting thinking to " + level + "...", false);
     void this.requestLineChange("thinking", "/thinking", {
       level,
       generation: this.identity.epoch,
@@ -376,10 +379,12 @@ export class CallRuntime {
     if (this.hangupPending) return;
     this.handsFree.stop("hangup");
     this.hangupPending = true;
+    // A new attempt takes down the last one's failure.
+    this.withdrawError("line");
     try {
       await this.postJson("/hangup", { generation: this.identity.epoch });
     } catch (err) {
-      this.setStatus("Could not hang up: " + errorText(err), true);
+      this.setStatus("line", "Could not hang up: " + errorText(err), true);
     } finally {
       this.hangupPending = false;
     }
@@ -449,14 +454,19 @@ export class CallRuntime {
   }
 
   /**
-   * Every status says whether it is an error. A status that is not one
-   * clears the flag: the page draws the error while the flag stands, and a
-   * routine status that kept a flag it did not set was drawn as an error in
-   * its place -- the turn after a failure put "Operator is listening..." and
-   * then the idle line on screen (#213).
+   * Every status names its source and says whether it is an error
+   * (`statusLine.ts`). The page draws the newest error still standing; a
+   * status that is not one takes down its own source's error and no other,
+   * so playback's idle line does not withdraw a server error (#354). A
+   * routine status is never drawn as an error: the turn after a failure
+   * once put "Operator is listening..." on screen as one (#213).
    */
-  private setStatus(text: string, error: boolean): void {
-    this.update({ status: text, statusError: error });
+  private setStatus(source: StatusSource, text: string, error: boolean): void {
+    this.update(this.statusLine.say(source, text, error));
+  }
+
+  private withdrawError(source: StatusSource): void {
+    this.update(this.statusLine.withdraw(source));
   }
 
   private applyLine(): void {
@@ -498,14 +508,16 @@ export class CallRuntime {
       handsFreeLease: leaseStates
         ? `Follow-up lease: ${Math.ceil(detail.leaseRemainingMs / 1000)} seconds remaining.`
         : "",
-      // A hands-free failure goes on screen the way a push-to-talk one does.
-      // Nothing on the page draws `handsFreeStatus`, so a detector that
-      // failed, or a microphone hands-free could not get, used to turn MODE
-      // back to push-to-talk with nothing said at all (#213).
-      ...(detail.state === "error"
-        ? { status: detail.message, statusError: true }
-        : {}),
     });
+    // A hands-free failure goes on screen the way a push-to-talk one does.
+    // Nothing on the page draws `handsFreeStatus`, so a detector that
+    // failed, or a microphone hands-free could not get, used to turn MODE
+    // back to push-to-talk with nothing said at all (#213). Turning
+    // hands-free on again takes the microphone's error down, as a new
+    // push-to-talk recording does.
+    if (detail.state === "error")
+      this.setStatus("microphone", detail.message, true);
+    else if (detail.state === "starting") this.withdrawError("microphone");
   }
 
   // --- Line controls ----------------------------------------------------
@@ -524,7 +536,7 @@ export class CallRuntime {
     this.lineRequestsPending += 1;
     this.applyLine();
     const execute = async () => {
-      this.update({ statusError: false });
+      this.withdrawError("line");
       try {
         const response = await this.postJson(url, body);
         if (response.error !== null && response.error !== undefined) {
@@ -532,7 +544,7 @@ export class CallRuntime {
         }
       } catch (err) {
         if (this.lineRequestIds[control] === request) {
-          this.setStatus("That did not go through: " + errorText(err), true);
+          this.setStatus("line", "That did not go through: " + errorText(err), true);
         }
       } finally {
         this.lineRequestsPending -= 1;
@@ -565,6 +577,7 @@ export class CallRuntime {
   private enqueueOutbox(clip: Clip): boolean {
     if (!this.outbox.add(clip)) {
       this.setStatus(
+        "turn",
         "Too many unsent voice clips; reconnect before recording again.",
         true,
       );
@@ -580,12 +593,12 @@ export class CallRuntime {
     if (!this.link.ready || this.outbox.size === 0) return;
     const clip = this.outbox.firstUnsent();
     if (!clip) {
-      this.setStatus(`Transcribing ${this.outbox.size} voice clip(s)...`, false);
+      this.setStatus("turn", `Transcribing ${this.outbox.size} voice clip(s)...`, false);
       return;
     }
     const ws = this.link.socket();
     if (!ws) {
-      this.setStatus(`Waiting to send ${this.outbox.size} clip(s)...`, true);
+      this.setStatus("turn", `Waiting to send ${this.outbox.size} clip(s)...`, true);
       return;
     }
     try {
@@ -602,7 +615,7 @@ export class CallRuntime {
       }
       clip.sent = true;
       clip.transmitted = true;
-      this.setStatus("Waiting for the server to accept your clip...", false);
+      this.setStatus("turn", "Waiting for the server to accept your clip...", false);
     } catch {
       // The socket died between frames. The same id and bytes are retried on
       // the next socket; the backend either never saw them or dedupes.
@@ -633,7 +646,7 @@ export class CallRuntime {
 
   /** A socket opened. */
   private lineUp(): void {
-    this.setStatus(IDLE_TEXT, false);
+    this.setStatus("connection", IDLE_TEXT, false);
     this.update({ connected: true });
     this.outbox.markAllUnsent();
   }
@@ -651,7 +664,7 @@ export class CallRuntime {
       this.pushToTalk.stop(true);
     this.handsFree.stop("disconnected");
     this.outbox.markAllUnsent();
-    this.setStatus("Disconnected. Reconnecting...", true);
+    this.setStatus("connection", "Disconnected. Reconnecting...", true);
     this.update({ connected: false });
   }
 
@@ -714,6 +727,7 @@ export class CallRuntime {
         this.link.snapshot(socket);
         if (resubmitted > 0) {
           this.setStatus(
+            "turn",
             `The line changed while you were talking; ` +
               `sending ${resubmitted} clip(s) along...`,
             false,
@@ -722,6 +736,7 @@ export class CallRuntime {
         this.flushOutbox();
         if (neverSent > 0) {
           this.setStatus(
+            "turn",
             `The line changed before ${neverSent} clip(s) went out. Please repeat that.`,
             true,
           );
@@ -736,14 +751,14 @@ export class CallRuntime {
       }
       case "candidate": {
         const { candidate } = this.followIdentity(message).identity;
-        if (candidate) this.setStatus(`Connecting to ${candidate}…`, false);
+        if (candidate) this.setStatus("line", `Connecting to ${candidate}…`, false);
         break;
       }
       case "candidate_cleared": {
         const { unmark } = this.followIdentity(message);
         if (unmark !== null) this.outbox.unmark(unmark);
-        if (this.state.status.startsWith("Connecting to ")) {
-          this.setStatus(IDLE_TEXT, false);
+        if (this.statusLine.latest.startsWith("Connecting to ")) {
+          this.setStatus("line", IDLE_TEXT, false);
         }
         break;
       }
@@ -765,7 +780,7 @@ export class CallRuntime {
         if (clip) {
           clip.streaming = false;
           clip.sent = false;
-          this.setStatus("Streaming unavailable; sending complete clip...", false);
+          this.setStatus("turn", "Streaming unavailable; sending complete clip...", false);
           this.flushOutbox();
         }
         break;
@@ -773,7 +788,7 @@ export class CallRuntime {
       case "accepted": {
         const clip = this.outbox.find(message.id);
         if (clip) {
-          this.setStatus("Transcribing...", false);
+          this.setStatus("turn", "Transcribing...", false);
           this.flushOutbox();
         }
         break;
@@ -796,6 +811,7 @@ export class CallRuntime {
         break;
       case "thinking":
         this.setStatus(
+          "turn",
           message.route === "operator"
             ? "Operator is listening..."
             : `${this.line.label || "working"} is working...`,
@@ -805,11 +821,12 @@ export class CallRuntime {
       case "queued": {
         const waiting = message.waiting;
         if (message.steered) {
-          this.setStatus("Added that to the turn already in progress.", false);
+          this.setStatus("turn", "Added that to the turn already in progress.", false);
         } else if (waiting > 1) {
-          this.setStatus(`Got it — ${waiting} waiting their turn.`, false);
+          this.setStatus("turn", `Got it — ${waiting} waiting their turn.`, false);
         } else {
           this.setStatus(
+            "turn",
             "Got it — you're next, once this turn finishes.",
             false,
           );
@@ -817,7 +834,7 @@ export class CallRuntime {
         break;
       }
       case "reply":
-        this.setStatus(IDLE_TEXT, false);
+        this.setStatus("turn", IDLE_TEXT, false);
         this.followIdentity(message);
         break;
       case "status":
@@ -834,13 +851,13 @@ export class CallRuntime {
           this.outbox.remove(message.id);
           this.handsFree.clipFailed(message.id);
         }
-        this.setStatus("Error: " + message.message, true);
+        this.setStatus("turn", "Error: " + message.message, true);
         break;
       case "routing_unavailable":
         // This is deliberately a page error. The backend emits no reply
         // audio when both routing authorities are unavailable.
         this.handsFree.endAwaitedTurn();
-        this.setStatus(message.message, true);
+        this.setStatus("turn", message.message, true);
         break;
     }
   }

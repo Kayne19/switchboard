@@ -149,9 +149,9 @@ describe('only an error reaches the screen, and only while it stands', () => {
         data: { title: 'WHAT IS NEW', columns: [{ label: 'CHANGE' }], rows: [['one']] },
       });
     });
-    await tapDamocles();
-    expect(latest.runtimeSpeech?.text, 'the failure is said').toMatch(/https/);
-    expect(cards(), 'as an error of the line, not an explanation').toEqual([expect.stringMatching(/^LINE \/ ERROR.*https/)]);
+    await receive({ type: 'error', message: 'The model refused.' });
+    expect(latest.runtimeSpeech?.text, 'the failure is said').toMatch(/The model refused/);
+    expect(cards(), 'as an error of the line, not an explanation').toEqual([expect.stringMatching(/^LINE \/ ERROR.*The model refused/)]);
 
     await receive({ type: 'thinking', route: 'operator', waiting: 0 });
     expect(latest.runtimeSpeech, 'a turn under way is not an error: the error is cleared').toBe(null);
@@ -165,6 +165,27 @@ describe('only an error reaches the screen, and only while it stands', () => {
       });
     }
     expect(cards()).toEqual([]);
+    expect(host.textContent).not.toContain(IDLE_TEXT);
+    expect(host.textContent).not.toMatch(/is listening|is working/);
+  });
+
+  // Each source takes down only its own error (#354). A turn's status is the
+  // turn's: it leaves a capture failure up, still as the error, and the
+  // turn's own words are never drawn.
+  it('keeps a capture failure up through the turn after it', async () => {
+    await act(async () => {
+      dispatch({
+        op: 'show', id: 'news', type: 'table', role: 'primary',
+        data: { title: 'WHAT IS NEW', columns: [{ label: 'CHANGE' }], rows: [['one']] },
+      });
+    });
+    await tapDamocles();
+    expect(latest.runtimeSpeech?.text, 'the failure is said').toMatch(/https/);
+
+    await receive({ type: 'thinking', route: 'operator', waiting: 0 });
+    await receive({ type: 'reply', text: 'Here is what is new.', route: 'operator', voiced: false });
+    expect(latest.runtimeSpeech?.text, 'the microphone has not said it is over').toMatch(/https/);
+    expect(cards()).toEqual([expect.stringMatching(/^LINE \/ ERROR.*https/)]);
     expect(host.textContent).not.toContain(IDLE_TEXT);
     expect(host.textContent).not.toMatch(/is listening|is working/);
   });

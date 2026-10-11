@@ -1,8 +1,10 @@
 // What playback says on the status line.
 //
 // Every status playback reports goes through here, and each says whether it
-// is an error (`CallRuntime.setStatus`). A pause or a blocked `play()` is an
-// error the caller has to act on; the clip sounding again takes it down.
+// is an error. The runtime keys them to playback (`statusLine.ts`), so what
+// playback says takes down playback's own error and no other (#354). A pause
+// or a blocked `play()` is an error the caller has to act on; the clip
+// sounding again takes it down.
 
 import { errorName, mediaErrorName } from "./errors";
 
@@ -10,12 +12,12 @@ export class PlaybackStatus {
   private readonly idleText: string;
   private readonly onStatus: (text: string, error: boolean) => void;
   /**
-   * Set while a pause or a blocked `play()` is on screen as an error the
-   * caller has to act on. The clip sounding again takes it down (`resumed`):
-   * nothing else would until the next turn's status, and a stream that
-   * recovered left the red card over the conversation (#260). It belongs to
-   * the status line, not to a clip: a blocked replay goes back to the queue,
-   * and the clip a tap then starts is a new one.
+   * Set while playback's standing error is a pause or a blocked `play()`,
+   * which the caller has to act on. The clip sounding again takes it down
+   * (`resumed`): nothing else would until the queue empties, and a stream
+   * that recovered left the red card over the conversation (#260). It
+   * belongs to playback's error, not to a clip: a blocked replay goes back to
+   * the queue, and the clip a tap then starts is a new one.
    */
   private awaitingTap = false;
 
@@ -105,7 +107,7 @@ export class PlaybackStatus {
   }
 
   private say(text: string, error: boolean): void {
-    // Whatever is said now replaces the pause or block on screen.
+    // Whatever playback says now replaces its own pause or block.
     this.awaitingTap = false;
     this.onStatus(text, error);
   }
