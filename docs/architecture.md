@@ -141,8 +141,9 @@ transfer, a background promotion, a takeover, a redial) holds one `Startup`
 (`leg_transitions.rs`) from the candidate it stages until it commits the leg
 or abandons it, so each takes the same steps in the same order. A
 rescue's quiet ends in `settle`, which takes the token the rescue returned
-(every page control on its way out), or `settle_at` for a reply delivered
-at that generation; a status publication settles nothing. A model or thinking redial is decided before
+(every page control that rescued, on its way out), or `settle_at` for a reply
+delivered at that generation; a redial's decision, which rescued nothing,
+and a status publication settle nothing. A model or thinking redial is decided before
 anything is torn down: `RedialPlanner` (`redial.rs`) makes every refusal from the
 coordinator's leg and prewarm's launch plan, without the PBX lock, so a refused
 page swap never rescues the live leg; `Switchboard::redial` runs a plan only
@@ -590,11 +591,11 @@ step after the rescue gets, so none can read the current one again
 | step | holds | on failure |
 |---|---|---|
 | `PageControl::admit` | `Admitted`: the generation the page held, which is the call's | 400 with none, 409 for one the call has left: "refused" (a picker), "ignored" (a hangup) |
-| `Admitted::decide` (a redial only) | the decision, registered at the admitted generation; running work is left alone | as `run`, at the admitted generation; an answer that needs no redial (a refusal, a setting on the operator) is delivered there and nothing is rescued |
+| `Admitted::decide` (a redial only) | the decision, registered at the admitted generation; running work is left alone | as `run`, at the admitted generation, but a failure settles nothing; an answer that needs no redial (a refusal, a setting on the operator) is delivered there, nothing is rescued, and nothing is settled: a quiet on the line is another control's to end (#461) |
 | `Admitted::rescue` (`begin_rescue_at`), `rescue_for` (`begin_rescue_of`, a redial) | `Rescued`: the token, after the leg's work is released | nothing rescued: 409 ("cancelled", "ignored", "superseded") |
 | `Rescued::run` (the dial, the redial) | the operation, registered at the token's generation | 409 "cancelled" if a newer rescue retired it (that one settles); 500 and a settle if it failed |
 | `Rescued::lock_pbx` (the hangup) | the PBX, checked under its lock against the token | 409 "superseded": a newer control owns the call |
-| `deliver` | the reply, delivered at its generation; the delivery settles | 409 "superseded" |
+| `deliver` | the reply, delivered at its generation; after a rescue the delivery settles (`speech::Quiet::End`), after a decision it does not (`Quiet::Keep`) | 409 "superseded" |
 | `Rescued::settle` | consumes the token: ends the quiet only while the call is at its generation | none: a newer rescue's quiet is that rescue's to end |
 
 `every_page_control_exit_leaves_the_line_as_the_table_says` in

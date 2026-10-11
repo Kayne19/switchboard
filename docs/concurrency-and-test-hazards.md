@@ -306,7 +306,10 @@ the newer control dials (409 "superseded").
 
 The quiet a rescue begins ends only where that rescue is named. A control
 settles with its token (`Coordinator::settle`), and a reply delivery at the
-generation it delivered at (`settle_at`); the settle is one call-line event
+generation it delivered at (`settle_at`). A redial's decision rescued
+nothing, so neither its answer nor its failure settles (`speech::Quiet::Keep`):
+a `/model` pressed while a `/connect` dials holds the connect's generation,
+and settling there would admit turns mid-dial (#461). The settle is one call-line event
 (`Event::Settle { generation }`) that brings a `Quiescing` call to rest only
 at that generation. A newer rescue that lands after a control's PBX step, or
 between a delivery's generation check and its settle (a rescue does not take
