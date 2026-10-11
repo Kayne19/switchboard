@@ -423,6 +423,8 @@ const machines = [
 	// session-guard (#359): the active-session guard is derived, not a machine. `name_leg_on_line`
 	// is its one writer and the one place the PBX locks it; a rescue's `take` is the only other change.
 	{ file: "apps/backend/src/pbx.rs", writer: /\*guard\s*=(?!=)/, max: 1, once: [/\.active_session\.lock\(\)/] },
+	// modal-focus (#396): `transition` writes a dialog's focus phase; `leave` cancels the give-back's frame.
+	{ file: "apps/frontend/src/hooks/useModalFocus.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/cancelAnimationFrame\(/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
@@ -452,6 +454,7 @@ const owners = [
 	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 2 },
 	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 0 },
 	{ file: "apps/frontend/src/app/screenReporter.ts", owner: "ScreenReporter", fields: 0 },
+	{ file: "apps/frontend/src/hooks/useModalFocus.ts", owner: "ModalFocus", fields: 0 },
 	{ file: "apps/backend/src/lifecycle.rs", owner: "CallLifecycle", fields: 1 },
 	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 6 },
 	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 7 },
