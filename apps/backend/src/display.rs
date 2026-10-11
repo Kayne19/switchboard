@@ -593,7 +593,9 @@ impl DisplayGateState {
 /// The most rejections `ConfirmState` keeps per generation. A display call
 /// waits at most `DISPLAY_CONFIRM_DEADLINE_MS`, so only the newest few can
 /// still have a waiter; the bound keeps a page that rejects everything from
-/// growing the map.
+/// growing the map. The page keeps no more waiting to be sent
+/// (`apps/frontend/src/app/screenReporter.ts`; `scripts/check_hygiene.mjs`
+/// keeps the two equal).
 const MAX_KEPT_REJECTIONS: usize = 16;
 
 #[derive(Clone, Default)]

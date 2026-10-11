@@ -768,13 +768,18 @@ represents the projection at that point in the stream.
 
 **The browser's report.** The existing `screen_state` message (sent whenever
 the page applies or declines a frame) carries two more fields:
-- `applied_seq`: the highest `seq` the page has actually rendered so far
-  (monotonic; it never regresses).
+- `applied_seq`: the highest `seq` the page has actually rendered so far,
+  held below the next rejection still waiting on the page (below), so it
+  never passes a rejection the service has not heard.
 - `rejected` (optional): `{ seq, reason }` for a frame the page could not
-  apply. It stays queued — not dropped — until the report that carries it is
-  the one actually transmitted, so an intervening, rejection-less report
-  can't silently swallow it. The page holds one: a second declined before a
-  report goes replaces the first (#378).
+  apply. The page keeps every one it has not sent, lowest `seq` first and at most
+  as many as the service keeps (`MAX_KEPT_REJECTIONS`, 16), and a report
+  carries the lowest; it leaves the list only when the report that
+  carries it is the one actually transmitted, so an intervening,
+  rejection-less report can't silently swallow it. While one is left, the
+  page reports again when the line is free, one rejection per report
+  (#378). Each waits for the ack of the report before it, so several declined
+  together reach the service one round trip apart.
 
 The page sends with stop-and-wait (`ScreenReporter`,
 `apps/frontend/src/app/screenReporter.ts`; its phase table is in
