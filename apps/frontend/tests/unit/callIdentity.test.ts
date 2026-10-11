@@ -350,6 +350,13 @@ const CONNECTING_ALPHA = "Connecting to alpha\u2026";
 const CONNECTING_BETA = "Connecting to beta\u2026";
 const WAITING_FOR_ACCEPT = "Waiting for the server to accept your clip...";
 const NEVER_SENT = "The line changed before 1 clip(s) went out. Please repeat that.";
+/**
+ * Away, the held take's "Waiting to send" stands: it is the turn's error, and
+ * only the turn's own next word takes it down (#354): the clip going out on
+ * the snapshot `epoch`, or a `reply`. The socket opening and a transfer's
+ * "Connecting to ..." are other sources' words, and leave it.
+ */
+const AWAY: Partial<Seen> = { status: "Waiting to send 1 clip(s)...", error: true };
 /** A live epoch 4 that the page was expecting: playback is handed off. */
 const HANDS_OFF_4: Seen["thenEpoch4"] = { clips: [], playback: ["hand off 4"] };
 
@@ -436,14 +443,14 @@ const rows: Row[] = [
   { from: "away, clip at 3", event: "epoch 3", seen: seen({ status: WAITING_FOR_ACCEPT, clips: [3], playback: ["reset 3"], callChanged: true }) },
   { from: "away, clip at 3", event: "epoch 4", seen: seen({ status: NEVER_SENT, error: true, playback: ["reset 4"], callChanged: true, stamp: stamp(4), thenEpoch4: HANDS_OFF_4 }) },
   { from: "away, clip at 3", event: "epoch 5", seen: seen({ status: NEVER_SENT, error: true, playback: ["reset 5"], callChanged: true, stamp: stamp(5) }) },
-  { from: "away, clip at 3", event: "candidate alpha", seen: seen({ status: CONNECTING_ALPHA, stamp: stamp(3, "alpha") }) },
-  { from: "away, clip at 3", event: "candidate beta", seen: seen({ status: CONNECTING_BETA, stamp: stamp(3, "beta") }) },
-  { from: "away, clip at 3", event: "candidate operator", seen: seen({}) },
-  { from: "away, clip at 3", event: "alpha adopted at 4", seen: seen({}) },
-  { from: "away, clip at 3", event: "alpha rolled back", seen: seen({}) },
-  { from: "away, clip at 3", event: "alpha rescued at 4", seen: seen({}) },
+  { from: "away, clip at 3", event: "candidate alpha", seen: seen({ ...AWAY, stamp: stamp(3, "alpha") }) },
+  { from: "away, clip at 3", event: "candidate beta", seen: seen({ ...AWAY, stamp: stamp(3, "beta") }) },
+  { from: "away, clip at 3", event: "candidate operator", seen: seen(AWAY) },
+  { from: "away, clip at 3", event: "alpha adopted at 4", seen: seen(AWAY) },
+  { from: "away, clip at 3", event: "alpha rolled back", seen: seen(AWAY) },
+  { from: "away, clip at 3", event: "alpha rescued at 4", seen: seen(AWAY) },
   { from: "away, clip at 3", event: "reply", seen: seen({}) },
-  { from: "away, clip at 3", event: "status", seen: seen({}) },
+  { from: "away, clip at 3", event: "status", seen: seen(AWAY) },
 
   // away, clip for alpha: the held take is marked for alpha. It is carried to
   // 4 only by alpha's adoption at 4 and its epoch; a rollback or a rescue
@@ -451,14 +458,14 @@ const rows: Row[] = [
   { from: "away, clip for alpha", event: "epoch 3", seen: seen({ status: WAITING_FOR_ACCEPT, clips: [3], playback: ["reset 3"], callChanged: true }) },
   { from: "away, clip for alpha", event: "epoch 4", seen: seen({ status: NEVER_SENT, error: true, playback: ["reset 4"], callChanged: true, stamp: stamp(4), thenEpoch4: HANDS_OFF_4 }) },
   { from: "away, clip for alpha", event: "epoch 5", seen: seen({ status: NEVER_SENT, error: true, playback: ["reset 5"], callChanged: true, stamp: stamp(5) }) },
-  { from: "away, clip for alpha", event: "candidate alpha", seen: seen({ status: CONNECTING_ALPHA, stamp: stamp(3, "alpha"), thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha", event: "candidate beta", seen: seen({ status: CONNECTING_BETA, stamp: stamp(3, "beta"), thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha", event: "candidate operator", seen: seen({ thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha", event: "alpha adopted at 4", seen: seen({ thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha", event: "alpha rolled back", seen: seen({}) },
-  { from: "away, clip for alpha", event: "alpha rescued at 4", seen: seen({}) },
+  { from: "away, clip for alpha", event: "candidate alpha", seen: seen({ ...AWAY, stamp: stamp(3, "alpha"), thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha", event: "candidate beta", seen: seen({ ...AWAY, stamp: stamp(3, "beta"), thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha", event: "candidate operator", seen: seen({ ...AWAY, thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha", event: "alpha adopted at 4", seen: seen({ ...AWAY, thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha", event: "alpha rolled back", seen: seen(AWAY) },
+  { from: "away, clip for alpha", event: "alpha rescued at 4", seen: seen(AWAY) },
   { from: "away, clip for alpha", event: "reply", seen: seen({ thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha", event: "status", seen: seen({ thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha", event: "status", seen: seen({ ...AWAY, thenAlphaAdopted: [4] }) },
 
   // away, clip for alpha, alpha adopted at 4: the snapshot's notice came
   // ahead of its epoch. Epoch 4 carries the held take; any other epoch
@@ -466,14 +473,14 @@ const rows: Row[] = [
   { from: "away, clip for alpha, alpha adopted at 4", event: "epoch 3", seen: seen({ status: WAITING_FOR_ACCEPT, clips: [3], playback: ["reset 3"], callChanged: true }) },
   { from: "away, clip for alpha, alpha adopted at 4", event: "epoch 4", seen: seen({ status: WAITING_FOR_ACCEPT, clips: [4], playback: ["reset 4"], callChanged: true, stamp: stamp(4), thenEpoch4: HANDS_OFF_4 }) },
   { from: "away, clip for alpha, alpha adopted at 4", event: "epoch 5", seen: seen({ status: NEVER_SENT, error: true, playback: ["reset 5"], callChanged: true, stamp: stamp(5) }) },
-  { from: "away, clip for alpha, alpha adopted at 4", event: "candidate alpha", seen: seen({ status: CONNECTING_ALPHA, stamp: stamp(3, "alpha"), thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha, alpha adopted at 4", event: "candidate beta", seen: seen({ status: CONNECTING_BETA, stamp: stamp(3, "beta"), thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha, alpha adopted at 4", event: "candidate operator", seen: seen({ thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha, alpha adopted at 4", event: "alpha adopted at 4", seen: seen({ thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha, alpha adopted at 4", event: "alpha rolled back", seen: seen({}) },
-  { from: "away, clip for alpha, alpha adopted at 4", event: "alpha rescued at 4", seen: seen({}) },
+  { from: "away, clip for alpha, alpha adopted at 4", event: "candidate alpha", seen: seen({ ...AWAY, stamp: stamp(3, "alpha"), thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha, alpha adopted at 4", event: "candidate beta", seen: seen({ ...AWAY, stamp: stamp(3, "beta"), thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha, alpha adopted at 4", event: "candidate operator", seen: seen({ ...AWAY, thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha, alpha adopted at 4", event: "alpha adopted at 4", seen: seen({ ...AWAY, thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha, alpha adopted at 4", event: "alpha rolled back", seen: seen(AWAY) },
+  { from: "away, clip for alpha, alpha adopted at 4", event: "alpha rescued at 4", seen: seen(AWAY) },
   { from: "away, clip for alpha, alpha adopted at 4", event: "reply", seen: seen({ thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha, alpha adopted at 4", event: "status", seen: seen({ thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha, alpha adopted at 4", event: "status", seen: seen({ ...AWAY, thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
 ];
 
 beforeEach(() => {
