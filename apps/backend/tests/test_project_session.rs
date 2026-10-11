@@ -1411,8 +1411,8 @@ Idle               | PromptStarts            | -                                
 Caller             | StartsSelfWoken         | start autonomous auto-3                                       | busy | -          | running «»                            | -
 Caller             | StartsSelfWokenAdmitted | start autonomous auto-3                                       | busy | autonomous | running «»                            | -
 Caller             | StartsInput             | start input t-2                                               | busy | -          | running «»                            | -
-Caller             | RunText                 | -                                                             | busy | -          | running «more run words»              | -
-Caller             | SecondText              | -                                                             | busy | -          | running «more second words»           | -
+Caller             | RunText                 | -                                                             | busy | -          | running «»                            | -
+Caller             | SecondText              | -                                                             | busy | -          | running «»                            | -
 Caller             | CallerText              | -                                                             | busy | -          | running «caller words»                | -
 Caller             | RunEnds                 | end input auto-1                                              | busy | -          | running «»                            | -
 Caller             | SecondEnds              | end input auto-2                                              | busy | -          | running «»                            | -
@@ -1459,8 +1459,8 @@ CallerAndSelfWoken | PromptCancelled         | -                                
 CallerSettled      | StartsSelfWoken         | start autonomous auto-3                                       | -    | -          | running «»                            | -
 CallerSettled      | StartsSelfWokenAdmitted | start autonomous auto-3                                       | busy | autonomous | running «»                            | -
 CallerSettled      | StartsInput             | start input t-2                                               | -    | -          | running «»                            | -
-CallerSettled      | RunText                 | -                                                             | -    | -          | running «more run words»              | -
-CallerSettled      | SecondText              | -                                                             | -    | -          | running «more second words»           | -
+CallerSettled      | RunText                 | -                                                             | -    | -          | running «»                            | -
+CallerSettled      | SecondText              | -                                                             | -    | -          | running «»                            | -
 CallerSettled      | CallerText              | -                                                             | -    | -          | running «caller words»                | -
 CallerSettled      | RunEnds                 | end input auto-1                                              | -    | -          | running «»                            | -
 CallerSettled      | SecondEnds              | end input auto-2                                              | -    | -          | running «»                            | -
@@ -1491,7 +1491,7 @@ Replaced           | PromptStarts            | -                                
 CallerInRun        | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
 CallerInRun        | StartsSelfWokenAdmitted | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
 CallerInRun        | StartsInput             | start input t-2                                               | busy | autonomous | running «»                            | -
-CallerInRun        | RunText                 | -                                                             | busy | autonomous | running «»                            | -
+CallerInRun        | RunText                 | -                                                             | busy | autonomous | running «more run words»              | -
 CallerInRun        | SecondText              | -                                                             | busy | autonomous | running «»                            | -
 CallerInRun        | CallerText              | -                                                             | busy | autonomous | running «»                            | -
 CallerInRun        | RunEnds                 | end autonomous auto-1 «run words»                             | -    | -          | returned «»                           | auto-1: run words
@@ -1502,6 +1502,21 @@ CallerInRun        | SnapshotOpen            | end autonomous auto-1 «run words
 CallerInRun        | SessionCloses           | end autonomous auto-1                                         | -    | gone       | failed «the project session ended» «» | auto-1: run words
 CallerInRun        | PromptCancelled         | -                                                             | busy | autonomous | -                                     | -
 ";
+
+/// A caller's prompt sent into a held run as a `follow_up` answers with the
+/// run's words after its reply, and returns on the run's end (#512): the
+/// run has no operation, so its words reach no transcript, and the caller
+/// hears them only as the prompt's answer.
+#[tokio::test]
+async fn a_prompt_sent_into_a_held_run_returns_with_the_runs_words() {
+    let mut rig = TurnRig::new().await;
+    rig.reach(TurnAt::CallerInRun).await;
+    rig.apply(TurnHappens::RunText).await;
+    rig.apply(TurnHappens::RunEnds).await;
+    let seen = rig.seen().await;
+    assert_eq!(seen[3], "returned «more run words»", "{seen:?}");
+    rig.session.close();
+}
 
 #[tokio::test]
 async fn a_project_session_turn_moves_by_its_table() {
