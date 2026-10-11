@@ -447,7 +447,7 @@ removes the real coupling; do not create interfaces for ceremony.
 |---|---|---|
 | `apps/backend/src/main.rs` | composition root; `Config`, the only reader of the environment | turn policy |
 | `api.rs` | the primary router, `/healthz`, the debug listener's router, and the origin check both listeners apply | anything a handler does |
-| `app_state.rs` | `AppState`/`AppInner` and their construction (the callbacks installed into the PBX and coordinator), the workers, shutdown, the event fan-out, the operation registry, the resident-agent projection | provider wire formats, PBX policy |
+| `app_state.rs` | `AppState`/`AppInner` and their construction (the callbacks installed into the PBX and coordinator), the workers, shutdown, the event fan-out, the operation registry, the resident-agent projection (`AgentProjection`: one `AgentPhase` per agent, written only by `apply`) | provider wire formats, PBX policy |
 | `browser.rs` | the `/ws` connection and its size bound: registration, snapshot, the frame multiplexer, which screen reports count, frame writes | what a command does once parsed, the screen report's shape (`display.rs`) |
 | `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, the rescue each control starts with, and the control's one flow from admission to settle (`PageControl`) | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
 | `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection, who is waiting to speak (`floor.rs`'s) |
@@ -460,11 +460,11 @@ removes the real coupling; do not create interfaces for ceremony.
 | `floor_hooks.rs` | the application side of `floor.rs`'s hooks: whether the page is connected, whether a request is still live (`still_live`, the one check), the Jev good-moment gate, the utility rewrite under its timeout, the release through the speech worker, and mirroring who is waiting into the agent projection (`waiting_hook`) | the floor's queue, order and phases (`floor.rs`'s), the speech worker (`speech.rs`'s) |
 | `lifecycle.rs` | the coordinator: the call line's one writer (`CallLifecycle::step`) and its lock, the candidate notices, the status projection; call identity, the current route and the leg on it, candidate legs, operations, the status | async work or I/O, the phases and their transitions (`call_line.rs`'s) |
 | `call_line.rs` | the call line (`Line`, its phase data and its one transition function, `Line::next`; see "Call line"): pure, it reads the line and returns the next one | the lock, writing the line, sending notices, async work or I/O |
-| `pbx.rs` | the `Switchboard`: its state, construction, callbacks, shared session guard and shutdown; the call types the other files share (`OPERATOR`, `TransferContext`, `AgentStateNotice`) | host setup, browser rendering, TTS encoding, a copy of the route |
+| `pbx.rs` | the `Switchboard`: its state, construction, callbacks, shared session guard and shutdown; the call types the other files share (`OPERATOR`, `TransferContext`, `AgentStateNotice` and its `AgentNotice`) | host setup, browser rendering, TTS encoding, a copy of the route |
 | `decisions.rs` | what a Jev decision does with a caller's line: continue, go to a project, split, take over, stop on confirmation, the utility's second opinion, the operator fallback; the routing trace | Jev's classification (`router.rs`), a second commit path |
 | `leg_transitions.rs` | transfer, background promotion, takeover, return, hangup and stop; the one bring-up owner (`Startup`: `commit` and `abandon`) | which leg is on the line (the coordinator's), redial decisions |
 | `redial.rs` | model and thinking changes: `RedialPlanner`'s decision without the PBX lock, and `Switchboard::redial` | a second commit path |
-| `residents.rs` | background residents: `BackgroundRegistry`, shelving, split-part starts, detached prompts, eviction on host loss | which leg is on the line, promotion (`leg_transitions.rs`) |
+| `residents.rs` | background residents (see "Background residents"): `BackgroundRegistry`, one `Resident` per project, entered only by `admit` and left only by `retire` for a `Leaving` reason, the one writer of the coordinator's background tokens; shelving, split-part starts, detached prompts, eviction on host loss | which leg is on the line, the promotion's bring-up (`leg_transitions.rs`) |
 | `operator.rs` | the operator's Pi process and the routing utility process: startup, recovery, utility requests, floor rewrites | routing policy |
 | `routing_view.rs` | `RoutingView`, what routing reads without the PBX lock, and the desk-session listing | any change to the call |
 | `prompts.rs` | the call's prompt text: the voice block, the voice brief, the foreground and background notices, the utility's rules, the intro prompt | when or to whom a prompt is sent |
@@ -647,6 +647,55 @@ them. A final result may be claimed only once. A failed or abandoned
 stream must either complete through the complete-clip contract or report a bounded,
 visible failure; it must not silently create a duplicate turn.
 
+## Background residents
+
+A project agent the caller moves away from, or starts as a split part,
+stays up in the background as a resident (`residents.rs`).
+`BackgroundRegistry` holds one `Resident` per project: its session and the
+background prompt running for it, which carries its number. The prompt's
+task publishes `idle` only while it is still its resident's prompt, so a
+late completion cannot make a replaced, promoted or stopped resident look
+idle. `admit` is the one way in: it registers the call token with the
+coordinator and enters the resident under the registry's lock, and refuses
+a handle that has already closed. `retire(project, Leaving)` is the one way
+out: it takes the resident and retires its token under the same lock, then
+does what the reason says leaving does. The coordinator's background tokens
+are written by `admit` and `retire` only.
+
+| `Leaving` | from | its prompt | its session | publishes |
+|---|---|---|---|---|
+| `Stopped` | `stop_project` | cancelled and joined | ended | `finished` |
+| `Dead` | work given to a project whose resident's handle has closed (`retire_dead_resident`) | cancelled and joined | left; it is dead | `finished` |
+| `Promoted` | a transfer to the project (`transfer_ctx`) | cancelled and joined | handed to the bring-up (`promote_background`) | nothing; the bring-up does |
+| `ClosedOnHost` | the host reports the session closed (`session_closed_callback`), and a prompt the host refused | left to end: the report can come from inside it | left; it is dead | `finished` |
+| `Shutdown` | `Switchboard::shutdown` | cancelled and joined | ended | nothing |
+
+`ClosedOnHost` retires only the exact session it names (persistent id and
+live-handle instance), so a report about an older handle cannot evict its
+replacement. A new way for a resident to leave is a `Leaving` variant and
+its row in `Leaving::exit`, never another removal.
+`a_resident_leaves_by_the_exits_of_its_table` in
+`apps/backend/tests/test_residents.rs` pins each exit from a busy and an
+idle resident.
+
+The page's view of each agent is the agent projection (`AgentProjection`,
+`app_state.rs`): one `AgentPhase` per project, moved only by
+`AgentPhase::on` through `AgentProjection::apply`. Its events are the PBX's
+and turn settlement's notices (`AgentNotice`: busy, idle, finished) and the
+floor's `Waiting` reports (asked, spoken).
+
+| phase | busy | idle | finished | asked | spoken |
+|---|---|---|---|---|---|
+| not listed | busy | idle | finished | waiting | stays |
+| busy, idle | busy | idle | finished | waiting | stays |
+| waiting (with the request) | busy (the request is dropped) | stays | finished | waiting, the newer request | idle |
+| finished | busy | idle | finished | waiting | stays |
+
+Entering `finished` drops the agent's held displays. Every event sends the
+whole projection to the page and the debug bus (`publish_agents`), moved or
+not. `the_agent_projection_moves_by_its_table` in
+`apps/backend/tests/test_app_state.rs` pins every cell.
+
 ## Background updates: the floor
 
 A background agent's `request_to_speak` waits on the floor (`floor.rs`)
@@ -655,8 +704,8 @@ it marks an agent waiting when it queues the agent's request, and ends the
 mark when the agent's last request on the floor is spoken. It reports both
 through its `Waiting` hook, under its lock, and `floor_hooks::waiting_hook`
 mirrors them into the agent projection the page and Jev read. The PBX's
-state notices are the projection's other writer: any notice but `idle`
-replaces an agent's waiting mark.
+state notices are the projection's other events: any notice but `idle`
+replaces an agent's waiting mark (see "Background residents").
 
 The queue holds the front request and, behind it, at most one waiting
 request per agent; a newer one replaces the agent's waiting one. One worker

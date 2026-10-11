@@ -430,6 +430,12 @@ const machines = [
 	{ file: "apps/backend/src/page_controls.rs", writer: /\bcoordinator\.generation\(\)/, max: 2, once: [/\.begin_rescue_at\(/, /\.begin_rescue_of\(/, /\bcoordinator\.settle\(/, /\.settle_at\(/] },
 	// modal-focus (#396): `transition` writes a dialog's focus phase; `leave` cancels the give-back's frame.
 	{ file: "apps/frontend/src/hooks/useModalFocus.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/cancelAnimationFrame\(/] },
+	// residents (#239, #388): one `Resident` per project, not a machine. `admit` is the one way in
+	// (the token and the entry), `take_out` the one removal (the entry and the token), which
+	// `retire` and a refused admission call; `retire` is the one exit, its `Leaving` the reason.
+	{ file: "apps/backend/src/residents.rs", writer: /\bresidents\.remove\(/, max: 1, once: [/\bresidents\.insert\(/, /\.register_background\(/, /\.remove_background\(/] },
+	// residents: `AgentProjection::apply` is the one writer of an agent's phase, which `AgentPhase::on` moves.
+	{ file: "apps/backend/src/app_state.rs", writer: /\bphases\.insert\(/, max: 1, once: [/\bAgentPhase::on\(/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
@@ -468,6 +474,8 @@ const owners = [
 	{ file: "apps/backend/src/turns.rs", owner: "TurnState", fields: 3 },
 	{ file: "apps/backend/src/host_turns.rs", owner: "HostTurns", fields: 1 },
 	{ file: "apps/host-agent/src/sessions.ts", owner: "Tracked", fields: 5 },
+	{ file: "apps/backend/src/residents.rs", owner: "Resident", fields: 1 },
+	{ file: "apps/backend/src/residents.rs", owner: "BackgroundRegistry", fields: 1 },
 ];
 function ownerFindings(file, text, row) {
 	const body = members(text, row.owner);
