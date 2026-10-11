@@ -316,33 +316,45 @@ impl Switchboard {
                 .await;
             return;
         }
-        if let Err(error) = previous.set_mode("background").await {
+        self.move_to_background(previous).await;
+    }
+
+    /// Makes `session` its project's resident: a foreground leaving the
+    /// line (`shelve_previous_foreground`), or a resident a failed promotion
+    /// did not get onto it (`LegChange::Promotion`, `Startup::abandon`).
+    /// The host is told to apply background rules, a busy agent is told
+    /// them too, and the agent is published busy or idle. One its host will
+    /// not move, or whose handle has closed (a failed host command leaves it
+    /// unusable), is ended and published finished.
+    pub(crate) async fn move_to_background(&self, session: ProjectSession) {
+        let project = session.label().to_owned();
+        if let Err(error) = session.set_mode("background").await {
             // The host still treats it as foreground, so its speech and
             // displays would not follow background rules. Do not keep a
             // resident whose host and service disagree about its mode.
-            tracing::warn!(project = %previous_label, %error, "could not move the previous agent to the background; closing it");
-            previous.close();
-            self.announce_agent_state(&previous_label, AgentNotice::Finished)
+            tracing::warn!(%project, %error, "could not move the agent to the background; closing it");
+            session.close();
+            self.announce_agent_state(&project, AgentNotice::Finished)
                 .await;
             return;
         }
-        if previous.busy() {
-            let _ = previous.steer(BACKGROUND_NOTICE, None).await;
+        if session.busy() {
+            let _ = session.steer(BACKGROUND_NOTICE, None).await;
         }
-        let state = if previous.busy() {
+        let state = if session.busy() {
             AgentNotice::Busy
         } else {
             AgentNotice::Idle
         };
         let admitted = self
             .background_agents
-            .admit(previous_label.clone(), previous, || {});
+            .admit(project.clone(), session, || {});
         let state = if admitted {
             state
         } else {
             AgentNotice::Finished
         };
-        self.announce_agent_state(&previous_label, state).await;
+        self.announce_agent_state(&project, state).await;
     }
 
     /// Prompts a background agent without waiting for its turn. `source` is

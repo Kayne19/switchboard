@@ -246,7 +246,7 @@ impl Switchboard {
                     "",
                     self.coordinator.thinking_default(),
                 );
-                self.begin_startup(candidate, LegChange::NewAgent)
+                self.begin_startup(candidate, LegChange::Promotion)
                     .map_err(|error| error.to_string())
             }
             Err(error) => Err(error.to_string()),
@@ -254,9 +254,7 @@ impl Switchboard {
         let mut startup = match begun {
             Ok(startup) => startup,
             Err(error) => {
-                session.close();
-                self.announce_agent_state(&project.id, AgentNotice::Finished)
-                    .await;
+                self.move_to_background(session).await;
                 return self.couldnt_bring_back(&project.id, error);
             }
         };
@@ -728,14 +726,22 @@ impl Switchboard {
     }
 }
 
-/// What a committed leg does to the foreground it takes the line from
-/// (`Startup::commit`).
+/// What a bring-up changes: what its commit does to the foreground it takes
+/// the line from (`Startup::commit`), and what its abandon does with the
+/// session it brought up (`Startup::abandon`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LegChange {
-    /// Another agent takes the line: a transfer, a background promotion, a
-    /// takeover. The previous foreground is shelved, and the incoming agent
-    /// settles to idle after its first turn.
+    /// Another agent takes the line: a transfer or a takeover. The previous
+    /// foreground is shelved, and the incoming agent settles to idle after
+    /// its first turn. Abandoned, the session it attached is ended and
+    /// published finished.
     NewAgent,
+    /// A resident is brought back onto the line: a background promotion.
+    /// It commits as a new agent does. Abandoned, the resident goes back to
+    /// the background (`Switchboard::move_to_background`) instead of
+    /// being ended: the caller asked to resume work that was alive, and one
+    /// failed step on its way to the line should not lose it.
+    Promotion,
     /// The project on the line is redialed onto another model or thinking
     /// level. There is no other foreground to shelve: a session that keeps
     /// its context is the one already on the line, and shelving it would
@@ -779,9 +785,9 @@ impl Startup {
     ///    its first turn. Either way the coordinator names it from here on;
     ///    the switchboard only swaps the session handles;
     /// 2. end the intro;
-    /// 3. on a [`LegChange::NewAgent`], shelve the previous foreground and
-    ///    settle the incoming agent, published busy for its first turn, to
-    ///    idle;
+    /// 3. on a [`LegChange::NewAgent`] or a [`LegChange::Promotion`], shelve
+    ///    the previous foreground and settle the incoming agent, published
+    ///    busy for its first turn, to idle;
     /// 4. name the session on the PBX and on the active-session guard;
     /// 5. announce the route.
     ///
@@ -802,7 +808,7 @@ impl Startup {
             unreachable!("a bring-up commits the session it attached");
         };
         self.coordinator.finish_intro();
-        if self.change == LegChange::NewAgent {
+        if self.change != LegChange::Redial {
             board.shelve_previous_foreground(&self.project).await;
             board
                 .announce_agent_state(&self.project, AgentNotice::Idle)
@@ -820,22 +826,33 @@ impl Startup {
     /// line rolls back to the leg before it while the guard names that leg,
     /// under the guard's lock. A rescue takes the guard under the same lock,
     /// so it finds either the bring-up's session on a line still starting,
-    /// or the leg before it on the line it is back on.
+    /// or the leg before it on the line it is back on. A promotion's
+    /// session is not ended: once the line and the guard are back on the
+    /// leg before it, so no rescue can reach it, it goes back to the
+    /// background.
     pub(crate) async fn abandon(mut self, board: &Switchboard, reason: String) {
-        if let Some(session) = self.attached.take() {
-            session.close();
-            if self.change == LegChange::NewAgent {
-                board
-                    .announce_agent_state(&self.project, AgentNotice::Finished)
-                    .await;
+        let returning = match (self.attached.take(), self.change) {
+            (Some(session), LegChange::Promotion) => Some(session),
+            (Some(session), change) => {
+                session.close();
+                if change == LegChange::NewAgent {
+                    board
+                        .announce_agent_state(&self.project, AgentNotice::Finished)
+                        .await;
+                }
+                None
             }
-        }
+            (None, _) => None,
+        };
         let (coordinator, generation) = (&self.coordinator, self.identity.generation);
         board
             .name_leg_on_line(None, || {
                 coordinator.rollback_startup(generation, reason);
             })
             .await;
+        if let Some(session) = returning {
+            board.move_to_background(session).await;
+        }
     }
 }
 
