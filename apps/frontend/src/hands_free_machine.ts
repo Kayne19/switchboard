@@ -222,14 +222,12 @@ export type Effect =
 
 /**
  * What an event does to the phase: the phase to write, the effects to run
- * after it, whether to publish it, and an event the machine sends itself
- * once it is published.
+ * after it, and whether to publish it.
  */
 interface PhaseStep {
 	to: Phase;
 	effects: Effect[];
 	publish: boolean;
-	then: HandsFreeEvent | null;
 }
 
 /** One step of the whole machine; only a phase step publishes. */
@@ -237,7 +235,6 @@ export interface Step {
 	to: Machine;
 	effects: Effect[];
 	publish: boolean;
-	then: HandsFreeEvent | null;
 }
 
 /** What a step may read from the page. It writes nothing. */
@@ -254,17 +251,13 @@ export interface PageReads {
 const RESET: Effect = { kind: "resetDetectors" };
 const QUIET: Effect[] = [{ kind: "silence" }, RESET];
 
-function go(
-	to: Phase,
-	effects: Effect[] = [],
-	then: HandsFreeEvent | null = null,
-): PhaseStep {
-	return { to, effects, publish: true, then };
+function go(to: Phase, effects: Effect[] = []): PhaseStep {
+	return { to, effects, publish: true };
 }
 
 /** A step that writes `to` without publishing it. */
 function quietly(to: Phase, effects: Effect[]): PhaseStep {
-	return { to, effects, publish: false, then: null };
+	return { to, effects, publish: false };
 }
 
 export function countdown(): Countdown {
@@ -319,8 +312,6 @@ export function graceOf(phase: Phase): Countdown | null {
 export function tickOf(phase: Phase): Countdown | null {
 	return phase.kind === "lease" ? phase.tick : null;
 }
-
-const TURN_OFF: HandsFreeEvent = { kind: "turnOff", message: OFF_MESSAGE };
 
 function arm(countdown: Countdown, ms: number, event: HandsFreeEvent): Effect {
 	return { kind: "arm", countdown, ms, event };
@@ -379,11 +370,10 @@ function fail(what: string, error: unknown): PhaseStep {
 
 /**
  * A recorder that cannot be made, started or stopped, or that reports an
- * error. Today it says so, then turns hands-free off over it.
+ * error: hands-free ends in `error`, as every other failure does.
  */
 function failRecording(what: string, error: unknown): PhaseStep {
-	const message = `Hands-free recording ${what} (${errorName(error)}).`;
-	return go({ kind: "error", message }, [], TURN_OFF);
+	return fail(`recording ${what}`, error);
 }
 
 /** The events that read or write more than the phase; `step` takes them. */
@@ -530,7 +520,6 @@ function moved(
 		to: phaseStep ? { ...to, phase: phaseStep.to } : to,
 		effects: [...before, ...(phaseStep?.effects ?? [])],
 		publish: phaseStep?.publish ?? false,
-		then: phaseStep?.then ?? null,
 	};
 }
 

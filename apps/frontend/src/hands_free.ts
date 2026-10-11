@@ -317,7 +317,6 @@ export class HandsFreeController {
 		}
 		if (this.state !== to) return;
 		if (taken.publish) this.publish();
-		if (taken.then) this.transition(taken.then);
 	}
 
 	/** The one teardown: release what `from` holds and `to` does not. */
