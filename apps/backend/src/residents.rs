@@ -1,193 +1,269 @@
 //! Resident project agents: sessions that stay up in the background while
-//! the caller is on other work. `BackgroundRegistry` owns their sessions,
-//! their detached prompt tasks and the task epochs that keep a late completion
-//! from making a replaced or promoted session look idle. The switchboard
-//! shelves the previous foreground here, starts split parts here, and evicts a
+//! the caller is on other work. `BackgroundRegistry` holds one `Resident` per
+//! project: its session and the background prompt running for it. A
+//! resident enters through `admit` and leaves through `retire`, whose
+//! `Leaving` reason decides everything leaving does. The switchboard shelves
+//! the previous foreground here, starts split parts here, and evicts a
 //! resident whose host reports it closed.
-use crate::pbx::{uuid_like, AgentStateNotice, Switchboard, TransferContext};
+use crate::lifecycle::Coordinator;
+use crate::pbx::{uuid_like, AgentNotice, AgentStateCallback, Switchboard, TransferContext};
 use crate::project_session::ProjectSession;
 use crate::prompts::{build_intro_prompt, BACKGROUND_NOTICE};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
 use tokio::task::JoinHandle;
 
-/// Owns resident sessions and the task reservations that may write their
-/// lifecycle projection. Callers never mutate the resident map directly: every
-/// removal invalidates the task epoch first, so a late completion cannot make a
-/// replaced or promoted session look idle.
-#[derive(Clone)]
-pub(crate) struct BackgroundRegistry {
-    // Session membership is shared with the closed-session reaper. The PBX
-    // still owns lifecycle decisions, while a host death can evict its
-    // resident immediately from the pump task.
-    sessions: Arc<StdMutex<HashMap<String, ProjectSession>>>,
-    tasks: Arc<StdMutex<HashMap<String, JoinHandle<()>>>>,
-    epochs: Arc<StdMutex<HashMap<String, Arc<AtomicU64>>>>,
-    next_epoch: Arc<AtomicU64>,
+/// One resident: its session and, once one was started, the background
+/// prompt given to it. The prompt's number is what lets the prompt's own
+/// task publish idle: it does so only while it is still its resident's
+/// prompt, so a late completion cannot make a replaced, promoted or stopped
+/// resident look idle.
+struct Resident {
+    session: ProjectSession,
+    prompt: Option<BackgroundPrompt>,
 }
 
-impl Default for BackgroundRegistry {
-    fn default() -> Self {
-        Self {
-            sessions: Arc::new(StdMutex::new(HashMap::new())),
-            tasks: Arc::new(StdMutex::new(HashMap::new())),
-            epochs: Arc::new(StdMutex::new(HashMap::new())),
-            next_epoch: Arc::new(AtomicU64::new(1)),
+struct BackgroundPrompt {
+    number: u64,
+    task: JoinHandle<()>,
+}
+
+/// Why a resident leaves the registry. The reason decides all of what
+/// leaving does (`Leaving::exit`):
+///
+/// | reason         | its prompt           | its session        | publishes  |
+/// |----------------|----------------------|--------------------|------------|
+/// | `Stopped`      | cancelled and joined | ended              | `finished` |
+/// | `Dead`         | cancelled and joined | left (it is dead)  | `finished` |
+/// | `Promoted`     | cancelled and joined | handed to the line | nothing    |
+/// | `ClosedOnHost` | left to end          | left (it is dead)  | `finished` |
+/// | `Shutdown`     | cancelled and joined | ended              | nothing    |
+///
+/// Every reason retires the resident's call token first, so no request or
+/// display passes the lifecycle check while the rest runs.
+#[derive(Debug)]
+pub(crate) enum Leaving {
+    /// The caller stopped it.
+    Stopped,
+    /// Its handle was found closed before work was given to it.
+    Dead,
+    /// The caller is put through to it: the session goes on the line.
+    Promoted,
+    /// Its host reported this session closed. Only the exact session (its
+    /// persistent id and live-handle instance) leaves, so a report about an
+    /// older handle cannot evict its replacement. Its prompt is left to end:
+    /// the report can come from inside that prompt's own task (a prompt the
+    /// host refused), which must not wait on itself, and a closed session's
+    /// prompt ends by itself.
+    ClosedOnHost {
+        session_id: String,
+        instance_id: u64,
+    },
+    /// The service is shutting down.
+    Shutdown,
+}
+
+/// What leaving does, besides retiring the call token.
+struct Exit {
+    cancel_prompt: bool,
+    end_session: bool,
+    publish_finished: bool,
+}
+
+impl Leaving {
+    fn exit(&self) -> Exit {
+        let (cancel_prompt, end_session, publish_finished) = match self {
+            Leaving::Stopped => (true, true, true),
+            Leaving::Dead => (true, false, true),
+            Leaving::Promoted => (true, false, false),
+            Leaving::ClosedOnHost { .. } => (false, false, true),
+            Leaving::Shutdown => (true, true, false),
+        };
+        Exit {
+            cancel_prompt,
+            end_session,
+            publish_finished,
+        }
+    }
+
+    /// Whether this reason is about `session`: the host's report names one
+    /// session; every other reason is about whichever resident the project
+    /// has.
+    fn names(&self, session: &ProjectSession) -> bool {
+        match self {
+            Leaving::ClosedOnHost {
+                session_id,
+                instance_id,
+            } => session.session_id() == session_id && session.instance_id() == *instance_id,
+            Leaving::Stopped | Leaving::Dead | Leaving::Promoted | Leaving::Shutdown => true,
         }
     }
 }
 
+/// Owns the residents. A resident's call token is registered with the
+/// coordinator in `admit` and retired in `retire`, nowhere else, so the
+/// coordinator's background tokens and this map name the same residents.
+/// Shared with the closed-session reaper, which retires a resident from its
+/// host's pump without the PBX lock.
+#[derive(Clone)]
+pub(crate) struct BackgroundRegistry {
+    residents: Arc<StdMutex<HashMap<String, Resident>>>,
+    coordinator: Coordinator,
+    next_prompt: Arc<AtomicU64>,
+}
+
 impl BackgroundRegistry {
-    #[cfg(test)]
-    fn sessions_snapshot_for_test(&self) -> Vec<(String, ProjectSession)> {
-        self.sessions
+    pub(crate) fn new(coordinator: Coordinator) -> Self {
+        Self {
+            residents: Arc::new(StdMutex::new(HashMap::new())),
+            coordinator,
+            next_prompt: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, HashMap<String, Resident>> {
+        self.residents
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[cfg(test)]
+    fn sessions_snapshot_for_test(&self) -> Vec<(String, ProjectSession)> {
+        self.lock()
             .iter()
-            .map(|(project, session)| (project.clone(), session.clone()))
+            .map(|(project, resident)| (project.clone(), resident.session.clone()))
             .collect()
     }
 
     pub(crate) fn projects(&self) -> Vec<String> {
-        let mut projects = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut projects = self.lock().keys().cloned().collect::<Vec<_>>();
         projects.sort();
         projects
     }
 
     pub(crate) fn contains_key(&self, project: &str) -> bool {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .contains_key(project)
+        self.lock().contains_key(project)
     }
 
     pub(crate) fn get(&self, project: &str) -> Option<ProjectSession> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.lock()
             .get(project)
-            .cloned()
+            .map(|resident| resident.session.clone())
     }
 
-    fn insert(&self, project: String, session: ProjectSession) {
-        self.epochs
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .entry(project.clone())
-            .or_insert_with(|| Arc::new(AtomicU64::new(0)));
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(project, session);
+    /// Makes `session` the project's resident: registers its call token and
+    /// enters it, under the registry's lock. Refused, leaving nothing
+    /// behind, when its handle has already closed (a host death the reaper
+    /// could not see yet, since the session was not resident) or the
+    /// project already has a resident. A death reported after the check
+    /// waits for the lock and retires the resident. `before_check` runs
+    /// between the entry and the check, where a test closes the handle.
+    fn admit(&self, project: String, session: ProjectSession, before_check: impl FnOnce()) -> bool {
+        let mut residents = self.lock();
+        if residents.contains_key(&project) {
+            tracing::error!(%project, "the project already has a resident; not admitting a second");
+            return false;
+        }
+        self.coordinator
+            .register_background(project.clone(), session.token());
+        residents.insert(
+            project.clone(),
+            Resident {
+                session: session.clone(),
+                prompt: None,
+            },
+        );
+        before_check();
+        if session.alive() {
+            return true;
+        }
+        self.take_out(&mut residents, &project);
+        false
     }
 
-    pub(crate) fn remove(&self, project: &str) -> Option<ProjectSession> {
-        self.invalidate(project);
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(project)
+    /// Takes the project's resident out of the map and retires its call
+    /// token: the one removal, under the registry's lock.
+    fn take_out(
+        &self,
+        residents: &mut HashMap<String, Resident>,
+        project: &str,
+    ) -> Option<Resident> {
+        let resident = residents.remove(project)?;
+        self.coordinator
+            .remove_background(&resident.session.token());
+        Some(resident)
     }
 
-    pub(crate) fn remove_closed(
+    /// Runs a background prompt for the project's resident: `prompt` gets
+    /// the prompt's number and returns its task's future. A prompt it
+    /// replaces is aborted. False when the project has no resident (its
+    /// host closed it), and nothing is started.
+    fn start_prompt<F>(&self, project: &str, prompt: impl FnOnce(u64) -> F) -> bool
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let mut residents = self.lock();
+        let Some(resident) = residents.get_mut(project) else {
+            return false;
+        };
+        let number = self.next_prompt.fetch_add(1, Ordering::Relaxed);
+        // Spawned under the lock: the task's own check of its number takes
+        // this lock, so it finds itself entered.
+        let task = tokio::spawn(prompt(number));
+        if let Some(replaced) = resident.prompt.replace(BackgroundPrompt { number, task }) {
+            replaced.task.abort();
+        }
+        true
+    }
+
+    /// Whether prompt `number` is still the project's resident's prompt.
+    fn prompt_is_current(&self, project: &str, number: u64) -> bool {
+        self.lock()
+            .get(project)
+            .and_then(|resident| resident.prompt.as_ref())
+            .is_some_and(|prompt| prompt.number == number)
+    }
+
+    /// The one way a resident leaves. Takes the resident `why` names out of
+    /// the registry and retires its call token, both under the registry's
+    /// lock, then does what `why` says leaving does (`Leaving`). Returns the
+    /// session that left, or `None` when no resident matched.
+    pub(crate) async fn retire(
         &self,
         project: &str,
-        session_id: &str,
-        instance_id: u64,
+        why: Leaving,
+        announce: Option<&AgentStateCallback>,
     ) -> Option<ProjectSession> {
-        let mut sessions = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if sessions.get(project).is_some_and(|session| {
-            session.session_id() == session_id && session.instance_id() == instance_id
-        }) {
-            self.invalidate(project);
-            sessions.remove(project)
-        } else {
-            None
+        let Resident { session, prompt } = {
+            let mut residents = self.lock();
+            if !residents
+                .get(project)
+                .is_some_and(|resident| why.names(&resident.session))
+            {
+                return None;
+            }
+            self.take_out(&mut residents, project)?
+        };
+        let exit = why.exit();
+        if let Some(prompt) = prompt.filter(|_| exit.cancel_prompt) {
+            prompt.task.abort();
+            let _ = prompt.task.await;
         }
-    }
-
-    fn invalidate(&self, project: &str) {
-        if let Some(epoch) = self
-            .epochs
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(project)
-        {
-            epoch.fetch_add(1, Ordering::AcqRel);
+        if exit.end_session {
+            session.close();
         }
-    }
-
-    fn begin_task(&self, project: &str) -> (Arc<AtomicU64>, u64) {
-        let mut epochs = self
-            .epochs
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let epoch = epochs
-            .entry(project.to_owned())
-            .or_insert_with(|| Arc::new(AtomicU64::new(0)))
-            .clone();
-        let generation = self.next_epoch.fetch_add(1, Ordering::Relaxed);
-        epoch.store(generation, Ordering::Release);
-        (epoch, generation)
-    }
-
-    fn set_task(&self, project: String, task: JoinHandle<()>) {
-        if let Some(previous) = self
-            .tasks
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(project, task)
-        {
-            previous.abort();
+        if exit.publish_finished {
+            if let Some(announce) = announce {
+                announce(crate::pbx::AgentStateNotice {
+                    project: project.to_owned(),
+                    state: AgentNotice::Finished,
+                })
+                .await;
+            }
         }
-    }
-
-    fn take_task(&self, project: &str) -> Option<JoinHandle<()>> {
-        self.invalidate(project);
-        self.tasks
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(project)
-    }
-
-    pub(crate) async fn cancel_task(&self, project: &str) {
-        if let Some(task) = self.take_task(project) {
-            task.abort();
-            let _ = task.await;
-        }
-    }
-
-    pub(crate) fn drain_sessions(&self) -> Vec<ProjectSession> {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .drain()
-            .map(|(_, session)| session)
-            .collect()
-    }
-
-    pub(crate) async fn cancel_all_tasks(&self) {
-        let tasks = self
-            .tasks
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .drain()
-            .map(|(_, task)| task)
-            .collect::<Vec<_>>();
-        for task in tasks {
-            task.abort();
-            let _ = task.await;
-        }
+        Some(session)
     }
 }
 
@@ -201,33 +277,29 @@ impl Switchboard {
             .collect()
     }
 
-    /// Removes a resident whose host session has already closed. The map is
-    /// otherwise enough to enforce one live session per project, but a closed
-    /// handle would make later work prompt a dead session and reject a fresh
-    /// start forever.
-    pub(crate) async fn remove_dead_background(&mut self, project: &str) -> bool {
-        let dead = self
-            .background_agents
-            .get(project)
-            .is_some_and(|session| !session.alive());
-        if !dead {
-            return false;
-        }
-        self.background_agents.cancel_task(project).await;
-        if let Some(session) = self.background_agents.remove(project) {
-            self.coordinator.remove_background(&session.token());
-        }
-        true
+    /// Retires the project's resident for `why`, publishing through this
+    /// switchboard's agent state callback.
+    pub(crate) async fn retire_resident(
+        &self,
+        project: &str,
+        why: Leaving,
+    ) -> Option<ProjectSession> {
+        self.background_agents
+            .retire(project, why, self.agent_state_callback.as_ref())
+            .await
     }
 
-    /// Removes a resident for a foreground promotion only after its detached
-    /// prompt has been cancelled and joined. This is the reservation boundary:
-    /// mode and token cannot change while the old background task is running.
-    pub(crate) async fn take_background(&mut self, project: &str) -> Option<ProjectSession> {
-        let session = self.background_agents.remove(project)?;
-        self.background_agents.cancel_task(project).await;
-        self.coordinator.remove_background(&session.token());
-        Some(session)
+    /// Retires a resident whose handle has closed without its host saying
+    /// so, before work is given to the project. A closed handle would make
+    /// later work prompt a dead session and refuse a fresh start forever.
+    pub(crate) async fn retire_dead_resident(&self, project: &str) {
+        if self
+            .background_agents
+            .get(project)
+            .is_some_and(|session| !session.alive())
+        {
+            self.retire_resident(project, Leaving::Dead).await;
+        }
     }
 
     /// Shelves the former foreground leg when another project takes the line.
@@ -240,7 +312,8 @@ impl Switchboard {
         let previous_label = previous.label().to_owned();
         if previous_label == next_project || previous.is_taken_over() {
             previous.close();
-            self.announce_agent_state(&previous_label, "finished").await;
+            self.announce_agent_state(&previous_label, AgentNotice::Finished)
+                .await;
             return;
         }
         if let Err(error) = previous.set_mode("background").await {
@@ -249,56 +322,27 @@ impl Switchboard {
             // resident whose host and service disagree about its mode.
             tracing::warn!(project = %previous_label, %error, "could not move the previous agent to the background; closing it");
             previous.close();
-            self.announce_agent_state(&previous_label, "finished").await;
+            self.announce_agent_state(&previous_label, AgentNotice::Finished)
+                .await;
             return;
         }
         if previous.busy() {
             let _ = previous.steer(BACKGROUND_NOTICE, None).await;
         }
-        let state = if previous.busy() { "busy" } else { "idle" };
-        let registered = self.register_background_session(previous_label.clone(), previous);
-        self.announce_agent_state(&previous_label, if registered { state } else { "finished" })
-            .await;
-    }
-
-    /// Registers a resident and rechecks the host handle after insertion. A
-    /// host can report death between the token registration and map insertion;
-    /// the final check closes that gap without leaving a dead token resident.
-    fn register_background_session(&self, project: String, session: ProjectSession) -> bool {
-        self.register_background_session_with(project, session, || {})
-    }
-
-    fn register_background_session_with(
-        &self,
-        project: String,
-        session: ProjectSession,
-        before_insert: impl FnOnce(),
-    ) -> bool {
-        let token = session.token();
-        self.coordinator.register_background(project.clone(), token);
-        before_insert();
-        self.background_agents
-            .insert(project.clone(), session.clone());
-        let still_registered = session.alive()
-            && self
-                .background_agents
-                .get(&project)
-                .is_some_and(|current| current.same_session(&session));
-        if !still_registered {
-            if let Some(removed) = self.background_agents.remove(&project) {
-                self.coordinator.remove_background(&removed.token());
-            }
-        }
-        still_registered
-    }
-
-    #[cfg(test)]
-    fn register_background_session_with_fake_death(
-        &self,
-        project: String,
-        session: ProjectSession,
-    ) -> bool {
-        self.register_background_session_with(project, session.clone(), || session.close())
+        let state = if previous.busy() {
+            AgentNotice::Busy
+        } else {
+            AgentNotice::Idle
+        };
+        let admitted = self
+            .background_agents
+            .admit(previous_label.clone(), previous, || {});
+        let state = if admitted {
+            state
+        } else {
+            AgentNotice::Finished
+        };
+        self.announce_agent_state(&previous_label, state).await;
     }
 
     /// Prompts a background agent without waiting for its turn. `source` is
@@ -312,39 +356,41 @@ impl Switchboard {
         text: String,
         source: &'static str,
     ) {
-        let (epoch, generation) = self.background_agents.begin_task(project);
         let utterance = self.current_utterance();
-        let token = session.token();
         let callback = self.agent_state_callback.clone();
         let closed_callback = self.session_closed_callback();
+        let registry = self.background_agents.clone();
         let project_id = project.to_owned();
         let session_id = session.session_id().to_owned();
         let instance_id = session.instance_id();
-        let task = tokio::spawn(async move {
-            let result = session.prompt_as(&text, source, utterance.as_deref()).await;
-            if let Err(error) = result {
-                tracing::warn!(%error, project = %project_id, "background agent prompt failed");
-                // Prompt transport failure is terminal for this resident. Do
-                // not leave a dead token reusable or publish an idle notice.
-                session.close();
-                closed_callback(project_id.clone(), session_id, instance_id).await;
-                return;
-            }
-            if let Some(callback) = callback {
-                if session.alive()
-                    && !session.busy()
-                    && epoch.load(Ordering::Acquire) == generation
-                    && session.token() == token
-                {
-                    callback(AgentStateNotice {
-                        project: project_id,
-                        state: "idle".into(),
-                    })
-                    .await;
+        let started = self
+            .background_agents
+            .start_prompt(project, |number| async move {
+                let result = session.prompt_as(&text, source, utterance.as_deref()).await;
+                if let Err(error) = result {
+                    tracing::warn!(%error, project = %project_id, "background agent prompt failed");
+                    // Prompt transport failure is terminal for this resident. Do
+                    // not leave a dead token reusable or publish an idle notice.
+                    session.close();
+                    closed_callback(project_id.clone(), session_id, instance_id).await;
+                    return;
                 }
-            }
-        });
-        self.background_agents.set_task(project.to_owned(), task);
+                if let Some(callback) = callback {
+                    if session.alive()
+                        && !session.busy()
+                        && registry.prompt_is_current(&project_id, number)
+                    {
+                        callback(crate::pbx::AgentStateNotice {
+                            project: project_id,
+                            state: AgentNotice::Idle,
+                        })
+                        .await;
+                    }
+                }
+            });
+        if !started {
+            tracing::info!(%project, "the resident closed before its prompt could start");
+        }
     }
 
     /// Start one split part without changing the caller's foreground route.
@@ -365,16 +411,15 @@ impl Switchboard {
         {
             return Err(format!("project {} is already busy", project.id));
         }
-        if self.remove_dead_background(&project.id).await {
-            self.announce_agent_state(&project.id, "finished").await;
-        }
+        self.retire_dead_resident(&project.id).await;
         // A resident background session can be idle after its prior turn. Keep
         // its history and address it instead of treating existence as busy.
         if let Some(session) = self.background_agents.get(&project.id) {
             if session.busy() {
                 return Err(format!("project {} is already busy", project.id));
             }
-            self.announce_agent_state(&project.id, "busy").await;
+            self.announce_agent_state(&project.id, AgentNotice::Busy)
+                .await;
             self.spawn_background_prompt(&project.id, session, text.to_owned(), "caller");
             return Ok(());
         }
@@ -399,14 +444,19 @@ impl Switchboard {
             &project,
             plan.prepare_report.as_ref(),
         );
-        if !self.register_background_session(project.id.clone(), session.clone()) {
-            self.announce_agent_state(&project.id, "finished").await;
+        if !self
+            .background_agents
+            .admit(project.id.clone(), session.clone(), || {})
+        {
+            self.announce_agent_state(&project.id, AgentNotice::Finished)
+                .await;
             return Err(format!(
                 "project {} ended before background registration",
                 project.id
             ));
         }
-        self.announce_agent_state(&project.id, "busy").await;
+        self.announce_agent_state(&project.id, AgentNotice::Busy)
+            .await;
         self.spawn_background_prompt(&project.id, session, intro, "intro");
         Ok(())
     }

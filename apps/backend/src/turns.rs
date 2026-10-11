@@ -747,7 +747,7 @@ impl TurnRun {
                 delivery_generation,
                 AgentStateNotice {
                     project: reply.route.clone(),
-                    state: "idle".into(),
+                    state: crate::pbx::AgentNotice::Idle,
                 },
             )
             .await;

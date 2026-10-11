@@ -6,7 +6,7 @@ use crate::app_state::{
 };
 use crate::browser::{handle_text_frame, queued_frames};
 use crate::delivery::{DeliveryFrame, Event};
-use crate::pbx::{AgentStateNotice, OPERATOR};
+use crate::pbx::{AgentNotice, AgentStateNotice, OPERATOR};
 use crate::project_session::AgentCall;
 use crate::protocol::AgentRequest;
 use crate::speech::AUDIO_SLOTS;
@@ -1407,7 +1407,7 @@ async fn an_idle_notice_does_not_clear_a_background_speak_request() {
         &state,
         AgentStateNotice {
             project: "alpha".into(),
-            state: "idle".into(),
+            state: AgentNotice::Idle,
         },
     )
     .await;
