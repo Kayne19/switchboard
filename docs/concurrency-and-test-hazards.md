@@ -217,6 +217,14 @@ operator's (#77). Promotion holds the display gate from adoption until the
 `epoch` is published, so a display from the new leg cannot be applied, and then
 wiped, ahead of its own reset.
 
+A rescue resets the scene too, without a leg: `release_rescued_work`
+(`apps/backend/src/page_controls.rs`) clears the stage and sends its `epoch`
+under the same gate (`DisplayGateState::rescue`), because the page drops the
+old leg's objects on that `epoch`. The stage then belongs to no leg, so the
+next announcement resets it as usual. Before this, the stage kept the rescued
+leg's objects until the next announcement: `view` reported them, and a page
+that reconnected in that window was sent them again.
+
 An `epoch` does not always cut off the audio that is playing. On a handoff the
 handoff line (the operator's "transferring you", a project's goodbye) is already
 fully sent when the line moves, because `speak` answers only once its speech is
