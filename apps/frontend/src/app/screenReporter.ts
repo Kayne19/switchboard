@@ -22,6 +22,14 @@ import { deriveScreenState } from "./sceneModel";
  */
 const ACK_DEADLINE_MS = 2_000;
 
+/**
+ * The most rejections the page keeps waiting to be sent: the service keeps
+ * no more per generation (`MAX_KEPT_REJECTIONS` in
+ * apps/backend/src/display.rs; `scripts/check_hygiene.mjs` keeps the two
+ * equal), so an older one could not reach a waiter anyway.
+ */
+export const MAX_KEPT_REJECTIONS = 16;
+
 /** A display the page declined: its seq and the page's reason. */
 export interface Rejection {
   seq: number;
@@ -46,10 +54,10 @@ interface ReporterState {
   /** The highest display seq the page has applied; it never goes back. */
   appliedSeq: number;
   /**
-   * The rejections no report has carried out yet, oldest first, one per
-   * seq. A report carries the oldest; only the report actually sent with
-   * it takes it off the list, so a report built earlier and sent later
-   * clears nothing it did not carry.
+   * The rejections no report has carried out yet, lowest seq first, one
+   * per seq, at most `MAX_KEPT_REJECTIONS`. A report carries the first;
+   * only the report actually sent with it takes it off the list, so a
+   * report built earlier and sent later clears nothing it did not carry.
    */
   rejections: Rejection[];
   /**
@@ -182,8 +190,13 @@ export class ScreenReporter {
       case "applied":
         return { ...state, appliedSeq: Math.max(state.appliedSeq, event.seq) };
       case "rejected": {
+        // Kept in seq order, so the next one waiting is the lowest and the
+        // ceiling in `build` holds below every rejection still waiting, even
+        // one declined after a newer seq. Past the bound the lowest goes, as
+        // the service drops it: no display call waits on it any more.
         const others = state.rejections.filter((each) => each.seq !== event.rejection.seq);
-        return { ...state, rejections: [...others, event.rejection] };
+        const rejections = [...others, event.rejection].sort((a, b) => a.seq - b.seq);
+        return { ...state, rejections: rejections.slice(-MAX_KEPT_REJECTIONS) };
       }
       default:
         return unreachable(event);
