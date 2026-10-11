@@ -392,9 +392,9 @@ const rows: Row[] = [
   { from: "steady", event: "reply", seen: seen({}) },
   { from: "steady", event: "status", seen: seen({}) },
 
-  // alpha starting: a take begun now is marked for alpha. `reply` and
-  // `status` clear the mark for later takes, though no notice ended the
-  // candidate (lifecycle map finding 10; kept as today). `candidate operator`
+  // alpha starting: a take begun now is marked for alpha. Only the
+  // service's explicit ends clear the mark: `candidate_cleared` or an
+  // `epoch` (#480); a `reply` or a `status` leaves it. `candidate operator`
   // clears it and leaves the status line.
   { from: "alpha starting", event: "epoch 3", seen: seen({ status: CONNECTING_ALPHA, playback: ["hand off 3"], callChanged: true }) },
   { from: "alpha starting", event: "epoch 4", seen: seen({ status: CONNECTING_ALPHA, playback: ["reset 4"], callChanged: true, stamp: stamp(4), thenEpoch4: HANDS_OFF_4 }) },
@@ -405,8 +405,8 @@ const rows: Row[] = [
   { from: "alpha starting", event: "alpha adopted at 4", seen: seen({ thenEpoch4: HANDS_OFF_4 }) },
   { from: "alpha starting", event: "alpha rolled back", seen: seen({}) },
   { from: "alpha starting", event: "alpha rescued at 4", seen: seen({}) },
-  { from: "alpha starting", event: "reply", seen: seen({}) },
-  { from: "alpha starting", event: "status", seen: seen({ status: CONNECTING_ALPHA }) },
+  { from: "alpha starting", event: "reply", seen: seen({ stamp: stamp(3, "alpha") }) },
+  { from: "alpha starting", event: "status", seen: seen({ status: CONNECTING_ALPHA, stamp: stamp(3, "alpha") }) },
 
   // alpha adopted at 4: only epoch 4 hands off. Any epoch ends the wait, so
   // after `epoch 3` the adoption is gone and a later epoch 4 cuts playback.
@@ -434,8 +434,8 @@ const rows: Row[] = [
   { from: "alpha adopted at 4, beta starting", event: "alpha adopted at 4", seen: seen({ thenEpoch4: HANDS_OFF_4 }) },
   { from: "alpha adopted at 4, beta starting", event: "alpha rolled back", seen: seen({}) },
   { from: "alpha adopted at 4, beta starting", event: "alpha rescued at 4", seen: seen({}) },
-  { from: "alpha adopted at 4, beta starting", event: "reply", seen: seen({ thenEpoch4: HANDS_OFF_4 }) },
-  { from: "alpha adopted at 4, beta starting", event: "status", seen: seen({ status: CONNECTING_BETA, thenEpoch4: HANDS_OFF_4 }) },
+  { from: "alpha adopted at 4, beta starting", event: "reply", seen: seen({ stamp: stamp(3, "beta"), thenEpoch4: HANDS_OFF_4 }) },
+  { from: "alpha adopted at 4, beta starting", event: "status", seen: seen({ status: CONNECTING_BETA, stamp: stamp(3, "beta"), thenEpoch4: HANDS_OFF_4 }) },
 
   // away, clip at 3: a reconnect's first epoch cuts playback even at the
   // same epoch. A held clip from another epoch that never went out is dropped
@@ -464,8 +464,8 @@ const rows: Row[] = [
   { from: "away, clip for alpha", event: "alpha adopted at 4", seen: seen({ ...AWAY, thenEpoch4: { clips: [4], playback: ["reset 4"] }, thenAlphaAdopted: [4] }) },
   { from: "away, clip for alpha", event: "alpha rolled back", seen: seen(AWAY) },
   { from: "away, clip for alpha", event: "alpha rescued at 4", seen: seen(AWAY) },
-  { from: "away, clip for alpha", event: "reply", seen: seen({ thenAlphaAdopted: [4] }) },
-  { from: "away, clip for alpha", event: "status", seen: seen({ ...AWAY, thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha", event: "reply", seen: seen({ stamp: stamp(3, "alpha"), thenAlphaAdopted: [4] }) },
+  { from: "away, clip for alpha", event: "status", seen: seen({ ...AWAY, stamp: stamp(3, "alpha"), thenAlphaAdopted: [4] }) },
 
   // away, clip for alpha, alpha adopted at 4: the snapshot's notice came
   // ahead of its epoch. Epoch 4 carries the held take; any other epoch
@@ -560,13 +560,5 @@ describe("follow", () => {
         expected: false,
       });
     }
-  });
-
-  // Lifecycle map finding 10, kept as today: a reply or a status ends the
-  // mark for later takes, though no notice ended the candidate.
-  it("ends the mark on a reply or a status, and keeps the adoption", () => {
-    const reply: IdentityMessage = { type: "reply", text: "Done.", route: "operator", voiced: false };
-    expect(follow(alphaStarting, reply).identity).toEqual(at3);
-    expect(follow({ ...alphaAdopted, candidate: "beta" }, statusMessage()).identity).toEqual(alphaAdopted);
   });
 });
