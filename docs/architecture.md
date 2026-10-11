@@ -754,9 +754,7 @@ mark when the agent's last request leaves the floor, spoken or dropped (a
 rescue made it stale, or its agent is gone): the request is gone, so the
 agent no longer waits, and it can ask again. It reports both
 through its `Waiting` hook, under its lock, and `floor_hooks::waiting_hook`
-mirrors them into the agent projection the page and Jev read; the end of
-a mark is mirrored whatever became of the agent, since a promoted or
-stopped agent's token is no longer a background one. The PBX's
+mirrors them into the agent projection the page and Jev read; the end of a mark is mirrored whatever became of the agent, since a promoted or stopped agent's token is no longer a background one. A resident that leaves the background (promoted, stopped, gone) leaves the floor at once: `Coordinator::remove_background` tells `Floor::forget`, which drops the resident's requests behind the front and wakes the worker, whose live check then drops a front request of its still waiting for its moment. A front request already on its way (the gate, the rewrite, the release) ends at its next live check, as before. The PBX's
 state notices are the projection's other events: `busy` and `idle` leave
 an agent's waiting mark alone, and `finished` ends it (see "Background
 residents").
@@ -771,9 +769,9 @@ a wait.
 
 | phase | what the worker does | next |
 |---|---|---|
-| reading | reads the page and the caller's last words | awaiting the page, awaiting quiet (held), gating (not held), rewriting (held, quiet) |
-| awaiting the page | waits for a floor event | reading |
-| awaiting quiet | waits for the threshold after the hold and after the caller's last words, or a floor event | reading |
+| reading | checks the agent is live, then reads the page and the caller's last words | left, agent gone; awaiting the page, awaiting quiet (held), gating (not held), rewriting (held, quiet) |
+| awaiting the page | waits for a floor event | reading (the live check first) |
+| awaiting quiet | waits for the threshold after the hold and after the caller's last words, or a floor event | reading (the live check first) |
 | gating | asks Jev for a good moment | rewriting (yes); reading, held from now (no, or failed) |
 | rewriting | checks the agent is live, asks the utility for words (the agent's own on failure), checks again | releasing; left, agent gone |
 | releasing | speaks the words through the speech worker | left, played; left, agent gone; retrying (no audio, page there); reading (no page) |
