@@ -791,12 +791,26 @@ async fn process_speech(state: AppState) {
     tracing::warn!("the speech worker stopped; agent-spoken lines will not be voiced");
 }
 
+/// What a delivered reply, or a page control's failure, does to a quiet at
+/// its generation.
+#[derive(Clone, Copy)]
+pub(crate) enum Quiet {
+    /// It ends the quiet: a caller's turn, or a page control that rescued,
+    /// acting at its own rescue's generation (or the one its operation
+    /// brought up).
+    End,
+    /// The control rescued nothing (a redial's decision): a quiet on the line
+    /// is another control's, and that control ends it (#461).
+    Keep,
+}
+
 pub(crate) async fn deliver_page_reply_if_current(
     state: &AppState,
     reply: &crate::reply::Reply,
     generation: u64,
+    quiet: Quiet,
 ) -> bool {
-    let (voice, _transition) = match admit_reply(state, reply, generation).await {
+    let (voice, _transition) = match admit_reply(state, reply, generation, quiet).await {
         ReplyAdmission::Stale => return false,
         ReplyAdmission::RoutingUnavailable => return true,
         ReplyAdmission::Deliver { voice, transition } => (voice, transition),
@@ -819,7 +833,7 @@ pub(crate) async fn deliver_page_reply_if_current(
             );
         }
     }
-    settle_delivered(state, generation);
+    settle_delivered(state, generation, quiet);
     drop(_transition);
     let _ = synthesize_reply_if_current(
         state,
@@ -833,11 +847,14 @@ pub(crate) async fn deliver_page_reply_if_current(
 }
 
 /// Ends the quiet at `generation`, the one the reply was admitted at
-/// (`Coordinator::settle_at`), and tells the page where the call is. A
-/// delivery checked that generation under the operation transition, but a
-/// rescue does not take that lock: one landing since keeps its quiet.
-fn settle_delivered(state: &AppState, generation: u64) {
-    state.0.coordinator.settle_at(generation);
+/// (`Coordinator::settle_at`), unless `quiet` keeps it, and tells the page
+/// where the call is. A delivery checked that generation under the
+/// operation transition, but a rescue does not take that lock: one landing
+/// since keeps its quiet.
+fn settle_delivered(state: &AppState, generation: u64, quiet: Quiet) {
+    if let Quiet::End = quiet {
+        state.0.coordinator.settle_at(generation);
+    }
     publish_status(state);
 }
 
@@ -862,6 +879,7 @@ async fn admit_reply<'a>(
     state: &'a AppState,
     reply: &crate::reply::Reply,
     generation: u64,
+    quiet: Quiet,
 ) -> ReplyAdmission<'a> {
     let voice = reserve_reply_voice(state, &reply.to_speak, generation).await;
     let transition = state.0.operation_transition.lock().await;
@@ -878,7 +896,7 @@ async fn admit_reply<'a>(
                 message: "Routing is unavailable. Please try again.".into(),
             },
         );
-        settle_delivered(state, generation);
+        settle_delivered(state, generation, quiet);
         if let Some(voice) = voice {
             voice.give_back(state).await;
         }
@@ -893,7 +911,7 @@ pub(crate) async fn deliver_turn_if_current(
     generation: u64,
     response_id: &str,
 ) -> bool {
-    let (voice, _transition) = match admit_reply(state, reply, generation).await {
+    let (voice, _transition) = match admit_reply(state, reply, generation, Quiet::End).await {
         ReplyAdmission::Stale => {
             trace_reply_speech(state, reply, Some("stale_generation"));
             return false;
@@ -919,7 +937,7 @@ pub(crate) async fn deliver_turn_if_current(
             sequence: voice.as_ref().map(|voice| voice.sequence),
         },
     );
-    settle_delivered(state, generation);
+    settle_delivered(state, generation, Quiet::End);
     drop(_transition);
     let success = synthesize_reply_if_current(
         state,

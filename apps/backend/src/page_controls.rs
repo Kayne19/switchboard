@@ -19,7 +19,7 @@ use crate::history::AGENT;
 use crate::pbx::Switchboard;
 use crate::protocol::{ServerMessage, Status};
 use crate::redial::{Redial, RedialPlan};
-use crate::speech::deliver_page_reply_if_current;
+use crate::speech::{deliver_page_reply_if_current, Quiet};
 #[cfg(test)]
 use crate::turns::process_turns;
 use axum::extract::rejection::JsonRejection;
@@ -221,9 +221,9 @@ impl PageControl {
     /// Runs `operation` registered at `generation`, so a rescue can cancel
     /// it, and returns its output. One that could not be registered, or was
     /// cancelled, lost to a newer rescue, which settles the call itself:
-    /// 409. One that failed settles the call unless something newer has:
-    /// 500.
-    async fn run<F, T>(&self, generation: u64, operation: F) -> Result<T, Response>
+    /// 409. One that failed answers 500 and, if `quiet` says the control
+    /// ends it, settles the call unless something newer has.
+    async fn run<F, T>(&self, generation: u64, quiet: Quiet, operation: F) -> Result<T, Response>
     where
         F: Future<Output = T> + Send + 'static,
         T: Send + 'static,
@@ -247,8 +247,10 @@ impl PageControl {
             }
             Err(error) => {
                 tracing::error!(%error, elapsed = ?self.elapsed(), "failed");
-                self.settle(|coordinator| coordinator.settle_at(generation))
-                    .await;
+                if let Quiet::End = quiet {
+                    self.settle(|coordinator| coordinator.settle_at(generation))
+                        .await;
+                }
                 Err(page_refusal(
                     axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                     format!("{} failed: {error}", self.what),
@@ -258,15 +260,16 @@ impl PageControl {
     }
 
     /// Delivers the control's reply at `generation`, which settles the call
-    /// (`deliver_page_reply_if_current`), or answers 409 if its leg was
-    /// superseded first.
+    /// if `quiet` says the control ends it (`deliver_page_reply_if_current`),
+    /// or answers 409 if its leg was superseded first.
     async fn deliver(
         &self,
         reply: crate::reply::Reply,
         generation: u64,
+        quiet: Quiet,
     ) -> Result<crate::reply::Reply, Response> {
         let generation = reply.delivery_generation.unwrap_or(generation);
-        if !deliver_page_reply_if_current(&self.state, &reply, generation).await {
+        if !deliver_page_reply_if_current(&self.state, &reply, generation, quiet).await {
             tracing::info!(
                 generation,
                 current = self.state.0.coordinator.generation(),
@@ -313,19 +316,26 @@ impl Admitted {
     }
 
     /// Runs a redial's decision registered at the admitted generation. It
-    /// leaves running work alone.
+    /// leaves running work alone, and a decision that fails settles nothing:
+    /// it rescued nothing, so a quiet on the line is another control's (#461).
     async fn decide<D>(self, decide: D) -> Result<(Self, Redial), Response>
     where
         D: Future<Output = Redial> + Send + 'static,
     {
-        let decided = self.control.run(self.generation, decide).await?;
+        let decided = self
+            .control
+            .run(self.generation, Quiet::Keep, decide)
+            .await?;
         Ok((self, decided))
     }
 
     /// Delivers an answer decided without a rescue, at the admitted
-    /// generation.
+    /// generation. It settles nothing: the control rescued nothing, so a
+    /// quiet on the line (a /connect still dialing) is that control's to end.
     async fn deliver(self, reply: crate::reply::Reply) -> Result<crate::reply::Reply, Response> {
-        self.control.deliver(reply, self.generation).await
+        self.control
+            .deliver(reply, self.generation, Quiet::Keep)
+            .await
     }
 
     /// Cancels running work to make way for `plan`, but only while its leg is
@@ -366,7 +376,7 @@ impl Rescued {
     {
         let output = self
             .control
-            .run(self.rescue.generation(), operation)
+            .run(self.rescue.generation(), Quiet::End, operation)
             .await?;
         Ok((self, output))
     }
@@ -374,7 +384,9 @@ impl Rescued {
     /// Delivers the control's reply at the rescue's generation, or at the
     /// one the reply names (a leg its operation brought up).
     async fn deliver(self, reply: crate::reply::Reply) -> Result<crate::reply::Reply, Response> {
-        self.control.deliver(reply, self.rescue.generation()).await
+        self.control
+            .deliver(reply, self.rescue.generation(), Quiet::End)
+            .await
     }
 
     /// The PBX, locked, while this control's rescue still owns the call.

@@ -749,7 +749,7 @@ async fn a_voiced_page_reply_names_the_utterance_its_speech_starts_with() {
     let generation = state.0.coordinator.generation();
     let reply = voiced_reply("Putting you through.", &["Putting you through."]);
 
-    assert!(deliver_page_reply_if_current(&state, &reply, generation).await);
+    assert!(deliver_page_reply_if_current(&state, &reply, generation, Quiet::End).await);
 
     let frames = wire_frames_until(&mut connection, "audio_done").await;
     let spoken = frames
@@ -778,7 +778,7 @@ async fn a_log_that_keeps_nothing_still_sends_every_spoken_line() {
 
     let generation = state.0.coordinator.generation();
     let reply = voiced_reply("Putting you through.", &["Putting you through."]);
-    assert!(deliver_page_reply_if_current(&state, &reply, generation).await);
+    assert!(deliver_page_reply_if_current(&state, &reply, generation, Quiet::End).await);
     let frames = wire_frames_until(&mut connection, "spoken").await;
     let spoken = frames.last().expect("a spoken frame");
     assert_eq!(
@@ -852,7 +852,7 @@ async fn superseded_reply_is_not_logged_or_broadcast() {
         delivery_generation: None,
     };
 
-    assert!(!deliver_page_reply_if_current(&state, &reply, generation).await);
+    assert!(!deliver_page_reply_if_current(&state, &reply, generation, Quiet::End).await);
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
     assert!(matches!(
         events.try_recv(),

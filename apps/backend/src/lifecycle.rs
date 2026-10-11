@@ -505,10 +505,13 @@ impl Coordinator {
         self.settle_at(rescued.generation())
     }
 
-    /// `settle`, for work admitted at `generation` without a rescue of its
-    /// own: a delivered reply (a caller's turn, a page control's answer,
-    /// including a refusal) or a page control whose decision failed. It
-    /// ends a quiet only while the call is still at that generation.
+    /// `settle`, for work that acts at `generation` without holding the
+    /// rescue's token: a caller's turn delivered there, or a page control's
+    /// reply or failure at the generation its rescue left (or the one its
+    /// operation brought up). It ends a quiet only while the call is still
+    /// at that generation. A redial's decision rescued nothing, so its
+    /// answer or failure does not settle: a quiet on the line is another
+    /// control's to end (#461).
     pub fn settle_at(&self, generation: u64) -> bool {
         self.linearize(|state| {
             self.step_locked(state, Event::Settle { generation })
