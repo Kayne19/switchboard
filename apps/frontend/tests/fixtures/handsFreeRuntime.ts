@@ -6,6 +6,7 @@
 import { vi } from "vitest";
 import {
   HandsFreeController,
+  type HandsFreeControllerOptions,
   type HandsFreeState,
   type SpeechEndpointer,
   type WakeDetector,
@@ -88,6 +89,9 @@ export function realHandsFree(createRecorder: () => MediaRecorder) {
   };
   const stream = { getTracks: () => [{ stop: () => undefined }] };
   let controller: HandsFreeController | null = null;
+  let given: HandsFreeControllerOptions | null = null;
+  // Set by `holdMicrophone`: the microphone is asked for and never granted.
+  let held: (() => void) | null = null;
   const options: Partial<CallRuntimeOptions> = {
     createRecorder,
     // The push-to-talk level meter's context.
@@ -95,9 +99,14 @@ export function realHandsFree(createRecorder: () => MediaRecorder) {
     loadWakeDetector: async () => detector as unknown as WakeDetector,
     loadSpeechEndpointer: async () => endpointer as unknown as SpeechEndpointer,
     createHandsFree: (runtimeOptions) => {
+      given = runtimeOptions;
       controller = new HandsFreeController({
         ...runtimeOptions,
-        getUserMedia: async () => stream as unknown as MediaStream,
+        getUserMedia: () => {
+          if (!held) return Promise.resolve(stream as unknown as MediaStream);
+          held();
+          return new Promise<MediaStream>(() => undefined);
+        },
         createAudioContext: () => fakeGraph() as unknown as AudioContext,
         createWorkletNode: () => worklet as unknown as AudioWorkletNode,
         createRecorder,
@@ -109,8 +118,17 @@ export function realHandsFree(createRecorder: () => MediaRecorder) {
   return {
     options,
     controller: (): HandsFreeController => {
-      if (!controller) throw new Error("hands-free was never turned on");
+      if (!controller) throw new Error("the runtime made no controller");
       return controller;
+    },
+    /** The options the runtime gave the controller. */
+    given: (): HandsFreeControllerOptions => {
+      if (!given) throw new Error("the runtime made no controller");
+      return given;
+    },
+    /** From now on a start asks for the microphone, calls `asked`, and waits forever. */
+    holdMicrophone: (asked: () => void) => {
+      held = asked;
     },
     /**
      * Lets the controller's start run, one microtask at a time, until it is

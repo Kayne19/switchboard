@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  HandsFreeController,
-  HandsFreeControllerOptions,
-  SpeechEndpointer,
-  WakeDetector,
-} from "../../src/hands_free";
+import type { SpeechEndpointer } from "../../src/hands_free";
 import type { ScreenStateReport } from "../../src/controller/types";
 import {
   CallRuntime,
@@ -17,57 +12,7 @@ import { AudioPlayback } from "../../src/runtime/audioPlayback";
 import { CAPTION_WAIT_MS } from "../../src/runtime/spokenLines";
 import { helloAck, statusMessage } from "../fixtures/serverMessages";
 import { realHandsFree, stubHandsFreeBrowser } from "../fixtures/handsFreeRuntime";
-
-class FakeSocket {
-  static instances: FakeSocket[] = [];
-  readyState = 0;
-  binaryType = "blob";
-  sent: unknown[] = [];
-  onopen: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-
-  constructor(readonly url: string) {
-    FakeSocket.instances.push(this);
-  }
-
-  static latest(): FakeSocket {
-    return FakeSocket.instances[FakeSocket.instances.length - 1];
-  }
-
-  send(data: unknown) {
-    if (this.readyState !== 1) throw new Error("socket is not open");
-    this.sent.push(data);
-  }
-
-  // A real socket reports its own close asynchronously.
-  close() {
-    if (this.readyState === 3) return;
-    this.readyState = 3;
-    queueMicrotask(() => this.onclose?.({} as CloseEvent));
-  }
-
-  open() {
-    this.readyState = 1;
-    this.onopen?.({} as Event);
-  }
-
-  drop() {
-    this.readyState = 3;
-    this.onclose?.({} as CloseEvent);
-  }
-
-  receive(message: object) {
-    this.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
-  }
-
-  sentJson(): Array<Record<string, unknown>> {
-    return this.sent
-      .filter((frame): frame is string => typeof frame === "string")
-      .map((frame) => JSON.parse(frame));
-  }
-}
+import { FakeSocket } from "./fakeSocket";
 
 class FakeRecorder {
   static latest: FakeRecorder | null = null;
@@ -911,63 +856,36 @@ describe("CallRuntime line controls", () => {
 });
 
 describe("CallRuntime hands-free", () => {
-  function fakeHandsFree() {
-    const calls: string[] = [];
-    let options: HandsFreeControllerOptions | null = null;
-    let enabled = false;
-    const controller = {
-      get isEnabled() {
-        return enabled;
-      },
-      async enable() {
-        enabled = true;
-        calls.push("enable");
-        options!.onState({ state: "armed", message: "Listening locally.", leaseRemainingMs: 0 });
-        return true;
-      },
-      disable(message = "Hands-free is off.") {
-        enabled = false;
-        calls.push("disable");
-        options!.onState({ state: "off", message, leaseRemainingMs: 0 });
-      },
-      pauseForPtt: () => calls.push("pause"),
-      resumeAfterPtt: () => calls.push("resume"),
-      epochChanged: () => calls.push("epochChanged"),
-      openFollowUpLease: (generation: number) => calls.push(`lease:${generation}`),
-    };
-    return {
-      calls,
-      options: () => options!,
-      create: (created: HandsFreeControllerOptions) => {
-        options = created;
-        return controller as unknown as HandsFreeController;
-      },
-    };
+  function recorder() {
+    return new FakeRecorder() as unknown as MediaRecorder;
   }
 
-  it("loads the wake detector once and reports the armed state", async () => {
-    const handsFree = fakeHandsFree();
-    const loadWakeDetector = vi.fn(async () => ({}) as WakeDetector);
-    const loadSpeechEndpointer = vi.fn(async () => ({}) as SpeechEndpointer);
+  it("loads the detectors once and reports the armed state", async () => {
+    stubHandsFreeBrowser();
+    const handsFree = realHandsFree(recorder);
+    const loadWakeDetector = vi.fn(handsFree.options.loadWakeDetector!);
+    const loadSpeechEndpointer = vi.fn(handsFree.options.loadSpeechEndpointer!);
     const { runtime, latestState } = makeRuntime({
+      ...handsFree.options,
       loadWakeDetector,
       loadSpeechEndpointer,
-      createHandsFree: handsFree.create,
     });
     await connectAt(runtime, 5);
     runtime.toggleHandsFree();
-    await settle();
+    await handsFree.reach("armed");
     expect(loadWakeDetector).toHaveBeenCalledTimes(1);
     expect(loadSpeechEndpointer).toHaveBeenCalledTimes(1);
-    expect(handsFree.options().speechEndpointer).toBeTruthy();
-    expect(latestState()).toMatchObject({ handsFree: true, handsFreeStatus: "Listening locally." });
-    expect(handsFree.options().currentEpoch()).toBe(5);
+    expect(latestState()).toMatchObject({
+      handsFree: true,
+      handsFreeStatus: "Listening locally for “Damocles”.",
+    });
+    expect(handsFree.given().currentEpoch()).toBe(5);
 
     runtime.toggleHandsFree();
     await settle();
     expect(latestState().handsFree).toBe(false);
     runtime.toggleHandsFree();
-    await settle();
+    await handsFree.reach("armed");
     expect(loadWakeDetector).toHaveBeenCalledTimes(1);
     expect(loadSpeechEndpointer).toHaveBeenCalledTimes(1);
     expect(latestState().handsFree).toBe(true);
@@ -975,36 +893,16 @@ describe("CallRuntime hands-free", () => {
   });
 
   // A first start that never finishes (a `resume()` WebKit leaves pending, a
-  // model that never arrives) held the runtime's startup for the life of the
-  // page, and every MODE tap after it was refused (#261).
+  // microphone prompt left open) held the runtime's startup for the life of
+  // the page, and every MODE tap after it was refused (#261).
   it("does not lock MODE behind a first start that never finishes", async () => {
-    const enables: string[] = [];
-    let options: HandsFreeControllerOptions | null = null;
-    let enabled = false;
-    const controller = {
-      get isEnabled() {
-        return enabled;
-      },
-      enable() {
-        enabled = true;
-        enables.push("enable");
-        options!.onState({ state: "starting", message: "Starting.", leaseRemainingMs: 0 });
-        return new Promise<boolean>(() => undefined);
-      },
-      disable(message = "Hands-free is off.") {
-        enabled = false;
-        options!.onState({ state: "off", message, leaseRemainingMs: 0 });
-      },
-    };
+    stubHandsFreeBrowser();
+    const handsFree = realHandsFree(recorder);
+    const asked: string[] = [];
     const page = { visibilityState: "visible" as DocumentVisibilityState };
     const listeners = new Map<string, () => void>();
     const { runtime, latestState } = makeRuntime({
-      loadWakeDetector: async () => ({}) as WakeDetector,
-      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
-      createHandsFree: (created) => {
-        options = created;
-        return controller as unknown as HandsFreeController;
-      },
+      ...handsFree.options,
       document: {
         get visibilityState() {
           return page.visibilityState;
@@ -1014,10 +912,12 @@ describe("CallRuntime hands-free", () => {
         removeEventListener: () => undefined,
       } as unknown as Document,
     });
+    handsFree.holdMicrophone(() => asked.push("microphone"));
     await connectAt(runtime);
     runtime.toggleHandsFree();
     await settle();
-    expect(enables).toEqual(["enable"]);
+    expect(asked).toEqual(["microphone"]);
+    expect(handsFree.controller().currentState).toBe("starting");
 
     page.visibilityState = "hidden";
     listeners.get("visibilitychange")!();
@@ -1027,7 +927,7 @@ describe("CallRuntime hands-free", () => {
 
     runtime.toggleHandsFree();
     await settle();
-    expect(enables).toEqual(["enable", "enable"]);
+    expect(asked).toEqual(["microphone", "microphone"]);
     runtime.dispose();
   });
 
@@ -1049,19 +949,16 @@ describe("CallRuntime hands-free", () => {
   });
 
   it("puts a hands-free failure on screen as an error, not only in handsFreeStatus", async () => {
-    const handsFree = fakeHandsFree();
-    const { runtime, latestState } = makeRuntime({
-      loadWakeDetector: async () => ({}) as WakeDetector,
-      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
-      createHandsFree: handsFree.create,
-    });
+    stubHandsFreeBrowser();
+    const handsFree = realHandsFree(recorder);
+    const { runtime, latestState } = makeRuntime(handsFree.options);
     await connectAt(runtime);
     runtime.toggleHandsFree();
-    await settle();
+    await handsFree.reach("armed");
     expect(latestState().handsFree).toBe(true);
 
     // The speech detector fails after "armed", as it did on every engine.
-    handsFree.options().onState({
+    handsFree.given().onState({
       state: "error",
       message: "Hands-free speech detector failed (Error).",
       leaseRemainingMs: 0,
@@ -1093,15 +990,12 @@ describe("CallRuntime hands-free", () => {
 
   it("stops on a new epoch and opens the follow-up lease once playback drains", async () => {
     vi.useFakeTimers();
-    const handsFree = fakeHandsFree();
-    const { runtime } = makeRuntime({
-      loadWakeDetector: async () => ({}) as WakeDetector,
-      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
-      createHandsFree: handsFree.create,
-    });
+    stubHandsFreeBrowser();
+    const handsFree = realHandsFree(recorder);
+    const { runtime } = makeRuntime(handsFree.options);
     const socket = await connectAt(runtime, 5);
     runtime.toggleHandsFree();
-    await settle();
+    await handsFree.reach("armed");
 
     socket.receive({
       type: "final_response_audio_closed",
@@ -1110,12 +1004,12 @@ describe("CallRuntime hands-free", () => {
       success: true,
     });
     vi.advanceTimersByTime(399);
-    expect(handsFree.calls).not.toContain("lease:5");
+    expect(handsFree.controller().currentState).toBe("armed");
     vi.advanceTimersByTime(1);
-    expect(handsFree.calls).toContain("lease:5");
+    expect(handsFree.controller().currentState).toBe("lease");
 
     socket.receive({ type: "epoch", generation: 6 });
-    expect(handsFree.calls).toContain("epochChanged");
+    expect(handsFree.controller().currentState).toBe("off");
     runtime.dispose();
   });
 
@@ -1170,44 +1064,20 @@ describe("CallRuntime hands-free", () => {
   }
 
   it("submits a hands-free clip only for the current epoch", async () => {
-    const handsFree = fakeHandsFree();
-    const { runtime } = makeRuntime({
-      loadWakeDetector: async () => ({}) as WakeDetector,
-      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
-      createHandsFree: handsFree.create,
-    });
+    stubHandsFreeBrowser();
+    const handsFree = realHandsFree(recorder);
+    const { runtime } = makeRuntime(handsFree.options);
     const socket = await connectAt(runtime, 7);
-    runtime.toggleHandsFree();
-    await settle();
-    handsFree.options().onClip(new Blob(["old"]), "audio/webm", 6);
-    handsFree.options().onClip(new Blob(["now"]), "audio/webm", 7);
+    expect(handsFree.given().onClip(new Blob(["old"]), "audio/webm", 6)).toBeNull();
+    const id = handsFree.given().onClip(new Blob(["now"]), "audio/webm", 7);
     const clips = socket.sentJson().filter((frame) => frame.type === "clip");
     expect(clips.map((frame) => frame.generation)).toEqual([7]);
+    expect(clips.map((frame) => frame.id)).toEqual([id]);
     runtime.dispose();
   });
 
-  it("pauses hands-free for push-to-talk and resumes after", async () => {
-    const handsFree = fakeHandsFree();
-    const { runtime } = makeRuntime({
-      loadWakeDetector: async () => ({}) as WakeDetector,
-      loadSpeechEndpointer: async () => ({}) as SpeechEndpointer,
-      createHandsFree: handsFree.create,
-    });
-    await connectAt(runtime);
-    runtime.toggleHandsFree();
-    await settle();
-    runtime.talk();
-    await settle();
-    expect(handsFree.options().isPttActive()).toBe(true);
-    runtime.send();
-    await settle();
-    expect(handsFree.calls).toEqual(["enable", "pause", "resume"]);
-    runtime.dispose();
-  });
-
-  // The fake above only records the word "resume". A real controller asks
-  // push-to-talk whether it still holds the microphone, and refused while
-  // the stopped recording had not let go of it (#257).
+  // The controller asks push-to-talk whether it still holds the microphone,
+  // and refused while the stopped recording had not let go of it (#257).
   it("is still listening after a push-to-talk press", async () => {
     stubHandsFreeBrowser();
     const handsFree = realHandsFree(
