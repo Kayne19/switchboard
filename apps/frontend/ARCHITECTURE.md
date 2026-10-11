@@ -281,28 +281,31 @@ each row through `CallRuntime`.
 | phase | holds | event | next | effect |
 |---|---|---|---|---|
 | `idle` | nothing | `start()` | `connecting` | a socket is made (`waiting` and "Connection error: …" when it cannot be) |
-| `connecting` | the socket | the socket opens | `open` | line up; `hello` goes; a socket that cannot take `hello` stays `connecting` and is closed |
+| `connecting` | the socket | the socket opens | `open` | line up; `hello` goes; a socket that cannot take `hello` stays `connecting`, the line never up, and is closed |
 | `open` | the socket, the keepalive | `epoch` (`snapshot`) | `ready` | clips and typed turns may go |
-| `open`, `ready` | the socket, the keepalive | `hello_ack` | same | `streaming` is what it chose |
-| `open`, `ready` | the socket, the keepalive | 20 s | same | a ping goes, and its pong is due in 8 s; a ping that cannot go replaces the socket |
-| `open`, `ready` | the socket, the keepalive | the pong, or 8 s without it | same, or `connecting` | the next ping in 20 s, or "Keepalive missed. Reconnecting..." and a new socket |
+| `open`, `ready` | the socket, the keepalive, `streaming` | `hello_ack` | same | `streaming` is what it chose |
+| `open`, `ready` | the socket, the keepalive | 20 s | same | a ping goes, and its pong is due in 8 s; a ping that cannot go takes the line down and replaces the socket |
+| `open`, `ready` | the socket, the keepalive | the pong, or 8 s without it | same, or `connecting` | the next ping in 20 s, or line down, "Keepalive missed. Reconnecting..." and a new socket |
 | any with a socket | the socket | the socket reports an error | same | "Connection error." |
 | any with a socket | the socket | the socket closes | `waiting` | line down |
 | any with a socket | the socket | a frame cannot go | same | the socket is closed; its close takes the line down |
-| any but `idle`, `disposed` | — | `retry()` | `connecting` | a new socket; the old socket is closed, or the reconnect timer cleared |
+| any but `idle`, `disposed` | — | `retry()` | `connecting` | line down if it was up (`open`, `ready`); "Forcing a fresh connection and retrying..."; a new socket; the old socket is closed, or the reconnect timer cleared |
 | `waiting` | the reconnect timer | 1.5 s | `connecting` | a new socket |
 | any | — | `dispose()` | `disposed` | the socket is closed, the timer cleared |
 
-Line up and line down are `CallRuntime`'s: line up says the idle line, sets
-`connected` and marks every clip unsent; line down finishes a push-to-talk
-take into the outbox, stops hands-free (`"disconnected"`), marks every clip
-unsent, says "Disconnected. Reconnecting..." and clears `connected`. A
-keepalive miss and `retry()` replace the socket without line down, so the
-line stays up until the replacement opens or closes. Two values outlive the
-socket that set them, on purpose (each pinned by a row): the streaming
-choice holds until a new socket opens, so a take begun while a replacement
-connects still streams, and `waiting` keeps whether the lost socket had its
-snapshot, so a clip finished after the drop is said to wait.
+The line is up in `open` and `ready` and nowhere else, and the runtime's
+`connected` is that read of the link (`CallLink.connected`); `CallRuntime`
+does not hold it. Line up and line down are `CallRuntime`'s: line up says
+the idle line and marks every clip unsent; line down finishes a
+push-to-talk take into the outbox, stops hands-free (`"disconnected"`),
+marks every clip unsent and says "Disconnected. Reconnecting...". Every way
+a line that was up goes down takes line down, in one order: a close, a
+keepalive miss, a ping that cannot go and `retry()` alike. Talk and MODE do
+nothing while the line is down, so no take begins during a reconnect, and
+the streaming choice is the open socket's own `hello_ack`'s. One value
+outlives the socket that set it, on purpose (pinned by a row): `waiting`
+keeps whether the lost socket had its snapshot, so a clip finished after
+the drop is said to wait.
 
 The call's identity is one `CallIdentity` value (`src/runtime/callIdentity.ts`):
 the epoch the server last announced, the candidate leg it said is starting
