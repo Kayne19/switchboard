@@ -119,13 +119,21 @@ function useRowKeys(): (line: TranscriptLine) => number {
 function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => boolean; inputRef: RefObject<HTMLInputElement | null> }) {
   const [draft, setDraft] = useState('');
   const [notSent, setNotSent] = useState(false);
+  const sendButton = useRef<HTMLButtonElement>(null);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!onSend || !draft.trim()) return;
+    // SEND turns disabled with the draft gone. Focus on it then went to the
+    // body, outside the dialog: it goes to the field, for the next turn.
+    // Only focus on SEND moves: a send from the field leaves focus there,
+    // and a tap that did not focus SEND (iPadOS Safari's) brings up no
+    // touch keyboard the caller had put away.
+    const fromSend = sendButton.current !== null && document.activeElement === sendButton.current;
     if (onSend(draft)) {
       setDraft('');
       setNotSent(false);
+      if (fromSend) inputRef.current?.focus({ preventScroll: true });
     } else {
       setNotSent(true);
     }
@@ -147,7 +155,7 @@ function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => b
         enterKeyHint="send"
         disabled={!onSend}
       />
-      <button className="transcript__send tech micro" type="submit" disabled={!onSend || !draft.trim()}>
+      <button ref={sendButton} className="transcript__send tech micro" type="submit" disabled={!onSend || !draft.trim()}>
         SEND
       </button>
       {notSent ? (
