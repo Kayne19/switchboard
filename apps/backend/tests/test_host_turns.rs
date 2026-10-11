@@ -84,6 +84,7 @@ async fn delayed_old_autonomous_call_is_refused_after_a_new_caller_operation() {
             cause: "autonomous".into(),
             ended: true,
             text: String::new(),
+            replaces: None,
         },
     )
     .await;
@@ -299,6 +300,7 @@ fn host_report(
         cause: cause.to_owned(),
         ended,
         text: text.to_owned(),
+        replaces: None,
     }
 }
 

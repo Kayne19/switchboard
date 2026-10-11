@@ -49,6 +49,11 @@ pub struct ProjectTurn {
     pub cause: String,
     pub ended: bool,
     pub text: String,
+    /// For a self-woken start: the end of the held run it replaces. The
+    /// application takes both under one admission, the end first, so the
+    /// operation passes from the ended run to the new one and no caller
+    /// turn waiting behind them enters in between.
+    pub replaces: Option<Box<ProjectTurn>>,
 }
 /// Answers whether the application admitted a self-woken turn's start as an
 /// operation of its own; false for every other report.
@@ -304,6 +309,7 @@ impl ProjectInner {
             cause: boundary.cause.clone(),
             ended: boundary.ended,
             text: boundary.text.clone(),
+            replaces: None,
         };
         match AssertUnwindSafe(callback(event)).catch_unwind().await {
             Ok(admitted) => admitted,
