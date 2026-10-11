@@ -5,6 +5,7 @@ use crate::app_state::{
     state_with_agents, state_with_agents_options, until_debug,
 };
 use crate::audio::{Speaker, TestTtsGate};
+use crate::browser::PageFeed;
 use crate::browser::{frames_until, types_of};
 use crate::caller_input::assert_dropped_with_notice;
 use crate::delivery::Event;
@@ -26,7 +27,7 @@ use tokio::time::{timeout, Duration};
 #[tokio::test]
 async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let old_generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
     let worker_state = state.clone();
@@ -55,7 +56,7 @@ async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
 async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
     let (client, requests, _responded) = fake_jev_client();
     let state = state_with_jev(client, Registry::new(vec![]));
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
 
     dispatch_routed_transcript(&state, "once", generation, "hello".into()).await;
@@ -80,7 +81,7 @@ async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
 #[tokio::test]
 async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     state
         .0
         .turns
@@ -117,7 +118,7 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
 async fn steer_rechecks_generation_under_the_active_session_guard() {
     let (client, _requests, responded) = fake_jev_client();
     let state = state_with_jev(client, Registry::new(vec![]));
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
         OPERATOR,
@@ -181,7 +182,7 @@ async fn an_utterance_steers_a_turn_that_holds_the_pbx_lock() {
     // queued instead of steered.
     let (client, _requests, _responded) = fake_jev_client();
     let state = state_with_jev(client, Registry::new(vec![]));
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
         OPERATOR,
@@ -468,7 +469,7 @@ async fn a_caller_message_steers_an_autonomous_project_turn() {
         json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-steer"}),
     );
     until_autonomous(&state, instance_id).await;
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
 
     dispatch_routed_transcript(
@@ -536,6 +537,81 @@ async fn a_rescue_does_not_wait_for_the_host_to_answer_a_steer() {
 
     dispatch.abort();
     let _ = dispatch.await;
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The clip worker does not wait for the host's answer to a steer (#295):
+/// on a half-open link that answer can take the whole command wait, and the
+/// caller's next line would wait with it. A steer that fails late is queued
+/// as a turn, in the order the lines were spoken: here both steers wait on a
+/// link that never answers, the link drops, both fail, and they reach the
+/// turn queue first line first.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_next_line_does_not_wait_for_the_host_to_answer_a_steer() {
+    let root = scratch_root("steer-answer-off-worker");
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }));
+    // A half-open link: each steer is taken and never answered.
+    fake.on_command = Some(Box::new(|name, _| (name == "steer").then_some(None)));
+    let (state, host) = state_with_agents_and_jev(&root, fake);
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-slow"}),
+    );
+    until_autonomous(&state, instance_id).await;
+    let generation = state.0.coordinator.generation();
+
+    for (id, words) in [
+        ("first-line", "and the docs"),
+        ("second-line", "and the tests"),
+    ] {
+        timeout(
+            Duration::from_secs(1),
+            dispatch_routed_transcript(&state, id, generation, words.into()),
+        )
+        .await
+        .expect("a line does not wait for the host to answer the steer before it");
+    }
+    timeout(Duration::from_secs(5), async {
+        while host.named("steer").len() < 2 {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("both steers reached the host");
+    assert_eq!(
+        host.named("steer")
+            .iter()
+            .map(|args| args["message"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>(),
+        vec!["and the docs".to_owned(), "and the tests".to_owned()],
+        "the steers go out in the order they were spoken"
+    );
+    assert_eq!(state.0.turns.queued_for_test(), 0, "nothing is queued yet");
+
+    // The link drops: both steers fail, and each line is queued as a turn.
+    state.0.hosts.disconnect_fake("scriptorium");
+    timeout(Duration::from_secs(5), async {
+        while state.0.turns.queued_for_test() < 2 {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("both lines were queued after their steers failed");
+    let mut receiver = state.0.turns.receiver.lock().await;
+    let receiver = receiver.as_mut().expect("no turn worker took the queue");
+    let order: Vec<String> = [receiver.try_recv(), receiver.try_recv()]
+        .into_iter()
+        .map(|queued| queued.expect("a queued line").0)
+        .collect();
+    assert_eq!(
+        order,
+        vec!["first-line".to_owned(), "second-line".to_owned()]
+    );
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
@@ -632,7 +708,7 @@ async fn a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles() {
     })
     .await
     .expect("the caller turn settled");
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
     dispatch_routed_transcript(
         &state,
@@ -641,6 +717,9 @@ async fn a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles() {
         "what branch are you on?".into(),
     )
     .await;
+    // The host's answer is awaited off the caller's line (#295): it is in
+    // once the line is reported steered.
+    let queued = next_event_of(&mut events, "queued").await;
     assert_eq!(
         host.named("steer")
             .iter()
@@ -649,7 +728,6 @@ async fn a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles() {
         vec!["what branch are you on?".to_owned()],
         "the message was queued behind the woken turn, not steered into it"
     );
-    let queued = next_event_of(&mut events, "queued").await;
     assert_eq!(queued["id"], "steer-woken");
     assert_eq!(queued["steered"], true);
     worker.abort();
@@ -669,7 +747,7 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
         autonomous_turn(token.clone(), instance_id, Some("auto-1")),
     )
     .await;
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     while events.try_recv().is_ok() {}
     let generation = state.0.coordinator.generation();
     state.0.turns.routed_decisions.lock().await.insert(
@@ -719,6 +797,7 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
             cause: "autonomous".into(),
             ended: true,
             text: String::new(),
+            cut_short: false,
             replaces: None,
         },
     )
@@ -762,7 +841,7 @@ async fn a_caller_turn_runs_after_an_autonomous_turn_whose_session_closed() {
     .await
     .expect("the closed session was retired");
 
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
     state
         .0
@@ -803,6 +882,84 @@ async fn a_caller_turn_runs_after_an_autonomous_turn_whose_session_closed() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A self-woken run whose session closes holds its operation until the
+/// closed leg is retired, under the PBX lock (#270). A caller turn that
+/// waits behind the run then runs on the operator, never against the dead
+/// leg. Here the PBX lock is held, so the retirement cannot run: the run's
+/// operation stays open and the line still names alpha until it can.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_run_whose_session_closed_holds_its_operation_until_the_leg_is_retired() {
+    use crate::debug::DebugEvent;
+    let root = scratch_root("autonomous-closed-retire-first");
+    let (state, _host) = state_with_agents_and_jev(
+        &root,
+        FakeHostAgent::new(Box::new(|_, _| {
+            vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+        })),
+    );
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-closed"}),
+    );
+    until_autonomous(&state, instance_id).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"text","text":"half done","turn_id":"auto-closed"}),
+    );
+
+    let board = state.0.switchboard.lock().await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"session_closed","reason":"host_link_closed"}),
+    );
+    // The pump publishes the run's final text, then reports its end.
+    until_debug(&state, |event| {
+        matches!(
+            event,
+            DebugEvent::AgentText { turn_id: Some(turn_id), final_: true, .. }
+                if turn_id == "auto-closed"
+        )
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(state.0.coordinator.route(), "alpha", "not retired yet");
+    assert!(
+        matches!(
+            state
+                .0
+                .coordinator
+                .begin_prompt(&state.0.coordinator.current_identity()),
+            Err(crate::lifecycle::LifecycleError::OperationActive)
+        ),
+        "a caller turn must not be admitted on the closed leg before it is retired"
+    );
+    drop(board);
+
+    within("the closed leg to be retired and its run to end", async {
+        while state.0.coordinator.route() != OPERATOR
+            || state
+                .0
+                .host_turns
+                .holds_self_woken_for_test(instance_id)
+                .await
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    let operation = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("the caller turn is admitted once the run has ended");
+    assert_eq!(state.0.coordinator.route(), OPERATOR);
+    assert!(state.0.coordinator.finish_operation(&operation));
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn process_turns_settlement_preserves_a_waiting_request() {
@@ -834,7 +991,7 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
     .await;
     assert_eq!(request.status(), StatusCode::OK);
 
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let id = "settled-waiting";
     let generation = state.0.coordinator.generation();
     state.0.turns.routed_decisions.lock().await.insert(
@@ -916,7 +1073,7 @@ async fn process_turns_settles_foreground_idle_once() {
         assert_eq!(reply.route, "alpha");
     }
     let (_connection, _, _) = state.register_connection().await;
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     while events.try_recv().is_ok() {}
     let id = "settled-idle-once";
     let generation = state.0.coordinator.generation();
@@ -1274,8 +1431,8 @@ async fn a_caller_turn_ends_once_in_every_phase() {
 #[tokio::test]
 async fn a_failed_turn_ends_like_every_other_turn() {
     let state = state();
-    let mut events = state.0.events.subscribe();
-    let mut errors = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
+    let mut errors = PageFeed::open(&state);
     let id = "failed-turn";
     let generation = state.0.coordinator.generation();
     let operation = state
@@ -1342,7 +1499,7 @@ done"#
         registry,
         std::sync::Arc::new(prewarm),
     ));
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let id = "table-turn";
     let worker = tokio::spawn(process_turns(state.clone()));
     let queue = |generation: u64| {
@@ -1428,11 +1585,7 @@ done"#
 /// Waits until the clip's turn has ended: its routing trace has a branch, a
 /// turn that was started has been traced to its end, and no turn is in
 /// flight. Then reads what the page was told.
-async fn until_turn_ended(
-    state: &AppState,
-    events: &mut tokio::sync::broadcast::Receiver<Event>,
-    id: &str,
-) -> TurnEnding {
+async fn until_turn_ended(state: &AppState, events: &mut PageFeed, id: &str) -> TurnEnding {
     use crate::debug::DebugEvent;
     let ended = |state: &AppState| {
         let trace = debug_events(state);

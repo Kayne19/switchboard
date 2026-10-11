@@ -51,6 +51,9 @@ pub struct ProjectTurn {
     pub cause: String,
     pub ended: bool,
     pub text: String,
+    /// For a self-woken run's end: its session closed under it, and the host
+    /// never settled it. The application ends it when it retires the leg.
+    pub cut_short: bool,
     /// For a self-woken start: the end of the held run it replaces. The
     /// application takes both under one admission, the end first, so the
     /// operation passes from the ended run to the new one and no caller
@@ -327,6 +330,7 @@ impl ProjectInner {
             cause: boundary.cause.clone(),
             ended: boundary.ended,
             text: boundary.text.clone(),
+            cut_short: boundary.cut_short,
             replaces: None,
         }
     }

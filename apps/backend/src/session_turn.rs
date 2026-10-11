@@ -66,6 +66,7 @@ impl SelfWokenRun {
                 } else {
                     String::new()
                 },
+                cut_short: !reported,
             },
             final_text: text,
         }
@@ -96,6 +97,9 @@ pub(crate) struct TurnBoundary {
     pub(crate) cause: String,
     pub(crate) ended: bool,
     pub(crate) text: String,
+    /// A self-woken run's end because its session closed under it: the host
+    /// never settled it (`RunEnding::CutShort`).
+    pub(crate) cut_short: bool,
 }
 
 impl TurnBoundary {
@@ -105,6 +109,7 @@ impl TurnBoundary {
             cause,
             ended: false,
             text: String::new(),
+            cut_short: false,
         }
     }
 }
@@ -426,6 +431,7 @@ impl TurnState {
                         cause: "input".into(),
                         ended: true,
                         text: String::new(),
+                        cut_short: false,
                     })
                 }));
                 (phase, effects)

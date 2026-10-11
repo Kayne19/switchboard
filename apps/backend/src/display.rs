@@ -12,7 +12,7 @@ use crate::delivery::{DeliveryState, Event};
 use crate::protocol::{ScreenState, ServerMessage};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
 /// The most metrics the primary cluster holds; `MAX_PRIMARY_METRICS` in
 /// apps/frontend/src/controller/reducer.ts. Keep the two equal.
@@ -496,12 +496,7 @@ impl DisplayGateState {
 
     /// Sends `action` to every page and applies it to the stage at the
     /// sequence it was sent with. Whether a page took it, and that sequence.
-    pub(crate) fn publish(
-        &mut self,
-        action: &Value,
-        delivery: &DeliveryState,
-        events: &broadcast::Sender<Event>,
-    ) -> (bool, u64) {
+    pub(crate) fn publish(&mut self, action: &Value, delivery: &DeliveryState) -> (bool, u64) {
         let event = Event::Json(
             ServerMessage::Display {
                 action: action.clone(),
@@ -509,7 +504,6 @@ impl DisplayGateState {
             }
             .to_value(),
         );
-        let _ = events.send(event.clone());
         let (delivered, sequence) = delivery.publish_sequenced(event);
         self.projection.apply(action, sequence);
         self.watermark = sequence;

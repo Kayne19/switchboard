@@ -54,7 +54,22 @@ Two properties are load-bearing and easy to break by accident:
   in the order they are queued, so a close or abort a rescue queues later
   still goes out behind the steer. The answer can take the host's 30 s command
   wait, and a rescue, a project turn's end, transcript logging and reply
-  admission all take that guard: they must not wait for it (#250).
+  admission all take that guard: they must not wait for it (#250). The
+  caller's next line must not wait for it either, so the answer is awaited
+  on a task of its own, off the clip worker (#295). A steer the host refuses
+  is queued as a turn, as it always was, and `LineOrder` in
+  `apps/backend/src/turns.rs` keeps the turn queue in the order the lines
+  were spoken: a failed steer is queued only after the lines ahead of it
+  have been steered or queued, and a line headed straight for the queue
+  while a steer ahead is unanswered waits behind it, off the caller's line.
+  Such a line keeps its own stamp, so if the line changed meanwhile the turn
+  worker drops it as stale. `LineOrder`'s lock (a `std` mutex beside the
+  turn state's) is a leaf: it is held only to take and set `tail` and to
+  spawn the next task, never across an `await`, and no other lock is taken
+  under it, so it adds nothing to the lock order.
+  `the_next_line_does_not_wait_for_the_host_to_answer_a_steer`
+  in `apps/backend/tests/test_turns.rs` steers two lines into a link that
+  never answers, then drops the link.
 
 - **Routing never takes the PBX lock.** The turn worker holds that lock for a
   whole prompt, so anything on the steer path that waits for it runs only after
@@ -581,6 +596,22 @@ for merely the first report. The replay test waits for the metric row to be
 visible and then polls until the newest report carries the generation,
 `has_visual` and the object id it expects. That is the shape the same spec
 already uses for every later drawing in it.
+
+## A test that reads what the page is sent
+
+A backend test reads what the browser is sent from the delivery queue, the
+path the page reads: `browser::PageFeed` is a connection of its own on it,
+and `register_connection` is a whole page. There is no second channel for
+tests (#408: a `tokio` broadcast on `AppInner` was sent every event and read
+only by tests, and it was deleted).
+
+A connection makes a page connected (`DeliveryState::connected`), and the
+service acts on that: a display waits for the page to confirm its render, and
+speech is synthesized for a page to play. So a test that opens a feed is a
+test with a page on the call. A display test confirms each render the way the
+browser does (`a_page_that_draws` in `test_module_calls.rs`), or each display
+call waits out `DISPLAY_CONFIRM_DEADLINE_MS`; a test of the no-page path opens
+no feed.
 
 ## A broken pipe reported instead of the error that caused it
 

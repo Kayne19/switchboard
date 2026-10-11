@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_state::{debug_events, scratch_root, state_with_agents};
+use crate::browser::PageFeed;
 use crate::delivery::Event;
 use crate::module_calls::{diagram_show, module_call};
 use crate::project_session::AgentCall;
@@ -86,6 +87,7 @@ async fn delayed_old_autonomous_call_is_refused_after_a_new_caller_operation() {
             cause: "autonomous".into(),
             ended: true,
             text: String::new(),
+            cut_short: false,
             replaces: None,
         },
     )
@@ -335,7 +337,8 @@ async fn a_run_that_replaces_a_held_one_takes_its_operation_before_a_waiting_cal
 // `auto-2`), `StaleStart` (`autonomous`, `auto-2`, another token), `RunEnd`
 // (`autonomous` ended, `auto-1`, "Done."), `SilentRunEnd` (the same with no
 // text), `OtherRunEnd` (`auto-9`), `ReconnectRunEnd` (`unknown` ended,
-// `auto-1`, "Done.").
+// `auto-1`, "Done."), `CutShortRunEnd` (`autonomous` ended, `auto-1`, its
+// session closed under it).
 
 #[derive(Clone, Copy, Debug)]
 enum HostPhase {
@@ -361,6 +364,7 @@ enum HostReport {
     SilentRunEnd,
     OtherRunEnd,
     ReconnectRunEnd,
+    CutShortRunEnd,
 }
 
 /// What the application did with one report.
@@ -401,6 +405,7 @@ fn host_report(
         cause: cause.to_owned(),
         ended,
         text: text.to_owned(),
+        cut_short: false,
         replaces: None,
     }
 }
@@ -430,6 +435,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (Idle, SilentRunEnd, none.clone()),
         (Idle, OtherRunEnd, none.clone()),
         (Idle, ReconnectRunEnd, none.clone()),
+        (Idle, CutShortRunEnd, none.clone()),
         (Caller, CallerStart, bound.clone()),
         (Caller, CallerEnd, caller.clone()),
         (Caller, SelfWokenStart, caller.clone()),
@@ -441,6 +447,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (Caller, SilentRunEnd, caller.clone()),
         (Caller, OtherRunEnd, caller.clone()),
         (Caller, ReconnectRunEnd, caller.clone()),
+        (Caller, CutShortRunEnd, caller.clone()),
         (CallerBound, CallerStart, bound.clone()),
         (CallerBound, CallerEnd, none.clone()),
         (CallerBound, SelfWokenStart, bound.clone()),
@@ -452,6 +459,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (CallerBound, SilentRunEnd, bound.clone()),
         (CallerBound, OtherRunEnd, bound.clone()),
         (CallerBound, ReconnectRunEnd, bound.clone()),
+        (CallerBound, CutShortRunEnd, bound.clone()),
         (SelfWoken, CallerStart, held.clone()),
         (SelfWoken, CallerEnd, held.clone()),
         (SelfWoken, SelfWokenStart, held.clone()),
@@ -475,6 +483,9 @@ async fn a_host_reported_turn_moves_by_its_table() {
             ReconnectRunEnd,
             host_outcome(false, "none", &["end alpha auto-1"], Some("alpha: Done.")),
         ),
+        // Its session closed while its leg is on the line: the run waits for
+        // the leg's retirement, which ends it under the PBX lock (#270).
+        (SelfWoken, CutShortRunEnd, held.clone()),
         (SelfWokenElsewhere, CallerStart, held.clone()),
         (SelfWokenElsewhere, CallerEnd, held.clone()),
         (SelfWokenElsewhere, SelfWokenStart, held.clone()),
@@ -486,6 +497,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (SelfWokenElsewhere, SilentRunEnd, held.clone()),
         (SelfWokenElsewhere, OtherRunEnd, held.clone()),
         (SelfWokenElsewhere, ReconnectRunEnd, held.clone()),
+        (SelfWokenElsewhere, CutShortRunEnd, held.clone()),
         (SelfWokenRescued, CallerStart, none.clone()),
         (SelfWokenRescued, CallerEnd, none.clone()),
         (SelfWokenRescued, SelfWokenStart, none.clone()),
@@ -497,6 +509,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (SelfWokenRescued, SilentRunEnd, none.clone()),
         (SelfWokenRescued, OtherRunEnd, none.clone()),
         (SelfWokenRescued, ReconnectRunEnd, none.clone()),
+        (SelfWokenRescued, CutShortRunEnd, none.clone()),
         (SelfWokenReturned, CallerStart, held.clone()),
         (SelfWokenReturned, CallerEnd, held.clone()),
         (SelfWokenReturned, SelfWokenStart, held.clone()),
@@ -531,6 +544,12 @@ async fn a_host_reported_turn_moves_by_its_table() {
                 &["end operator auto-1"],
                 Some("operator: Done."),
             ),
+        ),
+        // Its leg is off the line already: nothing retires it, so it ends now.
+        (
+            SelfWokenReturned,
+            CutShortRunEnd,
+            host_outcome(false, "none", &["end operator auto-1"], None),
         ),
     ];
     let mut wrong = Vec::new();
@@ -628,10 +647,14 @@ async fn host_report_row(phase: HostPhase, report: HostReport) -> HostOutcome {
             true,
             "Done.",
         ),
+        CutShortRunEnd => ProjectTurn {
+            cut_short: true,
+            ..host_report(&token, instance_id, "autonomous", Some("auto-1"), true, "")
+        },
     };
     let traced = debug_events(&state).len();
     let written = state.0.transcript_log.lock().await.entries().len();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
 
     let admitted = handle_project_turn(&state, report).await;
 

@@ -473,6 +473,41 @@ pub(crate) async fn frames_until(connection: &mut DeliveryConnection, until: &st
     }
 }
 
+/// What every page is sent, for a test to read in order: a connection of
+/// its own on the delivery queue (`DeliveryState::publish`), with the frames
+/// addressed to one connection (`DeliveryState::send`) left out.
+#[cfg(test)]
+pub(crate) struct PageFeed(DeliveryConnection);
+
+#[cfg(test)]
+impl PageFeed {
+    pub(crate) fn open(state: &AppState) -> Self {
+        Self(state.0.delivery.register())
+    }
+
+    /// The next event sent to every page; `Err` once the queue has let this
+    /// connection go.
+    pub(crate) async fn recv(&mut self) -> Result<Event, tokio::sync::mpsc::error::TryRecvError> {
+        loop {
+            match self.0.receiver.recv().await {
+                Some(DeliveryFrame::Event { event, .. }) => return Ok(event),
+                Some(DeliveryFrame::Message(_)) => {}
+                None => return Err(tokio::sync::mpsc::error::TryRecvError::Disconnected),
+            }
+        }
+    }
+
+    /// The next event already queued, if there is one.
+    pub(crate) fn try_recv(&mut self) -> Result<Event, tokio::sync::mpsc::error::TryRecvError> {
+        loop {
+            match self.0.receiver.try_recv()? {
+                DeliveryFrame::Event { event, .. } => return Ok(event),
+                DeliveryFrame::Message(_) => {}
+            }
+        }
+    }
+}
+
 /// Every frame already waiting on the connection.
 #[cfg(test)]
 pub(crate) fn queued_frames(connection: &mut DeliveryConnection) -> Vec<Value> {

@@ -17,6 +17,41 @@ use serde_json::{json, Value};
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
 
+/// A page that draws every display it is sent at once and says so, the way
+/// the browser confirms a render (`applied_seq`), so a display call answers
+/// without waiting out its confirmation. Returns what the page was sent.
+fn a_page_that_draws(state: &AppState) -> tokio::sync::mpsc::UnboundedReceiver<Value> {
+    let mut connection = state.0.delivery.register();
+    let (sent_tx, sent) = tokio::sync::mpsc::unbounded_channel();
+    let state = state.clone();
+    tokio::spawn(async move {
+        // unbounded: the page's own task, which ends when its connection does.
+        while let Some(frame) = connection.receiver.recv().await {
+            let DeliveryFrame::Event {
+                sequence,
+                event: Event::Json(value),
+            } = frame
+            else {
+                continue;
+            };
+            if value["type"] == "display" {
+                let drawn = json!({"type":"screen_state","view":"auto","has_visual":true,
+                    "applied_seq":sequence,"generation":state.0.coordinator.generation()});
+                let _ = handle_text_frame(
+                    &state,
+                    connection.epoch,
+                    &mut None,
+                    &mut None,
+                    &drawn.to_string(),
+                )
+                .await;
+            }
+            let _ = sent_tx.send(value);
+        }
+    });
+    sent
+}
+
 #[tokio::test]
 async fn browser_screen_state_is_available_to_the_agent_view_tool() {
     let state = state();
@@ -304,7 +339,6 @@ async fn speak_rejects_blank_text_without_logging_it() {
 #[tokio::test]
 async fn agent_callbacks_do_not_wait_for_the_turn_lock() {
     let state = state();
-    let _events = state.0.events.subscribe();
     let (locked_tx, locked_rx) = oneshot::channel();
     let turn_state = state.clone();
     let turn = tokio::spawn(async move {
@@ -481,7 +515,7 @@ async fn speak_that_fails_to_synthesize_is_answered_with_the_workers_reason() {
 #[tokio::test]
 async fn display_protocol_validation_and_composition() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = a_page_that_draws(&state);
 
     // What `validate_action` makes of each action is the shared corpus's to
     // pin (`agrees_with_the_shared_validator_corpus`). A composed scene
@@ -502,9 +536,7 @@ async fn display_protocol_validation_and_composition() {
     });
     let (code, _) = agent_call_json(&state, "/display", show).await;
     assert_eq!(code, StatusCode::OK);
-    let Event::Json(event) = within("events", events.recv()).await.unwrap() else {
-        panic!("expected event")
-    };
+    let event = within("events", events.recv()).await.unwrap();
     assert_eq!(event["type"], "display");
     assert_eq!(event["action"]["id"], "main");
     for (id, role) in [("compare", "compare"), ("secondary", "secondary")] {
@@ -524,10 +556,10 @@ async fn display_protocol_validation_and_composition() {
         )
         .await;
         assert_eq!(code, StatusCode::OK);
-        assert!(matches!(
-            within("events", events.recv()).await.unwrap(),
-            Event::Json(_)
-        ));
+        assert_eq!(
+            within("events", events.recv()).await.unwrap()["type"],
+            "display"
+        );
     }
     let (code, _) = agent_call_json(
         &state,
@@ -544,10 +576,10 @@ async fn display_protocol_validation_and_composition() {
     )
     .await;
     assert_eq!(code, StatusCode::OK);
-    assert!(matches!(
-        within("events", events.recv()).await.unwrap(),
-        Event::Json(_)
-    ));
+    assert_eq!(
+        within("events", events.recv()).await.unwrap()["type"],
+        "display"
+    );
 }
 
 // A refused action comes back to the agent with the validator's error,
@@ -630,7 +662,7 @@ async fn display_refuses_a_show_past_the_stage_bound_and_takes_updates_and_hides
         assert_eq!(call(metric(&format!("m{n}"))).await.0, StatusCode::OK);
     }
     assert_eq!(on_stage().await, MAX_STAGE_OBJECTS);
-    let mut events = state.0.events.subscribe();
+    let mut events = a_page_that_draws(&state);
     let (code, body) = call(metric("one-too-many")).await;
     assert_eq!(
         (code, body),
@@ -664,7 +696,7 @@ async fn display_refuses_a_show_past_the_stage_bound_and_takes_updates_and_hides
 #[tokio::test]
 async fn display_projection_hide_clears_focus() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = a_page_that_draws(&state);
 
     // 1. Show primary chart
     let show_chart = json!({
