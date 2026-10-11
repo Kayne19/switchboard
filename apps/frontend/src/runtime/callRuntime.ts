@@ -353,8 +353,12 @@ export class CallRuntime {
     this.pushToTalk.stop(true);
   }
 
-  /** Forces a fresh connection and resends every clip still in the outbox. */
+  /**
+   * Forces a fresh connection and resends every clip still in the outbox.
+   * Before `start()` there is no connection to force.
+   */
   retry(): void {
+    if (!this.started) return;
     this.outbox.markAllUnsent();
     this.setStatus("Forcing a fresh connection and retrying...", false);
     this.connect();

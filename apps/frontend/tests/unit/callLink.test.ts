@@ -490,7 +490,8 @@ const DISPOSED: Seen = { ...READY, ready: null, open: false };
 const rows: Row[] = [
   // idle
   { from: "idle", event: "start", seen: { ...CONNECTING, sockets: 1 } },
-  { from: "idle", event: "retry", seen: { ...CONNECTING, sockets: 1, status: RETRYING } },
+  // Before `start()` there is no connection to force.
+  { from: "idle", event: "retry", seen: CONNECTING },
   { from: "idle", event: "dispose", seen: { ...CONNECTING, ready: null, stops: ["dispose"] } },
   { from: "idle", event: "talk", seen: CONNECTING },
 
