@@ -6,9 +6,9 @@
 // `onServer` for every decoded backend message -- and the React adapter
 // (`integration/runtime.tsx`) turns those into scenes.
 //
-// Lifecycle: `start()` opens the socket; every socket gets a generation, and a
-// callback from a retired generation is a no-op, so reconnects never stack.
-// `dispose()` retires the current generation without reconnecting.
+// Lifecycle: `start()` starts the socket's link (`callLink.ts`), which owns the
+// socket, its keepalive and the reconnect, and tells this runtime when the
+// line comes up and goes down. `dispose()` ends the link without reconnecting.
 
 import {
   HandsFreeController,
@@ -20,9 +20,6 @@ import {
 } from "../hands_free";
 import {
   clipHeader,
-  decodeServerMessage,
-  helloMessage,
-  pingMessage,
   postJson,
   screenStateMessage,
   sttChunkHeader,
@@ -34,6 +31,7 @@ import {
 import type { ScreenStateReport } from "../controller/types";
 import { AudioPlayback } from "./audioPlayback";
 import { selectVoiceLevel } from "./audioLevel";
+import { CallLink } from "./callLink";
 import { errorText } from "./errors";
 import {
   lineStateFromStatus,
@@ -53,12 +51,6 @@ import { PushToTalk, type PushToTalkOptions } from "./pushToTalk";
 import { SpokenLines, type HeardLine } from "./spokenLines";
 
 export const IDLE_TEXT = "Connected. Tap Talk and speak.";
-
-const SOCKET_CONNECTING = 0;
-const SOCKET_OPEN = 1;
-const HEARTBEAT_INTERVAL_MS = 20_000;
-const PONG_DEADLINE_MS = 8_000;
-const RECONNECT_DELAY_MS = 1_500;
 
 export interface RuntimeState {
   connected: boolean;
@@ -149,7 +141,7 @@ type LineControl = "route" | "model" | "thinking";
 
 export class CallRuntime {
   private readonly options: CallRuntimeOptions;
-  private readonly createSocket: (url: string) => WebSocket;
+  private readonly link: CallLink;
   private readonly postJson: typeof postJson;
   private readonly playback: AudioPlayback;
   private readonly spokenLines: SpokenLines;
@@ -158,18 +150,6 @@ export class CallRuntime {
   private state: RuntimeState = { ...INITIAL_RUNTIME_STATE };
   private statePublishQueued = false;
   private line: LineState = OPERATOR_LINE;
-
-  private started = false;
-  private disposed = false;
-  private ws: WebSocket | null = null;
-  private socketGeneration = 0;
-  private snapshotReady = false;
-  private streamingSelected = false;
-  private heartbeatSequence = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
-  private pongDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingPong: string | null = null;
   private clipSequence = 0;
 
   // The server's turn epoch, as last announced. A clip is stamped with
@@ -213,7 +193,15 @@ export class CallRuntime {
 
   constructor(options: CallRuntimeOptions) {
     this.options = options;
-    this.createSocket = options.createSocket ?? ((url) => new WebSocket(url));
+    this.link = new CallLink({
+      url: options.socketUrl,
+      createSocket: options.createSocket ?? ((url) => new WebSocket(url)),
+      lineUp: () => this.lineUp(),
+      lineDown: () => this.lineDown(),
+      status: (text, error) => this.setStatus(text, error),
+      message: (message, socket) => this.receive(message, socket),
+      audio: (bytes) => this.playback.receiveAudioChunk(bytes),
+    });
     this.postJson = options.postJson ?? postJson;
     this.spokenLines = new SpokenLines((line) => this.options.onHeard?.(line));
     this.playback = new AudioPlayback({
@@ -247,9 +235,9 @@ export class CallRuntime {
       context: () => ({
         epoch: this.turnEpoch,
         transferEra: this.transferEra,
-        streamingSelected: this.streamingSelected,
+        streamingSelected: this.link.streaming,
       }),
-      openSocket: () => this.openSocket(),
+      openSocket: () => this.link.socket(),
       enqueue: (clip) => this.enqueueOutbox(clip),
       flush: () => this.flushOutbox(),
       onRecordingChange: (recording) => this.update({ recording }),
@@ -261,7 +249,7 @@ export class CallRuntime {
     });
     const handsFreeOptions: HandsFreeControllerOptions = {
       loadDetectors: () => loadDetectors(options),
-      isSnapshotReady: () => this.snapshotReady,
+      isSnapshotReady: () => this.link.ready,
       currentEpoch: () => this.turnEpoch,
       isPttActive: () => this.pushToTalk.isActive,
       isPlaybackDrained: () => this.playback.isDrained(),
@@ -290,8 +278,7 @@ export class CallRuntime {
   }
 
   start(): void {
-    if (this.started || this.disposed) return;
-    this.started = true;
+    if (this.link.started) return;
     // Blocked audio waits for a gesture, and `click` alone does not find one
     // on an iPad: iOS Safari does not deliver a click through event
     // delegation for a tap on an ordinary element, so a tap on the page body
@@ -306,13 +293,13 @@ export class CallRuntime {
       this.onVisibilityChange,
     );
     this.options.window?.addEventListener("pagehide", this.onPageHide);
+    this.link.start();
     this.publishState();
-    this.connect();
   }
 
   dispose(): void {
-    if (this.disposed) return;
-    this.disposed = true;
+    if (this.link.disposed) return;
+    this.link.dispose();
     for (const type of GESTURE_EVENTS) {
       this.options.document?.removeEventListener(type, this.onDocumentGesture);
     }
@@ -321,20 +308,6 @@ export class CallRuntime {
       this.onVisibilityChange,
     );
     this.options.window?.removeEventListener("pagehide", this.onPageHide);
-    // Retire the socket's generation first so its close callback cannot
-    // schedule a reconnect.
-    this.socketGeneration++;
-    this.clearTimer(this.reconnectTimer);
-    this.reconnectTimer = null;
-    this.stopHeartbeat();
-    const socket = this.ws;
-    this.ws = null;
-    if (
-      socket &&
-      (socket.readyState === SOCKET_OPEN ||
-        socket.readyState === SOCKET_CONNECTING)
-    )
-      socket.close();
     this.pushToTalk.stop(false);
     this.handsFree.stop("dispose");
     this.playback.dispose();
@@ -353,11 +326,15 @@ export class CallRuntime {
     this.pushToTalk.stop(true);
   }
 
-  /** Forces a fresh connection and resends every clip still in the outbox. */
+  /**
+   * Forces a fresh connection and resends every clip still in the outbox.
+   * Before `start()` there is no connection to force.
+   */
   retry(): void {
+    if (!this.link.started) return;
     this.outbox.markAllUnsent();
     this.setStatus("Forcing a fresh connection and retrying...", false);
-    this.connect();
+    this.link.retry();
   }
 
   toggleHandsFree(): void {
@@ -422,8 +399,8 @@ export class CallRuntime {
    */
   sendText(text: string): boolean {
     const body = text.trim();
-    if (!body || !this.snapshotReady) return false;
-    const socket = this.openSocket();
+    if (!body || !this.link.ready) return false;
+    const socket = this.link.socket();
     if (!socket) return false;
     try {
       socket.send(typedTurnMessage({ id: this.newClipId(), epoch: this.turnEpoch, text: body }));
@@ -439,7 +416,7 @@ export class CallRuntime {
    * `screen_state_ack`.
    */
   sendScreenState(report: ScreenStateReport): boolean {
-    const socket = this.openSocket();
+    const socket = this.link.socket();
     if (!socket) return false;
     try {
       socket.send(screenStateMessage(report));
@@ -467,11 +444,11 @@ export class CallRuntime {
   // Several fields usually change together (a reconnect touches status,
   // connection, and hands-free); publish them as one state.
   private publishState(): void {
-    if (this.statePublishQueued || !this.started) return;
+    if (this.statePublishQueued || !this.link.started) return;
     this.statePublishQueued = true;
     queueMicrotask(() => {
       this.statePublishQueued = false;
-      if (!this.disposed) this.options.onState({ ...this.state });
+      if (!this.link.disposed) this.options.onState({ ...this.state });
     });
   }
 
@@ -604,14 +581,14 @@ export class CallRuntime {
   // their transcript arrives, so a backend restart cannot destroy the only
   // copy.
   private flushOutbox(): void {
-    if (!this.snapshotReady || this.outbox.size === 0) return;
+    if (!this.link.ready || this.outbox.size === 0) return;
     const clip = this.outbox.firstUnsent();
     if (!clip) {
       this.setStatus(`Transcribing ${this.outbox.size} voice clip(s)...`, false);
       return;
     }
-    const ws = this.ws;
-    if (!ws || ws.readyState !== SOCKET_OPEN) {
+    const ws = this.link.socket();
+    if (!ws) {
       this.setStatus(`Waiting to send ${this.outbox.size} clip(s)...`, true);
       return;
     }
@@ -632,15 +609,15 @@ export class CallRuntime {
       this.setStatus("Waiting for the server to accept your clip...", false);
     } catch {
       // The socket died between frames. The same id and bytes are retried on
-      // the next generation; the backend either never saw them or dedupes.
+      // the next socket; the backend either never saw them or dedupes.
       clip.sent = false;
-      ws.close();
+      this.link.sendFailed(ws);
     }
   }
 
   /** The id the clip went out under, or null when it was not taken. */
   private submitHandsFreeClip(audio: Blob, mime: string, epoch: number): string | null {
-    if (!this.snapshotReady || epoch !== this.turnEpoch) return null;
+    if (!this.link.ready || epoch !== this.turnEpoch) return null;
     const clip: Clip = {
       id: this.newClipId(),
       audio,
@@ -656,151 +633,38 @@ export class CallRuntime {
     return clip.id;
   }
 
-  // --- Socket -----------------------------------------------------------
+  // --- Line ------------------------------------------------------------
 
-  private openSocket(): WebSocket | null {
-    const ws = this.ws;
-    return ws && ws.readyState === SOCKET_OPEN ? ws : null;
+  /** A socket opened. */
+  private lineUp(): void {
+    this.setStatus(IDLE_TEXT, false);
+    this.update({ connected: true });
+    this.outbox.markAllUnsent();
   }
 
-  private clearTimer(timer: ReturnType<typeof setTimeout> | null): void {
-    if (timer !== null) clearTimeout(timer);
+  /**
+   * The current socket closed. A keepalive miss or `retry()` replaces the
+   * socket without this: the line stays up until the new socket opens or
+   * closes.
+   */
+  private lineDown(): void {
+    // Finalise the in-flight recording into the outbox rather than
+    // discarding it. Accepted work is already server-owned; unaccepted work
+    // remains locally retryable under the same id.
+    if (this.pushToTalk.isRecording() || this.pushToTalk.isStarting)
+      this.pushToTalk.stop(true);
+    this.handsFree.stop("disconnected");
+    this.outbox.markAllUnsent();
+    this.setStatus("Disconnected. Reconnecting...", true);
+    this.update({ connected: false });
   }
 
-  private stopHeartbeat(): void {
-    this.clearTimer(this.heartbeatTimer);
-    this.clearTimer(this.pongDeadlineTimer);
-    this.heartbeatTimer = null;
-    this.pongDeadlineTimer = null;
-    this.pendingPong = null;
-  }
-
-  private startHeartbeat(socket: WebSocket, generation: number): void {
-    const ping = () => {
-      if (
-        generation !== this.socketGeneration ||
-        socket !== this.ws ||
-        socket.readyState !== SOCKET_OPEN
-      )
-        return;
-      const nonce = `${generation}:${Date.now()}:${++this.heartbeatSequence}`;
-      this.pendingPong = nonce;
-      try {
-        socket.send(pingMessage(nonce, Date.now()));
-      } catch {
-        socket.close();
-        this.connect();
-        return;
-      }
-      this.clearTimer(this.pongDeadlineTimer);
-      this.pongDeadlineTimer = setTimeout(() => {
-        if (
-          generation === this.socketGeneration &&
-          socket === this.ws &&
-          this.pendingPong === nonce
-        ) {
-          this.setStatus("Keepalive missed. Reconnecting...", true);
-          socket.close();
-          this.connect();
-        }
-      }, PONG_DEADLINE_MS);
-    };
-    this.clearTimer(this.heartbeatTimer);
-    this.heartbeatTimer = setTimeout(ping, HEARTBEAT_INTERVAL_MS);
-  }
-
-  private connect(): void {
-    if (this.disposed) return;
-    const generation = ++this.socketGeneration;
-    this.clearTimer(this.reconnectTimer);
-    this.reconnectTimer = null;
-    this.stopHeartbeat();
-
-    // Incrementing the generation first makes every callback from the old
-    // socket a no-op, including its close callback. This is what prevents a
-    // manual retry from stacking another reconnect timer behind itself.
-    const previous = this.ws;
-    this.ws = null;
-    if (
-      previous &&
-      (previous.readyState === SOCKET_OPEN ||
-        previous.readyState === SOCKET_CONNECTING)
-    )
-      previous.close();
-
-    let socket: WebSocket;
-    try {
-      socket = this.createSocket(this.options.socketUrl);
-    } catch (error) {
-      this.setStatus("Connection error: " + errorText(error), true);
-      this.scheduleReconnect(generation);
-      return;
-    }
-    this.snapshotReady = false;
-    this.ws = socket;
-    socket.binaryType = "arraybuffer";
-    const current = () => generation === this.socketGeneration && socket === this.ws;
-
-    socket.onopen = () => {
-      if (!current()) return;
-      this.setStatus(IDLE_TEXT, false);
-      this.update({ connected: true });
-      this.outbox.markAllUnsent();
-      this.snapshotReady = false;
-      this.streamingSelected = false;
-      try {
-        socket.send(helloMessage());
-      } catch {
-        socket.close();
-        return;
-      }
-      this.startHeartbeat(socket, generation);
-    };
-
-    socket.onclose = () => {
-      if (!current()) return;
-      // Finalise the in-flight recording into the outbox rather than
-      // discarding it. Accepted work is already server-owned; unaccepted work
-      // remains locally retryable under the same id.
-      if (this.pushToTalk.isRecording() || this.pushToTalk.isStarting)
-        this.pushToTalk.stop(true);
-      this.handsFree.stop("disconnected");
-      this.stopHeartbeat();
-      this.outbox.markAllUnsent();
-      this.setStatus("Disconnected. Reconnecting...", true);
-      this.update({ connected: false });
-      this.scheduleReconnect(generation);
-    };
-
-    socket.onerror = () => {
-      if (!current()) return;
-      this.setStatus("Connection error.", true);
-    };
-
-    socket.onmessage = (event) => {
-      if (!current()) return;
-      if (typeof event.data === "string") {
-        const message = decodeServerMessage(event.data);
-        if (!message) {
-          console.warn(
-            "Switchboard: ignored a server message that is not in the protocol:",
-            event.data.slice(0, 200),
-          );
-          return;
-        }
-        this.handleText(message, socket, generation);
-        this.options.onServer(message);
-        // After `onServer`, so a line is in the transcript before it is
-        // heard, even when its audio has already started.
-        this.trackSpokenLine(message);
-      } else if (event.data instanceof ArrayBuffer) {
-        this.playback.receiveAudioChunk(event.data);
-      } else if (event.data instanceof Blob) {
-        void event.data.arrayBuffer().then((bytes) => {
-          if (current()) this.playback.receiveAudioChunk(bytes);
-        });
-      }
-    };
+  private receive(message: ServerMessage, socket: WebSocket): void {
+    this.handleText(message, socket);
+    this.options.onServer(message);
+    // After `onServer`, so a line is in the transcript before it is heard,
+    // even when its audio has already started.
+    this.trackSpokenLine(message);
   }
 
   /**
@@ -823,21 +687,10 @@ export class CallRuntime {
     }
   }
 
-  private scheduleReconnect(generation: number): void {
-    this.clearTimer(this.reconnectTimer);
-    this.reconnectTimer = setTimeout(() => {
-      if (generation === this.socketGeneration) this.connect();
-    }, RECONNECT_DELAY_MS);
-  }
-
-  private handleText(
-    message: ServerMessage,
-    socket: WebSocket,
-    generation: number,
-  ): void {
+  private handleText(message: ServerMessage, socket: WebSocket): void {
     switch (message.type) {
       case "hello_ack":
-        this.streamingSelected = message.stt_streaming;
+        this.link.greeted(socket, message.stt_streaming);
         this.playback.setStreamingEnabled(message.mse_mp3);
         this.flushOutbox();
         break;
@@ -857,7 +710,7 @@ export class CallRuntime {
           // operator (same generation, new route). A hangup, a rescue or a
           // reconnect's first epoch still cuts playback off at once.
           const handoff =
-            this.snapshotReady && (adoption !== null || epoch === this.turnEpoch);
+            this.link.ready && (adoption !== null || epoch === this.turnEpoch);
           const resubmitted = adoption
             ? restampStaleClips(this.outbox.all, adoption)
             : 0;
@@ -874,7 +727,7 @@ export class CallRuntime {
             (clip) => clip.epoch === epoch || clip.transmitted === true,
           );
           this.turnEpoch = epoch;
-          this.snapshotReady = true;
+          this.link.snapshot(socket);
           this.transferEra = null;
           if (resubmitted > 0) {
             this.setStatus(
@@ -936,12 +789,7 @@ export class CallRuntime {
         this.handsFree.replyClosed(message.generation, message.success);
         break;
       case "pong":
-        if (message.nonce === this.pendingPong) {
-          this.pendingPong = null;
-          this.clearTimer(this.pongDeadlineTimer);
-          this.pongDeadlineTimer = null;
-          this.startHeartbeat(socket, generation);
-        }
+        this.link.pong(socket, message.nonce);
         break;
       case "abandoned": {
         this.pushToTalk.abandonStreaming(message.id);

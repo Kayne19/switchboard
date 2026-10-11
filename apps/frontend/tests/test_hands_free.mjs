@@ -433,7 +433,7 @@ assert.match(runtime, /createSpeechEndpointer/);
 assert.match(runtime, /import\("\.\.\/silero_vad"\)/);
 assert.match(wakeWordSource, /import \{ WakeWordEngine \}/);
 assert.match(runtime, /final_response_audio_closed/);
-assert.match(runtime, /snapshotReady/);
+assert.match(runtime, /isSnapshotReady: \(\) => this\.link\.ready/);
 assert.match(runtime, /submitHandsFreeClip/);
 // The engine and ONNX Runtime load from the committed /openwakeword/ files
 // through the page's import map; the import map must precede the bundle.
