@@ -636,7 +636,13 @@ impl Switchboard {
         if let Some(project) = project {
             self.announce_agent_state(&project, "finished").await;
         }
-        self.set_active_session(self.operator_leg()).await;
+        // An operator a rescue ended is not handed back to the guard: the
+        // rescue took it off, and the next turn starts another.
+        let operator = match self.operator_leg() {
+            Some(operator) if operator.alive().await => Some(operator),
+            _ => None,
+        };
+        self.set_active_session(operator).await;
         self.coordinator.return_to_operator();
         if was_on_a_project {
             self.announce_route().await;
