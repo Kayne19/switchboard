@@ -1135,6 +1135,10 @@ pub(crate) enum Step {
     CallWithToken(String, &'static str, Value),
     /// The turn goes on and never settles: no further steps, no `turn_end`.
     Hold,
+    /// The turn goes on until the service sends the session `abort`, which
+    /// settles it (`turn_end`), as a real host's does. The fake answers
+    /// other commands meanwhile.
+    HoldUntilAbort,
     /// The turn waits until the service sends this command (a `steer`, say),
     /// which is answered as usual.
     WaitFor(&'static str),
@@ -1227,6 +1231,8 @@ impl FakeHostAgent {
         let mut calls = 0u64;
         let mut turns = 0u64;
         let mut stash: std::collections::VecDeque<Value> = Default::default();
+        // The `turn_end` of each session's turn held until it is aborted.
+        let mut held_until_abort: HashMap<String, Value> = HashMap::new();
         loop {
             let frame = match stash.pop_front() {
                 Some(frame) => frame,
@@ -1363,6 +1369,11 @@ impl FakeHostAgent {
                                 settles = false;
                                 break;
                             }
+                            Step::HoldUntilAbort => {
+                                held_until_abort.insert(session.clone(), end.clone());
+                                settles = false;
+                                break;
+                            }
                             Step::WaitFor(wanted) => {
                                 loop {
                                     let Some(frame) = link.recv().await else {
@@ -1420,6 +1431,11 @@ impl FakeHostAgent {
                         &session,
                         json!({"kind": "session_closed", "reason": "killed"}),
                     );
+                }
+                "abort" => {
+                    if let Some(end) = held_until_abort.remove(&session) {
+                        event(&link, &session, end);
+                    }
                 }
                 _ => {}
             }

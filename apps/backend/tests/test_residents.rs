@@ -1,6 +1,8 @@
 use super::*;
 use crate::hosts::{FakeHostAgent, Step};
-use crate::pbx::{board_on, board_with, project, says, serve, transcript, two_model_catalog, HOST};
+use crate::pbx::{
+    board_on, board_with, project, says, serve, transcript, two_model_catalog, HOST, OPERATOR,
+};
 use crate::project_session::ProjectLaunch;
 use crate::within;
 use serde_json::json;
@@ -456,7 +458,7 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
 #[cfg(unix)]
 #[tokio::test]
 async fn promoting_a_busy_resident_interrupts_its_turn_before_the_callers_words() {
-    let (mut board, log, resident, _notices) = board_with_a_resident(true).await;
+    let (mut board, log, resident, _notices) = board_with_a_resident(Turn::Busy).await;
 
     let reply = within("the promotion", board.dial("alpha", "")).await;
 
@@ -521,11 +523,24 @@ struct ResidentAfter {
     notices: Vec<String>,
 }
 
-/// Puts `alpha` in the background with its first turn held (`busy`) or
-/// settled (`idle`), and returns the board, its fake host's log, the
-/// resident session and the notices recorder.
+/// The resident's turn when a row's event comes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Turn {
+    /// Its first turn has settled.
+    Idle,
+    /// Its first turn runs until it is aborted, then settles, as a real
+    /// host's does.
+    Busy,
+    /// Its host woke it (a self-woken run), and the run does not stop when
+    /// it is aborted.
+    Stuck,
+}
+
+/// Puts `alpha` in the background with its turn as `turn` says, and
+/// returns the board, its fake host's log, the resident session and the
+/// notices recorder.
 async fn board_with_a_resident(
-    busy: bool,
+    turn: Turn,
 ) -> (
     Switchboard,
     crate::hosts::FakeLog,
@@ -533,8 +548,14 @@ async fn board_with_a_resident(
     Arc<StdMutex<Vec<String>>>,
 ) {
     let mut board = board_with(vec![project("alpha", "")], false);
-    // A row that waits on a turn fails in seconds, not in ten minutes.
-    board.set_project_turn_timeout_for_test(Duration::from_secs(5));
+    // A row that waits on a turn fails in seconds, not in ten minutes; a
+    // stuck turn is given up on in one.
+    board.set_project_turn_timeout_for_test(Duration::from_secs(if turn == Turn::Stuck {
+        1
+    } else {
+        5
+    }));
+    let busy = turn == Turn::Busy;
     let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
     let (idle_tx, idle_rx) = tokio::sync::oneshot::channel::<()>();
     let idle_tx = Arc::new(StdMutex::new(Some(idle_tx)));
@@ -586,20 +607,42 @@ async fn board_with_a_resident(
             .await
             .expect("the settled resident is published idle");
     }
+    if turn == Turn::Stuck {
+        board.hosts().send_fake(
+            HOST,
+            json!({"type": "event", "session": "s1", "cursor": "boot:1000",
+                   "event": {"kind": "turn_start", "cause": "autonomous", "turn_id": "wake-1"}}),
+        );
+        within("the self-woken run to start", async {
+            while !resident.busy() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+    }
     notices.lock().unwrap().clear();
     (board, log, resident, notices)
 }
 
 async fn resident_after(
-    busy: bool,
+    turn: Turn,
     event: ResidentEvent,
     notices_wanted: usize,
 ) -> (ResidentAfter, Switchboard) {
-    let (mut board, _log, resident, notices) = board_with_a_resident(busy).await;
+    let busy = turn != Turn::Idle;
+    let (mut board, _log, resident, notices) = board_with_a_resident(turn).await;
     match event {
         ResidentEvent::Stop => {
             let reply = board.stop_project("alpha").await;
             assert_eq!(reply.text, "Stopped alpha.");
+        }
+        ResidentEvent::Promote if turn == Turn::Stuck => {
+            let reply = board.dial("alpha", "").await;
+            assert_eq!(reply.route, OPERATOR);
+            assert_eq!(
+                reply.to_speak,
+                ["alpha is still busy and didn't stop. It's working in the background; ask again in a moment."]
+            );
         }
         ResidentEvent::Promote => {
             assert_eq!(board.dial("alpha", "").await.route, "alpha");
@@ -695,20 +738,39 @@ async fn a_resident_leaves_by_the_exits_of_its_table() {
         notices: notices.iter().map(|notice| (*notice).to_owned()).collect(),
     };
     let finished = ["alpha:finished"];
-    let rows: Vec<(bool, ResidentEvent, ResidentAfter)> = vec![
+    let rows: Vec<(Turn, ResidentEvent, ResidentAfter)> = vec![
         // (busy, event, after)
         (
-            true,
+            Turn::Busy,
             Stop,
             after(false, false, false, false, false, &finished),
         ),
         (
-            false,
+            Turn::Idle,
             Stop,
             after(false, false, false, false, false, &finished),
         ),
         (
-            true,
+            Turn::Stuck,
+            Promote,
+            after(true, true, true, true, false, &[]),
+        ),
+        (
+            Turn::Busy,
+            Promote,
+            after(
+                false,
+                false,
+                false,
+                true,
+                true,
+                // The interrupted background prompt ends first, while it is
+                // still the resident's.
+                &["alpha:idle", "alpha:busy", "alpha:idle"],
+            ),
+        ),
+        (
+            Turn::Idle,
             Promote,
             after(
                 false,
@@ -720,25 +782,17 @@ async fn a_resident_leaves_by_the_exits_of_its_table() {
             ),
         ),
         (
-            false,
-            Promote,
-            after(
-                false,
-                false,
-                false,
-                true,
-                true,
-                &["alpha:busy", "alpha:idle"],
-            ),
+            Turn::Busy,
+            MoreWork,
+            after(true, true, true, true, false, &[]),
         ),
-        (true, MoreWork, after(true, true, true, true, false, &[])),
         (
-            false,
+            Turn::Idle,
             MoreWork,
             after(true, true, true, true, false, &["alpha:busy", "alpha:idle"]),
         ),
         (
-            false,
+            Turn::Idle,
             MoreWorkAfterDeath,
             after(
                 false,
@@ -750,7 +804,7 @@ async fn a_resident_leaves_by_the_exits_of_its_table() {
             ),
         ),
         (
-            false,
+            Turn::Idle,
             DialAfterDeath,
             after(
                 false,
@@ -762,44 +816,39 @@ async fn a_resident_leaves_by_the_exits_of_its_table() {
             ),
         ),
         (
-            true,
+            Turn::Busy,
             ClosedOnHost,
             after(false, false, false, true, false, &finished),
         ),
         (
-            false,
+            Turn::Idle,
             ClosedOnHost,
             after(false, false, false, true, false, &finished),
         ),
         (
-            true,
+            Turn::Busy,
             StaleClosedOnHost,
             after(true, true, true, true, false, &[]),
         ),
         (
-            false,
+            Turn::Idle,
             StaleClosedOnHost,
             after(true, true, true, true, false, &[]),
         ),
         (
-            true,
+            Turn::Busy,
             Shutdown,
             after(false, false, false, false, false, &[]),
         ),
         (
-            false,
+            Turn::Idle,
             Shutdown,
             after(false, false, false, false, false, &[]),
         ),
     ];
-    for (busy, event, want) in rows {
-        let (got, mut board) = resident_after(busy, event, want.notices.len()).await;
-        assert_eq!(
-            got,
-            want,
-            "a {} resident, then {event:?}",
-            if busy { "busy" } else { "idle" }
-        );
+    for (turn, event, want) in rows {
+        let (got, mut board) = resident_after(turn, event, want.notices.len()).await;
+        assert_eq!(got, want, "a {turn:?} resident, then {event:?}");
         board.shutdown().await;
     }
 }
