@@ -155,6 +155,29 @@ Motion owns semantic continuity:
 
 Motion is an implementation detail. It must not appear in the model-facing protocol.
 
+## Modal focus
+
+The focus layer and the history are modal dialogs over the stage, and their
+focus is one machine, `ModalFocus` in `src/hooks/useModalFocus.ts`, which
+both take through `useModalFocus(open, layer, target)`. Its phase holds what
+exists only there; `transition()` is the only writer, the phase x event table
+in `tests/unit/modalFocus.test.tsx` pins it (the rows that need `inert` or a
+browser's blur are in `historyModal.spec.ts` and `focusModal.spec.ts`), and
+`leave()` cancels the frame a give-back scheduled once its phase is left:
+
+| phase | holds | left by |
+|---|---|---|
+| `closed` | nothing | `open` (`open`: what held focus is read, and focus moves to the target) |
+| `open` | the opener (null when nothing held focus) and the target | `retarget` (stays `open`; focus follows the new target when the old one is still usable, or was lost under focus), `close` (`restoring` with an opener, else `closed`) |
+| `restoring` | the opener, the next try (`Due`: the closing commit's microtask, then a frame) and the tries left | a try that gives focus back, finds the opener gone or inert, finds focus elsewhere, or is the 60th (`closed`); `open` (`open`, the pending frame cancelled) |
+
+The opener is read and the target focused in a layout effect of the commit
+that opens the dialog: that commit makes the opener inert, and it is the
+commit of the tap, which is when iPadOS Safari lets a focused field bring up
+the touch keyboard. A try names itself, so one that outlives its phase is
+dropped. The history's target is its field while the line is up and RETURN
+while it is down.
+
 ## Transport boundary
 
 The production boundary is a bidirectional WebSocket:

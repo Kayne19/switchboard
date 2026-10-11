@@ -428,6 +428,8 @@ const machines = [
 	// for a failed operation, its generation. After the rescue no step reads the current generation:
 	// `control_generation` reads it, and the superseded delivery logs it, nowhere else.
 	{ file: "apps/backend/src/page_controls.rs", writer: /\bcoordinator\.generation\(\)/, max: 2, once: [/\.begin_rescue_at\(/, /\.begin_rescue_of\(/, /\bcoordinator\.settle\(/, /\.settle_at\(/] },
+	// modal-focus (#396): `transition` writes a dialog's focus phase; `leave` cancels the give-back's frame.
+	{ file: "apps/frontend/src/hooks/useModalFocus.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/cancelAnimationFrame\(/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
@@ -457,6 +459,7 @@ const owners = [
 	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 2 },
 	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 0 },
 	{ file: "apps/frontend/src/app/screenReporter.ts", owner: "ScreenReporter", fields: 0 },
+	{ file: "apps/frontend/src/hooks/useModalFocus.ts", owner: "ModalFocus", fields: 0 },
 	{ file: "apps/backend/src/lifecycle.rs", owner: "CallLifecycle", fields: 1 },
 	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 6 },
 	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 7 },
