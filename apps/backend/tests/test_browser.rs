@@ -444,8 +444,8 @@ async fn a_connection_gets_epoch_status_history_and_scene_before_any_live_event(
     let state = state();
     // Something in every part of the snapshot: an epoch that has moved, a
     // transcript, and an object on stage.
-    state.0.coordinator.begin_rescue("an earlier rescue");
-    state.0.coordinator.settle();
+    let rescued = state.0.coordinator.begin_rescue("an earlier rescue");
+    state.0.coordinator.settle(rescued);
     let generation = state.0.coordinator.generation();
     state
         .0

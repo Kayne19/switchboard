@@ -140,8 +140,9 @@ processes and changes the leg only through the coordinator's named transitions
 transfer, a background promotion, a takeover, a redial) holds one `Startup`
 (`leg_transitions.rs`) from the candidate it stages until it commits the leg
 or abandons it, so each takes the same steps in the same order. A
-rescue ends in `settle`, which every page control and
-delivered turn passes through. A model or thinking redial is decided before
+rescue's quiet ends in `settle`, which takes the token the rescue returned
+(every page control on its way out), or `settle_at` for a reply delivered
+at that generation; a status publication settles nothing. A model or thinking redial is decided before
 anything is torn down: `RedialPlanner` (`redial.rs`) makes every refusal from the
 coordinator's leg and prewarm's launch plan, without the PBX lock, so a refused
 page swap never rescues the live leg; `Switchboard::redial` runs a plan only
@@ -448,7 +449,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `api.rs` | the primary router, `/healthz`, the debug listener's router, and the origin check both listeners apply | anything a handler does |
 | `app_state.rs` | `AppState`/`AppInner` and their construction (the callbacks installed into the PBX and coordinator), the workers, shutdown, the event fan-out, the operation registry, the resident-agent projection | provider wire formats, PBX policy |
 | `browser.rs` | the `/ws` connection and its size bound: registration, snapshot, the frame multiplexer, which screen reports count, frame writes | what a command does once parsed, the screen report's shape (`display.rs`) |
-| `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, and the rescue each control starts with | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
+| `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, the rescue each control starts with, and the control's one flow from admission to settle (`PageControl`) | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
 | `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection, who is waiting to speak (`floor.rs`'s) |
 | `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |
 | `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker and a caller turn's one end (`TurnRun`) | speech synthesis, PBX policy, host-reported turns (`host_turns.rs`'s) |
@@ -508,7 +509,7 @@ through them.
 | `Open` | the leg on the line; the turn running on it, if any | the call starts here; `settle`, `finish_intro`, a rollback, `return_to_operator` from `Quiescing` | `begin_candidate`, a rescue, `begin_shutdown` |
 | `Starting` | the leg, which still answers; the staged candidate, private until adopted; the leg's turn (a transfer runs inside the caller's) | `begin_candidate` | `adopt_candidate`; a rollback (to `Open`, the turn kept); a rescue or shutdown, which abandon the candidate and retire its generation |
 | `Adopted` | the adopted leg and its intro (or later) turn; the leg it `replaced` | `adopt_candidate` | `finish_intro` (to `Open`); a rollback (`replaced` comes back); a rescue; a shutdown; another `begin_candidate` |
-| `Quiescing` | the leg under the rescue's new identity; no turn | a rescue | `settle`, `return_to_operator`, `begin_candidate`, a shutdown |
+| `Quiescing` | the leg under the rescue's new identity; no turn | a rescue | a settle naming that rescue's generation (`settle`, `settle_at`), `return_to_operator`, `begin_candidate`, a shutdown |
 | `Shutdown` | the leg; no turn, no startup | `begin_shutdown` | nothing |
 
 Entering `Starting` announces the candidate (`candidate`); leaving it
@@ -576,6 +577,30 @@ the guard and ends the session, and since an ended session is never named,
 no later change hands it back. `every_change_to_the_legs_leaves_the_guard_as_the_table_says`
 in `apps/backend/tests/test_pbx.rs` pins six call states against eight
 changes to the legs.
+
+### A page control
+
+`/connect`, `/model`, `/thinking` and `/hangup` take one flow
+(`page_controls.rs`). It is a fixed sequence with failure exits, not a
+machine: each step consumes the control and returns the next, and the
+coordinator's rescue token (`lifecycle::Rescued`) is the only generation a
+step after the rescue gets, so none can read the current one again
+(#263, #369).
+
+| step | holds | on failure |
+|---|---|---|
+| `PageControl::admit` | `Admitted`: the generation the page held, which is the call's | 400 with none, 409 for one the call has left: "refused" (a picker), "ignored" (a hangup) |
+| `Admitted::decide` (a redial only) | the decision, registered at the admitted generation; running work is left alone | as `run`, at the admitted generation; an answer that needs no redial (a refusal, a setting on the operator) is delivered there and nothing is rescued |
+| `Admitted::rescue` (`begin_rescue_at`), `rescue_for` (`begin_rescue_of`, a redial) | `Rescued`: the token, after the leg's work is released | nothing rescued: 409 ("cancelled", "ignored", "superseded") |
+| `Rescued::run` (the dial, the redial) | the operation, registered at the token's generation | 409 "cancelled" if a newer rescue retired it (that one settles); 500 and a settle if it failed |
+| `Rescued::lock_pbx` (the hangup) | the PBX, checked under its lock against the token | 409 "superseded": a newer control owns the call |
+| `deliver` | the reply, delivered at its generation; the delivery settles | 409 "superseded" |
+| `Rescued::settle` | consumes the token: ends the quiet only while the call is at its generation | none: a newer rescue's quiet is that rescue's to end |
+
+`every_page_control_exit_leaves_the_line_as_the_table_says` in
+`apps/backend/tests/test_page_controls.rs` drives each control through
+each exit and pins the answer and the line it leaves. A new control is a
+handler that composes these steps; a new exit is a row there.
 
 ## Turn lifecycle
 

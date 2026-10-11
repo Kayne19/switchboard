@@ -1493,7 +1493,8 @@ async fn assert_turn_at_rest(state: &AppState, id: &str) {
     assert!(state.0.active_operations.lock().await.is_empty());
     assert!(state.0.active_speech_group().is_none());
     assert!(!state.0.turns.routed_decisions.lock().await.contains_key(id));
-    state.0.coordinator.settle();
+    let coordinator = &state.0.coordinator;
+    coordinator.settle_at(coordinator.generation());
     let probe = state
         .0
         .coordinator

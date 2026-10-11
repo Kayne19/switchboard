@@ -69,21 +69,26 @@ async fn page_rescue_aborts_work_before_waiting_for_the_pbx_lock() {
 async fn newer_page_control_supersedes_setup_before_a_session_exists() {
     let state = state();
     let first_state = state.clone();
-    let (first, first_id, _) =
-        spawn_active_operation(&state, state.0.coordinator.generation(), async move {
+    let (first, first_id) =
+        spawn_registered_operation(&state, state.0.coordinator.generation(), async move {
             hold_turn_lock(&first_state, None).await;
         })
         .await
         .unwrap();
 
     let second_state = state.clone();
-    let (second, second_id, _generation) =
-        spawn_replacing_operation(&state, state.0.coordinator.generation(), async move {
-            let _held_second = second_state.0.switchboard.lock().await;
-            7
-        })
-        .await
-        .unwrap();
+    let Ok((rescued, _closed)) = admitted(&state).rescue().await else {
+        panic!("the call is still at the generation the control was admitted at");
+    };
+    let second = tokio::spawn(async move {
+        rescued
+            .run(async move {
+                let _held_second = second_state.0.switchboard.lock().await;
+                7
+            })
+            .await
+            .map(|(_, output)| output)
+    });
 
     assert!(within("first", first).await.unwrap_err().is_cancelled());
     clear_active_operation(&state, first_id).await;
@@ -91,10 +96,10 @@ async fn newer_page_control_supersedes_setup_before_a_session_exists() {
         timeout(Duration::from_secs(1), second)
             .await
             .unwrap()
+            .unwrap()
             .unwrap(),
         7
     );
-    clear_active_operation(&state, second_id).await;
     assert!(state.0.active_operations.lock().await.is_empty());
 }
 
@@ -109,11 +114,11 @@ async fn a_control_overtaken_during_its_rescue_registers_nothing() {
     // The rescue stops after it moved the generation, while it waits to close
     // the live session.
     let session = state.0.active_session.lock().await;
-    let control_state = state.clone();
+    let control = admitted(&state);
     let control = tokio::spawn(async move {
-        spawn_replacing_operation(&control_state, generation, async { 7 })
+        run_page_control(control, async { operator_reply() })
             .await
-            .map(|(_, _, generation)| generation)
+            .err()
     });
     timeout(Duration::from_secs(5), async {
         while state.0.coordinator.generation() == generation {
@@ -125,11 +130,18 @@ async fn a_control_overtaken_during_its_rescue_registers_nothing() {
     state.0.coordinator.begin_rescue("a newer control");
     drop(session);
 
-    let registered = timeout(Duration::from_secs(5), control)
+    let refused = timeout(Duration::from_secs(5), control)
         .await
         .unwrap()
-        .unwrap();
-    assert_eq!(registered, None, "it ran on the newer control's generation");
+        .unwrap()
+        .expect("it ran on the newer control's generation");
+    assert_eq!(
+        refusal_of(refused).await,
+        (
+            StatusCode::CONFLICT,
+            json!({"detail":"connection attempt was cancelled"})
+        )
+    );
     assert!(state.0.active_operations.lock().await.is_empty());
 }
 
@@ -244,8 +256,7 @@ done
 async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superseded() {
     let state = state();
     let rescuer = state.clone();
-    let generation = state.0.coordinator.generation();
-    let controlled = run_page_control(&state, "connection attempt", generation, async move {
+    let controlled = run_page_control(admitted(&state), async move {
         rescuer.0.coordinator.begin_rescue("page rescue");
         operator_reply()
     })
@@ -267,8 +278,7 @@ async fn a_page_control_whose_leg_is_rescued_mid_operation_is_refused_as_superse
 #[tokio::test]
 async fn a_page_control_that_fails_is_refused_as_a_server_error() {
     let state = state();
-    let generation = state.0.coordinator.generation();
-    let controlled = run_page_control(&state, "connection attempt", generation, async move {
+    let controlled = run_page_control(admitted(&state), async move {
         panic!("the PBX operation failed");
     })
     .await;
@@ -371,8 +381,8 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
 
     // The operator puts the caller through, as a turn the rescue can cancel.
     let turn_state = state.clone();
-    let (turn, _id, _generation) =
-        spawn_active_operation(&state, state.0.coordinator.generation(), async move {
+    let (turn, _id) =
+        spawn_registered_operation(&state, state.0.coordinator.generation(), async move {
             let mut board = turn_state.0.switchboard.lock().await;
             board.handle("put me through to alpha").await
         })
@@ -549,8 +559,8 @@ async fn hanging_up_a_project_leg_from_the_page_does_not_wait_for_its_turn() {
     // A turn that will never settle holds the PBX lock.
     let (locked_tx, locked_rx) = oneshot::channel();
     let turn_state = state.clone();
-    let (wedged, _, _) =
-        spawn_active_operation(&state, state.0.coordinator.generation(), async move {
+    let (wedged, _) =
+        spawn_registered_operation(&state, state.0.coordinator.generation(), async move {
             hold_turn_lock(&turn_state, Some(locked_tx)).await;
         })
         .await
@@ -1240,6 +1250,18 @@ async fn queue_a_clip_while_a_page_control_starts_a_leg(
     (control, turn_worker)
 }
 
+/// A `/connect` admitted at the generation the call is at, as the page
+/// sends it.
+fn admitted(state: &AppState) -> Admitted {
+    PageControl::admit(
+        state,
+        "connection attempt",
+        StaleOutcome::Refused,
+        Some(state.0.coordinator.generation()),
+    )
+    .unwrap_or_else(|_| panic!("the page holds the generation the call is at"))
+}
+
 fn operator_reply() -> crate::reply::Reply {
     crate::reply::Reply {
         text: String::new(),
@@ -1465,4 +1487,273 @@ async fn wedge_a_turn(state: &AppState) -> JoinHandle<()> {
         .insert(abort.id(), abort);
     within("locked_rx", locked_rx).await.unwrap();
     turn
+}
+
+// ---------------------------------------------------------------------------
+// The page control table (#369). A page control is a fixed sequence with
+// failure exits: admitted at the generation the page held, rescued (a
+// redial decides first), its operation run at the rescue's generation, the
+// PBX acted on, the reply delivered, and the call settled. Each row drives
+// one control through one exit over HTTP, on a call put through to alpha,
+// and records the answer and the line it leaves: how far the generation
+// moved (`+1` is the control's own rescue, `+2` a newer one on top), whether
+// the call is still quiescing or has settled, and the route.
+
+const PAGE_CONTROL_ROWS: [&str; 24] = [
+    "connect | admitted | no generation",
+    "connect | admitted | the line moved on",
+    "connect | rescued | the dial is delivered",
+    "connect | rescued | a newer rescue lands while it releases the leg",
+    "connect | running | a newer rescue cancels the dial",
+    "connect | delivering | a newer rescue supersedes the reply",
+    "hangup | admitted | no generation",
+    "hangup | admitted | the line moved on",
+    "hangup | rescued | the leg is dropped",
+    "hangup | rescued | a newer rescue lands while it releases the leg",
+    "hangup | at the pbx | a newer rescue lands before the check",
+    "hangup | at the pbx | a newer rescue lands after the drop",
+    "model | admitted | no generation",
+    "model | admitted | the line moved on",
+    "model | deciding | answered without a redial",
+    "model | deciding | a rescue cancels the decision",
+    "model | deciding | the caller leaves before the rescue",
+    "model | rescued | the redial is delivered",
+    "model | rescued | a newer rescue lands while it releases the leg",
+    "model | running | a newer rescue cancels the redial",
+    "model | running | the caller leaves before the pbx",
+    "thinking | admitted | no generation",
+    "thinking | deciding | answered without a redial",
+    "thinking | rescued | the redial is delivered",
+];
+
+#[cfg(unix)]
+#[tokio::test]
+async fn every_page_control_exit_leaves_the_line_as_the_table_says() {
+    let mut rows = Vec::new();
+    for row in PAGE_CONTROL_ROWS {
+        let call = call_on_alpha(&[]).await;
+        let before = call.state.0.coordinator.generation();
+        let (code, answer) = drive_page_control(&call, row).await;
+        let body = serde_json::to_string(&answer).unwrap();
+        rows.push(format!(
+            "{row} => {} {body} | {}",
+            code.as_u16(),
+            line_after(&call.state, before)
+        ));
+        call.hang_up().await;
+    }
+    let expected: Vec<&str> = PAGE_CONTROL_TABLE.trim().lines().map(str::trim).collect();
+    if rows != expected {
+        eprintln!("{}", rows.join("\n"));
+    }
+    assert_eq!(rows, expected);
+}
+
+const PAGE_CONTROL_TABLE: &str = r#"
+connect | admitted | no generation => 400 {"detail":"connection attempt was refused: it carries no generation"} | +0 settled alpha
+connect | admitted | the line moved on => 409 {"detail":"connection attempt was refused: the line moved on (the page held generation 1, the call is at 2)"} | +0 settled alpha
+connect | rescued | the dial is delivered => 200 {"error":null,"route":"operator"} | +1 settled operator
+connect | rescued | a newer rescue lands while it releases the leg => 409 {"detail":"connection attempt was cancelled"} | +2 quiescing alpha
+connect | running | a newer rescue cancels the dial => 409 {"detail":"connection attempt was cancelled"} | +2 quiescing alpha
+connect | delivering | a newer rescue supersedes the reply => 409 {"detail":"connection attempt was superseded"} | +2 settled operator
+hangup | admitted | no generation => 400 {"detail":"hangup was ignored: it carries no generation"} | +0 settled alpha
+hangup | admitted | the line moved on => 409 {"detail":"hangup was ignored: the line moved on (the page held generation 1, the call is at 2)"} | +0 settled alpha
+hangup | rescued | the leg is dropped => 200 {"hungup":true,"left":"alpha"} | +1 settled operator
+hangup | rescued | a newer rescue lands while it releases the leg => 409 {"detail":"hangup was superseded"} | +2 quiescing alpha
+hangup | at the pbx | a newer rescue lands before the check => 409 {"detail":"hangup was superseded"} | +2 quiescing alpha
+hangup | at the pbx | a newer rescue lands after the drop => 200 {"hungup":true,"left":"alpha"} | +2 quiescing operator
+model | admitted | no generation => 400 {"detail":"model change was refused: it carries no generation"} | +0 settled alpha
+model | admitted | the line moved on => 409 {"detail":"model change was refused: the line moved on (the page held generation 1, the call is at 2)"} | +0 settled alpha
+model | deciding | answered without a redial => 200 {"error":null,"model":"anthropic/current"} | +0 settled alpha
+model | deciding | a rescue cancels the decision => 409 {"detail":"model change was cancelled"} | +1 quiescing alpha
+model | deciding | the caller leaves before the rescue => 409 {"detail":"model change was superseded"} | +0 settled operator
+model | rescued | the redial is delivered => 200 {"error":null,"model":"anthropic/next"} | +2 settled alpha
+model | rescued | a newer rescue lands while it releases the leg => 409 {"detail":"model change was cancelled"} | +2 quiescing alpha
+model | running | a newer rescue cancels the redial => 409 {"detail":"model change was cancelled"} | +2 quiescing alpha
+model | running | the caller leaves before the pbx => 409 {"detail":"model change was superseded"} | +1 settled operator
+thinking | admitted | no generation => 400 {"detail":"thinking change was refused: it carries no generation"} | +0 settled alpha
+thinking | deciding | answered without a redial => 200 {"error":null,"thinking":"medium"} | +0 settled alpha
+thinking | rescued | the redial is delivered => 200 {"error":null,"thinking":"high"} | +2 settled alpha
+"#;
+
+/// Drives one row of `PAGE_CONTROL_ROWS` on `call` and returns the answer.
+#[cfg(unix)]
+async fn drive_page_control(call: &AlphaCall, row: &str) -> (StatusCode, Value) {
+    let state = &call.state;
+    let generation = state.0.coordinator.generation();
+    let (control, phase, event) = {
+        let mut parts = row.split(" | ");
+        (
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+        )
+    };
+    let (path, body) = match control {
+        "connect" => ("/connect", json!({"project": "operator"})),
+        "hangup" => ("/hangup", json!({})),
+        "model" => ("/model", json!({"model": "anthropic/next"})),
+        "thinking" => ("/thinking", json!({"level": "high"})),
+        other => panic!("no control {other}"),
+    };
+    let at = |mut body: Value| {
+        body["generation"] = json!(generation);
+        body
+    };
+    match (phase, event) {
+        ("admitted", "no generation") => request_json(state, Method::POST, path, Some(body)).await,
+        ("admitted", "the line moved on") => {
+            let mut body = at(body);
+            body["generation"] = json!(generation - 1);
+            request_json(state, Method::POST, path, Some(body)).await
+        }
+        ("deciding", "answered without a redial") => {
+            let body = match control {
+                "model" => json!({"model": "anthropic/current"}),
+                _ => json!({"level": "medium"}),
+            };
+            request_json(state, Method::POST, path, Some(at(body))).await
+        }
+        ("deciding", "a rescue cancels the decision") => {
+            call.prewarm
+                .settle_catalog("scriptorium", crate::prewarm::CatalogState::Pending);
+            let request = post(state, path, at(body));
+            until(|| call.prewarm.catalog_waiters("scriptorium") > 0).await;
+            cancel_active_operations(state).await;
+            within("request", request).await.unwrap()
+        }
+        ("deciding", "the caller leaves before the rescue") => {
+            call.prewarm
+                .settle_catalog("scriptorium", crate::prewarm::CatalogState::Pending);
+            let request = post(state, path, at(body));
+            until(|| call.prewarm.catalog_waiters("scriptorium") > 0).await;
+            state.0.switchboard.lock().await.force_hangup().await;
+            call.prewarm.settle_catalog(
+                "scriptorium",
+                crate::prewarm::CatalogState::Ready {
+                    snapshot: catalog_of(&["current", "next"]),
+                    degraded_reason: None,
+                },
+            );
+            within("request", request).await.unwrap()
+        }
+        ("rescued", "a newer rescue lands while it releases the leg") => {
+            // The control's rescue stops after it moved the generation, while
+            // it waits to take the live session off the guard.
+            let guard = state.0.active_session.lock().await;
+            let request = post(state, path, at(body));
+            until(|| state.0.coordinator.generation() != generation).await;
+            state.0.coordinator.begin_rescue("a newer control");
+            drop(guard);
+            within("request", request).await.unwrap()
+        }
+        ("rescued", _) => request_json(state, Method::POST, path, Some(at(body))).await,
+        ("running", "a newer rescue cancels the dial" | "a newer rescue cancels the redial") => {
+            // The operation is registered at the control's rescue and waits
+            // for the PBX, which the test holds.
+            let board = state.0.switchboard.lock().await;
+            let request = post(state, path, at(body));
+            until_registered(state, generation).await;
+            cancel_active_operations(state).await;
+            drop(board);
+            within("request", request).await.unwrap()
+        }
+        ("running", "the caller leaves before the pbx") => {
+            // A turn holds the PBX; something queued behind it for the lock,
+            // and not an operation a rescue cancels, moves the caller first.
+            let turn = wedge_a_turn(state).await;
+            let (queued_tx, queued_rx) = oneshot::channel();
+            let mover_state = state.clone();
+            let mover = tokio::spawn(async move {
+                let board = mover_state.0.switchboard.lock();
+                let _ = queued_tx.send(());
+                // unbounded: inside the spawned mover; the row bounds `mover` itself.
+                board.await.force_hangup().await
+            });
+            within("queued_rx", queued_rx).await.unwrap();
+            let answer = request_json(state, Method::POST, path, Some(at(body))).await;
+            assert!(within("turn", turn).await.unwrap_err().is_cancelled());
+            within("mover", mover).await.unwrap();
+            answer
+        }
+        ("delivering", "a newer rescue supersedes the reply") => {
+            // The dial waits for the PBX; a newer rescue that cancels nothing
+            // lands before it returns, so its reply is for a retired leg.
+            let board = state.0.switchboard.lock().await;
+            let request = post(state, path, at(body));
+            until_registered(state, generation).await;
+            state.0.coordinator.begin_rescue("a newer control");
+            drop(board);
+            within("request", request).await.unwrap()
+        }
+        ("at the pbx", "a newer rescue lands before the check") => {
+            let board = state.0.switchboard.lock().await;
+            let request = post(state, path, at(body));
+            until(|| state.0.coordinator.generation() != generation).await;
+            state.0.coordinator.begin_rescue("a newer control");
+            drop(board);
+            within("request", request).await.unwrap()
+        }
+        ("at the pbx", "a newer rescue lands after the drop") => {
+            // The hangup has dropped alpha and waits to write its line into
+            // the transcript, which the test holds.
+            let transcript = state.0.transcript_log.lock().await;
+            let request = post(state, path, at(body));
+            until(|| state.0.coordinator.route() == OPERATOR).await;
+            state.0.coordinator.begin_rescue("a newer control");
+            drop(transcript);
+            within("request", request).await.unwrap()
+        }
+        _ => panic!("no row {row}"),
+    }
+}
+
+/// Posts a page control on its own task.
+fn post(state: &AppState, path: &str, body: Value) -> JoinHandle<(StatusCode, Value)> {
+    let state = state.clone();
+    let path = path.to_owned();
+    tokio::spawn(async move { request_json(&state, Method::POST, &path, Some(body)).await })
+}
+
+/// Waits, bounded, until `ready` holds.
+async fn until(ready: impl Fn() -> bool) {
+    timeout(Duration::from_secs(5), async {
+        while !ready() {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the control reached the step the row waits for");
+}
+
+/// Waits, bounded, until a control admitted at `generation` has rescued
+/// and registered its operation.
+async fn until_registered(state: &AppState, generation: u64) {
+    timeout(Duration::from_secs(5), async {
+        while state.0.coordinator.generation() == generation
+            || state.0.active_operations.lock().await.is_empty()
+        {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await
+    .expect("the control registered its operation");
+}
+
+/// The line a control left: how far the generation moved from `before`,
+/// whether the call still quiesces (its activity is discarded) or has
+/// settled, and the route.
+fn line_after(state: &AppState, before: u64) -> String {
+    let coordinator = &state.0.coordinator;
+    let route = coordinator.route();
+    let leg = if route == OPERATOR {
+        OPERATOR.to_owned()
+    } else {
+        coordinator.current_identity().token
+    };
+    let line = match coordinator.classify_activity(&leg) {
+        crate::lifecycle::ActivityDisposition::Discard => "quiescing",
+        _ => "settled",
+    };
+    format!("+{} {line} {route}", coordinator.generation() - before)
 }

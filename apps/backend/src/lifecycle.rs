@@ -52,6 +52,25 @@ pub struct ProjectLeg {
     pub persistent_session_id: String,
 }
 
+/// What a rescue leaves: the identity the line is on after it. Only a rescue
+/// issues one, and `Coordinator::settle` takes it, so a settle names the
+/// quiet it ends and cannot end a newer rescue's.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Rescued {
+    identity: LegIdentity,
+}
+
+impl Rescued {
+    #[cfg(test)]
+    pub fn identity(&self) -> &LegIdentity {
+        &self.identity
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.identity.generation
+    }
+}
+
 /// One prompt turn on one leg. A steer attaches to the turn already running.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperationIdentity {
@@ -430,21 +449,21 @@ impl Coordinator {
     /// keeps the line, but its startup is over too: the rescue cancels the
     /// work that would have committed or rolled it back, so nothing is left
     /// for a late rollback to restore.
-    fn rescue(&self, of: RescueOf, reason: String) -> Option<LegIdentity> {
-        let (notice, next) = self.linearize(|state| {
+    fn rescue(&self, of: RescueOf, reason: String) -> Option<Rescued> {
+        let (notice, identity) = self.linearize(|state| {
             let notice = self.step_locked(state, Event::Rescue(of)).ok()?;
             Some((notice, state.line.leg().identity.clone()))
         })?;
         tracing::info!(
             %reason,
-            generation = next.generation,
+            generation = identity.generation,
             abandoned_candidate = notice.as_ref().map(|notice| notice.route.as_str()),
             "rescue retired the current leg"
         );
-        Some(next)
+        Some(Rescued { identity })
     }
 
-    pub fn begin_rescue(&self, reason: impl Into<String>) -> LegIdentity {
+    pub fn begin_rescue(&self, reason: impl Into<String>) -> Rescued {
         self.rescue(RescueOf::Line, reason.into())
             .expect("a rescue of the line is admitted in every phase")
     }
@@ -453,11 +472,7 @@ impl Coordinator {
     /// rescues nothing. A page control carries the generation the page held
     /// when the caller acted, so one meant for a leg the call has since left
     /// does not rescue the leg it moved to (#263).
-    pub fn begin_rescue_at(
-        &self,
-        generation: u64,
-        reason: impl Into<String>,
-    ) -> Option<LegIdentity> {
+    pub fn begin_rescue_at(&self, generation: u64, reason: impl Into<String>) -> Option<Rescued> {
         self.rescue(RescueOf::Generation(generation), reason.into())
     }
 
@@ -465,29 +480,40 @@ impl Coordinator {
     /// startup is in flight; `None` rescues nothing. A control that decided on
     /// the leg it read earlier does not cancel work on a leg the caller has
     /// since moved to, nor on one the PBX does not hold yet. Returns
-    /// the leg as the rescue left it: the same project, model, and session
-    /// under a new identity.
+    /// the leg as the rescue left it, the same project, model, and session
+    /// under a new identity, with the rescue's token.
     pub fn begin_rescue_of(
         &self,
         leg: &ProjectLeg,
         reason: impl Into<String>,
-    ) -> Option<ProjectLeg> {
-        let identity = self.rescue(RescueOf::Leg(leg), reason.into())?;
-        Some(ProjectLeg {
-            identity,
+    ) -> Option<(ProjectLeg, Rescued)> {
+        let rescued = self.rescue(RescueOf::Leg(leg), reason.into())?;
+        let leg = ProjectLeg {
+            identity: rescued.identity.clone(),
             ..leg.clone()
-        })
+        };
+        Some((leg, rescued))
     }
 
-    /// Ends the quiet a rescue left: a `Quiescing` call comes to rest on the
-    /// route it is on, and callbacks and steers are admitted again. Every
-    /// page control settles on its way out, and so does every delivered turn,
-    /// including one that was refused. Returns the status to publish.
-    pub fn settle(&self) -> Status {
+    /// Ends the quiet `rescued` began: a call still `Quiescing` at its
+    /// generation comes to rest on the route it is on, and callbacks and
+    /// steers are admitted again. Every page control that rescued settles on
+    /// its way out. True while the call is at the rescue's generation;
+    /// false, and nothing settled, once a newer rescue has taken it over:
+    /// that one settles it.
+    pub fn settle(&self, rescued: Rescued) -> bool {
+        self.settle_at(rescued.generation())
+    }
+
+    /// `settle`, for work admitted at `generation` without a rescue of its
+    /// own: a delivered reply (a caller's turn, a page control's answer,
+    /// including a refusal) or a page control whose decision failed. It
+    /// ends a quiet only while the call is still at that generation.
+    pub fn settle_at(&self, generation: u64) -> bool {
         self.linearize(|state| {
-            self.step_locked(state, Event::Settle)
+            self.step_locked(state, Event::Settle { generation })
                 .expect("a settle is admitted in every phase");
-            state.status(&self.config)
+            state.line.leg().identity.generation == generation
         })
     }
 

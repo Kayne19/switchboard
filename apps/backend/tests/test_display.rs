@@ -572,8 +572,8 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
     // A rescue moves the generation without announcing a leg: the gate is
     // left alone until the page reports at the new generation, which starts
     // that generation's confirmations.
-    state.0.coordinator.begin_rescue("a table row");
-    state.0.coordinator.settle();
+    let rescue = state.0.coordinator.begin_rescue("a table row");
+    state.0.coordinator.settle(rescue);
     let rescued = state.0.coordinator.generation();
     assert_eq!(seen(&state).await, want, "a rescue");
     report(
