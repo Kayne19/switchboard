@@ -111,9 +111,10 @@ pub(crate) async fn cancel_active_operations(state: &AppState) -> Option<String>
     release_rescued_work(state, rescued.generation(), false, "operation interrupted").await
 }
 /// What a rescue does once the coordinator has retired the leg: drop queued
-/// audio, announce the new epoch, abort registered work, and close the live
-/// leg, or, for a model change that keeps the session (`keep_session`), only
-/// stop its running turn. Returns the label of the leg it closed.
+/// audio, clear the stage and announce the new epoch, abort registered work,
+/// and close the live leg, or, for a model change that keeps the session
+/// (`keep_session`), only stop its running turn. Returns the label of the leg
+/// it closed.
 async fn release_rescued_work(
     state: &AppState,
     generation: u64,
@@ -122,9 +123,18 @@ async fn release_rescued_work(
 ) -> Option<String> {
     state.0.clear_continuity();
     state.0.audio.lock().await.clear();
-    // Tell the browser at once, so speech it starts recording after this point
-    // is stamped with the new epoch rather than the one being retired.
-    emit_message(state, ServerMessage::Epoch { generation });
+    {
+        // The stage is the retired leg's: cleared with the epoch, under the
+        // gate, as a new leg's is (`LegAnnouncer::begin_scene`), so a page
+        // that connects or an agent that asks for `view` before the next leg
+        // is announced does not see the old leg's objects.
+        let mut gate = state.0.display_gate.lock().await;
+        gate.rescue(generation);
+        // Tell the browser at once, so speech it starts recording after this
+        // point is stamped with the new epoch rather than the one being
+        // retired.
+        emit_message(state, ServerMessage::Epoch { generation });
+    }
     let operations = std::mem::take(&mut *state.0.active_operations.lock().await);
     for operation in operations.into_values() {
         operation.abort();
