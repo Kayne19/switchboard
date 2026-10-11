@@ -145,6 +145,39 @@ async fn a_control_overtaken_during_its_rescue_registers_nothing() {
     assert!(state.0.active_operations.lock().await.is_empty());
 }
 
+// #461: a redial's decision rescues nothing. One that fails while another
+// control's rescue quiesces (a /model pressed while a /connect dials) must
+// not end that control's quiet: turns would be admitted mid-dial.
+#[tokio::test]
+async fn a_decision_that_fails_leaves_another_controls_quiet() {
+    let state = state();
+    state.0.coordinator.begin_rescue("another control");
+    let control = PageControl::admit(
+        &state,
+        "model change",
+        StaleOutcome::Refused,
+        Some(state.0.coordinator.generation()),
+    )
+    .unwrap_or_else(|_| panic!("the page holds the generation the call is at"));
+
+    let Err(failed) = control.decide(async { a_failing_decision() }).await else {
+        panic!("the decision failed");
+    };
+
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        matches!(
+            state.0.coordinator.classify_activity(OPERATOR),
+            crate::lifecycle::ActivityDisposition::Discard
+        ),
+        "the decision ended the other control's quiet"
+    );
+}
+
+fn a_failing_decision() -> crate::redial::Redial {
+    panic!("the decision failed")
+}
+
 #[tokio::test]
 async fn speech_queued_while_a_page_control_starts_a_leg_is_dropped_with_notice_on_adoption() {
     let state = state();
@@ -1499,7 +1532,7 @@ async fn wedge_a_turn(state: &AppState) -> JoinHandle<()> {
 // moved (`+1` is the control's own rescue, `+2` a newer one on top), whether
 // the call is still quiescing or has settled, and the route.
 
-const PAGE_CONTROL_ROWS: [&str; 24] = [
+const PAGE_CONTROL_ROWS: [&str; 26] = [
     "connect | admitted | no generation",
     "connect | admitted | the line moved on",
     "connect | rescued | the dial is delivered",
@@ -1517,12 +1550,14 @@ const PAGE_CONTROL_ROWS: [&str; 24] = [
     "model | deciding | answered without a redial",
     "model | deciding | a rescue cancels the decision",
     "model | deciding | the caller leaves before the rescue",
+    "model | deciding | answered while another control's rescue quiesces",
     "model | rescued | the redial is delivered",
     "model | rescued | a newer rescue lands while it releases the leg",
     "model | running | a newer rescue cancels the redial",
     "model | running | the caller leaves before the pbx",
     "thinking | admitted | no generation",
     "thinking | deciding | answered without a redial",
+    "thinking | deciding | answered while another control's rescue quiesces",
     "thinking | rescued | the redial is delivered",
 ];
 
@@ -1567,12 +1602,14 @@ model | admitted | the line moved on => 409 {"detail":"model change was refused:
 model | deciding | answered without a redial => 200 {"error":null,"model":"anthropic/current"} | +0 settled alpha
 model | deciding | a rescue cancels the decision => 409 {"detail":"model change was cancelled"} | +1 quiescing alpha
 model | deciding | the caller leaves before the rescue => 409 {"detail":"model change was superseded"} | +0 settled operator
+model | deciding | answered while another control's rescue quiesces => 200 {"error":null,"model":"anthropic/current"} | +1 quiescing alpha
 model | rescued | the redial is delivered => 200 {"error":null,"model":"anthropic/next"} | +2 settled alpha
 model | rescued | a newer rescue lands while it releases the leg => 409 {"detail":"model change was cancelled"} | +2 quiescing alpha
 model | running | a newer rescue cancels the redial => 409 {"detail":"model change was cancelled"} | +2 quiescing alpha
 model | running | the caller leaves before the pbx => 409 {"detail":"model change was superseded"} | +1 settled operator
 thinking | admitted | no generation => 400 {"detail":"thinking change was refused: it carries no generation"} | +0 settled alpha
 thinking | deciding | answered without a redial => 200 {"error":null,"thinking":"medium"} | +0 settled alpha
+thinking | deciding | answered while another control's rescue quiesces => 200 {"error":null,"thinking":"medium"} | +1 quiescing alpha
 thinking | rescued | the redial is delivered => 200 {"error":null,"thinking":"high"} | +2 settled alpha
 "#;
 
@@ -1613,6 +1650,18 @@ async fn drive_page_control(call: &AlphaCall, row: &str) -> (StatusCode, Value) 
                 _ => json!({"level": "medium"}),
             };
             request_json(state, Method::POST, path, Some(at(body))).await
+        }
+        ("deciding", "answered while another control's rescue quiesces") => {
+            // Another control (a /connect still dialing) has rescued, and
+            // the page holds its generation. The answer rescued nothing, so
+            // the quiet stays that control's to end (#461).
+            state.0.coordinator.begin_rescue("another control");
+            let mut body = match control {
+                "model" => json!({"model": "anthropic/current"}),
+                _ => json!({"level": "medium"}),
+            };
+            body["generation"] = json!(state.0.coordinator.generation());
+            request_json(state, Method::POST, path, Some(body)).await
         }
         ("deciding", "a rescue cancels the decision") => {
             call.prewarm
