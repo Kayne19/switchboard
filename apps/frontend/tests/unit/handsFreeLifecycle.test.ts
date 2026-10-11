@@ -138,6 +138,8 @@ const HANDED_OFF = "The line changed; listening locally for “Damocles”.";
 const PTT_FIRST = "Finish push-to-talk and keep this page visible first.";
 const DETECTOR_FAILED = "Hands-free detector failed (Error).";
 const START_FAILED = "Hands-free could not start (Error).";
+const NO_RECORDER = "Hands-free recording is unavailable (Error).";
+const RECORDING_FAILED = "Hands-free recording failed (Error).";
 
 class TableRecorder {
   static starts = 0;
@@ -526,10 +528,10 @@ const rows: Row[] = [
 
   { from: "wake_grace", event: "speech start", seen: { published: ["capturing"], said: CAPTURING, starts: 1 }, then: "capturing" },
   { from: "wake_grace", event: "speech start, no snapshot", seen: {}, then: "wake_grace" },
-  // Today a recorder that cannot be made or started says so, then turns
-  // hands-free off over it.
-  { from: "wake_grace", event: "speech start, no recorder", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
-  { from: "wake_grace", event: "speech start, start throws", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
+  // A recorder that cannot be made or started ends in `error`, as every
+  // other failure does: one publish, and the error stands.
+  { from: "wake_grace", event: "speech start, no recorder", seen: { published: ["error"], said: NO_RECORDER, ...LET_GO }, then: "error" },
+  { from: "wake_grace", event: "speech start, start throws", seen: { published: ["error"], said: RECORDING_FAILED, ...LET_GO }, then: "error" },
   { from: "wake_grace", event: "grace lapses", seen: { published: ["armed"], said: GRACE_LAPSED, ...QUIET }, then: "armed" },
   { from: "wake_grace", event: "wake", seen: {}, then: "wake_grace" },
   { from: "wake_grace", event: "follow-up", seen: { published: ["lease"], said: LEASE, resets: [0, 1] }, then: "lease" },
@@ -541,11 +543,11 @@ const rows: Row[] = [
   { from: "capturing", event: "speech end", seen: { stops: 1 }, then: "finishing" },
   { from: "capturing", event: "capped", seen: { stops: 1 }, then: "finishing" },
   // A recorder that cannot stop has failed, as one that reports an error has.
-  { from: "capturing", event: "speech end, stop throws", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
+  { from: "capturing", event: "speech end, stop throws", seen: { published: ["error"], said: RECORDING_FAILED, ...LET_GO }, then: "error" },
   { from: "capturing", event: "data", seen: {}, then: "capturing" },
   // The recorder stopped by itself before anything was recorded.
   { from: "capturing", event: "recorder stops", seen: { published: ["armed"], said: NOTHING_KEPT, ...QUIET }, then: "armed" },
-  { from: "capturing", event: "recorder error", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
+  { from: "capturing", event: "recorder error", seen: { published: ["error"], said: RECORDING_FAILED, ...LET_GO }, then: "error" },
   { from: "capturing", event: "disable", seen: { published: ["off"], said: OFF, stops: 1, ...LET_GO }, then: "off" },
   { from: "capturing", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, stops: 1, ...LET_GO }, then: "paused_ptt" },
   { from: "capturing", event: "epoch, rescue", seen: { published: ["off"], said: CALL_CHANGED, stops: 1, ...LET_GO }, then: "off" },
@@ -559,7 +561,7 @@ const rows: Row[] = [
 
   { from: "finishing", event: "recorder stops", seen: { published: ["awaiting_response"], said: SENT, clips: 1 }, then: "awaiting_response" },
   { from: "finishing", event: "recorder stops, clip refused", seen: { published: ["armed"], said: NOT_SENT, clips: 1, ...QUIET }, then: "armed" },
-  { from: "finishing", event: "recorder error", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
+  { from: "finishing", event: "recorder error", seen: { published: ["error"], said: RECORDING_FAILED, ...LET_GO }, then: "error" },
   { from: "finishing", event: "disable", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
   // A second stop before the recorder's `stop` event changes nothing: that
   // event ends the capture and sends its clip.
@@ -603,7 +605,7 @@ const rows: Row[] = [
   { from: "lease_finishing", event: "speech end", seen: {}, then: "lease_finishing" },
   { from: "lease_finishing", event: "recorder stops", seen: { published: ["awaiting_response"], said: SENT, clips: 1 }, then: "awaiting_response" },
   { from: "lease_capturing", event: "recorder stops", seen: { published: ["armed"], said: NOTHING_KEPT, ...QUIET }, then: "armed" },
-  { from: "lease_capturing", event: "recorder error", seen: { published: ["error", "off"], said: OFF, ...LET_GO }, then: "off" },
+  { from: "lease_capturing", event: "recorder error", seen: { published: ["error"], said: RECORDING_FAILED, ...LET_GO }, then: "error" },
   { from: "lease_capturing", event: "follow-up", seen: {}, then: "lease_capturing" },
   { from: "lease_capturing", event: "disable", seen: { published: ["off"], said: OFF, stops: 1, ...LET_GO }, then: "off" },
   { from: "lease_capturing", event: "epoch, handoff", seen: { published: ["armed"], said: HANDED_OFF, stops: 1, ...QUIET }, then: "armed" },
