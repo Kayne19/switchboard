@@ -542,19 +542,20 @@ const rows: Row[] = [
   { from: "unloaded", event: "ptt press", seen: { ...STOPPED, said: STANDBY } },
   { from: "unloaded", event: "reply closed", seen: { ...STOPPED, said: STANDBY }, lease: false },
 
-  // Loading: MODE waits for it, and a page event does not reach it.
+  // Loading: MODE waits for it; a page stop or an epoch ends it, and the next MODE loads again.
   { from: "loading", event: "MODE", seen: { ...ON, said: LOADING, loads: 0, asked: 0 } },
   { from: "loading", event: "load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
   { from: "loading", event: "load fails", seen: { ...STOPPED, said: LOAD_FAILED, error: LOAD_FAILED, asked: 0 } },
-  { from: "loading", event: "page hidden", seen: { ...ON, said: LOADING } },
-  { from: "loading", event: "page hidden, load lands", seen: { ...STOPPED, said: PTT_FIRST, error: PTT_FIRST, asked: 0 } },
-  { from: "loading", event: "pagehide, load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
+  { from: "loading", event: "page hidden", seen: { ...STOPPED, said: HIDDEN } },
+  { from: "loading", event: "page hidden, load lands", seen: { ...STOPPED, said: HIDDEN, error: null, asked: 0 } },
+  { from: "loading", event: "page hidden, shown, MODE", seen: { ...ON, said: LOADING, loads: 1 } },
+  { from: "loading", event: "pagehide, load lands", seen: { ...STOPPED, said: LEFT, asked: 0 } },
   // A disposed page publishes nothing more; what counts is that no microphone opens.
   { from: "loading", event: "dispose, load lands", seen: { asked: 0 } },
-  { from: "loading", event: "route, load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
-  { from: "loading", event: "hangup, load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
-  { from: "loading", event: "socket drops, load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
-  { from: "loading", event: "epoch, load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
+  { from: "loading", event: "route, load lands", seen: { ...STOPPED, said: ROUTE, asked: 0 } },
+  { from: "loading", event: "hangup, load lands", seen: { ...STOPPED, said: HANGUP, asked: 0 } },
+  { from: "loading", event: "socket drops, load lands", seen: { ...STOPPED, said: DISCONNECTED, asked: 0 } },
+  { from: "loading", event: "epoch, load lands", seen: { ...STOPPED, said: CALL_CHANGED, asked: 0 } },
   { from: "loading", event: "ptt press, load lands", seen: { ...STOPPED, said: PTT_FIRST, error: PTT_FIRST, asked: 0 } },
   { from: "loading", event: "reply closed, load lands", seen: { ...ON, said: LISTENING, asked: 1 }, lease: true },
 

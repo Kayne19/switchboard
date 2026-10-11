@@ -437,7 +437,11 @@ export class HandsFreeController {
 		return null;
 	}
 
-	/** Loads the detectors for `load`; its result names it. */
+	/**
+	 * Loads the detectors for `load`; its result names it. A load starts
+	 * only while there are no detectors, and only a controller built with a
+	 * loader is ever without them.
+	 */
 	private async load(load: Load): Promise<void> {
 		try {
 			const detectors = await this.options.loadDetectors!();

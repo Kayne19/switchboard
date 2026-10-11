@@ -335,6 +335,14 @@ function startOrRefuse(page: PageReads, detectors: Detectors): PhaseStep {
 	return go({ kind: "starting", attempt }, [{ kind: "start", attempt }]);
 }
 
+/**
+ * Off, saying why. A load in flight holds no microphone and no detector yet;
+ * its result, when it comes, names a load no phase holds.
+ */
+function turnOff(phase: Phase, message: string): PhaseStep {
+	return go({ kind: "off", message }, phase.kind === "loading" ? [] : QUIET);
+}
+
 /** MODE on: the first time loads the detectors, then every time starts. */
 function turnOn(machine: Machine, page: PageReads): PhaseStep {
 	if (machine.detectors) return startOrRefuse(page, machine.detectors);
@@ -394,7 +402,8 @@ export function step(
 	page: PageReads,
 ): Step | null {
 	const { phase, detectors, followUp } = machine;
-	const settled = { ...machine, followUp: null };
+	// The same machine without the reply waiting to drain.
+	const dropped = { ...machine, followUp: null };
 	switch (event.kind) {
 		case "toggle":
 			// MODE waits for the first load to land (#261).
@@ -402,32 +411,30 @@ export function step(
 			return moved(
 				machine,
 				machine,
-				isEnabled(phase)
-					? go({ kind: "off", message: OFF_MESSAGE }, QUIET)
-					: turnOn(machine, page),
+				isEnabled(phase) ? turnOff(phase, OFF_MESSAGE) : turnOn(machine, page),
 			);
 		case "enable":
 			return isEnabled(phase) && phase.kind !== "paused_ptt"
 				? null
 				: moved(machine, machine, turnOn(machine, page));
-		case "stop": {
-			// Every page stop drops a reply still waiting to drain.
-			const off: Phase = { kind: "off", message: STOPPED[event.reason] };
-			// A stop does not reach a load in flight, which then starts as if
-			// nothing happened; only the page's own end stops it.
-			if (phase.kind === "loading")
-				return moved(machine, settled, event.reason === "dispose" ? go(off) : null);
-			// Before the first load there is nothing to stop and nothing to say.
-			return moved(machine, settled, detectors ? go(off, QUIET) : null);
-		}
-		case "callChanged": {
-			const message = "Hands-free stopped because the call changed.";
+		case "stop":
+			// Every page stop drops a reply still waiting to drain. Before
+			// the first load there is nothing to stop and nothing to say.
 			return moved(
 				machine,
-				settled,
-				isOn(phase) ? go({ kind: "off", message }, QUIET) : null,
+				dropped,
+				detectors || phase.kind === "loading"
+					? turnOff(phase, STOPPED[event.reason])
+					: null,
 			);
-		}
+		case "callChanged":
+			return moved(
+				machine,
+				dropped,
+				isEnabled(phase)
+					? turnOff(phase, "Hands-free stopped because the call changed.")
+					: null,
+			);
 		case "pttActive":
 			if (event.active)
 				return isOn(phase)
@@ -442,7 +449,7 @@ export function step(
 			if (!event.success)
 				return moved(
 					machine,
-					settled,
+					dropped,
 					phase.kind === "awaiting_response"
 						? listen(phase.graph, NO_REPLY_MESSAGE)
 						: null,
@@ -457,7 +464,7 @@ export function step(
 		case "debounceElapsed":
 			if (!followUp || followUp.debounce !== event.debounce) return null;
 			if (!ready(followUp, page) || !page.playbackDrained()) return null;
-			return moved(machine, settled, openLease(phase, followUp.generation, page));
+			return moved(machine, dropped, openLease(phase, followUp.generation, page));
 		case "given":
 			if (detectors) return null;
 			return moved(
@@ -545,7 +552,7 @@ function next(
 ): PhaseStep | null {
 	switch (event.kind) {
 		case "turnOff":
-			return go({ kind: "off", message: event.message }, QUIET);
+			return turnOff(phase, event.message);
 		case "followUp":
 			return openLease(phase, event.generation, page);
 		case "noReply":
