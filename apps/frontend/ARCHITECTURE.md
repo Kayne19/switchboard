@@ -142,6 +142,41 @@ vertical field
 
 The renderer can later evolve into a more general constraint solver without changing the model protocol.
 
+### Values read from the layout
+
+What the page draws from its own layout -- a box's size, whether a line
+overflows, where the rail stands -- is read through one hook,
+`useMeasured` (`src/hooks/useMeasured.ts`). It is not a machine: a value
+has two states, unmounted and held, and one teardown. The hook owns the
+lifecycle; each reader owns only what it reads.
+
+| event | what the hook does |
+|---|---|
+| mount, or a change of the reader's deps | `target` names the element and `read` reads it in a layout effect, so the first frame painted has the value; the observers are set up |
+| an observer's report (a resize; with `children`, a child's resize or the children changing; with `changes`, anything in the subtree) | `read` again, and a changed value committed at once (`flushSync`), before the frame the report is about is painted |
+| a report of the value held (`same`) | nothing is committed |
+| unmount, or a change of deps | the observers disconnect, in one place |
+| no element to measure (`target` gives none) | nothing is watched; the value held stands, and the reader says what it means then |
+
+| reader | file | value |
+|---|---|---|
+| `useElementSize` | `src/hooks/useElementSize.ts` | a box's layout size (charts, drawings, the calendar, timers, the forecast) |
+| `useLaidOutHeight` | `src/primitives/TimerPrimitive.tsx` | the timers' rows height, the field's ask |
+| `useListMeasure` | `src/primitives/InboxPrimitive.tsx` | the inbox list's width and type size |
+| `ListViewport` | `src/primitives/ListViewport.tsx` | whether the list scrolls, across, and the pinned band's depth |
+| `Spot`, `WeatherPrimitive` | `src/primitives/WeatherPrimitive.tsx` | whether the spot line sets the chance of rain aside; the condition line's width in a small slot |
+| `useRailUnder` | `src/components/Scenes.tsx` | whether the rail stands under the main column |
+| `useCrowded`, `useRailFit` | `src/components/Rail.tsx` | whether the note leads a crowded column; under the column, the rail's fit and the note's floor |
+| `ChartNotes` | `src/components/ChartNotes.tsx` | the chart canvas the notes' layer follows |
+
+`tests/unit/measuredValues.test.tsx` holds every reader to the same rows.
+Before, each reader observed the layout itself and chose its own commit
+policy; the ones that left a report to React's schedule drew it a frame
+late, and on a loaded WebKit half a second late (#333, #392).
+`scripts/check_hygiene.mjs` (check 22) refuses a layout observer or a
+`flushSync` outside the hook, except where it names why: the scroll pin
+(`usePinnedScroll`), the chart notes' placement pass, and the debug page.
+
 ## Motion
 
 Motion owns semantic continuity:

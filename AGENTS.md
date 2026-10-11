@@ -166,6 +166,13 @@ commit.
   `pub(crate)` on the shared struct with both readers named in its comment.
   Do not add a `pub(crate)` field for one reader: nobody is holding that
   boundary.
+- A value the page draws from its own layout (a size, an overflow, where a
+  box stands) is read through `useMeasured`
+  (`apps/frontend/src/hooks/useMeasured.ts`), never through an observer
+  of its own: the hook reads in a layout effect and commits each report
+  before the frame is painted, and a reader that chose its own policy drew
+  timers 520 ms late on WebKit (#333, #392). `scripts/check_hygiene.mjs`
+  names the few observers that are not such values, and why.
 - A browser command that acts carries its `generation`; one without is
   refused (if it would start something) or ignored (if it would end
   something), and the handler says which. It is never defaulted to the

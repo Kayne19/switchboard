@@ -555,9 +555,37 @@ for (const row of owners) findings.push(...ownerFindings(row.file, lines(path.jo
 	}
 }
 
+// 22. A value read from the layout goes through useMeasured (#392): read in
+//     a layout effect, each report committed before the frame it reports
+//     is painted, and its observers released in one place. Each reader
+//     that observed the layout by itself chose its own commit policy, and
+//     the one left to React's schedule drew timers a frame, on a loaded
+//     WebKit 520 ms, late (#333). An observer elsewhere is named here with
+//     why it is not such a value, and a name that observes nothing fails,
+//     so the list cannot outlive its reason.
+{
+	const measured = "apps/frontend/src/hooks/useMeasured.ts";
+	const observers = new Map([
+		[measured, "the hook"],
+		["apps/frontend/src/hooks/usePinnedScroll.ts", "a scroll pinned to its newest line, not a value drawn"],
+		["apps/frontend/src/components/ChartNotes.tsx", "the notes' placement pass: its reads set the cards' widths to measure them, and it rests after a resize"],
+		["apps/frontend/src/debug/SwitchboardView.tsx", "the debug page's geometry, measured once a frame"],
+	]);
+	const observer = /\bnew (?:Resize|Mutation)Observer\b/;
+	for (const file of files(path.join(root, "apps/frontend/src"), new Set([".ts", ".tsx"]))) {
+		const name = rel(file);
+		if (!observers.has(name)) scan(file, observer, "a layout observer outside useMeasured: read the value through it (AGENTS.md)");
+		if (name !== measured) scan(file, /\bflushSync\b/, "flushSync outside useMeasured: a measured value is committed by the hook (AGENTS.md)");
+	}
+	for (const name of observers.keys()) {
+		const file = path.join(root, name);
+		if (!existsSync(file) || !lines(file).some((line) => observer.test(line))) findings.push(`${name}: named in check 22 but observes nothing: take it off the list`);
+	}
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render, one hook for a measured value");
