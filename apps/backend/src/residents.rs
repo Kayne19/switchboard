@@ -49,7 +49,9 @@ pub(crate) enum Leaving {
     Stopped,
     /// Its handle was found closed before work was given to it.
     Dead,
-    /// The caller is put through to it: the session goes on the line.
+    /// The caller is put through to it: the session goes on the line. A
+    /// promotion that fails brings it back through `admit`
+    /// (`Switchboard::move_to_background`).
     Promoted,
     /// Its host reported this session closed. Only the exact session (its
     /// persistent id and live-handle instance) leaves, so a report about an
