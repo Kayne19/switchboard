@@ -465,7 +465,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `leg_transitions.rs` | transfer, background promotion, takeover, return, hangup and stop; the one bring-up owner (`Startup`: `commit` and `abandon`) | which leg is on the line (the coordinator's), redial decisions |
 | `redial.rs` | model and thinking changes: `RedialPlanner`'s decision without the PBX lock, and `Switchboard::redial` | a second commit path |
 | `residents.rs` | background residents: `BackgroundRegistry`, shelving, split-part starts, detached prompts, eviction on host loss | which leg is on the line, promotion (`leg_transitions.rs`) |
-| `operator.rs` | the operator's Pi process and the routing utility process: startup, recovery, utility requests, floor rewrites | routing policy |
+| `operator.rs` | the operator's Pi process and the routing utility process: how each is launched, their slot (`LocalProcess`: one `ensure`, one `close`), the shared `RoutingUtility` the floor reaches without the PBX lock, recovery, utility requests, floor rewrites | routing policy, the process's own phase (`pi_client.rs`'s) |
 | `routing_view.rs` | `RoutingView`, what routing reads without the PBX lock, and the desk-session listing | any change to the call |
 | `prompts.rs` | the call's prompt text: the voice block, the voice brief, the foreground and background notices, the utility's rules, the intro prompt | when or to whom a prompt is sent |
 | `reply.rs` | `Reply` and the switchboard's reply and failure builders | routing or lifecycle policy |
@@ -601,6 +601,38 @@ step after the rescue gets, so none can read the current one again
 `apps/backend/tests/test_page_controls.rs` drives each control through
 each exit and pins the answer and the line it leaves. A new control is a
 handler that composes these steps; a new exit is a row there.
+
+### The operator and the routing utility
+
+The operator and the routing utility are local pi processes, each held in
+a `LocalProcess` slot (`operator.rs`). A slot is empty, or holds a process
+that is live or has died. Nothing reports a death: the slot finds it when
+the process is next needed. `LocalProcess::ensure` is the one place a
+process is started and a dead one closed and replaced, and
+`LocalProcess::close` is the one end. A restart has no backoff: a binary
+that keeps crashing fails one prompt at a time.
+
+| slot | ensure | ensure, the start fails | close |
+|---|---|---|---|
+| empty | starts one | stays empty, the error returns | nothing |
+| live | keeps it | keeps it (no start is tried) | closes it, empty |
+| dead | closes it, starts one | closes it, empty, the error returns | closes it, empty |
+
+`a_local_process_slot_starts_keeps_restarts_and_closes_by_its_phase` in
+`apps/backend/tests/test_operator.rs` pins this table for both slots.
+
+The operator's slot is `Switchboard::operator`, under the PBX lock. A
+started operator renames the session guard; `recover_operator`,
+`force_hangup` and `shutdown` close it. The utility's slot is inside
+`RoutingUtility`, behind a lock of its own. The switchboard keeps one
+clone for second opinions and split dispatch, and `AppInner` keeps one
+for the floor's rewrite (`floor_hooks.rs`), so a foreground turn that
+holds the PBX lock for its whole prompt does not hold a background update
+past its rewrite (#386). The utility's lock covers finding or starting
+the process only; a prompt runs on the session it hands out. The
+process's own phase (idle, prompting, abandoned, closed) is
+`pi_client.rs`'s `ProcessState`; the slot reads it only through
+`alive()`.
 
 ## Turn lifecycle
 
