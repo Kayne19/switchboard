@@ -423,6 +423,11 @@ const machines = [
 	// session-guard (#359): the active-session guard is derived, not a machine. `name_leg_on_line`
 	// is its one writer and the one place the PBX locks it; a rescue's `take` is the only other change.
 	{ file: "apps/backend/src/pbx.rs", writer: /\*guard\s*=(?!=)/, max: 1, once: [/\.active_session\.lock\(\)/] },
+	// page-control (#369): a page control is a fixed sequence, not a machine. Its quiet begins in
+	// `Admitted::rescue` or `rescue_for` and ends in `PageControl::settle`, with the rescue's token or,
+	// for a failed operation, its generation. After the rescue no step reads the current generation:
+	// `control_generation` reads it, and the superseded delivery logs it, nowhere else.
+	{ file: "apps/backend/src/page_controls.rs", writer: /\bcoordinator\.generation\(\)/, max: 2, once: [/\.begin_rescue_at\(/, /\.begin_rescue_of\(/, /\bcoordinator\.settle\(/, /\.settle_at\(/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];

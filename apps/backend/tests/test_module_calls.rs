@@ -851,9 +851,9 @@ async fn display_projection_generation_race() {
     assert_eq!(code, StatusCode::OK);
 
     // Now rescue occurs: bumps generation and rotates leg token!
-    let next_leg = state.0.coordinator.begin_rescue("operator rescue");
-    assert_eq!(next_leg.generation, 1);
-    assert_ne!(next_leg.token, "operator");
+    let rescued = state.0.coordinator.begin_rescue("operator rescue");
+    assert_eq!(rescued.generation(), 1);
+    assert_ne!(rescued.identity().token, "operator");
 
     // Stale token from earlier generation must be rejected with 409 CONFLICT!
     let stale_display = json!({
@@ -888,7 +888,7 @@ async fn display_projection_generation_race() {
 
     // Settle back onto the operator so new calls can proceed with the rotated
     // token.
-    state.0.coordinator.settle();
+    state.0.coordinator.settle(rescued);
     let current_token = state.0.coordinator.current_identity().token;
 
     let fresh_display = json!({

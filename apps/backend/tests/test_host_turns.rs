@@ -479,8 +479,8 @@ async fn host_report_row(phase: HostPhase, report: HostReport) -> HostOutcome {
     }
     match phase {
         SelfWokenRescued => {
-            coordinator.begin_rescue("test rescue");
-            coordinator.settle();
+            let rescued = coordinator.begin_rescue("test rescue");
+            coordinator.settle(rescued);
         }
         SelfWokenReturned => coordinator.return_to_operator(),
         _ => {}
