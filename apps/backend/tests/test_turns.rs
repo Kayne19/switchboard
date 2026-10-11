@@ -5,6 +5,7 @@ use crate::app_state::{
     state_with_agents, state_with_agents_options, until_debug,
 };
 use crate::audio::{Speaker, TestTtsGate};
+use crate::browser::PageFeed;
 use crate::browser::{frames_until, types_of};
 use crate::caller_input::assert_dropped_with_notice;
 use crate::delivery::Event;
@@ -26,7 +27,7 @@ use tokio::time::{timeout, Duration};
 #[tokio::test]
 async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let old_generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
     let worker_state = state.clone();
@@ -55,7 +56,7 @@ async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
 async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
     let (client, requests, _responded) = fake_jev_client();
     let state = state_with_jev(client, Registry::new(vec![]));
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
 
     dispatch_routed_transcript(&state, "once", generation, "hello".into()).await;
@@ -80,7 +81,7 @@ async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
 #[tokio::test]
 async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     state
         .0
         .turns
@@ -117,7 +118,7 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
 async fn steer_rechecks_generation_under_the_active_session_guard() {
     let (client, _requests, responded) = fake_jev_client();
     let state = state_with_jev(client, Registry::new(vec![]));
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
         OPERATOR,
@@ -181,7 +182,7 @@ async fn an_utterance_steers_a_turn_that_holds_the_pbx_lock() {
     // queued instead of steered.
     let (client, _requests, _responded) = fake_jev_client();
     let state = state_with_jev(client, Registry::new(vec![]));
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
         OPERATOR,
@@ -468,7 +469,7 @@ async fn a_caller_message_steers_an_autonomous_project_turn() {
         json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-steer"}),
     );
     until_autonomous(&state, instance_id).await;
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
 
     dispatch_routed_transcript(
@@ -632,7 +633,7 @@ async fn a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles() {
     })
     .await
     .expect("the caller turn settled");
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
     dispatch_routed_transcript(
         &state,
@@ -669,7 +670,7 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
         autonomous_turn(token.clone(), instance_id, Some("auto-1")),
     )
     .await;
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     while events.try_recv().is_ok() {}
     let generation = state.0.coordinator.generation();
     state.0.turns.routed_decisions.lock().await.insert(
@@ -762,7 +763,7 @@ async fn a_caller_turn_runs_after_an_autonomous_turn_whose_session_closed() {
     .await
     .expect("the closed session was retired");
 
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
     state
         .0
@@ -834,7 +835,7 @@ async fn process_turns_settlement_preserves_a_waiting_request() {
     .await;
     assert_eq!(request.status(), StatusCode::OK);
 
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let id = "settled-waiting";
     let generation = state.0.coordinator.generation();
     state.0.turns.routed_decisions.lock().await.insert(
@@ -916,7 +917,7 @@ async fn process_turns_settles_foreground_idle_once() {
         assert_eq!(reply.route, "alpha");
     }
     let (_connection, _, _) = state.register_connection().await;
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     while events.try_recv().is_ok() {}
     let id = "settled-idle-once";
     let generation = state.0.coordinator.generation();
@@ -1274,8 +1275,8 @@ async fn a_caller_turn_ends_once_in_every_phase() {
 #[tokio::test]
 async fn a_failed_turn_ends_like_every_other_turn() {
     let state = state();
-    let mut events = state.0.events.subscribe();
-    let mut errors = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
+    let mut errors = PageFeed::open(&state);
     let id = "failed-turn";
     let generation = state.0.coordinator.generation();
     let operation = state
@@ -1342,7 +1343,7 @@ done"#
         registry,
         std::sync::Arc::new(prewarm),
     ));
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let id = "table-turn";
     let worker = tokio::spawn(process_turns(state.clone()));
     let queue = |generation: u64| {
@@ -1428,11 +1429,7 @@ done"#
 /// Waits until the clip's turn has ended: its routing trace has a branch, a
 /// turn that was started has been traced to its end, and no turn is in
 /// flight. Then reads what the page was told.
-async fn until_turn_ended(
-    state: &AppState,
-    events: &mut tokio::sync::broadcast::Receiver<Event>,
-    id: &str,
-) -> TurnEnding {
+async fn until_turn_ended(state: &AppState, events: &mut PageFeed, id: &str) -> TurnEnding {
     use crate::debug::DebugEvent;
     let ended = |state: &AppState| {
         let trace = debug_events(state);

@@ -42,7 +42,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 #[cfg(test)]
 use tokio::sync::oneshot;
-use tokio::sync::{broadcast, watch, Mutex};
+use tokio::sync::{watch, Mutex};
 use tokio::task::{AbortHandle, Id as TaskId, JoinHandle};
 #[cfg(test)]
 use tokio::time::{timeout, Duration};
@@ -319,7 +319,6 @@ pub struct AppInner {
     pub(crate) foreground_audio_generation: Arc<StdMutex<Option<u64>>>,
     pub stt: SttAdapter,
     pub stt_stream: SttStreamAdapter,
-    pub events: broadcast::Sender<Event>,
     pub coordinator: Coordinator,
     /// Decides the pickers' redials without the PBX lock. Only
     /// `page_controls.rs` asks for it, through `redial_planner`.
@@ -430,7 +429,6 @@ impl AppState {
         stt_stream: SttStreamAdapter,
         debug: DebugBus,
     ) -> Self {
-        let (events, _) = broadcast::channel(256);
         let speech = SpeechQueue::new();
         let clips = ClipState::new();
         let (shutdown, _) = watch::channel(false);
@@ -448,7 +446,6 @@ impl AppState {
         let foreground_audio_generation = Arc::new(StdMutex::new(None));
         let leg_announcer = LegAnnouncer {
             coordinator: coordinator.clone(),
-            events: events.clone(),
             delivery: delivery.clone(),
             display_gate: display_gate.clone(),
             projection: projection.clone(),
@@ -461,7 +458,6 @@ impl AppState {
             let announcer = activity_announcer.clone();
             Box::pin(async move { announcer.on_activity(activity).await })
         });
-        let candidate_events = events.clone();
         let candidate_delivery = delivery.clone();
         coordinator.set_candidate_callback(Arc::new(
             move |notice: &crate::lifecycle::CandidateNotice| {
@@ -478,9 +474,7 @@ impl AppState {
                         reason,
                     },
                 };
-                let event = Event::Json(message.to_value());
-                let _ = candidate_events.send(event.clone());
-                candidate_delivery.publish(event);
+                candidate_delivery.publish(Event::Json(message.to_value()));
             },
         ));
         let route_announcer = leg_announcer.clone();
@@ -590,7 +584,6 @@ impl AppState {
                 foreground_audio_generation,
                 stt,
                 stt_stream,
-                events,
                 coordinator,
                 redials,
                 utility,
@@ -656,9 +649,7 @@ pub async fn shutdown(state: &AppState) {
     state.end_debug_call("shutdown");
 }
 pub(crate) fn emit(state: &AppState, event: Event) -> bool {
-    let browser_delivered = state.0.delivery.publish(event.clone());
-    let _ = state.0.events.send(event);
-    browser_delivered
+    state.0.delivery.publish(event)
 }
 pub(crate) fn emit_message(state: &AppState, message: ServerMessage) -> bool {
     emit(state, Event::Json(message.to_value()))
@@ -867,7 +858,7 @@ pub(crate) async fn until_debug(
 
 #[cfg(test)]
 pub(crate) async fn next_event_of(
-    events: &mut broadcast::Receiver<Event>,
+    events: &mut crate::browser::PageFeed,
     event_type: &str,
 ) -> Value {
     timeout(Duration::from_secs(1), async {

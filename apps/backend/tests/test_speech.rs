@@ -2,6 +2,7 @@ use super::*;
 use crate::app_state::{debug_events, state, AppState};
 use crate::audio::{Speaker, SttAdapter, SttStreamAdapter, TestTtsGate, TtsContinuity};
 use crate::browser::frame_json;
+use crate::browser::PageFeed;
 use crate::caller_input::route_final_transcript;
 use crate::delivery::{DeliveryConnection, DeliveryFrame, Event};
 use crate::history::TranscriptLog;
@@ -12,7 +13,6 @@ use crate::registry::Registry;
 use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
-use tokio::sync::broadcast;
 use tokio::time::{timeout, Duration};
 
 #[test]
@@ -332,7 +332,7 @@ async fn speech_a_rescue_stops_is_not_shown_to_the_caller_as_an_error() {
     );
     let (_connection, _, _) = state.register_connection().await;
     start_speech_worker_for_test(&state);
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
     let group = state.0.new_speech_group();
     let admission = |text: &str, scope| SpeechAdmission {
@@ -452,12 +452,12 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
         SttAdapter::from_command(None),
         SttStreamAdapter::from_command(None),
     );
-    let _connection = match event {
+    // The page, when there is one: what it is sent is what the row reads.
+    let mut page = match event {
         SpeechEvent::BodyDrainedNoBrowser => None,
-        _ => Some(state.register_connection().await),
+        _ => Some(state.register_connection().await.0),
     };
     start_speech_worker_for_test(&state);
-    let mut events = state.0.events.subscribe();
     let generation = state.0.coordinator.generation();
     let admission = SpeechAdmission {
         text: "One line.".into(),
@@ -512,14 +512,12 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
     for _ in 0..8 {
         tokio::task::yield_now().await;
     }
-    let mut page_error = false;
-    let mut spoken_line = false;
-    while let Ok(event) = events.try_recv() {
-        if let Event::Json(value) = event {
-            page_error |= value["type"] == "error";
-            spoken_line |= value["type"] == "spoken";
-        }
-    }
+    let sent = page
+        .as_mut()
+        .map(crate::browser::queued_frames)
+        .unwrap_or_default();
+    let page_error = sent.iter().any(|frame| frame["type"] == "error");
+    let spoken_line = sent.iter().any(|frame| frame["type"] == "spoken");
     let slot_left_open = !state.0.audio.lock().await.slots.is_empty();
     SpeechCompletion {
         answer: answer.map_err(|failure| failure.to_string()),
@@ -634,7 +632,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
 #[tokio::test]
 async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
     let reply = crate::reply::Reply {
         text: "Final answer".into(),
@@ -668,7 +666,7 @@ async fn final_response_barrier_is_emitted_once_after_a_settled_turn() {
 #[tokio::test]
 async fn stale_final_response_does_not_emit_a_barrier() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
     let reply = crate::reply::Reply {
@@ -684,7 +682,7 @@ async fn stale_final_response_does_not_emit_a_barrier() {
     assert!(!deliver_turn_if_current(&state, &reply, generation, "stale-clip").await);
     assert!(matches!(
         events.try_recv(),
-        Err(broadcast::error::TryRecvError::Empty)
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     ));
 }
 
@@ -839,7 +837,7 @@ async fn a_reply_superseded_after_its_utterance_was_reserved_leaves_no_slot_open
 #[tokio::test]
 async fn superseded_reply_is_not_logged_or_broadcast() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
     let reply = crate::reply::Reply {
@@ -856,7 +854,7 @@ async fn superseded_reply_is_not_logged_or_broadcast() {
     assert!(state.0.transcript_log.lock().await.entries().is_empty());
     assert!(matches!(
         events.try_recv(),
-        Err(broadcast::error::TryRecvError::Empty)
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     ));
 }
 

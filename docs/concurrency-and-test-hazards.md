@@ -582,6 +582,22 @@ visible and then polls until the newest report carries the generation,
 `has_visual` and the object id it expects. That is the shape the same spec
 already uses for every later drawing in it.
 
+## A test that reads what the page is sent
+
+A backend test reads what the browser is sent from the delivery queue, the
+path the page reads: `browser::PageFeed` is a connection of its own on it,
+and `register_connection` is a whole page. There is no second channel for
+tests (#408: a `tokio` broadcast on `AppInner` was sent every event and read
+only by tests, and it was deleted).
+
+A connection makes a page connected (`DeliveryState::connected`), and the
+service acts on that: a display waits for the page to confirm its render, and
+speech is synthesized for a page to play. So a test that opens a feed is a
+test with a page on the call. A display test confirms each render the way the
+browser does (`a_page_that_draws` in `test_module_calls.rs`), or each display
+call waits out `DISPLAY_CONFIRM_DEADLINE_MS`; a test of the no-page path opens
+no feed.
+
 ## A broken pipe reported instead of the error that caused it
 
 With the `ETXTBSY` noise gone, a second failure appeared at roughly two runs in

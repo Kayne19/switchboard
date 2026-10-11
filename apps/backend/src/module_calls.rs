@@ -488,8 +488,7 @@ async fn display(
             .into_response();
     }
 
-    let (delivered, sequence) =
-        gate.publish(&normalized_action, &state.0.delivery, &state.0.events);
+    let (delivered, sequence) = gate.publish(&normalized_action, &state.0.delivery);
     let mut confirm_rx = gate.confirmations();
     drop(gate);
 

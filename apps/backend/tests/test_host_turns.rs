@@ -1,5 +1,6 @@
 use super::*;
 use crate::app_state::{debug_events, scratch_root, state_with_agents};
+use crate::browser::PageFeed;
 use crate::delivery::Event;
 use crate::module_calls::{diagram_show, module_call};
 use crate::project_session::AgentCall;
@@ -631,7 +632,7 @@ async fn host_report_row(phase: HostPhase, report: HostReport) -> HostOutcome {
     };
     let traced = debug_events(&state).len();
     let written = state.0.transcript_log.lock().await.entries().len();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
 
     let admitted = handle_project_turn(&state, report).await;
 
