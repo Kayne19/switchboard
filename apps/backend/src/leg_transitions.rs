@@ -144,13 +144,17 @@ impl Switchboard {
         };
 
         // At most one session per project: one the caller is on is ended
-        // before another is made for the same project.
+        // before another is made for the same project. Like every change to
+        // the PBX's agent, taking it re-derives the guard (#457), so a rescue
+        // in the window before the new session attaches finds nothing to
+        // take rather than the session ended here.
         if self
             .agent
             .as_ref()
             .is_some_and(|agent| agent.label() == project.id)
         {
             if let Some(previous) = self.agent.take() {
+                self.name_leg_on_line(None, || {}).await;
                 previous.close();
             }
         }
