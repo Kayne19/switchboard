@@ -330,22 +330,6 @@ const readers: Record<string, Reader> = {
   },
 };
 
-/**
- * When a changed report reaches the page: in the observer's callback, before
- * the frame it reports is painted, or on React's schedule, after it.
- */
-const COMMITTED: Record<keyof typeof readers, 'in the callback' | 'on React\'s schedule'> = {
-  'useElementSize (a box\'s size)': 'in the callback',
-  'TimerPrimitive (the rows\' height the field asks)': 'in the callback',
-  'InboxPrimitive (the list\'s width and type)': 'in the callback',
-  'ListViewport (whether the list scrolls)': 'in the callback',
-  'WeatherPrimitive (whether the spot line sets the chance of rain aside)': 'in the callback',
-  'WeatherPrimitive (the condition line\'s width beside an outlook)': 'in the callback',
-  'the scene (whether the rail stands under the main column)': 'in the callback',
-  'RailDetails beside the column (whether the note leads a crowded column)': 'in the callback',
-  'RailDetails under the column (whether the note leads, by useRailFit)': 'in the callback',
-};
-
 // Every commit under the reader is counted.
 let commits = 0;
 const mountReader = (reader: Reader) =>
@@ -382,12 +366,12 @@ describe.each(Object.keys(readers))('%s', (name) => {
     expect(reader.drawn(mountReader(reader))).toBe(reader.expected.b);
   });
 
-  it(`commits a changed report ${COMMITTED[name]}`, async () => {
+  it('commits a changed report in the observer\'s callback, before the frame it reports is painted', async () => {
     layout = reader.layouts.a;
     const page = mountReader(reader);
     layout = reader.layouts.b;
     const { inCallback, settled } = await reportedOutsideAct(page, reader);
-    expect(inCallback).toBe(COMMITTED[name] === 'in the callback' ? reader.expected.b : reader.expected.a);
+    expect(inCallback).toBe(reader.expected.b);
     expect(settled).toBe(reader.expected.b);
   });
 

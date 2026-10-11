@@ -1,8 +1,7 @@
 import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { prefersReducedMotion } from './reducedMotion';
 import { PAGE_SHARE, scrollMove, type ScrollMove } from './drawingScroll';
-import { useMeasured } from '../hooks/useMeasured';
-import { drawnScale } from '../hooks/watchElement';
+import { drawnScale, useMeasured } from '../hooks/useMeasured';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
 // list, an inbox, an agenda, a forecast's days, a table's rows, source, a
