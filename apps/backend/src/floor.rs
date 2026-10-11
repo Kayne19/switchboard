@@ -81,8 +81,9 @@ pub(crate) type ReleaseFuture = Pin<Box<dyn Future<Output = ReleaseOutcome> + Se
 pub(crate) enum Waiting<'a> {
     /// The agent asked to speak; `request` is now its newest on the floor.
     Asked(&'a FloorRequest),
-    /// The agent's last request on the floor was spoken.
-    Spoken(&'a FloorRequest),
+    /// The agent's last request on the floor left it: spoken, or dropped
+    /// unspoken (a rescue made it stale, or its agent is gone).
+    Left(&'a FloorRequest),
 }
 
 pub(crate) type WaitingHook = Arc<dyn Fn(Waiting<'_>) + Send + Sync>;
@@ -390,8 +391,8 @@ impl Floor {
     }
 
     /// The front request's teardown, whichever phase it left from: its trace,
-    /// its place in the queue, and, when it was spoken and was its agent's
-    /// last request on the floor, the agent's waiting mark.
+    /// its place in the queue, and, when it was its agent's last request on
+    /// the floor, the agent's waiting mark, spoken or not.
     async fn leave(&self, request: &FloorRequest, left: Left) {
         self.trace_released(request, left.how());
         let mut state = self.state.lock().await;
@@ -399,8 +400,8 @@ impl Floor {
             state.queue.pop_front();
         }
         let still_waiting = state.queue.iter().any(|entry| entry.token == request.token);
-        if matches!(left, Left::Played(_)) && !still_waiting {
-            (self.waiting)(Waiting::Spoken(request));
+        if !still_waiting {
+            (self.waiting)(Waiting::Left(request));
         }
         drop(state);
         self.changed.notify_waiters();
