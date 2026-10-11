@@ -50,12 +50,15 @@ function SceneContent({
     setTranscriptOpen,
     // Both cover the scene and are modal: behind either it is inert.
     behindModal: focusedObject !== null || transcriptOpen,
+    // The caller dismisses the view the agent chose, or the one they
+    // pinned: the screen goes back to auto (docs/frontend-command-station-architecture.md, "Focus precedence").
+    onExitView: () => dispatch({ op: "auto_view" }),
   };
 
   return (
     <LayoutGroup id="switchboard-layout">
       <FocusedObject.Provider value={focusedObject?.id ?? null}>
-      <main className="stage" data-scene-kind={kind}>
+      <main className="stage" data-scene-kind={kind} data-view={state.workspace.effectiveView}>
         <AnimatePresence mode="sync" initial={false}>
           <SceneShell key={kind} kind={kind} {...shared} />
         </AnimatePresence>

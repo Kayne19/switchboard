@@ -34,6 +34,8 @@ export interface SceneProps {
   onToggleMode?: () => void;
   /** The focus layer or the history, a modal, is open over the scene: the scene is inert behind it (`useModalFocus`). */
   behindModal?: boolean;
+  /** The caller leaves the view the page is in for auto: the theater view's EXIT. */
+  onExitView: () => void;
 }
 
 export function annotationForScene(

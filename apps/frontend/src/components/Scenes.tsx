@@ -23,6 +23,7 @@ import { TranscriptToggle } from '../primitives/TranscriptToggle';
 import { renderObject } from './renderObject';
 import { SurfaceBoundary } from './SurfaceBoundary';
 import { composedContent } from './ComposedScene';
+import { focusNotes, StagedObject } from './FocusLayer';
 import { objectContent } from './ObjectScene';
 import { RailDetails } from './Rail';
 import { ObjectSurface, StageColumn, type SceneContent, type SceneProps } from './sceneContent';
@@ -214,6 +215,7 @@ function sceneContent(
   switch (props.kind) {
     case 'idle':
     case 'conversation':
+    case 'theater':
       return null;
     case 'training':
       return trainingContent(props, chartRailNote, onChartRailNote, chartBand);
@@ -232,7 +234,7 @@ function sceneContent(
  * primary object; a content kind with nothing to show draws the idle page.
  */
 export function SceneShell(props: SceneProps) {
-  const { kind, composition, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, behindModal = false } = props;
+  const { kind, composition, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, onExitView, behindModal = false } = props;
   const isPresent = useIsPresent();
   // A chart hands the rail the one note it leaves out so the others have
   // places clear of its data.
@@ -257,7 +259,9 @@ export function SceneShell(props: SceneProps) {
   // hand it out again, the band coming and going under it.
   const [chartBand, setChartBand] = useState<ChartRailNote | null>(null);
   const content = sceneContent(props, chartRailNote, onChartRailNote, chartBand);
-  const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
+  // The theater view's subject: the primary, alone on the stage.
+  const staged = kind === 'theater' ? composition.primary : null;
+  const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : staged ? 'theater' : 'idle';
   const gridRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
@@ -285,7 +289,7 @@ export function SceneShell(props: SceneProps) {
       listening={state.listening}
       onToggleListening={onToggleListening}
       context={content?.context}
-      size={content ? 'rail' : layout === 'conversation' ? 'conversation' : 'idle'}
+      size={content ? 'rail' : layout === 'conversation' ? 'conversation' : layout === 'theater' ? 'compact' : 'idle'}
       showCaption={content !== null}
       activity={state.activity}
     />
@@ -345,6 +349,22 @@ export function SceneShell(props: SceneProps) {
           <ConversationAnswer composition={composition} />
           <TranscriptToggle onOpen={() => setTranscriptOpen(true)} />
           <ToolActivity activity={state.activity} placement="conversation" />
+        </>
+      ) : staged ? (
+        <>
+          {/* The theater view (#277): the primary at the size focus gives
+              it, with the notes about it, and the one way out; Damocles
+              stays, compact, so a caller on push-to-talk can still speak. */}
+          <StagedObject
+            object={staged}
+            objects={state.agentObjects}
+            notes={focusNotes(state, staged)}
+            label={`THEATER / ${staged.type.toUpperCase()}`}
+            action="EXIT / ESC"
+            onAction={onExitView}
+            variant="theater"
+          />
+          <div className="theater__presence">{presence}</div>
         </>
       ) : (
         <>
