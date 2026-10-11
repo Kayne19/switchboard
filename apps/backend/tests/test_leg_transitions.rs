@@ -1467,14 +1467,20 @@ async fn a_bring_up_dropped_before_it_ends_rolls_its_candidate_back() {
 // one of its exits and shows what it left: the reply, the call line and the
 // candidate notices the browser was sent, the guard, the PBX's agent and
 // residents, the agent states the page was told, and whether the session it
-// brought up still runs.
+// brought up still runs. A promotion that fails while its session is still
+// usable puts the resident back in the background (Kayne's decision,
+// 2026-10-11); a host command that fails leaves the handle unusable (#291),
+// so those exits end it as before.
 
-/// Where a bring-up is made to fail: the host refuses a command, or a
-/// competing owner restages the candidate when the host sees one, so the
-/// bring-up's adoption fails.
+/// Where a bring-up is made to fail: the host refuses a command (which
+/// leaves the session's handle unusable), the agent's model call fails in
+/// its first turn (the session stays usable), or a competing owner
+/// restages the candidate when the host sees a command, so the bring-up's
+/// adoption fails.
 #[derive(Clone, Copy)]
 enum Fault {
     Refuse(&'static str),
+    ModelError,
     Restage(&'static str),
 }
 
@@ -1530,7 +1536,17 @@ async fn bring_up_scene() -> BringUp {
     })));
     let fault: Arc<StdMutex<Option<Fault>>> = Arc::default();
     let armed = Arc::clone(&fault);
-    let mut host = FakeHostAgent::new(Box::new(|_, _| says("ready")));
+    let failing = Arc::clone(&fault);
+    let mut host = FakeHostAgent::new(Box::new(move |_, _| {
+        let mut failing = failing.lock().unwrap();
+        if matches!(*failing, Some(Fault::ModelError)) {
+            *failing = None;
+            return vec![Step::Event(
+                json!({"kind": "error", "message": "the model is overloaded"}),
+            )];
+        }
+        says("ready")
+    }));
     host.on_command = Some(Box::new(move |name, _| {
         let mut armed = armed.lock().unwrap();
         match *armed {
@@ -1631,6 +1647,7 @@ async fn bring_up_row(kind: &str, exit: &str) -> String {
         (_, "join fails") => Some(Fault::Refuse("join_call")),
         (_, "model fails") => Some(Fault::Refuse("set_model")),
         (_, "first turn fails") => Some(Fault::Refuse("prompt")),
+        (_, "first turn errors") => Some(Fault::ModelError),
         ("redial", "adoption fails") => Some(Fault::Restage("join_call")),
         (_, "adoption fails") => Some(Fault::Restage("prompt")),
         other => panic!("no bring-up exit {other:?}"),
@@ -1704,22 +1721,25 @@ async fn bring_up_row(kind: &str, exit: &str) -> String {
     format!("{kind} | {exit} => {shown}")
 }
 
-const BRING_UP_EXITS: [(&str, &str); 21] = [
+const BRING_UP_EXITS: [(&str, &str); 24] = [
     ("transfer", "refused"),
     ("transfer", "session fails"),
     ("transfer", "first turn fails"),
+    ("transfer", "first turn errors"),
     ("transfer", "adoption fails"),
     ("transfer", "commits"),
     ("promotion", "set_mode fails"),
     ("promotion", "join fails"),
     ("promotion", "refused"),
     ("promotion", "first turn fails"),
+    ("promotion", "first turn errors"),
     ("promotion", "adoption fails"),
     ("promotion", "commits"),
     ("takeover", "refused"),
     ("takeover", "attach fails"),
     ("takeover", "join fails"),
     ("takeover", "first turn fails"),
+    ("takeover", "first turn errors"),
     ("takeover", "adoption fails"),
     ("takeover", "commits"),
     ("redial", "refused"),
@@ -1745,18 +1765,21 @@ const BRING_UP_TABLE: &str = r#"
 transfer | refused => alpha error "I couldn't open beta." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
 transfer | session fails => alpha error "I couldn't open beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
 transfer | first turn fails => alpha error "I couldn't open beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+transfer | first turn errors => alpha error "I couldn't open beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
 transfer | adoption fails => alpha error "I couldn't open beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
 transfer | commits => beta "" | line beta [beta staged, beta Adopted] | guard beta | agent beta | residents [alpha] | states [beta:busy, alpha:idle, beta:idle] | brought up runs
 promotion | set_mode fails => alpha error "I couldn't pick beta back up." | line alpha [] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:finished] | brought up ended
 promotion | join fails => alpha error "I couldn't pick beta back up." | line alpha [] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:finished] | brought up ended
-promotion | refused => alpha error "I couldn't pick beta back up." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+promotion | refused => alpha error "I couldn't pick beta back up." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [beta] | states [beta:busy, beta:idle] | brought up runs
 promotion | first turn fails => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
-promotion | adoption fails => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+promotion | first turn errors => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [beta] | states [beta:busy, beta:idle] | brought up runs
+promotion | adoption fails => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [beta] | states [beta:busy, beta:idle] | brought up runs
 promotion | commits => beta "" | line beta [beta staged, beta Adopted] | guard beta | agent beta | residents [alpha] | states [beta:busy, alpha:idle, beta:idle] | brought up runs
 takeover | refused => alpha error "I couldn't take over beta." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
 takeover | attach fails => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
 takeover | join fails => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up -
 takeover | first turn fails => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+takeover | first turn errors => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
 takeover | adoption fails => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
 takeover | commits => beta "" | line beta [beta staged, beta Adopted] | guard beta | agent beta | residents [alpha] | states [beta:busy, alpha:idle, beta:idle] | brought up runs
 redial | refused => alpha error "I couldn't change the model on alpha." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up runs
