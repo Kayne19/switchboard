@@ -155,7 +155,7 @@ function controller() {
     isPttActive: () => ptt,
     onClip: (_audio, _mime, epoch) => {
       clips.push(epoch);
-      return acceptClips;
+      return acceptClips ? `clip-${clips.length}` : null;
     },
     onState: (detail) => states.push(detail.state),
   });
@@ -277,7 +277,8 @@ describe("the hands-free controller over fakes", () => {
     stubBrowser();
     const harness = controller();
     expect(await harness.instance.enable()).toBe(true);
-    harness.instance.openFollowUpLease(4);
+    harness.instance.replyClosed(4, true);
+    harness.advance(400);
     expect(harness.instance.currentState).toBe("lease");
     harness.endpointer.speechStarts();
     expect(harness.instance.currentState).toBe("lease_capturing");
@@ -347,7 +348,7 @@ describe("the hands-free controller over fakes", () => {
       isSnapshotReady: () => true,
       currentEpoch: () => 4,
       isPttActive: () => false,
-      onClip: () => true,
+      onClip: () => "clip",
       onState: () => undefined,
     });
 

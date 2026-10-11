@@ -5,10 +5,13 @@ remains manual: the Damocles presence starts a turn and sends it. The two
 capture modes share microphone ownership, so push-to-talk pauses and releases
 the hands-free graph.
 
-The call runtime (`apps/frontend/src/runtime/callRuntime.ts`) owns the
-controller: `toggleHandsFree()` loads the detector on first use and enables or
-disables listening, and the controller's state is published as the runtime's
-`handsFree`, `handsFreeStatus`, and `handsFreeLease` fields. Nothing on the
+The call runtime (`apps/frontend/src/runtime/callRuntime.ts`) makes the
+controller once and only tells it what happened: `toggleHandsFree()` is the
+controller's `toggle()` (it loads the detectors on first use, then starts or
+stops listening), and the page's stops, the `epoch`, push-to-talk, the
+server's reply and error frames and every playback change each go to it as
+one call (the table at the end). The controller's state is published as the
+runtime's `handsFree`, `handsFreeStatus`, and `handsFreeLease` fields. Nothing on the
 page draws `handsFreeStatus`, so a state of `error` (a refusal, a microphone
 hands-free could not get, a detector that could not load or that failed) is
 also the runtime's error status, which the page puts on screen as it does a
@@ -21,10 +24,10 @@ the registered voice runtime and switches it by calling `toggleHandsFree()`;
 while listening it names the wake word (`MODE / HANDS-FREE · HEY JARVIS`).
 The page holds no listening state of its own, and the refusals below stay the
 runtime's. A switch while the line is down, or while the detectors are still
-loading, does nothing and says nothing (`toggleHandsFree` returns at once). The
-controller's own start is outside that wait: the controller is enabled from the
-first moment of its start, so a switch during it turns hands-free off, and a
-start that never finishes cannot hold MODE for the life of the page (#261). A
+loading, does nothing and says nothing. The controller's own start is outside
+that wait: the controller is enabled from the first moment of its start, so a
+switch during it turns hands-free off, and a start that never finishes cannot
+hold MODE for the life of the page (#261). A
 switch with push-to-talk active is refused by the controller and reported in
 `handsFreeStatus`. The demo page registers no runtime, so the control is
 disabled there.
@@ -119,16 +122,16 @@ lifecycle timings (wake grace, utterance ceiling, lease) in
 `apps/frontend/src/hands_free_machine.ts`, the rest in
 `apps/frontend/src/hands_free.ts`, which re-exports them all. A settled response opens one browser-local 8,000
 ms follow-up lease after the server barrier and playback queue have both
-settled, with a 400 ms drain debounce. The lease admits one no-wake utterance; a
-later utterance needs a wake word again.
+settled, with a 400 ms drain debounce (`PLAYBACK_DRAIN_DEBOUNCE_MS`). The
+lease admits one no-wake utterance; a later utterance needs a wake word again.
 
 A turn that brings no successful reply opens no lease, so it re-arms the wake
-word instead (`HandsFreeController.endAwaitedTurn`): the server's `error` for
-the clip hands-free sent (Whisper heard nothing, the usual false trigger), a
-`final_response_audio_closed` with `success: false`, or `routing_unavailable`.
-So does an utterance the page could not send (`onClip` returns false: the
-snapshot is not ready, the epoch moved, or the outbox is full) and a capture
-that kept nothing. Without that exit, hands-free waited in `awaiting_response`,
+word instead: the server's `error` for the clip hands-free sent (Whisper heard
+nothing, the usual false trigger; `clipFailed`), a
+`final_response_audio_closed` with `success: false` (`replyClosed`), or
+`routing_unavailable` (`endAwaitedTurn`). So does an utterance the page could
+not send (`onClip` returns null: the snapshot is not ready, the epoch moved,
+or the outbox is full) and a capture that kept nothing. Without that exit, hands-free waited in `awaiting_response`,
 where no frame reaches the wake detector, and MODE said HANDS-FREE while
 nothing could wake it (#258).
 
@@ -146,7 +149,8 @@ microphone and nodes it makes to itself until its last wait is over. A start
 that a newer one overtook releases only those, never the newer start's graph.
 
 A page hidden or left, a disconnect, a hangup, a route change and every new
-`epoch` turn hands-free off; a push-to-talk press pauses it. Each discards a
+`epoch` turn hands-free off, the first load of the detectors included; a
+push-to-talk press pauses it. Each discards a
 running capture and releases the microphone. Secure contexts with
 `getUserMedia`, a 16-kHz `AudioContext`, `AudioWorkletNode`, and a supported
 `MediaRecorder` MIME are required. Reduced-motion settings do not change
@@ -154,35 +158,52 @@ listening behavior or accessibility announcements.
 
 ## The controller as one machine
 
-`HandsFreeController` is one machine (#366). `apps/frontend/src/hands_free_machine.ts`
-names its phases, and each phase holds what exists only in it. `next()` there
-is the phase x event table, pinned by `tests/unit/handsFreeLifecycle.test.ts`:
-it reads the page (snapshot, epoch, push-to-talk) and returns the next phase,
-the effects to run and whether to publish, and does nothing itself.
-`transition()` in `hands_free.ts` is the only writer of the phase. It writes
-the phase before anything else, so a recorder that fires `stop` at once sees
-the phase it belongs to; then `leave()` releases what the old phase held and
-the new one does not (a timer, a discarded capture, the graph); then the
-effects run; then the phase is published. What the page sees is `view()` of
-the phase, and nothing else.
+`HandsFreeController` is one machine (#366). Its state, `Machine` in
+`apps/frontend/src/hands_free_machine.ts`, has three parts: the phase; the
+detectors, null until the first load lands and kept from then on; and the
+follow-up, a closed reply waiting for playback to drain. Each phase holds what
+exists only in it. `step()` there is the state x event table, pinned by
+`tests/unit/handsFreeLifecycle.test.ts` (the controller alone) and
+`tests/unit/handsFreeGlue.test.ts` (the controller inside a `CallRuntime`): it
+reads the page (snapshot, epoch, push-to-talk, playback drained) and returns
+the next state, the effects to run and whether to publish, and does nothing
+itself. `next()` is its part for the events that move only the phase.
+`transition()` in `hands_free.ts` is the only writer of the state. It writes
+the state before anything else, so a recorder that fires `stop` at once sees
+the phase it belongs to; then `leave()` releases what the old state held and
+the new one does not (a timer, a discarded capture, the graph, the drain
+debounce); then the effects run; then the phase is published. What the page
+sees is `view()` of the phase, and nothing else.
 
 | phase (published as) | holds | left by |
 |---|---|---|
-| `off`, `error` | the status line | MODE: `starting`, or `error` when refused (push-to-talk active, page hidden, no secure context, worklet or recorder MIME, no detector) |
+| `off`, `error` | the status line | MODE: `loading` the first time (and after a load failed or was stopped), then `starting`, or `error` when refused (push-to-talk active, page hidden, no secure context, worklet or recorder MIME, no detector) |
+| `loading` (`starting`) | the load (`Load`) | the detectors (`starting`, or `error` when refused), a failed load (`error`), a page stop or an `epoch` (`off`); MODE waits for it |
 | `starting` | the start (`Attempt`); what it makes stays its own until it hands the graph over | the graph (`armed`), a failed start or a `resume()` past 3 s (`error`) |
 | `paused_ptt` | nothing | push-to-talk ends: a full restart (`starting`), or `error` when refused |
 | `armed` | the graph | the wake word (`wake_grace`), a follow-up lease (`lease`) |
 | `wake_grace` | the graph, the 2 s timer | speech (`capturing`), the timer (`armed`), a follow-up lease (`lease`) |
 | `capturing` (`lease_capturing` with a lease) | the graph, the capture (recorder, chunks, epoch stamp, 30 s cap), the lease it began in | a speech end or the cap (`finishing`), the recorder stopping by itself (`awaiting_response`, or `armed` when nothing was kept), the lease expiring (stays, without the lease) |
-| `finishing` (published as the capture it ends) | the same | the recorder's `stop` event: `awaiting_response`, or `armed` when nothing was kept or the page could not send it |
-| `awaiting_response` | the graph | a turn with no reply (`armed`), a follow-up lease (`lease`) |
+| `finishing` (published as the capture it ends) | the same | the recorder's `stop` event: `awaiting_response` once the page took the clip, or `armed` when nothing was kept or the page could not send it |
+| `awaiting_response` | the graph, the id the clip went out under | a turn with no reply (`armed`), a follow-up lease (`lease`) |
 | `lease` | the graph, the lease deadline, its expiry and 250 ms tick | speech (`lease_capturing`), expiry (`armed`) |
 
-Every phase but `off` and `error` also leaves for `off` (MODE, a hidden or
-left page, a disconnect, a hangup, a route change, an `epoch`), for
+Every phase but `off`, `error` and `loading` also leaves for `off` (MODE, a
+hidden or left page, a disconnect, a hangup, a route change, an `epoch`), for
 `paused_ptt` (a push-to-talk press) and for `error` (a detector failure). A
 recorder that cannot be made, started or stopped, or that reports an error,
-publishes `error` and then turns hands-free `off`.
+publishes `error` and then turns hands-free `off`. Before the first load
+nothing stops: the runtime keeps its own line ("Standby") until the first
+MODE.
+
+The follow-up is not a phase's, on purpose. A reply to a push-to-talk turn
+closes while hands-free is paused or restarting, and it still opens the lease
+once hands-free is listening again and playback has drained. It is set by a
+`final_response_audio_closed` with `success: true` at the page's epoch, and
+the 400 ms debounce runs while playback is drained (`playbackChanged`
+cancels it when audio starts again). It ends when the debounce opens the
+lease (which still opens only from the phases below), at the next closed
+reply, at a page stop and at an `epoch`. MODE off keeps it.
 
 A follow-up lease opens only from `armed`, `wake_grace`, `awaiting_response`
 or `lease`: never over a start or a running capture. A second stop while
@@ -190,9 +211,26 @@ or `lease`: never over a start or a running capture. A second stop while
 Every way into `armed` resets both detectors; `wake_grace` and `lease` reset
 the endpointer.
 
-An event from a start, a recorder or a timer names its attempt, capture,
-lease or timer, and `next()` drops one the current phase does not hold. A
-start that a newer one overtook therefore releases only what it made.
+An event from a load, a start, a recorder or a timer names its load,
+attempt, capture, lease or timer, and `step()` drops one the current state
+does not hold. A start that a newer one overtook therefore releases only what
+it made, and a load that a stop ended starts nothing.
+
+What `CallRuntime` tells the controller:
+
+| page or server event | call |
+|---|---|
+| MODE (while the line is up) | `toggle()` |
+| page hidden, `pagehide`, `dispose`, route change, hangup, socket closed | `stop(reason)` |
+| `epoch` | `epochChanged()` |
+| push-to-talk takes or gives back the microphone | `pauseForPtt()`, `resumeAfterPtt()` |
+| `final_response_audio_closed` | `replyClosed(generation, success)` |
+| playback changed | `playbackChanged()` |
+| `error` naming a clip | `clipFailed(id)` |
+| `routing_unavailable` | `endAwaitedTurn()` |
+
+A keepalive miss and `retry()` reconnect without `stop`: hands-free stays as
+it was until the new socket's `epoch` turns it off.
 
 ## Asset provenance and licenses
 

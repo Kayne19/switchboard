@@ -250,7 +250,7 @@ function harness() {
     isPttActive: () => ptt,
     onClip: () => {
       counts.clips += 1;
-      return acceptClips;
+      return acceptClips ? `clip-${counts.clips}` : null;
     },
     onState: (detail) => published.push([detail.state, detail.message]),
   });
@@ -331,8 +331,10 @@ async function reach(phase: Phase): Promise<Harness> {
         h.speechEnds();
       }
       if (phase === "awaiting_response") h.latest().onstop!();
-      if (phase === "lease" || phase === "lease_capturing" || phase === "lease_finishing")
-        h.instance.openFollowUpLease(4);
+      if (phase === "lease" || phase === "lease_capturing" || phase === "lease_finishing") {
+        h.instance.replyClosed(4, true);
+        h.fire(400);
+      }
       if (phase === "lease_capturing" || phase === "lease_finishing") h.speechStarts();
       if (phase === "lease_finishing") {
         h.latest().ondataavailable!({ data: new Blob(["words"]) });
@@ -365,9 +367,11 @@ async function apply(h: Harness, event: Event): Promise<void> {
     case "epoch":
       return h.instance.epochChanged();
     case "follow-up":
-      return h.instance.openFollowUpLease(4);
+      h.instance.replyClosed(4, true);
+      return h.fire(400);
     case "follow-up, old generation":
-      return h.instance.openFollowUpLease(3);
+      h.instance.replyClosed(3, true);
+      return h.fire(400);
     case "no reply":
       return h.instance.endAwaitedTurn();
     case "wake":
