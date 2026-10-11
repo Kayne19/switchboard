@@ -23,6 +23,62 @@ fn read_lines(path: &std::path::Path) -> Vec<String> {
         .collect()
 }
 
+/// A transfer to the project already on the line ends that project's
+/// session before it starts another, and the guard stops naming it then,
+/// not only once the new session attaches (#457): every change to the PBX's
+/// agent re-derives the guard, so a rescue in that window finds nothing to
+/// take.
+#[tokio::test]
+async fn a_transfer_to_the_project_on_the_line_empties_the_guard_before_it_starts_anew() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let mut started_tx = Some(started_tx);
+    let mut creates = 0;
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("ready")));
+    host.on_command = Some(Box::new(move |name, _| {
+        if name != "create_session" {
+            return None;
+        }
+        creates += 1;
+        if creates == 1 {
+            return None;
+        }
+        // The second session is never answered: the test looks at the
+        // guard while the transfer waits for it.
+        if let Some(started) = started_tx.take() {
+            let _ = started.send(());
+        }
+        Some(None)
+    }));
+    host.serve(board.hosts().connect_fake(HOST));
+    let reply = board
+        .transfer_to(&transcript("look at alpha"), "alpha")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let previous = board.agent.clone().expect("alpha is on the line");
+    let guard = board.session_control();
+
+    let again = transcript("start alpha over");
+    let transfer = board.transfer_to(&again, "alpha");
+    let named = tokio::select! {
+        reply = transfer => panic!("the transfer ended before its session started: {reply:?}"),
+        named = async {
+            within("the second create_session", started_rx)
+                .await
+                .expect("the host saw the second create_session");
+            guard.lock().await.clone()
+        } => named,
+    };
+
+    assert!(!previous.alive(), "the previous session was ended");
+    assert_eq!(
+        named.map(|session| session.label().to_owned()),
+        None,
+        "the guard still names the ended session"
+    );
+    board.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_dial_to_an_ambiguous_name_asks_which_project_was_meant() {
     let p1 = Project {
