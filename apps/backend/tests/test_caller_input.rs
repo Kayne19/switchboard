@@ -3,13 +3,14 @@ use crate::app_state::AppState;
 use crate::app_state::{
     begin_alpha_candidate, next_event_of, state, state_with_stream, state_with_stt,
 };
+use crate::browser::PageFeed;
 use crate::browser::{frames_until, handle_text_frame, next_delivery, types_of};
 use crate::delivery::{DeliveryConnection, Event};
 use crate::pi_client::{LegSession, PiSession};
 use crate::protocol::ServerMessage;
 use crate::turns::process_turns;
 use serde_json::{json, Value};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{timeout, Duration};
 
@@ -227,7 +228,7 @@ fn clip_headers_carry_a_required_capture_epoch() {
 #[tokio::test]
 async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
     let state = state_with_stt(Some("printf 'stale words'".into()));
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     state
         .0
         .clips
@@ -456,7 +457,7 @@ async fn a_clip_resent_after_its_verdict_was_missed_is_answered_with_it() {
 
     // The tab drops before the clip is transcribed.
     state.0.delivery.retire(connection.epoch);
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let clip_worker = tokio::spawn(process_clips(state.clone()));
     let verdict = verdict_emitted(&mut events, "missed").await;
     assert_eq!(verdict["type"], "transcript");
@@ -487,7 +488,7 @@ async fn a_stale_clip_resent_after_a_reconnect_is_told_it_was_dropped() {
     state.0.delivery.retire(connection.epoch);
     // The leg changes while the tab is away, so the clip is dropped.
     state.0.coordinator.begin_rescue("page rescue");
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let clip_worker = tokio::spawn(process_clips(state.clone()));
     verdict_emitted(&mut events, "stale").await;
 
@@ -753,7 +754,7 @@ async fn resend_clip(state: &AppState, connection: &DeliveryConnection, id: &str
 
 /// Waits for the verdict on clip `id` to be emitted, whether or not a
 /// connection is there to receive it.
-async fn verdict_emitted(events: &mut broadcast::Receiver<Event>, id: &str) -> Value {
+async fn verdict_emitted(events: &mut PageFeed, id: &str) -> Value {
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
             .await

@@ -1,4 +1,5 @@
 use super::*;
+use crate::browser::PageFeed;
 use crate::browser::{frames_until, types_of};
 use crate::delivery::Event;
 use crate::module_calls::diagram_show;
@@ -156,7 +157,7 @@ async fn failed_promotion_finished_notice_clears_the_held_display_projection() {
 async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
     let root = scratch_root("agents-state-lifecycle");
     let state = state_with_agents(&root);
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let context = crate::pbx::TransferContext {
         exact_caller_transcript: "put me through to alpha".into(),
         ..Default::default()

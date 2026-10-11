@@ -18,7 +18,7 @@ use tokio::time::{timeout, Duration};
 #[tokio::test]
 async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let connection = state.0.delivery.register();
     let generation = state.0.coordinator.generation();
     let frame = json!({"type":"typed_turn", "id":"typed-1", "generation":generation, "text":"  deploy it  "});
@@ -119,7 +119,7 @@ async fn typed_turns_reach_the_agent_in_the_order_they_were_sent() {
 #[tokio::test]
 async fn typed_turn_from_a_retired_epoch_is_dropped() {
     let state = state();
-    let mut events = state.0.events.subscribe();
+    let mut events = PageFeed::open(&state);
     let connection = state.0.delivery.register();
     let old_generation = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");

@@ -792,7 +792,7 @@ pub(crate) async fn until_debug(
 
 #[cfg(test)]
 pub(crate) async fn next_event_of(
-    events: &mut broadcast::Receiver<Event>,
+    events: &mut crate::browser::PageFeed,
     event_type: &str,
 ) -> Value {
     timeout(Duration::from_secs(1), async {
