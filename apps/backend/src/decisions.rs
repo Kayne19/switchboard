@@ -667,7 +667,8 @@ impl Switchboard {
         // promoted resident is removed first; avoid clearing its waiting
         // request in that transitional case.
         if !self.coordinator.project_is_background(session.label()) {
-            self.announce_agent_state(session.label(), "busy").await;
+            self.announce_agent_state(session.label(), crate::pbx::AgentNotice::Busy)
+                .await;
         }
         self.set_agent_task(session.label(), &context.exact_caller_transcript);
         let utterance = self.current_utterance();

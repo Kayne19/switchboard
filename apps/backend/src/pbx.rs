@@ -35,7 +35,7 @@ use crate::redial::RedialPlanner;
 #[cfg(test)]
 use crate::registry::Project;
 use crate::registry::Registry;
-use crate::residents::BackgroundRegistry;
+use crate::residents::{BackgroundRegistry, Leaving};
 #[cfg(test)]
 use crate::router::Decision;
 use crate::router::Router;
@@ -60,7 +60,30 @@ pub type RouteCallback = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>
 #[derive(Clone, Debug)]
 pub struct AgentStateNotice {
     pub project: String,
-    pub state: String,
+    pub state: AgentNotice,
+}
+
+/// What the PBX and turn settlement tell the agent projection about a
+/// project agent. Whether one is waiting to speak is the floor's to say
+/// (`floor::Waiting`), not a notice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentNotice {
+    /// A turn of its own is running.
+    Busy,
+    /// Its turn settled.
+    Idle,
+    /// Its session ended, or it was never made resident.
+    Finished,
+}
+
+impl std::fmt::Display for AgentNotice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            AgentNotice::Busy => "busy",
+            AgentNotice::Idle => "idle",
+            AgentNotice::Finished => "finished",
+        })
+    }
 }
 /// Told when a session that is not a background resident closes on its host:
 /// project, session id and instance. The API retires it from the line.
@@ -196,7 +219,7 @@ impl Switchboard {
             operator: None,
             utility: None,
             agent: None,
-            background_agents: BackgroundRegistry::default(),
+            background_agents: BackgroundRegistry::new(coordinator.clone()),
             operator_note: None,
             agent_tasks: Arc::new(StdMutex::new(HashMap::new())),
             call_state: String::new(),
@@ -249,53 +272,46 @@ impl Switchboard {
         self.agent_state_callback = callback;
     }
 
-    pub(crate) async fn announce_agent_state(&self, project: &str, state: &str) {
+    pub(crate) async fn announce_agent_state(&self, project: &str, state: AgentNotice) {
+        tracing::debug!(%project, %state, "agent state");
         if let Some(callback) = &self.agent_state_callback {
             callback(AgentStateNotice {
                 project: project.to_owned(),
-                state: state.to_owned(),
+                state,
             })
             .await;
         }
     }
 
-    /// Evicts a resident as soon as its host reports session death. A callback
-    /// from an old session cannot remove a replacement because the persistent
-    /// id and unique live-handle instance are checked by the shared registry.
+    /// Evicts a resident as soon as its host reports session death
+    /// (`Leaving::ClosedOnHost`). A callback from an old session cannot
+    /// remove a replacement: the registry retires only the exact session.
     pub(crate) fn session_closed_callback(&self) -> SessionClosedCallback {
         let registry = self.background_agents.clone();
-        let coordinator = self.coordinator.clone();
         let state_callback = self.agent_state_callback.clone();
         let foreground_closed = self.foreground_closed_callback.clone();
         Arc::new(
             move |project: String, session_id: String, instance_id: u64| {
                 let registry = registry.clone();
-                let coordinator = coordinator.clone();
                 let state_callback = state_callback.clone();
                 let foreground_closed = foreground_closed.clone();
                 Box::pin(async move {
-                    let Some(session) = registry.remove_closed(&project, &session_id, instance_id)
-                    else {
-                        // Not a resident: it may be the agent on the line or
-                        // a taken-over desk session. The PBX checks and
-                        // retires it under its own lock.
-                        if let Some(callback) = foreground_closed {
-                            callback(project, session_id, instance_id).await;
-                        }
-                        return;
+                    let why = Leaving::ClosedOnHost {
+                        session_id: session_id.clone(),
+                        instance_id,
                     };
+                    if registry
+                        .retire(&project, why, state_callback.as_ref())
+                        .await
+                        .is_some()
                     {
-                        // Retire the call token before releasing the shared
-                        // resident handle, so no request/display can pass the
-                        // lifecycle check while cleanup is in flight.
-                        coordinator.remove_background(&session.token());
-                        if let Some(callback) = state_callback {
-                            callback(AgentStateNotice {
-                                project,
-                                state: "finished".into(),
-                            })
-                            .await;
-                        }
+                        return;
+                    }
+                    // Not a resident: it may be the agent on the line or a
+                    // taken-over desk session. The PBX checks and retires it
+                    // under its own lock.
+                    if let Some(callback) = foreground_closed {
+                        callback(project, session_id, instance_id).await;
                     }
                 })
             },
@@ -398,9 +414,8 @@ impl Switchboard {
         if let Some(session) = self.agent.take() {
             session.close();
         }
-        self.background_agents.cancel_all_tasks().await;
-        for session in self.background_agents.drain_sessions() {
-            session.close();
+        for project in self.background_agents.projects() {
+            self.retire_resident(&project, Leaving::Shutdown).await;
         }
         if let Some(session) = self.operator.take() {
             session.close().await;

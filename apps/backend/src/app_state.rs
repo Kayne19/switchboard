@@ -23,7 +23,7 @@ use crate::module_calls::module_call;
 use crate::page_controls::cancel_active_operations;
 #[cfg(test)]
 use crate::pbx::OPERATOR;
-use crate::pbx::{AgentStateCallback, AgentStateNotice, RouteCallback, Switchboard};
+use crate::pbx::{AgentNotice, AgentStateCallback, AgentStateNotice, RouteCallback, Switchboard};
 use crate::pi_client::{Activity, ActivityCallback, LegSession};
 use crate::project_session::{AgentCall, ModuleCallback, ProjectTurn, TurnCallback};
 use crate::protocol::{AgentRequest, AgentState, ServerMessage};
@@ -35,7 +35,7 @@ use crate::speech::start_speech_worker_for_test;
 use crate::speech::{ensure_speech_worker, SpeechContinuity, SpeechGroup, SpeechQueue};
 use crate::turns::{process_turns, TurnState};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -48,16 +48,73 @@ use tokio::time::{timeout, Duration};
 use tracing::Instrument;
 
 /// The presentation-side owner of resident agent state and held displays.
-/// PBX transitions and turn settlement feed it notices; no caller edits either
-/// projection directly, so waiting requests cannot be lost by a late idle.
+/// PBX transitions, turn settlement and the floor feed it events; `apply` is
+/// the one writer of an agent's phase, so no caller edits it directly and a
+/// waiting request cannot be lost by a late idle.
 #[derive(Clone)]
 pub(crate) struct AgentProjection {
     // These are deliberately synchronous locks. Coordinator's background
     // owner holds its lifecycle mutex while it validates a resident and
     // applies a waiting/display mutation, so the check and write cannot be
     // separated by promotion.
-    states: Arc<StdMutex<Vec<AgentState>>>,
+    phases: Arc<StdMutex<BTreeMap<String, AgentPhase>>>,
     displays: Arc<StdMutex<HashMap<String, HeldScene>>>,
+}
+
+/// The phase the page shows for one project agent (`agents_state`).
+#[derive(Clone, Debug)]
+enum AgentPhase {
+    Busy,
+    Idle,
+    /// It asked to speak, and the floor holds its request.
+    Waiting(AgentRequest),
+    Finished,
+}
+
+/// What moves an agent's phase.
+enum AgentEvent {
+    /// The PBX or turn settlement said so (`AgentStateNotice`).
+    Notice(AgentNotice),
+    /// The floor queued a request of the agent's (`floor::Waiting::Asked`).
+    Asked(AgentRequest),
+    /// The floor spoke the agent's last request (`floor::Waiting::Spoken`).
+    Spoken,
+}
+
+impl AgentPhase {
+    /// The phase `event` moves an agent to from `from` (`None`: an agent the
+    /// page does not list yet); `None` when it stays where it is.
+    fn on(from: Option<&AgentPhase>, event: AgentEvent) -> Option<AgentPhase> {
+        match (from, event) {
+            // A turn that settles beside a waiting request does not end the
+            // wait: only the floor speaking it does.
+            (Some(AgentPhase::Waiting(_)), AgentEvent::Notice(AgentNotice::Idle)) => None,
+            (_, AgentEvent::Notice(AgentNotice::Idle)) => Some(AgentPhase::Idle),
+            (_, AgentEvent::Notice(AgentNotice::Busy)) => Some(AgentPhase::Busy),
+            (_, AgentEvent::Notice(AgentNotice::Finished)) => Some(AgentPhase::Finished),
+            (_, AgentEvent::Asked(request)) => Some(AgentPhase::Waiting(request)),
+            (Some(AgentPhase::Waiting(_)), AgentEvent::Spoken) => Some(AgentPhase::Idle),
+            (
+                None | Some(AgentPhase::Busy | AgentPhase::Idle | AgentPhase::Finished),
+                AgentEvent::Spoken,
+            ) => None,
+        }
+    }
+
+    /// The agent as the page and the debug page receive it.
+    fn to_wire(&self, project: &str) -> AgentState {
+        let (state, pending_request) = match self {
+            AgentPhase::Busy => ("busy", None),
+            AgentPhase::Idle => ("idle", None),
+            AgentPhase::Waiting(request) => ("waiting", Some(request.clone())),
+            AgentPhase::Finished => ("finished", None),
+        };
+        AgentState {
+            project: project.to_owned(),
+            state: state.into(),
+            pending_request,
+        }
+    }
 }
 
 /// A background agent's held displays: the stage it gets when the caller
@@ -76,72 +133,52 @@ pub(crate) struct HeldScene {
 pub(crate) struct AgentsChange(Vec<AgentState>);
 
 impl AgentProjection {
-    fn notice(&self, notice: &AgentStateNotice) -> AgentsChange {
-        if notice.state == "finished" {
-            self.displays
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .remove(&notice.project);
+    fn new() -> Self {
+        Self {
+            phases: Arc::new(StdMutex::new(BTreeMap::new())),
+            displays: Arc::new(StdMutex::new(HashMap::new())),
         }
-        let mut agents = self
-            .states
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(agent) = agents
-            .iter_mut()
-            .find(|agent| agent.project == notice.project)
-        {
-            if !(agent.state == "waiting" && notice.state == "idle") {
-                agent.state = notice.state.clone();
-                if notice.state != "waiting" {
-                    agent.pending_request = None;
-                }
-            }
-        } else {
-            agents.push(AgentState {
-                project: notice.project.clone(),
-                state: notice.state.clone(),
-                pending_request: None,
-            });
-            agents.sort_by(|left, right| left.project.cmp(&right.project));
-        }
-        AgentsChange(agents.clone())
     }
 
-    pub(crate) fn waiting(&self, project: String, request: AgentRequest) -> AgentsChange {
-        let mut agents = self
-            .states
+    /// Moves `project`'s phase on `event`: the one writer of a phase.
+    /// Entering `Finished` drops the agent's held displays. Returns every
+    /// agent, by project, whether the event moved this one or not.
+    fn apply(&self, project: &str, event: AgentEvent) -> AgentsChange {
+        let mut phases = self
+            .phases
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(agent) = agents.iter_mut().find(|agent| agent.project == project) {
-            agent.state = "waiting".into();
-            agent.pending_request = Some(request);
-        } else {
-            agents.push(AgentState {
-                project,
-                state: "waiting".into(),
-                pending_request: Some(request),
-            });
-            agents.sort_by(|left, right| left.project.cmp(&right.project));
+        if let Some(next) = AgentPhase::on(phases.get(project), event) {
+            if matches!(next, AgentPhase::Finished) {
+                self.displays
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .remove(project);
+            }
+            phases.insert(project.to_owned(), next);
         }
-        AgentsChange(agents.clone())
+        AgentsChange(
+            phases
+                .iter()
+                .map(|(project, phase)| phase.to_wire(project))
+                .collect(),
+        )
+    }
+
+    fn notice(&self, notice: &AgentStateNotice) -> AgentsChange {
+        self.apply(&notice.project, AgentEvent::Notice(notice.state))
+    }
+
+    /// The floor queued the agent's request (`floor::Waiting::Asked`).
+    pub(crate) fn waiting(&self, project: String, request: AgentRequest) -> AgentsChange {
+        self.apply(&project, AgentEvent::Asked(request))
     }
 
     /// The floor spoke the agent's last request (`floor::Waiting::Spoken`).
     /// This is distinct from a normal idle settlement, which deliberately
     /// preserves a request that a turn finished beside.
     pub(crate) fn floor_released(&self, project: &str) -> AgentsChange {
-        let mut agents = self
-            .states
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(agent) = agents.iter_mut().find(|agent| agent.project == project) {
-            if agent.state == "waiting" {
-                agent.state = "idle".into();
-                agent.pending_request = None;
-            }
-        }
-        AgentsChange(agents.clone())
+        self.apply(project, AgentEvent::Spoken)
     }
 
     /// Applies a background agent's display to the scene held for it: the
@@ -181,10 +218,12 @@ impl AgentProjection {
     }
 
     pub(crate) fn snapshot(&self) -> Vec<AgentState> {
-        self.states
+        self.phases
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .iter()
+            .map(|(project, phase)| phase.to_wire(project))
+            .collect()
     }
 }
 
@@ -325,12 +364,7 @@ impl AppState {
         let speech = SpeechQueue::new();
         let clips = ClipState::new();
         let (shutdown, _) = watch::channel(false);
-        let background_displays = Arc::new(StdMutex::new(HashMap::new()));
-        let agent_states = Arc::new(StdMutex::new(Vec::new()));
-        let projection = AgentProjection {
-            states: agent_states.clone(),
-            displays: background_displays.clone(),
-        };
+        let projection = AgentProjection::new();
         let delivery = DeliveryState::new();
         let speech_deadline = speaker.speech_deadline;
         let mut coordinator = switchboard.coordinator();
@@ -680,7 +714,7 @@ pub(crate) fn state_on(board: Switchboard) -> AppState {
 /// consistency contract.
 #[cfg(test)]
 pub(crate) async fn assert_lifecycle_consistent(state: &AppState) {
-    let agents = state.0.projection.states.lock().unwrap().clone();
+    let agents = state.0.projection.snapshot();
     let displays = state.0.projection.displays.lock().unwrap().clone();
     let route = state.0.coordinator.route();
     let board = state.0.switchboard.lock().await;

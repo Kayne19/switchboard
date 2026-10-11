@@ -95,7 +95,7 @@ async fn stopping_a_background_agent_discards_its_held_display() {
         &state,
         AgentStateNotice {
             project: "alpha".into(),
-            state: "finished".into(),
+            state: AgentNotice::Finished,
         },
     )
     .await;
@@ -136,7 +136,7 @@ async fn failed_promotion_finished_notice_clears_the_held_display_projection() {
         &state,
         AgentStateNotice {
             project: "alpha".into(),
-            state: "finished".into(),
+            state: AgentNotice::Finished,
         },
     )
     .await;
@@ -170,7 +170,7 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
         .await;
     assert_eq!(reply.route, "alpha");
     assert_lifecycle_consistent(&state).await;
-    let agents = state.0.projection.states.lock().unwrap().clone();
+    let agents = state.0.projection.snapshot();
     assert_eq!(
         agents
             .iter()
@@ -193,10 +193,7 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
 
     state.0.switchboard.lock().await.force_hangup().await;
     assert_lifecycle_consistent(&state).await;
-    assert_eq!(
-        state.0.projection.states.lock().unwrap()[0].state,
-        "finished"
-    );
+    assert_eq!(state.0.projection.snapshot()[0].state, "finished");
     assert!(std::iter::from_fn(|| events.try_recv().ok()).any(|event| {
         matches!(event, Event::Json(value) if value["type"] == "agents_state" && value["agents"][0]["state"] == "finished")
     }));
@@ -217,14 +214,14 @@ enum ProjectionEvent {
 }
 
 fn apply_projection_event(projection: &AgentProjection, event: ProjectionEvent) {
-    let notice = |state: &str| AgentStateNotice {
+    let notice = |state: AgentNotice| AgentStateNotice {
         project: "alpha".into(),
-        state: state.into(),
+        state,
     };
     let _change = match event {
-        ProjectionEvent::Busy => projection.notice(&notice("busy")),
-        ProjectionEvent::Idle => projection.notice(&notice("idle")),
-        ProjectionEvent::Finished => projection.notice(&notice("finished")),
+        ProjectionEvent::Busy => projection.notice(&notice(AgentNotice::Busy)),
+        ProjectionEvent::Idle => projection.notice(&notice(AgentNotice::Idle)),
+        ProjectionEvent::Finished => projection.notice(&notice(AgentNotice::Finished)),
         ProjectionEvent::Asked(message) => projection.waiting(
             "alpha".into(),
             AgentRequest {
@@ -320,7 +317,7 @@ async fn the_agent_projection_lists_agents_by_project() {
     for project in ["gamma", "alpha", "beta"] {
         let _change = projection.notice(&AgentStateNotice {
             project: project.into(),
-            state: "busy".into(),
+            state: AgentNotice::Busy,
         });
     }
     let _change = projection.waiting(

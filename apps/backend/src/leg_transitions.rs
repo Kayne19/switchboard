@@ -7,7 +7,7 @@
 //! operator end a leg.
 use crate::hosts::Hosts;
 use crate::lifecycle::{CandidateLeg, Coordinator, LegIdentity, LifecycleError};
-use crate::pbx::{uuid_like, Switchboard, TransferContext, OPERATOR};
+use crate::pbx::{uuid_like, AgentNotice, Switchboard, TransferContext, OPERATOR};
 use crate::pi_client::{PiSessionError, Turn};
 use crate::prewarm::LaunchPlan;
 use crate::project_session::{ModuleCallback, ProjectLaunch, ProjectSession, TurnCallback};
@@ -15,6 +15,7 @@ use crate::prompts::{build_intro_prompt, FOREGROUND_NOTICE};
 use crate::redial::thinking_in_spec;
 use crate::registry::{Project, Registry};
 use crate::reply::Reply;
+use crate::residents::Leaving;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -91,14 +92,8 @@ impl Switchboard {
         // transfer/dial path, which otherwise only checked the foreground
         // handle and could create a second live session for this project.
         if self.coordinator.route() != project.id {
-            if self.remove_dead_background(&project.id).await {
-                self.announce_agent_state(&project.id, "finished").await;
-            }
-            if self.background_agents.contains_key(&project.id) {
-                let session = self
-                    .take_background(&project.id)
-                    .await
-                    .expect("background session exists");
+            self.retire_dead_resident(&project.id).await;
+            if let Some(session) = self.take_background(&project.id).await {
                 return self.promote_background(session, context.clone()).await;
             }
         }
@@ -176,7 +171,8 @@ impl Switchboard {
 
         let intro_prompt = build_intro_prompt(context, project, plan.prepare_report.as_ref());
 
-        self.announce_agent_state(&project.id, "busy").await;
+        self.announce_agent_state(&project.id, AgentNotice::Busy)
+            .await;
         let utterance = self.current_utterance();
         let turn = match session
             .prompt_as(&intro_prompt, "intro", utterance.as_deref())
@@ -220,7 +216,8 @@ impl Switchboard {
             None => {
                 let project = session.label().to_owned();
                 session.close();
-                self.announce_agent_state(&project, "finished").await;
+                self.announce_agent_state(&project, AgentNotice::Finished)
+                    .await;
                 return self.reply_transfer_error(
                     format!("{project} isn't registered any more."),
                     Some("project is no longer registered".into()),
@@ -237,7 +234,8 @@ impl Switchboard {
         .await;
         let begun = match joined {
             Ok(_) => {
-                self.announce_agent_state(&project.id, "busy").await;
+                self.announce_agent_state(&project.id, AgentNotice::Busy)
+                    .await;
                 let candidate = CandidateLeg::new(
                     project.id.clone(),
                     project.id.clone(),
@@ -255,7 +253,8 @@ impl Switchboard {
             Ok(startup) => startup,
             Err(error) => {
                 session.close();
-                self.announce_agent_state(&project.id, "finished").await;
+                self.announce_agent_state(&project.id, AgentNotice::Finished)
+                    .await;
                 return self.couldnt_bring_back(&project.id, error);
             }
         };
@@ -480,7 +479,8 @@ impl Switchboard {
             }
         };
         startup.attach(self, &session).await;
-        self.announce_agent_state(&project.id, "busy").await;
+        self.announce_agent_state(&project.id, AgentNotice::Busy)
+            .await;
         let utterance = self.current_utterance();
         let turn = session
             .prompt_as(text, "caller", utterance.as_deref())
@@ -634,7 +634,8 @@ impl Switchboard {
             s.close();
         }
         if let Some(project) = project {
-            self.announce_agent_state(&project, "finished").await;
+            self.announce_agent_state(&project, AgentNotice::Finished)
+                .await;
         }
         self.name_leg_on_line(None, || self.coordinator.return_to_operator())
             .await;
@@ -696,16 +697,12 @@ impl Switchboard {
             self.drop_agent().await;
             return self.reply([format!("Stopped {target}.")], None);
         }
-        if self.background_agents.contains_key(target) {
+        if self
+            .retire_resident(target, Leaving::Stopped)
+            .await
+            .is_some()
+        {
             self.legs.resume_blocked.insert(target.to_owned());
-            self.background_agents.cancel_task(target).await;
-            let session = self
-                .background_agents
-                .remove(target)
-                .expect("background session exists");
-            self.coordinator.remove_background(&session.token());
-            session.close();
-            self.announce_agent_state(target, "finished").await;
             return self.reply([format!("Stopped {target}.")], None);
         }
         self.reply([format!("{target} isn't running.")], None)
@@ -806,7 +803,9 @@ impl Startup {
         self.coordinator.finish_intro();
         if self.change == LegChange::NewAgent {
             board.shelve_previous_foreground(&self.project).await;
-            board.announce_agent_state(&self.project, "idle").await;
+            board
+                .announce_agent_state(&self.project, AgentNotice::Idle)
+                .await;
         }
         board.agent = Some(session);
         board.name_leg_on_line(None, || {}).await;
@@ -825,7 +824,9 @@ impl Startup {
         if let Some(session) = self.attached.take() {
             session.close();
             if self.change == LegChange::NewAgent {
-                board.announce_agent_state(&self.project, "finished").await;
+                board
+                    .announce_agent_state(&self.project, AgentNotice::Finished)
+                    .await;
             }
         }
         let (coordinator, generation) = (&self.coordinator, self.identity.generation);

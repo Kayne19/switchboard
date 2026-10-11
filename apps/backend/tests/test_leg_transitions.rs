@@ -675,7 +675,7 @@ async fn failed_transfer_adoption_returns_to_the_operator_and_cleans_up() {
     let mut board = board_with(vec![project("alpha", "")], false);
     let coordinator = board.coordinator();
     board.set_agent_state_callback(Some(Arc::new(move |notice| {
-        if notice.project == "alpha" && notice.state == "busy" {
+        if notice.project == "alpha" && notice.state == AgentNotice::Busy {
             // The candidate is staged before its intro prompt. Simulate a
             // competing lifecycle owner changing it before PBX adoption.
             coordinator.set_candidate_token_for_test("not-the-transfer-token");
@@ -1506,7 +1506,7 @@ async fn bring_up_scene() -> BringUp {
         let _ = state_tx.send(state);
         let (seen, guard) = (Arc::clone(&seen), Arc::clone(&guard));
         Box::pin(async move {
-            if notice.state != "busy" {
+            if notice.state != AgentNotice::Busy {
                 return;
             }
             if let Some(LegSession::Project(session)) = guard.lock().await.clone() {

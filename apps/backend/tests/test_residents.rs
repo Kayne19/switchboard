@@ -81,7 +81,7 @@ async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() 
     let finished_tx = Arc::new(StdMutex::new(Some(finished_tx)));
     let finished_for_callback = finished_tx.clone();
     board.set_agent_state_callback(Some(Arc::new(move |notice| {
-        if notice.project == "alpha" && notice.state == "finished" {
+        if notice.project == "alpha" && notice.state == AgentNotice::Finished {
             if let Some(tx) = finished_for_callback.lock().unwrap().take() {
                 let _ = tx.send(());
             }
@@ -191,9 +191,9 @@ async fn stale_host_loss_callback_after_resume_keeps_the_replacement_resident() 
     assert_eq!(old.session_id(), replacement.session_id());
     assert_ne!(old.instance_id(), replacement.instance_id());
 
-    board
+    assert!(board
         .background_agents
-        .insert("alpha".into(), replacement.clone());
+        .admit("alpha".into(), replacement.clone(), || {}));
     let callback = board.session_closed_callback();
     callback("alpha".into(), old.session_id().into(), old.instance_id()).await;
 
@@ -213,7 +213,7 @@ async fn host_loss_evicts_a_background_resident_without_a_later_action() {
     let finished_tx = Arc::new(StdMutex::new(Some(finished_tx)));
     let finished_for_callback = finished_tx.clone();
     board.set_agent_state_callback(Some(Arc::new(move |notice| {
-        if notice.project == "alpha" && notice.state == "finished" {
+        if notice.project == "alpha" && notice.state == AgentNotice::Finished {
             if let Some(tx) = finished_for_callback.lock().unwrap().take() {
                 let _ = tx.send(());
             }
@@ -318,7 +318,7 @@ async fn stopped_background_prompt_does_not_publish_idle_after_close() {
     let finished_tx = Arc::new(StdMutex::new(Some(finished_tx)));
     let finished_for_callback = finished_tx.clone();
     board.set_agent_state_callback(Some(Arc::new(move |notice| {
-        if notice.project == "beta" && notice.state == "finished" {
+        if notice.project == "beta" && notice.state == AgentNotice::Finished {
             if let Some(tx) = finished_for_callback.lock().unwrap().take() {
                 let _ = tx.send(());
             }
@@ -342,7 +342,7 @@ async fn stopped_background_prompt_does_not_publish_idle_after_close() {
         .expect("stop published finished");
     let mut late_idle = false;
     while let Ok((project, state)) = state_rx.try_recv() {
-        late_idle |= project == "beta" && state == "idle";
+        late_idle |= project == "beta" && state == AgentNotice::Idle;
     }
     assert!(!late_idle, "a stopped prompt must not publish idle");
     board.shutdown().await;
@@ -424,7 +424,7 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
         .lock()
         .unwrap()
         .iter()
-        .any(|(project, state)| project == "alpha" && state == "busy"));
+        .any(|(project, state)| project == "alpha" && *state == AgentNotice::Busy));
     assert!(log
         .named("set_mode")
         .iter()

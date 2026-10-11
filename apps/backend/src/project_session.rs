@@ -729,6 +729,7 @@ impl ProjectSession {
     pub fn alive(&self) -> bool {
         self.inner.alive()
     }
+    #[cfg(test)]
     pub fn same_session(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
