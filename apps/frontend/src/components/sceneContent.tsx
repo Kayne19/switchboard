@@ -110,6 +110,8 @@ export interface SceneContent {
   /** The rail's note is one the charts could not hold, or one about a visual off them: in a rail too short for all it carries, it leads. */
   noteLeads?: boolean;
   progressList: Array<SceneObject<ProgressData>>;
+  /** The scene's note, where the main slot's graph may carry it as a callout (`mayCarryCallout`): the rail leaves it out while the drawing does (`useCalloutPlaced`). */
+  calloutNote?: NoteData;
   /** The primary chart and the notes on it, by key: a band holds a note while it is one of them. */
   chartNotes?: { chart: string; keys: string[] };
 }

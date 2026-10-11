@@ -127,3 +127,84 @@ describe('a note about a node of the main graph', () => {
     vi.mocked(console.error).mockRestore();
   });
 });
+
+// The rail drew the note until the diagram's passive effect said it placed
+// the callout, then let the card go: for some 300 ms an unseen card held
+// rail space and was in the accessibility tree (#390). Every card added to
+// the page is caught, from the first commit on.
+describe('a note the drawing carries as a callout', () => {
+  // How many rail cards were added to the page while `run` ran and the page settled.
+  async function railCardsAdded(run: () => void): Promise<number> {
+    let added = 0;
+    const count = (records: MutationRecord[]) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const cards = [...(node.matches('.annotation-card') ? [node] : []), ...node.querySelectorAll('.annotation-card')];
+          added += cards.filter((card) => card.closest('.content-rail') !== null).length;
+        }
+      }
+    };
+    const watcher = new MutationObserver(count);
+    watcher.observe(document.body, { childList: true, subtree: true });
+    run();
+    await settle();
+    count(watcher.takeRecords());
+    watcher.disconnect();
+    return added;
+  }
+
+  it('is never mounted in the rail when it is shown with the graph', async () => {
+    const cards = await railCardsAdded(() => renderScene([diagram(), fitting]));
+    expect(scene().querySelector('.diagram-callout')).not.toBeNull();
+    expect(cards).toBe(0);
+  });
+
+  it('is never mounted in the rail when it arrives on a drawn graph', async () => {
+    renderScene([diagram()]);
+    await settle();
+    const cards = await railCardsAdded(() => runActions([fitting]));
+    expect(scene().querySelector('.diagram-callout')).not.toBeNull();
+    expect(cards).toBe(0);
+  });
+
+  it('stays out of the rail when it is updated in place', async () => {
+    renderScene([diagram(), fitting]);
+    await settle();
+    const cards = await railCardsAdded(() => runActions([note({}, 'The gate stamps every action.')]));
+    expect(scene().querySelector('.diagram-callout')?.textContent).toContain('every action');
+    expect(cards).toBe(0);
+  });
+
+
+  // The graph is first drawn for the screen (1024 x 768 in jsdom), where it
+  // carries the note, then for its own box, where it is laid out upright and
+  // does not. The page reads the drawing again when it changes, in a
+  // microtask: before the frame is painted, not in a later task.
+  it('is given back to the rail before the first frame where the slot is too narrow to carry it', async () => {
+    const restore: Array<() => void> = [];
+    for (const [key, value] of [['offsetWidth', 300], ['offsetHeight', 600]] as const) {
+      const before = Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)!;
+      Object.defineProperty(HTMLElement.prototype, key, {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.classList.contains('diagram-primitive') ? value : 0;
+        },
+      });
+      restore.push(() => Object.defineProperty(HTMLElement.prototype, key, before));
+    }
+    try {
+      renderScene([diagram(), fitting]);
+      const flag = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+      flag.IS_REACT_ACT_ENVIRONMENT = false;
+      try {
+        for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+      } finally {
+        flag.IS_REACT_ACT_ENVIRONMENT = true;
+      }
+      expect(seen()).toEqual(IN_RAIL);
+    } finally {
+      for (const undo of restore) undo();
+    }
+  });
+});

@@ -13,6 +13,7 @@ import { countText } from '../primitives/countText';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { FocusableSurface } from '../primitives/FocusableSurface';
 import { TechFrame, type FrameVariant } from '../primitives/TechFrame';
+import { mayCarryCallout } from './DiagramObject';
 import { renderObject } from './renderObject';
 import { annotationForScene, liveChatMessage, noteForTarget, ObjectSurface, sceneCaption, type SceneContent, type SceneProps } from './sceneContent';
 
@@ -20,7 +21,7 @@ import { annotationForScene, liveChatMessage, noteForTarget, ObjectSurface, scen
 // timer or forecast fills the main slot, its note in the rail -- unless the
 // diagram places the note as its own callout -- and every other visual in
 // the aux row under it.
-export function objectContent({ state, composition, onFocus }: SceneProps, onCalloutChange: (placed: boolean) => void): SceneContent | null {
+export function objectContent({ state, composition, onFocus }: SceneProps): SceneContent | null {
   const primary = composition.primary;
   const frame = primary ? sceneFrame(primary) : null;
   if (!primary || !frame) return null;
@@ -40,12 +41,13 @@ export function objectContent({ state, composition, onFocus }: SceneProps, onCal
     noteObject,
     moreNotes,
     progressList: objectsOfType<ProgressData>(state, 'progress'),
+    calloutNote: primary.type === 'diagram' && note && mayCarryCallout(cast.diagram(primary).data, primary.id, note) ? note : undefined,
     main: (
       <ObjectMotion objectId={primary.id} className={`content-main ${primary.type}-object`}>
         {outline ? <TechFrame variant={outline} /> : null}
         <ObjectSurface object={primary}>
           <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
-            {renderObject(primary, 'primary', { onStage: state.agentObjects, notes: [...(note ? [note] : []), ...moreNotes.map((object) => object.data)], onCalloutChange })}
+            {renderObject(primary, 'primary', { onStage: state.agentObjects, notes: [...(note ? [note] : []), ...moreNotes.map((object) => object.data)] })}
           </FocusableSurface>
         </ObjectSurface>
       </ObjectMotion>

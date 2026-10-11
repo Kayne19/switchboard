@@ -24,6 +24,39 @@ const SEMANTICS = Object.keys(SEMANTIC_COLOR) as Semantic[];
 const CALLOUT_LINE_CHARS = 32;
 const CALLOUT_TAG_CHARS = 34;
 
+/** The node of `data` the note names, where it names one this graph holds. */
+export function anchoredNode(data: DiagramData, id: string, note: NoteData | null | undefined): string | undefined {
+  const node = markedPart(note, id).node;
+  return node && data.nodes.some((each) => each.id === node) ? node : undefined;
+}
+
+/**
+ * The note's words as the callout box sets them, or null where they do not
+ * fit it. The box fits three wrapped lines and a one-line tag. A longer
+ * note -- or a word or tag too wide for the box -- is not truncated or
+ * spilled over the diagram: it is treated as not fitting, so the note stays
+ * in the rail with the matching badge and nothing is silently lost.
+ */
+export function calloutText(note: NoteData): string[] | null {
+  const lines = wrapWords(note.segments.map((segment) => segment.text).join(''), CALLOUT_LINE_CHARS);
+  const fits =
+    lines.length > 0 &&
+    lines.length <= 3 &&
+    lines.every((line) => textCells(line) <= CALLOUT_LINE_CHARS) &&
+    textCells(note.tag ?? '') <= CALLOUT_TAG_CHARS;
+  return fits ? lines : null;
+}
+
+/**
+ * Whether a graph drawn within `element` carries its note as a callout.
+ * Only the drawing knows, for the room it is laid out in; the scene reads
+ * it from what is drawn (`useCalloutPlaced`), so the rail leaves the note
+ * out.
+ */
+export function drawsCallout(element: Element): boolean {
+  return element.querySelector('.diagram-callout') !== null;
+}
+
 /**
  * An edge's label, or a stub's names, on a backing of its own. A stub's
  * names line up on the side its line meets, so its arrow sits by the line.
@@ -66,9 +99,8 @@ export function DiagramPrimitive({
 }) {
   const callout = slot === 'primary';
   const ids = useSvgIds();
-  const anchoredNodeId = markedPart(note, id).node;
-  const hasAnchoredNode = Boolean(anchoredNodeId && data.nodes.some((n) => n.id === anchoredNodeId));
-  const anchor = hasAnchoredNode ? anchoredNodeId : undefined;
+  const anchor = anchoredNode(data, id, note);
+  const hasAnchoredNode = anchor !== undefined;
   // The layout is chosen for the viewport: as drawn for the approved canvas
   // when that reads, otherwise recomposed for this viewport and scrolled;
   // one that scrolls far enough to carry a map is laid out beside the map's
@@ -120,22 +152,10 @@ export function DiagramPrimitive({
       },
     };
   }, [layout, anchor]);
-  // The callout box fits three wrapped lines and a one-line tag. A longer
-  // note — or a word or tag too wide for the box — is not truncated or
-  // spilled over the diagram: it is treated as not fitting, so the note
-  // stays in the rail with the matching badge and nothing is silently lost.
-  const calloutLines =
-    hasAnchoredNode && note
-      ? wrapWords(note.segments.map((segment) => segment.text).join(''), CALLOUT_LINE_CHARS)
-      : [];
-  const calloutFits =
-    calloutLines.length > 0 &&
-    calloutLines.length <= 3 &&
-    calloutLines.every((line) => textCells(line) <= CALLOUT_LINE_CHARS) &&
-    textCells(note?.tag ?? '') <= CALLOUT_TAG_CHARS;
+  const calloutLines = hasAnchoredNode && note ? calloutText(note) : null;
   // A callout rides on the drawing; on one that scrolls it could sit out of
   // view, so there the note stays in the rail and the node carries the marker.
-  const calloutPlaced = Boolean(callout && !portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutFits);
+  const calloutPlaced = Boolean(callout && !portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutLines);
 
   // The scene drops the note from the rail while the callout carries it. A
   // diagram that goes away (a new scene, or a render error that leaves its
@@ -237,7 +257,7 @@ export function DiagramPrimitive({
         </g>
         <g className="diagram-nodes">
           {layout.nodes.map(({ node, box, lines, ruleY }, index) => {
-            const isAnchored = hasAnchoredNode && node.id === anchoredNodeId;
+            const isAnchored = hasAnchoredNode && node.id === anchor;
             const state = node.state ?? 'todo';
             const color = isAnchored ? 'var(--orange)' : SEMANTIC_COLOR[node.semantic ?? 'paper'];
             // A blocked node is framed in red even when a note anchors it: the
@@ -298,7 +318,7 @@ export function DiagramPrimitive({
             );
           })}
         </g>
-        {calloutPlaced && layout.callout && note ? (
+        {calloutPlaced && layout.callout && note && calloutLines ? (
           <g className="diagram-callout" style={{ animationDelay: '150ms' }}>
             <path
               className="diagram-callout__leader"
