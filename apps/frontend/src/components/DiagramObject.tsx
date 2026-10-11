@@ -11,19 +11,17 @@ export function DiagramObject({
   id,
   slot,
   note,
-  onCalloutChange,
 }: {
   data: DiagramObjectData;
   /** The object's id: an anchored note belongs to it only when `anchor.target` matches. */
   id: string;
   slot?: Slot;
   note?: NoteData | null;
-  onCalloutChange?: (placed: boolean) => void;
 }) {
   if (data.mode === 'sequence') {
     return <SequencePrimitive data={data} id={id} slot={slot} note={note} />;
   }
-  return <DiagramPrimitive data={data} id={id} slot={slot} note={note} onCalloutChange={onCalloutChange} />;
+  return <DiagramPrimitive data={data} id={id} slot={slot} note={note} />;
 }
 
 /**

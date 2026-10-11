@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import type { DiagramData, NoteData, Semantic } from '../controller/types';
 import { ARROW_LENGTH, LABEL_INSET, cornerTagBoxes, litEdges, nodeFramePath, viewDiagram, type DiagramLayout, type EdgeLabel, type EdgeStub } from './diagramLayout';
 import { GlowFilters, LABEL_HEIGHT, entranceStep, pathThrough } from './drawingKit';
@@ -87,7 +87,6 @@ export function DiagramPrimitive({
   slot = 'primary',
   id,
   note,
-  onCalloutChange,
 }: {
   data: DiagramData;
   /** Where the graph is drawn. Only in the main slot may the note ride on the drawing as a callout where it fits; in an aux cell the rail shows it, in focus a panel of its own. */
@@ -95,7 +94,6 @@ export function DiagramPrimitive({
   /** This diagram's object id: an anchored note only belongs to it when its `anchor.target` matches. */
   id: string;
   note?: NoteData | null;
-  onCalloutChange?: (placed: boolean) => void;
 }) {
   const callout = slot === 'primary';
   const ids = useSvgIds();
@@ -156,14 +154,6 @@ export function DiagramPrimitive({
   // A callout rides on the drawing; on one that scrolls it could sit out of
   // view, so there the note stays in the rail and the node carries the marker.
   const calloutPlaced = Boolean(callout && !portrait && !fit.scrollX && !fit.scrollY && layout.callout && calloutLines);
-
-  // The scene drops the note from the rail while the callout carries it. A
-  // diagram that goes away (a new scene, or a render error that leaves its
-  // surface unavailable) takes the callout with it, so it hands the note back.
-  useEffect(() => {
-    onCalloutChange?.(calloutPlaced);
-    return () => onCalloutChange?.(false);
-  }, [calloutPlaced, onCalloutChange]);
 
   const lit = litEdges(data);
   const edges = layout.edges.map((laidOut, index) => {
