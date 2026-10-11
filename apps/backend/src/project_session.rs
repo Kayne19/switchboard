@@ -10,7 +10,9 @@ use crate::pi_client::{
     panic_message, spoken_error, tool_error_text, Activity, ActivityCallback, PiSessionError, Turn,
     SPEAK_TOOL, STREAM_LIMIT,
 };
-use crate::session_turn::{Collector, TurnBoundary, TurnEffect, TurnEvent, TurnFrame, TurnState};
+use crate::session_turn::{
+    Collector, RunEnd, TurnBoundary, TurnEffect, TurnEvent, TurnFrame, TurnState,
+};
 use futures_util::FutureExt;
 use serde_json::{json, Value};
 use std::future::Future;
@@ -271,9 +273,16 @@ impl ProjectInner {
                         effects.push_front(effect);
                     }
                 }
-                TurnEffect::RunEnded { report, final_text } => {
+                TurnEffect::RunEnded(RunEnd { report, final_text }) => {
                     self.publish_final(report.turn_id.clone(), &final_text);
                     self.report_turn(&report).await;
+                }
+                TurnEffect::RunReplaced {
+                    ended: RunEnd { report, final_text },
+                    started,
+                } => {
+                    self.publish_final(report.turn_id.clone(), &final_text);
+                    self.report_turn_replacing(&started, &report).await;
                 }
             }
         }
@@ -295,14 +304,9 @@ impl ProjectInner {
             .self_woken_cause()
     }
 
-    /// Reports a turn boundary to the application; true when it admitted a
-    /// self-woken start as an operation of its own.
-    async fn report_turn(&self, boundary: &TurnBoundary) -> bool {
-        let Some(callback) = &self.on_turn else {
-            return false;
-        };
-        let callback = Arc::clone(callback);
-        let event = ProjectTurn {
+    /// The application's view of `boundary` on this session.
+    fn project_turn(&self, boundary: &TurnBoundary) -> ProjectTurn {
+        ProjectTurn {
             instance_id: self.instance_id,
             token: self.token(),
             turn_id: boundary.turn_id.clone(),
@@ -310,7 +314,30 @@ impl ProjectInner {
             ended: boundary.ended,
             text: boundary.text.clone(),
             replaces: None,
+        }
+    }
+
+    /// Reports a turn boundary to the application; true when it admitted a
+    /// self-woken start as an operation of its own.
+    async fn report_turn(&self, boundary: &TurnBoundary) -> bool {
+        self.report(self.project_turn(boundary)).await
+    }
+
+    /// Reports the start of a run that replaces a held one, with that run's
+    /// end, for the application to take together.
+    async fn report_turn_replacing(&self, started: &TurnBoundary, ended: &TurnBoundary) {
+        let turn = ProjectTurn {
+            replaces: Some(Box::new(self.project_turn(ended))),
+            ..self.project_turn(started)
         };
+        self.report(turn).await;
+    }
+
+    async fn report(&self, event: ProjectTurn) -> bool {
+        let Some(callback) = &self.on_turn else {
+            return false;
+        };
+        let callback = Arc::clone(callback);
         match AssertUnwindSafe(callback(event)).catch_unwind().await {
             Ok(admitted) => admitted,
             Err(panic) => {
