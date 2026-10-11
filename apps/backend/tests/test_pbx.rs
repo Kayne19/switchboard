@@ -155,3 +155,227 @@ async fn a_closed_session_that_is_not_resident_is_reported_for_the_line() {
     );
     board.shutdown().await;
 }
+
+// The guard table. The active-session guard names the session steering and
+// a page rescue act on: the leg on the line's, or the one coming up. Each
+// row starts the call in one state, makes one change to the legs, and shows
+// what the guard names after it, beside the route and the operator.
+
+/// A switchboard on alpha and beta whose operator answers every line and
+/// whose host refuses the next `prompt` while `refuse_prompt` is set.
+#[cfg(unix)]
+struct GuardScene {
+    board: Switchboard,
+    refuse_prompt: Arc<std::sync::atomic::AtomicBool>,
+    root: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+async fn guard_scene(start: &str) -> GuardScene {
+    use crate::hosts::FakeHostAgent;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let root = scratch_dir("guard-table");
+    let operator = root.join("fake-operator");
+    crate::pi_client::write_executable_script(
+        &operator,
+        r#"while IFS= read -r _line; do
+  printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator here."}}'
+  printf '%s\n' '{"type":"agent_settled"}'
+done
+"#,
+    );
+    let mut board = board_on(
+        vec![project("alpha", ""), project("beta", "")],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let refuse_prompt = Arc::new(AtomicBool::new(false));
+    let armed = Arc::clone(&refuse_prompt);
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("ready")));
+    host.on_command = Some(Box::new(move |name, _| {
+        (name == "prompt" && armed.swap(false, Ordering::AcqRel))
+            .then(|| Some(Err(("failed".into(), "prompt failed".into()))))
+    }));
+    host.serve(board.hosts().connect_fake(HOST));
+    // How the call stands before the row's change.
+    let (operator_up, on_alpha, rescued) = match start {
+        "operator idle" => (false, false, false),
+        "operator" => (true, false, false),
+        "operator rescued" => (true, false, true),
+        "alpha" => (false, true, false),
+        "alpha, operator up" => (true, true, false),
+        "alpha rescued" => (true, true, true),
+        other => panic!("no start {other:?}"),
+    };
+    if operator_up {
+        board.ensure_operator().await.expect("the operator starts");
+    }
+    if on_alpha {
+        let reply = board
+            .transfer_to(&transcript("look at alpha"), "alpha")
+            .await;
+        assert_eq!(reply.route, "alpha", "{reply:?}");
+    }
+    if rescued {
+        // What a page rescue does to the guard (`release_rescued_work`):
+        // retire the leg's generation, then take its session and end it.
+        board.coordinator.begin_rescue("test rescue");
+        let taken = board.session_control().lock().await.take();
+        if let Some(session) = taken {
+            session.close().await;
+        }
+    }
+    GuardScene {
+        board,
+        refuse_prompt,
+        root,
+    }
+}
+
+#[cfg(unix)]
+/// A leg's session as a row shows it: whose it is, and whether it has ended.
+async fn leg_shown(session: &LegSession) -> String {
+    let ended = if session.alive().await { "" } else { " ended" };
+    format!("{}{ended}", session.label())
+}
+
+#[cfg(unix)]
+async fn guard_row(start: &str, change: &str) -> String {
+    use std::sync::atomic::Ordering;
+    let mut scene = guard_scene(start).await;
+    let board = &mut scene.board;
+    match change {
+        "operator starts" => {
+            board.ensure_operator().await.expect("the operator starts");
+        }
+        "operator fails" => {
+            board.recover_operator("test failure".into()).await;
+        }
+        "agent dropped" => board.drop_agent().await,
+        "hangup" => {
+            board.force_hangup().await;
+        }
+        "alpha closed on host" => {
+            if let Some(alpha) = board.agent.clone() {
+                board
+                    .retire_closed_foreground("alpha", alpha.session_id(), alpha.instance_id())
+                    .await;
+            }
+        }
+        "beta commits" | "beta abandoned" => {
+            scene
+                .refuse_prompt
+                .store(change == "beta abandoned", Ordering::Release);
+            board
+                .transfer_to(&transcript("put me through to beta"), "beta")
+                .await;
+        }
+        "shutdown" => board.shutdown().await,
+        other => panic!("no change {other:?}"),
+    }
+    let guard = match board.session_control().lock().await.clone() {
+        None => "none".to_owned(),
+        Some(session) => leg_shown(&session).await,
+    };
+    let operator = match board.operator.clone() {
+        None => "none".to_owned(),
+        Some(session) => leg_shown(&LegSession::Operator(session)).await,
+    };
+    let row = format!(
+        "{start} | {change} => guard {guard} | route {} | operator {operator}",
+        board.coordinator.route()
+    );
+    scene.board.shutdown().await;
+    let _ = std::fs::remove_dir_all(&scene.root);
+    row
+}
+
+#[cfg(unix)]
+const GUARD_STARTS: [&str; 6] = [
+    "operator idle",
+    "operator",
+    "operator rescued",
+    "alpha",
+    "alpha, operator up",
+    "alpha rescued",
+];
+
+#[cfg(unix)]
+const GUARD_CHANGES: [&str; 8] = [
+    "operator starts",
+    "operator fails",
+    "agent dropped",
+    "hangup",
+    "alpha closed on host",
+    "beta commits",
+    "beta abandoned",
+    "shutdown",
+];
+
+#[cfg(unix)]
+#[tokio::test]
+async fn every_change_to_the_legs_leaves_the_guard_as_the_table_says() {
+    let mut rows = Vec::new();
+    for start in GUARD_STARTS {
+        for change in GUARD_CHANGES {
+            rows.push(guard_row(start, change).await);
+        }
+    }
+    let expected: Vec<&str> = GUARD_TABLE.trim().lines().map(str::trim).collect();
+    if rows != expected {
+        eprintln!("{}", rows.join("\n"));
+    }
+    assert_eq!(rows, expected);
+}
+
+#[cfg(unix)]
+const GUARD_TABLE: &str = r#"
+operator idle | operator starts => guard operator | route operator | operator operator
+operator idle | operator fails => guard none | route operator | operator none
+operator idle | agent dropped => guard none | route operator | operator none
+operator idle | hangup => guard none | route operator | operator none
+operator idle | alpha closed on host => guard none | route operator | operator none
+operator idle | beta commits => guard beta | route beta | operator none
+operator idle | beta abandoned => guard none | route operator | operator none
+operator idle | shutdown => guard none | route operator | operator none
+operator | operator starts => guard operator | route operator | operator operator
+operator | operator fails => guard none | route operator | operator none
+operator | agent dropped => guard operator | route operator | operator operator
+operator | hangup => guard none | route operator | operator none
+operator | alpha closed on host => guard operator | route operator | operator operator
+operator | beta commits => guard beta | route beta | operator operator
+operator | beta abandoned => guard operator | route operator | operator operator
+operator | shutdown => guard none | route operator | operator none
+operator rescued | operator starts => guard operator | route operator | operator operator
+operator rescued | operator fails => guard none | route operator | operator none
+operator rescued | agent dropped => guard operator ended | route operator | operator operator ended
+operator rescued | hangup => guard none | route operator | operator none
+operator rescued | alpha closed on host => guard none | route operator | operator operator ended
+operator rescued | beta commits => guard beta | route beta | operator operator ended
+operator rescued | beta abandoned => guard none | route operator | operator operator ended
+operator rescued | shutdown => guard none | route operator | operator none
+alpha | operator starts => guard alpha | route alpha | operator operator
+alpha | operator fails => guard alpha | route alpha | operator none
+alpha | agent dropped => guard none | route operator | operator none
+alpha | hangup => guard none | route operator | operator none
+alpha | alpha closed on host => guard none | route operator | operator none
+alpha | beta commits => guard beta | route beta | operator none
+alpha | beta abandoned => guard alpha | route alpha | operator none
+alpha | shutdown => guard none | route alpha | operator none
+alpha, operator up | operator starts => guard alpha | route alpha | operator operator
+alpha, operator up | operator fails => guard alpha | route alpha | operator none
+alpha, operator up | agent dropped => guard operator | route operator | operator operator
+alpha, operator up | hangup => guard operator | route operator | operator operator
+alpha, operator up | alpha closed on host => guard operator | route operator | operator operator
+alpha, operator up | beta commits => guard beta | route beta | operator operator
+alpha, operator up | beta abandoned => guard alpha | route alpha | operator operator
+alpha, operator up | shutdown => guard none | route alpha | operator none
+alpha rescued | operator starts => guard none | route alpha | operator operator
+alpha rescued | operator fails => guard none | route alpha | operator none
+alpha rescued | agent dropped => guard operator | route operator | operator operator
+alpha rescued | hangup => guard operator | route operator | operator operator
+alpha rescued | alpha closed on host => guard operator | route operator | operator operator
+alpha rescued | beta commits => guard beta | route beta | operator operator
+alpha rescued | beta abandoned => guard none | route alpha | operator operator
+alpha rescued | shutdown => guard none | route alpha | operator none
+"#;
