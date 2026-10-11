@@ -501,6 +501,21 @@ impl AppState {
         switchboard.set_debug_bus(debug.clone());
         Self(Arc::new_cyclic(|app: &std::sync::Weak<AppInner>| {
             let floor = floor.with_waiting(waiting_hook(app.clone()));
+            // A resident that leaves the background (promoted, stopped,
+            // gone) leaves the floor too: its requests go unspoken, and its
+            // waiting mark ends (#421). The coordinator calls this under its
+            // background lock, so the floor is told from a task of its own.
+            let left_app = app.clone();
+            coordinator.set_background_left_callback(Arc::new(move |token: &str| {
+                let Some(app) = left_app.upgrade() else {
+                    return;
+                };
+                let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+                    return;
+                };
+                let token = token.to_owned();
+                runtime.spawn(async move { app.floor.forget(&token).await });
+            }));
             let state_app = app.clone();
             let state_callback: AgentStateCallback = Arc::new(move |notice: AgentStateNotice| {
                 let app = state_app.upgrade();

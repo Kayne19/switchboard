@@ -262,17 +262,17 @@ impl Floor {
         listener: &mut Listener<'floor>,
     ) -> FloorEvent {
         match phase {
-            FrontPhase::Reading { .. } => self.read(hooks, listener).await,
+            FrontPhase::Reading { .. } => self.read_live(hooks, request, listener).await,
             FrontPhase::AwaitingPage { .. } => {
                 listener.as_mut().await;
-                self.read(hooks, listener).await
+                self.read_live(hooks, request, listener).await
             }
             FrontPhase::AwaitingQuiet { until, .. } => {
                 tokio::select! {
                     _ = sleep_until(*until) => {},
                     _ = listener.as_mut() => {},
                 }
-                self.read(hooks, listener).await
+                self.read_live(hooks, request, listener).await
             }
             FrontPhase::Gating { .. } => {
                 FloorEvent::GateAnswered(self.ask_gate(hooks, request).await)
@@ -306,6 +306,22 @@ impl Floor {
         let mut listener = Box::pin(self.changed.notified());
         listener.as_mut().enable();
         listener
+    }
+
+    /// Reads the floor for a front request still waiting for its moment, or
+    /// says its agent is gone: a request whose agent left the background (or
+    /// that a rescue made stale) leaves at once, not when its moment comes
+    /// (#421). `forget` wakes the worker for it.
+    async fn read_live<'floor>(
+        &'floor self,
+        hooks: &FloorHooks,
+        request: &FloorRequest,
+        listener: &mut Listener<'floor>,
+    ) -> FloorEvent {
+        if !(hooks.live)(request) {
+            return FloorEvent::AgentGone;
+        }
+        self.read(hooks, listener).await
     }
 
     /// Reads the floor, after listening for its next change.
@@ -402,6 +418,35 @@ impl Floor {
         let still_waiting = state.queue.iter().any(|entry| entry.token == request.token);
         if !still_waiting {
             (self.waiting)(Waiting::Left(request));
+        }
+        drop(state);
+        self.changed.notify_waiters();
+    }
+
+    /// The agent with `token` left the background (promoted, stopped, gone):
+    /// its requests behind the front leave the floor now, unspoken, and the
+    /// worker is woken so a front request of its still waiting for its moment
+    /// leaves too (`read_live`). A front request already on its way (the gate,
+    /// the rewrite, the release) ends as it does today, at its next live
+    /// check. When none of the agent's requests is left, its waiting mark
+    /// ends (`Waiting::Left`), as `leave` ends it (#421).
+    pub(crate) async fn forget(&self, token: &str) {
+        let mut state = self.state.lock().await;
+        let mut dropped = Vec::new();
+        let mut index = 1;
+        while index < state.queue.len() {
+            if state.queue[index].token == token {
+                dropped.extend(state.queue.remove(index));
+            } else {
+                index += 1;
+            }
+        }
+        for request in &dropped {
+            self.trace_released(request, Left::AgentGone.how());
+        }
+        let still_waiting = state.queue.iter().any(|entry| entry.token == token);
+        if let Some(last) = dropped.last().filter(|_| !still_waiting) {
+            (self.waiting)(Waiting::Left(last));
         }
         drop(state);
         self.changed.notify_waiters();
@@ -521,10 +566,12 @@ fn step(phase: FrontPhase, event: FloorEvent, now: Instant) -> Step {
     let next = match phase {
         Phase::Reading { hold } | Phase::AwaitingPage { hold } => match event {
             Event::Read(view) => after_reading(hold, view, now),
+            Event::AgentGone => return Step::Left(Left::AgentGone),
             _ => phase,
         },
         Phase::AwaitingQuiet { held_since, .. } => match event {
             Event::Read(view) => after_reading(Some(held_since), view, now),
+            Event::AgentGone => return Step::Left(Left::AgentGone),
             _ => phase,
         },
         Phase::Gating { quiet } => match event {
