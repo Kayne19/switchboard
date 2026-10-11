@@ -424,8 +424,10 @@ pub(crate) async fn hangup(
     }
     // Like every page control, a hangup settles the call on its way out, even
     // with nothing on the line: its rescue left the call quiescing, which
-    // refuses callbacks and steers until something settles it.
-    publish_status(&state);
+    // refuses callbacks and steers until something settles it. Only its own
+    // rescue's quiet: a newer control that rescued after the drop owns the
+    // call and settles it itself.
+    settle_if_current(&state, rescued).await;
     match hung_up {
         Some((left, _)) => {
             tracing::info!(%left, elapsed = ?started.elapsed(), "hung up; the caller is back on the operator");
