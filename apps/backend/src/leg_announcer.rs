@@ -8,7 +8,7 @@ use crate::pi_client::Activity;
 use crate::protocol::ServerMessage;
 use crate::speech::{SpeechContinuity, SpeechGroup};
 use std::sync::{Arc, Mutex as StdMutex};
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 
 /// Tells the browser the call has moved to a new leg.
 ///
@@ -20,7 +20,6 @@ use tokio::sync::{broadcast, Mutex};
 #[derive(Clone)]
 pub(crate) struct LegAnnouncer {
     pub(crate) coordinator: Coordinator,
-    pub(crate) events: broadcast::Sender<Event>,
     pub(crate) delivery: DeliveryState,
     pub(crate) display_gate: Arc<Mutex<DisplayGateState>>,
     pub(crate) projection: AgentProjection,
@@ -31,9 +30,7 @@ pub(crate) struct LegAnnouncer {
 
 impl LegAnnouncer {
     fn publish(&self, message: ServerMessage) {
-        let event = Event::Json(message.to_value());
-        let _ = self.events.send(event.clone());
-        self.delivery.publish(event);
+        self.delivery.publish(Event::Json(message.to_value()));
     }
 
     /// Adopts the candidate leg `token` names and announces it. False when
@@ -136,7 +133,7 @@ impl LegAnnouncer {
                 let actions = held.snapshot_actions();
                 let mut delivered = false;
                 for action in &actions {
-                    (delivered, _) = gate.publish(action, &self.delivery, &self.events);
+                    (delivered, _) = gate.publish(action, &self.delivery);
                 }
                 tracing::info!(route = %leg.route, actions = actions.len(), delivered, "released the background scene on foreground");
             }
