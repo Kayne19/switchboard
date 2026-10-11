@@ -1,5 +1,4 @@
 import { motion, useIsPresent } from 'motion/react';
-import { flushSync } from 'react-dom';
 import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import type {
   ControllerState,
@@ -9,6 +8,7 @@ import type {
 } from '../controller/types';
 import { cast, VISUAL_TYPES, type CompositionModel } from '../app/sceneModel';
 import { useLayoutMotion } from '../hooks/useLayoutMotion';
+import { useMeasured } from '../hooks/useMeasured';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
 import { ListViewport } from '../primitives/ListViewport';
 import { SpokenLog } from '../primitives/SpokenLog';
@@ -119,29 +119,21 @@ function MainWithAux({
 }
 
 // Whether the rail stands under the main column (a portrait stage) rather
-// than beside it, read from where the two boxes lie, not from a media query.
-// Where it does, the rail's note reads whole (useRailFit), and the note a
-// single chart cannot hold lies in a band under it. A scene whose rail
-// stays beside its column re-renders nothing for it.
-function useRailUnder(active: boolean, mainRef: RefObject<HTMLDivElement | null>, railRef: RefObject<HTMLElement | null>): boolean {
-  const [under, setUnder] = useState(false);
-  useLayoutEffect(() => {
-    const boxes = [mainRef.current, railRef.current];
-    if (!active || boxes.some((box) => !box)) {
-      setUnder(false);
-      return undefined;
-    }
-    const measure = () => {
+// than beside it, read from where the two boxes lie in their grid, not from
+// a media query. Where it does, the rail's note reads whole (useRailFit),
+// and the note a single chart cannot hold lies in a band under it. A scene
+// whose rail stays beside its column re-renders nothing for it.
+function useRailUnder(active: boolean, gridRef: RefObject<HTMLDivElement | null>, mainRef: RefObject<HTMLDivElement | null>, railRef: RefObject<HTMLElement | null>): boolean {
+  const under = useMeasured(
+    () => (active ? gridRef.current : null),
+    () => {
       const main = mainRef.current;
       const rail = railRef.current;
-      setUnder(main !== null && rail !== null && main.offsetHeight > 0 && rail.offsetTop >= main.offsetTop + main.offsetHeight - 1);
-    };
-    measure();
-    // Committed before the resized frame is painted, as the rail it decides is.
-    const observer = new ResizeObserver(() => flushSync(measure));
-    for (const box of boxes) observer.observe(box!);
-    return () => observer.disconnect();
-  }, [active, mainRef, railRef]);
+      return main !== null && rail !== null && main.offsetHeight > 0 && rail.offsetTop >= main.offsetTop + main.offsetHeight - 1;
+    },
+    { initial: false, children: true },
+    [active, gridRef, mainRef, railRef],
+  );
   return active && under;
 }
 
@@ -232,9 +224,10 @@ export function SceneShell(props: SceneProps) {
   const [chartBand, setChartBand] = useState<ChartRailNote | null>(null);
   const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote, chartBand);
   const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
+  const gridRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
-  const under = useRailUnder(content !== null, mainRef, railRef);
+  const under = useRailUnder(content !== null, gridRef, mainRef, railRef);
   // How tall the rail's note reads whole in, while the rail stands under the column (RailDetails).
   const [railFloor, setRailFloor] = useState<number | null>(null);
   const banding = under ? content?.chartNotes : undefined;
@@ -283,7 +276,7 @@ export function SceneShell(props: SceneProps) {
             <div className="scene-heading__title tech">{content.title}</div>
             <div className="scene-heading__sub tech micro">{content.subtitle}</div>
           </div>
-          <div className="content-grid" style={railFloor !== null ? ({ '--rail-floor': `${railFloor}px` } as CSSProperties) : undefined}>
+          <div ref={gridRef} className="content-grid" style={railFloor !== null ? ({ '--rail-floor': `${railFloor}px` } as CSSProperties) : undefined}>
             <MainWithAux ref={mainRef} variant={content.mainVariant} aux={content.aux} onStage={state.agentObjects} onFocus={onFocus} drawn={pageNotes}>
               {content.main}
             </MainWithAux>

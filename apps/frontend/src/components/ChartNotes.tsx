@@ -1,6 +1,5 @@
 import { AnimatePresence, motion, useIsPresent, useReducedMotion } from 'motion/react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 import type { ChartData, NoteData, SceneObject } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
 import { AnnotationCard } from '../primitives/AnnotationCard';
@@ -16,6 +15,7 @@ import {
 } from '../primitives/chartGeometry';
 import { layoutNotes, NOTE_CARD_CUT, placedInFull, routeLeader, type NoteField, type NoteToPlace } from '../primitives/notePlacement';
 import { crispLine, type Point, type Rect, type Size } from '../primitives/geometry';
+import { useMeasured } from '../hooks/useMeasured';
 import { svgUrl, useSvgIds } from '../hooks/useSvgIds';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
@@ -228,21 +228,16 @@ export function ChartNotes({
   // frame -- the box the cards and leaders are placed in -- is the canvas's
   // size, moved by the scroll, so the cards are laid out over the whole
   // chart and keep to the bars they name. Found from the panel the layer
-  // stands in; found in the same frame the chart starts or stops scrolling:
-  // at mount the layout effect's own update is committed before the frame
-  // is painted, and a later change the observer reports is committed at once
-  // (flushSync), which React allows outside a lifecycle method only.
+  // stands in, as a value read from the layout (useMeasured): at mount in
+  // the layout effect, so before the frame is painted, and a later change
+  // in the frame it is made in.
   const outerRef = useRef<HTMLDivElement>(null);
-  const [canvas, setCanvas] = useState<HTMLElement | null>(null);
-  useLayoutEffect(() => {
-    const panel = outerRef.current?.parentElement;
-    if (!panel) return undefined;
-    const find = () => panel.querySelector<HTMLElement>('.chart-primitive__canvas');
-    setCanvas(find());
-    const watcher = new MutationObserver(() => flushSync(() => setCanvas(find())));
-    watcher.observe(panel, { childList: true, subtree: true });
-    return () => watcher.disconnect();
-  }, []);
+  const canvas = useMeasured(
+    () => outerRef.current?.parentElement,
+    (panel): HTMLElement | null => panel.querySelector<HTMLElement>('.chart-primitive__canvas'),
+    { initial: null, changes: true },
+    [],
+  );
   useLayoutEffect(() => {
     const outer = outerRef.current;
     const frame = layerRef.current;

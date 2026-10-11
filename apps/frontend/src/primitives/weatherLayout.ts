@@ -98,6 +98,12 @@ export interface WeatherLayout {
 /** Below either, the box is a small slot. */
 export const COMPACT_HEIGHT = 300;
 export const COMPACT_WIDTH = 280;
+
+/** Whether a box is a small slot: its forecast is `compact`, by its size alone. */
+export function weatherCompact(width: number, height: number): boolean {
+  return width < COMPACT_WIDTH || height < COMPACT_HEIGHT;
+}
+
 /** A small slot shorter than this has no room for a list under the
  * conditions: a list there would show its head and no row. The days stand
  * beside the conditions instead (the outlook); the rest is a focus away. */
@@ -144,7 +150,7 @@ export function weatherLayout(
 ): WeatherLayout {
   const alertLine = has.alert === true;
   const none = { outlook: false, inline: false, alertLine, figure: 0 };
-  if (width < COMPACT_WIDTH || height < COMPACT_HEIGHT) {
+  if (weatherCompact(width, height)) {
     const temp = Math.round(clamp(Math.min(width * 0.13, height * 0.22), 26, 48));
     // Before the box is measured (0) it is drawn whole, as it is in a test.
     if (height > 0 && height < COMPACT_LIST_HEIGHT) {
