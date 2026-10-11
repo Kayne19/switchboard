@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
 import { fixtures } from '../../src/fixtures/scenes';
-import { besideVisuals, buildCompositionModel, deriveScreenState, sceneKind, VISUAL_TYPES } from '../../src/app/sceneModel';
+import { besideVisuals, buildCompositionModel, deriveScreenState, VISUAL_TYPES } from '../../src/app/sceneModel';
+import { sceneKindOf } from './sceneKindOf';
 import type { ControllerAction, SceneObjectType } from '../../src/controller/types';
 
 const expected = {
@@ -28,7 +29,7 @@ describe('scene classification', () => {
   for (const [fixture, kind] of Object.entries(expected)) {
     it(`classifies ${fixture} as ${kind}`, () => {
       const state = reduceActions(createInitialState(), fixtures[fixture as keyof typeof fixtures]);
-      expect(sceneKind(state)).toBe(kind);
+      expect(sceneKindOf(state)).toBe(kind);
     });
   }
 
@@ -37,7 +38,7 @@ describe('scene classification', () => {
   it('gives every visual primary a scene of its own: the composed primary is a metric, a progress or a note', () => {
     const types: SceneObjectType[] = [...VISUAL_TYPES, 'metric', 'progress', 'note'];
     const composed = types.filter((type) =>
-      sceneKind(reduceActions(createInitialState(), [
+      sceneKindOf(reduceActions(createInitialState(), [
         { op: 'show', id: 'x', type, role: 'primary', data: {} },
         { op: 'show', id: 'y', type: 'code', data: {} },
       ])) === 'composed');

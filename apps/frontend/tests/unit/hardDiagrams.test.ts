@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DiagramData, SequenceDiagramData } from '../../src/controller/types';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
 import { validateControllerAction } from '../../src/controller/validation';
-import { sceneKind } from '../../src/app/sceneModel';
+import { sceneKindOf } from './sceneKindOf';
 import { fixtures, pipelineDiagram, topologyDiagram, traceDiagram } from '../../src/fixtures/scenes';
 import { layoutDiagram } from '../../src/primitives/diagramLayout';
 
@@ -12,7 +12,7 @@ describe('hard diagram fixtures', () => {
   for (const name of ['topology', 'pipeline', 'trace'] as const) {
     it(`${name}: every action is a valid display action, drawn as a diagram scene`, () => {
       for (const action of fixtures[name]) expect(validateControllerAction(action), `${name} / ${'id' in action ? action.id : action.op}`).toMatchObject({ ok: true });
-      expect(sceneKind(reduceActions(createInitialState(), fixtures[name]))).toBe('architecture');
+      expect(sceneKindOf(reduceActions(createInitialState(), fixtures[name]))).toBe('architecture');
     });
   }
 

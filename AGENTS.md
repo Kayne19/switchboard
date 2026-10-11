@@ -67,9 +67,9 @@ commit.
   one frame depth, one set of size caps, CPU-time budgets, no focused
   `.only` test, no user-agent checks, bounded test awaits, no page under
   the notch, one runtime ID prefix, stage-relative sizes, one writer per lifecycle
-  machine, no new phase fields on a lifecycle owner, live paths,
-  routes and settings in the docs); a new rule of that kind gets a check
-  there. Both Playwright configs also set `forbidOnly` on CI, so a focused
+  machine, no new phase fields on a lifecycle owner, one composition a
+  render, live paths, routes and settings in the docs); a new rule of that
+  kind gets a check there. Both Playwright configs also set `forbidOnly` on CI, so a focused
   spec fails its browser leg.
 - CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
   `npm run test:browser` (every spec in `apps/frontend/tests/visual` but
@@ -173,6 +173,10 @@ commit.
   (`docs/architecture.md`, rule 7).
 - A bug fix lands with a test that fails on `master`: stash the source change
   and run the test once to see it fail. Say so in the PR.
+- The scenes draw the composition `SceneRenderer` builds once a render
+  (`SceneProps.composition`); no scene builds its own. A scene that did
+  picked its own primary and chart order, and the page then disagreed with
+  the screen state the agent reads (#266).
 - One implementation per lifecycle. A fallback is an adapter or an explicit
   refusal, not a second copy of the path kept for "when the real one is
   absent" (see rule 9 in `docs/architecture.md`).

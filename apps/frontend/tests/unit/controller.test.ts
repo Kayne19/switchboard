@@ -5,7 +5,8 @@ import {
   reduceActions,
   TOOL_BURST_WINDOW_MS,
 } from '../../src/controller/reducer';
-import { buildCompositionModel, deriveScreenState, sceneKind } from '../../src/app/sceneModel';
+import { buildCompositionModel, deriveScreenState } from '../../src/app/sceneModel';
+import { sceneKindOf } from './sceneKindOf';
 import type {
   ChartData,
   CodeData,
@@ -180,14 +181,14 @@ describe('controller reducer & ownership', () => {
   it('gives the primary role to the latest show that claims it', () => {
     const state = reduceActions(createInitialState(), [chartAction, diagramAction]);
     expect(buildCompositionModel(state).primary?.id).toBe('sys-arch');
-    expect(sceneKind(state)).toBe('architecture');
+    expect(sceneKindOf(state)).toBe('architecture');
     // The displaced object stays on stage, demoted rather than removed.
     expect(state.agentObjects['training-loss'].role).toBe('secondary');
     expect(state.agentOrder).toEqual(['training-loss', 'sys-arch']);
 
     const reversed = reduceActions(createInitialState(), [diagramAction, chartAction]);
     expect(buildCompositionModel(reversed).primary?.id).toBe('training-loss');
-    expect(sceneKind(reversed)).toBe('training');
+    expect(sceneKindOf(reversed)).toBe('training');
     expect(reversed.agentObjects['sys-arch'].role).toBe('secondary');
   });
 
@@ -219,7 +220,7 @@ describe('controller reducer & ownership', () => {
       { op: 'hide', id: 'patch' },
     ]);
     expect(buildCompositionModel(state).primary?.id).toBe('sys-arch');
-    expect(sceneKind(state)).toBe('architecture');
+    expect(sceneKindOf(state)).toBe('architecture');
   });
 
   it('withdraws runtime speech only while it is still what was said to the target', () => {
@@ -357,7 +358,7 @@ describe('controller reducer & ownership', () => {
     const state = reduceActions(createInitialState(), [metricAction, progressAction, noteAction]);
     const comp = buildCompositionModel(state);
     expect(comp.isGenericComposed).toBe(true);
-    expect(sceneKind(state)).toBe('composed');
+    expect(sceneKindOf(state)).toBe('composed');
   });
 
   it('separates agent-owned objects/speech from runtime-owned state', () => {
@@ -406,7 +407,7 @@ describe('controller reducer & ownership', () => {
     expect(afterEpochReset.runtimeSpeech?.text).toBe('Damocles speaking');
     expect(afterEpochReset.speech?.text).toBe('Damocles speaking');
     expect(afterEpochReset.listening).toBe(true);
-    expect(sceneKind(afterEpochReset)).toBe('conversation');
+    expect(sceneKindOf(afterEpochReset)).toBe('conversation');
   });
 
   it('lets a new leg release the agent view but not the caller pin', () => {

@@ -11,7 +11,8 @@
 // to switch and the control says so.
 import { act, useEffect } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { sceneKind, type SceneKind } from '../../src/app/sceneModel';
+import { type SceneKind } from '../../src/app/sceneModel';
+import { sceneKindOf } from './sceneKindOf';
 import { useController, type VoiceRuntime } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
@@ -56,7 +57,7 @@ const mode = () => lastScene().querySelector<HTMLButtonElement>('.channel-stack_
 describe('the CHANNEL / MODE stack', () => {
   it.each(scenes)('stands once in the bottom-left corner of the %s page', (kind, actions) => {
     renderScene(actions, <Voice runtime={voiceRuntime()} />);
-    expect(sceneKind(controllerState())).toBe(kind);
+    expect(sceneKindOf(controllerState())).toBe(kind);
     expect(stack()).toHaveLength(1);
     expect(stack()[0].textContent).toBe('CHANNEL / VOICEMODE / PUSH-TO-TALK');
     // No page carries a second one, and none labels the corner itself.

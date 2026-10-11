@@ -5,7 +5,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { sceneKind, type SceneKind } from '../../src/app/sceneModel';
+import { type SceneKind } from '../../src/app/sceneModel';
+import { sceneKindOf } from './sceneKindOf';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import type { ControllerState, MessageData } from '../../src/controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
@@ -77,7 +78,7 @@ let latest: ControllerState;
 function SceneRecorder() {
   const { state } = useController();
   latest = state;
-  const kind = sceneKind(state);
+  const kind = sceneKindOf(state);
   if (scenes[scenes.length - 1] !== kind) scenes.push(kind);
   return null;
 }
@@ -113,7 +114,7 @@ async function callTheOperator() {
   await receive({ type: 'epoch', generation: 1 });
   await receive(operatorStatus);
   await receive({ type: 'history', entries: [] });
-  expect(sceneKind(latest)).toBe('idle');
+  expect(sceneKindOf(latest)).toBe('idle');
 
   await receive({ type: 'transcript', id: 'c1', text: 'Put me through to switchboard.' });
   await receive({
@@ -122,7 +123,7 @@ async function callTheOperator() {
     route: 'operator',
     voiced: true,
   });
-  expect(sceneKind(latest)).toBe('conversation');
+  expect(sceneKindOf(latest)).toBe('conversation');
   scenes = ['conversation'];
 }
 
@@ -168,7 +169,7 @@ describe('operator-to-project handoff', () => {
     await adoptTheProjectLeg();
 
     // Relabelled under the new leg without leaving the conversation.
-    expect(sceneKind(latest)).toBe('conversation');
+    expect(sceneKindOf(latest)).toBe('conversation');
     expect(conversation().context).toBe('PROJECT / SWITCHBOARD');
     expect(conversation().transcript?.map((line) => line.text)).toEqual([
       'Put me through to switchboard.',
@@ -201,12 +202,12 @@ describe('operator-to-project handoff', () => {
     await adoptTheProjectLeg();
 
     await receive({ type: 'display', seq: 5, action: diagram });
-    expect(sceneKind(latest)).toBe('architecture');
+    expect(sceneKindOf(latest)).toBe('architecture');
 
     await receive(projectStatus);
     await receive({ type: 'reply', text: 'That is the call path.', route: 'switchboard', voiced: false });
 
-    expect(sceneKind(latest)).toBe('architecture');
+    expect(sceneKindOf(latest)).toBe('architecture');
     expect(latest.agentOrder).toEqual(['call-path']);
     expect(conversation().segments[0].text).toBe('Putting you through to switchboard.');
     expect(conversation().transcript?.at(-1)?.text).toBe('That is the call path.');
@@ -233,7 +234,7 @@ describe('operator-to-project handoff', () => {
     await adoptTheProjectLeg();
 
     expect(latest.agentOrder).toEqual([]);
-    expect(sceneKind(latest)).toBe('conversation');
+    expect(sceneKindOf(latest)).toBe('conversation');
     expect(scenes).not.toContain('idle');
   });
 
@@ -267,6 +268,6 @@ describe('operator-to-project handoff', () => {
     await receive({ type: 'history', entries: [] });
 
     expect(latest.runtimeObjects[RUNTIME_CONVERSATION_ID]).toBeUndefined();
-    expect(sceneKind(latest)).toBe('idle');
+    expect(sceneKindOf(latest)).toBe('idle');
   });
 });

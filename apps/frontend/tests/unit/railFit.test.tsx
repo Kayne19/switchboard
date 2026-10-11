@@ -3,7 +3,7 @@
 // note, and the note reads whole there: the rail grows to the note's height
 // (the grid's --rail-floor), the note leads a column too short for all it
 // carries, and the activity panel stands at the column's foot only where it
-// fits there whole (Scenes.tsx useRailFit). Before, a note there was cut to
+// fits there whole (Rail.tsx useRailFit). Before, a note there was cut to
 // what the rail's share left it under a reserved activity slot (two lines
 // of the architecture fixture's seven at 390x844), or the rail folded to a
 // strip with Damocles at a third of its size. tests/visual/rail.spec.ts

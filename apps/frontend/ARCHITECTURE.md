@@ -69,6 +69,17 @@ shell once; it is never wired into a composition by hand. The presence reads
 the voice level from the registered voice runtime, so no page can leave it
 out.
 
+The composition is built once a render, by `SceneRenderer`
+(`src/components/SceneRenderer.tsx`), and handed down: `sceneKind` names
+the scene from it, and the scene reads its primary and the visuals beside
+it from `SceneProps.composition`. No scene builds its own, so none can pick
+a primary the screen state does not name (#266; `scripts/check_hygiene.mjs`
+holds it). Each content scene is a builder in a file of its own
+(`TrainingScene.tsx`, `ObjectScene.tsx`, `ComposedScene.tsx`) that returns
+a `SceneContent` (`src/components/sceneContent.tsx`): its frame text, its
+main slot, the visuals its slot leaves for the aux row, and what the rail
+(`src/components/Rail.tsx`) carries for it.
+
 The corner stack (`ChannelStack`, #180) is the page's one input-mode
 control. CHANNEL names how the caller is on the line -- voice today; a text
 channel is a later issue, so the line is shown and does nothing. MODE reads
@@ -369,7 +380,7 @@ Add a new content type in this order:
 1. Define its semantic data type.
 2. Implement one reusable primitive that takes the `slot` prop.
 3. Draw it in `renderObject`, once for every slot.
-4. Add it to scene composition rules: a visual type to `VISUAL_TYPES`, which names its scene, and its frame words to `sceneFrame` (`src/components/Scenes.tsx`).
+4. Add it to scene composition rules: a visual type to `VISUAL_TYPES`, which names its scene, and its frame words to `sceneFrame` (`src/components/ObjectScene.tsx`).
 5. Create a canonical fixture. Every fixture action must be one the validator accepts as written (`validation.test.ts`).
 6. Add reducer or rendering tests.
 7. Add visual references at approved geometries.

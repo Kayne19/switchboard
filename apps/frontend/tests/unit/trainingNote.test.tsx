@@ -6,6 +6,7 @@
 // without one.
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ChartNotes, type ChartNote } from '../../src/components/ChartNotes';
+import { buildCompositionModel } from '../../src/app/sceneModel';
 import { SceneShell } from '../../src/components/Scenes';
 import { ControllerProvider } from '../../src/controller/context';
 import { createInitialState, reduceActions } from '../../src/controller/reducer';
@@ -71,7 +72,7 @@ afterEach(() => {
 
 const shell = (state: ControllerState) => (
   <ControllerProvider>
-    <SceneShell kind="training" state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} />
+    <SceneShell kind="training" composition={buildCompositionModel(state)} state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} />
   </ControllerProvider>
 );
 

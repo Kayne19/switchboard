@@ -3,7 +3,8 @@
 // presence, and the tool activity panel while the agent runs a tool. The
 // idle page shows no activity panel.
 import { describe, expect, it } from 'vitest';
-import { sceneKind, type SceneKind } from '../../src/app/sceneModel';
+import { type SceneKind } from '../../src/app/sceneModel';
+import { sceneKindOf } from './sceneKindOf';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { controllerState, renderScene, stubResizeObserver } from './sceneHarness';
@@ -37,7 +38,7 @@ stubResizeObserver();
 describe('every page', () => {
   it.each(scenes)('draws one presence and its tool activity on the %s page', (kind, actions) => {
     const host = renderScene([...actions, tool]);
-    expect(sceneKind(controllerState())).toBe(kind);
+    expect(sceneKindOf(controllerState())).toBe(kind);
     const page = host.querySelector(`[data-scene="${kind}"]`)!;
     expect(page).not.toBeNull();
     expect(page.querySelectorAll('[data-testid="damocles-presence"]')).toHaveLength(1);

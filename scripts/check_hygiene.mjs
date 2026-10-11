@@ -523,9 +523,22 @@ function selfTest(check, run, violation, clean) {
 for (const machine of machines) findings.push(...machineFindings(machine.file, lines(path.join(root, machine.file)), machine));
 for (const row of owners) findings.push(...ownerFindings(row.file, lines(path.join(root, row.file)), row));
 
+// 21. The composition is built once a render, by SceneRenderer, and handed
+//     to the scenes (#380). A scene that builds its own is free to pick its
+//     own primary, and one did: the chart scene drew a primary and a chart
+//     order the screen state did not name (#266). The screen-state report
+//     (deriveScreenState, beside the builder in sceneModel.ts) builds its own.
+{
+	const builders = new Set(["apps/frontend/src/components/SceneRenderer.tsx", "apps/frontend/src/app/sceneModel.ts"]);
+	for (const file of files(path.join(root, "apps/frontend/src"), new Set([".ts", ".tsx"]))) {
+		if (builders.has(rel(file))) continue;
+		scan(file, /\bbuildCompositionModel\b/, "the composition built outside SceneRenderer (take it from SceneProps.composition)");
+	}
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render");

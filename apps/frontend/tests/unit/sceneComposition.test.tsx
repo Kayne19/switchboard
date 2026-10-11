@@ -172,6 +172,37 @@ describe('a visual beside the primary', () => {
   }
 });
 
+// Each scene draws the primary the composition names, the one the screen
+// state and view() name too, whatever was shown first.
+describe('the primary a scene draws', () => {
+  it('an ambient visual shown first does not take the main slot from the visual the composition makes primary', () => {
+    const page = render([show('figure', 'image', 'ambient'), show('matrix', 'table')]);
+    expect(page.getAttribute('data-scene')).toBe('table');
+    expect(page.querySelector('.scene-heading__title')?.textContent).toBe('DATA / TABLE');
+    expect(page.querySelectorAll('.content-grid > .content-main [data-testid="table"]')).toHaveLength(1);
+    expect([...page.querySelectorAll('.composed-aux [data-testid]')].map((node) => node.getAttribute('data-testid'))).toEqual(['image']);
+  });
+
+  it('an ambient metric shown first does not head the composed workspace', () => {
+    const page = render([
+      { op: 'show', id: 'spark', type: 'metric', role: 'ambient', data: { label: 'SPARK', value: '1' } },
+      { op: 'show', id: 'main', type: 'metric', data: { label: 'P95', value: '182 ms' } },
+    ]);
+    expect(page.getAttribute('data-scene')).toBe('composed');
+    expect(page.querySelector('.scene-heading__title')?.textContent).toBe('P95');
+    expect(deriveScreenState(controllerState(), 1).title).toBe('P95');
+  });
+
+  it('an agent message the composition makes primary is the conversation page\'s answer', () => {
+    const [conversation] = fixtures.conversation;
+    if (conversation.op !== 'show') throw new Error('the conversation fixture shows a message');
+    // Not named `message`, and no runtime conversation: the answer is the primary.
+    const page = render([{ ...conversation, id: 'reply' }]);
+    expect(page.getAttribute('data-scene')).toBe('conversation');
+    expect(page.querySelector('.conversation-answer__text')?.textContent).toContain('The divergence begins around');
+  });
+});
+
 describe('a primary alone', () => {
   const composedFixtures = new Set(['composed', 'today', 'idle', 'conversation']);
   const alone = (Object.keys(fixtures) as Array<keyof typeof fixtures>).filter((name) => !composedFixtures.has(name));
