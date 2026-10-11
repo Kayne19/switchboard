@@ -128,6 +128,17 @@ impl Switchboard {
         )
     }
 
+    /// A resident the caller asked for did not stop its background work
+    /// when it was interrupted; it is still in the background.
+    pub(crate) fn still_busy(&self, project: &str) -> Reply {
+        self.reply_failure(
+            format!(
+                "{project} is still busy and didn't stop. It's working in the background; ask again in a moment."
+            ),
+            "the agent's turn did not stop when it was interrupted",
+        )
+    }
+
     /// Taking over a session open at the caller's desk failed.
     pub(crate) fn couldnt_take_over(&self, project: &str, detail: impl Into<String>) -> Reply {
         self.reply_failure(format!("I couldn't take over {project}."), detail)

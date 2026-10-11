@@ -710,9 +710,21 @@ are written by `admit` and `retire` only.
 |---|---|---|---|---|
 | `Stopped` | `stop_project` | cancelled and joined | ended | `finished` |
 | `Dead` | work given to a project whose resident's handle has closed (`retire_dead_resident`) | cancelled and joined | left; it is dead | `finished` |
-| `Promoted` | a transfer to the project (`transfer_ctx`) | cancelled and joined | handed to the bring-up (`promote_background`), which readmits it if the promotion fails | nothing; the bring-up does |
+| `Promoted` | a transfer to the project (`transfer_ctx`), once its turn has settled (`take_resident_for_line`) | cancelled and joined (it has ended with its turn) | handed to the bring-up (`promote_background`), which readmits it if the promotion fails | nothing; the bring-up does |
 | `ClosedOnHost` | the host reports the session closed (`session_closed_callback`), and a prompt the host refused | left to end: the report can come from inside it | left; it is dead | `finished` |
 | `Shutdown` | `Switchboard::shutdown` | cancelled and joined | ended | nothing |
+
+A promotion hands the line a session with no turn running, so the
+caller's words are a prompt of their own, not a follow-up the host merges
+into the background work (#239). Before the resident leaves,
+`Switchboard::take_resident_for_line` sends the host `abort` for a turn
+still running and waits, while the resident is still resident, for its
+background prompt to end (it publishes the resident idle) and its session
+to settle. The wait is `ProjectSession::settle_wait`: the host's command
+wait (`SESSION_COMMAND_WAIT`, 30 s), never longer than the session's
+silent-turn deadline. A turn that has not settled by then leaves the
+resident as it was, busy in the background, and the caller is told so
+(`still_busy`): the promotion does not happen.
 
 `ClosedOnHost` retires only the exact session it names (persistent id and
 live-handle instance), so a report about an older handle cannot evict its

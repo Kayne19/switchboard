@@ -20,7 +20,7 @@ use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tokio::time::{timeout, Duration};
 
 /// Distinguishes live handles that reopen the same persistent daemon session.
@@ -232,6 +232,9 @@ struct ProjectInner {
     /// Where the session's turn is; written only by `TurnState::step`,
     /// through `step_turn`.
     turn: StdMutex<TurnState>,
+    /// Woken on every step of the turn, for whoever waits for the session
+    /// to settle (`settled`).
+    turn_moved: Notify,
     /// Where the session is in its end of life; written only by `end`.
     lifecycle: StdMutex<Lifecycle>,
     brief: String,
@@ -250,10 +253,13 @@ impl ProjectInner {
     /// lock, and returns what is left to do. A prompt's start and end leave
     /// nothing.
     fn step_turn(&self, event: TurnEvent) -> Vec<TurnEffect> {
-        self.turn
+        let effects = self
+            .turn
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .step(event)
+            .step(event);
+        self.turn_moved.notify_waiters();
+        effects
     }
 
     /// Moves the session's turn on a frame from its host, then does what
@@ -733,6 +739,7 @@ impl ProjectSession {
             debug: launch.debug,
             turn_lock: Mutex::new(()),
             turn: StdMutex::new(TurnState::new()),
+            turn_moved: Notify::new(),
             lifecycle: StdMutex::new(Lifecycle::Open {
                 _subscription: subscription,
             }),
@@ -890,6 +897,28 @@ impl ProjectSession {
                 });
             }
             Err(error) => tracing::info!(%label, %error, "could not abort the project turn"),
+        }
+    }
+
+    /// How long the host has to settle a turn the service interrupted: as
+    /// long as it has to answer any command (`SESSION_COMMAND_WAIT`), and
+    /// never longer than the session's silent-turn deadline.
+    pub fn settle_wait(&self) -> Duration {
+        SESSION_COMMAND_WAIT.min(self.inner.turn_timeout)
+    }
+
+    /// Waits until the session's turn has settled (it is not busy), or the
+    /// session has ended. The caller bounds the wait.
+    pub async fn settled(&self) {
+        loop {
+            // Listen before the check, so no step between them is lost.
+            let moved = self.inner.turn_moved.notified();
+            tokio::pin!(moved);
+            moved.as_mut().enable();
+            if !self.busy() || !self.alive() {
+                return;
+            }
+            moved.await;
         }
     }
 
