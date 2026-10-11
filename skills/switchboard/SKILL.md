@@ -61,9 +61,11 @@ after "On screen.".
   "Display".
 - `view(target=None)`: with no target, report what is on the caller's screen.
   With a target, ask the screen to focus `visual` (what `display` put there),
-  `comms` (the conversation and tool activity), `system` (project, model and
-  route controls), `theater` (the current visual fills the screen) or `auto`
-  (the default). The caller's own choice wins until they dismiss it. From the
+  `comms` (the conversation and tool activity), `system`, `theater` or `auto`
+  (the default). The report names the view the screen draws, which may not be
+  the one you asked for: it has no `system` or `theater` scene yet and draws
+  `auto` for them, and `visual` with nothing on it is `auto` too. The caller's
+  own choice wins until they dismiss it. From the
   background, only the report is answered: a target is refused with
   `caller_away`, and the screen follows your display when the caller brings
   you forward.
