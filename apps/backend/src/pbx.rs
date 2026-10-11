@@ -91,7 +91,10 @@ pub struct Switchboard {
     foreground_closed_callback: Option<ForegroundClosedCallback>,
     /// What a project leg is launched with; `leg_transitions.rs` owns it.
     pub(crate) legs: LegLaunch,
-    pub(crate) active_session: Arc<Mutex<Option<LegSession>>>,
+    /// The active-session guard: the session steering and a page rescue act
+    /// on. It is derived, never set: `name_leg_on_line` is its one writer,
+    /// and a rescue's `take` (`page_controls.rs`) its one other change.
+    active_session: Arc<Mutex<Option<LegSession>>>,
     pub(crate) operator: Option<PiSession>,
     /// A separate process for second opinions and split dispatch. It must not
     /// share the operator's turn lock or conversation history.
@@ -345,25 +348,36 @@ impl Switchboard {
         Arc::clone(&self.active_session)
     }
 
-    pub(crate) async fn set_active_session(&self, session: Option<LegSession>) {
-        *self.active_session.lock().await = session;
-    }
-
-    /// Empties the guard only if the operator holds it: a project on the
-    /// line keeps the guard while the operator answers for it.
-    pub(crate) async fn release_operator_guard(&self) {
-        let mut guard = self.active_session.lock().await;
-        if matches!(*guard, Some(LegSession::Operator(_))) {
-            *guard = None;
+    /// The session the guard names: the one a bring-up has `bringing_up`,
+    /// else the live session of the leg on the line (the project's on a
+    /// project route, the operator's on the operator's). A session that has
+    /// ended is named by nothing: a rescue that ended it took it off the
+    /// guard, and nothing may hand it back.
+    async fn leg_on_line(&self, bringing_up: Option<&ProjectSession>) -> Option<LegSession> {
+        if let Some(session) = bringing_up {
+            return Some(LegSession::Project(session.clone()));
         }
+        let leg = if self.coordinator.route() == OPERATOR {
+            self.operator.clone().map(LegSession::Operator)
+        } else {
+            self.agent_on_the_line().map(LegSession::Project)
+        }?;
+        leg.alive().await.then_some(leg)
     }
 
-    pub(crate) fn operator_leg(&self) -> Option<LegSession> {
-        self.operator.clone().map(LegSession::Operator)
-    }
-
-    pub(crate) fn agent_leg(&self) -> Option<LegSession> {
-        self.agent.clone().map(LegSession::Project)
+    /// The one writer of the guard. Every change to the legs calls it after
+    /// it changes `agent`, `operator` or the route; nobody passes it a
+    /// session to name, only a bring-up names the one it has. `move_line`
+    /// moves the call line under the guard's lock, so a rescue, which takes
+    /// the guard under the same lock, finds the guard and the line agreeing.
+    pub(crate) async fn name_leg_on_line(
+        &self,
+        bringing_up: Option<&ProjectSession>,
+        move_line: impl FnOnce(),
+    ) {
+        let mut guard = self.active_session.lock().await;
+        move_line();
+        *guard = self.leg_on_line(bringing_up).await;
     }
 
     /// The PBX's project session, if it is the session of the project leg
@@ -394,7 +408,7 @@ impl Switchboard {
         if let Some(session) = self.utility.take() {
             session.close().await;
         }
-        self.set_active_session(None).await;
+        self.name_leg_on_line(None, || {}).await;
         // Idempotent: the service's shutdown path may reach here twice.
         self.prewarm.shutdown();
     }

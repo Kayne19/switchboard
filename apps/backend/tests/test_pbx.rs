@@ -290,6 +290,45 @@ async fn guard_row(start: &str, change: &str) -> String {
     row
 }
 
+/// The guard's four answers: the leg on the line's live session, the
+/// project's on a project route and the operator's on the operator's, a
+/// bring-up's session over either, and nothing for a session that ended.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_guard_names_a_bring_up_else_the_live_session_on_the_line() {
+    let mut scene = guard_scene("alpha, operator up").await;
+    let board = &scene.board;
+    let alpha = board.agent.clone().expect("alpha is on the line");
+    let named = |leg: Option<LegSession>| leg.map(|leg| leg.label().to_owned());
+
+    assert_eq!(
+        named(board.leg_on_line(None).await).as_deref(),
+        Some("alpha")
+    );
+
+    board.coordinator.return_to_operator();
+    assert_eq!(
+        named(board.leg_on_line(None).await).as_deref(),
+        Some(OPERATOR)
+    );
+    assert_eq!(
+        named(board.leg_on_line(Some(&alpha)).await).as_deref(),
+        Some("alpha"),
+        "a bring-up's session is named over the leg on the line"
+    );
+
+    board
+        .operator
+        .as_ref()
+        .expect("the operator runs")
+        .close()
+        .await;
+    assert_eq!(named(board.leg_on_line(None).await), None);
+
+    scene.board.shutdown().await;
+    let _ = std::fs::remove_dir_all(&scene.root);
+}
+
 #[cfg(unix)]
 const GUARD_STARTS: [&str; 6] = [
     "operator idle",

@@ -8,7 +8,7 @@
 use crate::hosts::Hosts;
 use crate::lifecycle::{CandidateLeg, Coordinator, LegIdentity, LifecycleError};
 use crate::pbx::{uuid_like, Switchboard, TransferContext, OPERATOR};
-use crate::pi_client::{LegSession, PiSessionError, Turn};
+use crate::pi_client::{PiSessionError, Turn};
 use crate::prewarm::LaunchPlan;
 use crate::project_session::{ModuleCallback, ProjectLaunch, ProjectSession, TurnCallback};
 use crate::prompts::{build_intro_prompt, FOREGROUND_NOTICE};
@@ -636,14 +636,8 @@ impl Switchboard {
         if let Some(project) = project {
             self.announce_agent_state(&project, "finished").await;
         }
-        // An operator a rescue ended is not handed back to the guard: the
-        // rescue took it off, and the next turn starts another.
-        let operator = match self.operator_leg() {
-            Some(operator) if operator.alive().await => Some(operator),
-            _ => None,
-        };
-        self.set_active_session(operator).await;
-        self.coordinator.return_to_operator();
+        self.name_leg_on_line(None, || self.coordinator.return_to_operator())
+            .await;
         if was_on_a_project {
             self.announce_route().await;
         }
@@ -723,7 +717,7 @@ impl Switchboard {
             if let Some(session) = self.operator.take() {
                 tracing::info!("caller hung up a wedged operator turn from the page");
                 session.close().await;
-                self.set_active_session(None).await;
+                self.name_leg_on_line(None, || {}).await;
                 return Some(OPERATOR.into());
             }
             return None;
@@ -769,29 +763,15 @@ pub(crate) struct Startup {
     change: LegChange,
     /// The session, once it is on the guard; `None` while only the
     /// candidate is staged.
-    attached: Option<Attached>,
-}
-
-/// A bring-up's session on the active-session guard, and what it took the
-/// guard from: the leg an abandoned bring-up hands the guard back to.
-struct Attached {
-    session: ProjectSession,
-    displaced: Option<LegSession>,
+    attached: Option<ProjectSession>,
 }
 
 impl Startup {
     /// Puts `session` on the active-session guard, so steering and a page
     /// rescue reach the leg being brought up.
     pub(crate) async fn attach(&mut self, board: &Switchboard, session: &ProjectSession) {
-        let displaced = board
-            .active_session
-            .lock()
-            .await
-            .replace(LegSession::Project(session.clone()));
-        self.attached = Some(Attached {
-            session: session.clone(),
-            displaced,
-        });
+        board.name_leg_on_line(Some(session), || {}).await;
+        self.attached = Some(session.clone());
     }
 
     /// Makes the attached leg the one on the line:
@@ -820,7 +800,7 @@ impl Startup {
                 return Err(error);
             }
         }
-        let Some(attached) = self.attached.take() else {
+        let Some(session) = self.attached.take() else {
             unreachable!("a bring-up commits the session it attached");
         };
         self.coordinator.finish_intro();
@@ -828,33 +808,32 @@ impl Startup {
             board.shelve_previous_foreground(&self.project).await;
             board.announce_agent_state(&self.project, "idle").await;
         }
-        board.agent = Some(attached.session);
-        board.set_active_session(board.agent_leg()).await;
+        board.agent = Some(session);
+        board.name_leg_on_line(None, || {}).await;
         board.announce_route().await;
         Ok(self.identity.clone())
     }
 
     /// Ends a bring-up that failed, in one order whichever step it failed
     /// at: the session it attached is ended, a new agent is published
-    /// finished (it was published busy around its attach), and the guard
-    /// and the call line go back to the leg before it together. A rescue
-    /// takes the guard under the same lock, so it finds either the
-    /// bring-up's session on a line still starting, or the leg before it
-    /// on the line it is back on.
+    /// finished (it was published busy around its attach), and the call
+    /// line rolls back to the leg before it while the guard names that leg,
+    /// under the guard's lock. A rescue takes the guard under the same lock,
+    /// so it finds either the bring-up's session on a line still starting,
+    /// or the leg before it on the line it is back on.
     pub(crate) async fn abandon(mut self, board: &Switchboard, reason: String) {
-        let attached = self.attached.take();
-        if let Some(Attached { session, .. }) = &attached {
+        if let Some(session) = self.attached.take() {
             session.close();
             if self.change == LegChange::NewAgent {
                 board.announce_agent_state(&self.project, "finished").await;
             }
         }
-        let mut guard = board.active_session.lock().await;
-        self.coordinator
-            .rollback_startup(self.identity.generation, reason);
-        if let Some(Attached { displaced, .. }) = attached {
-            *guard = displaced;
-        }
+        let (coordinator, generation) = (&self.coordinator, self.identity.generation);
+        board
+            .name_leg_on_line(None, || {
+                coordinator.rollback_startup(generation, reason);
+            })
+            .await;
     }
 }
 
