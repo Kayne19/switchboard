@@ -3,6 +3,10 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import ts from "typescript";
 
 const source = readFileSync("apps/frontend/src/hands_free.ts", "utf8");
+const machineSource = readFileSync(
+	"apps/frontend/src/hands_free_machine.ts",
+	"utf8",
+);
 const detectorSource = readFileSync(
 	"apps/frontend/src/wake_detector.ts",
 	"utf8",
@@ -51,7 +55,14 @@ const moduleUrl = (text, fileName, tag) =>
 		"base64",
 	)}#${tag}`;
 
-const handsFreeUrl = moduleUrl(source, "hands_free.ts", "hands-free");
+// A data: URL cannot resolve a relative import, so hands_free.ts is pointed
+// at the machine module loaded first (it imports only types back).
+const machineUrl = moduleUrl(machineSource, "hands_free_machine.ts", "hands-free-machine");
+const handsFreeUrl = moduleUrl(
+	source.replaceAll('"./hands_free_machine.js"', JSON.stringify(machineUrl)),
+	"hands_free.ts",
+	"hands-free",
+);
 const handsFree = await import(handsFreeUrl);
 const { WakeWordDetectorAdapter } = await import(
 	moduleUrl(detectorSource, "wake_detector.ts", "wake-detector")
@@ -412,7 +423,7 @@ async function speak(state, probability, windows) {
 assert.match(worklet, /type: "energy"/);
 assert.match(worklet, /postMessage\(\{ type: "audio", samples: frame \}/);
 assert.doesNotMatch(worklet, /postMessage\(\s*channel/);
-for (const text of [worklet, source]) {
+for (const text of [worklet, source, machineSource]) {
 	assert.doesNotMatch(text, /"speech_start"|"speech_end"|reset_endpoint/);
 	assert.doesNotMatch(text, /noiseFloor|MIN_ENERGY/);
 }
