@@ -681,6 +681,14 @@ impl Switchboard {
             .await
         {
             Ok(t) => t,
+            // The host refused the prompt, and the session is still usable
+            // (#423): only that prompt failed, so the caller stays on the leg.
+            Err(error) if session.alive() => {
+                let name = self.route_label();
+                tracing::warn!(route = %name, %error, "the host refused the caller's prompt; the leg stays");
+                return self
+                    .reply_failure(format!("{name} couldn't take that."), error.to_string());
+            }
             Err(error) => {
                 let detail = error.to_string();
                 let name = self.route_label();

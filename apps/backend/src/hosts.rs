@@ -208,6 +208,18 @@ impl CommandError {
             message: message.into(),
         }
     }
+
+    /// The host answered and refused this one command (`docs/host-link.md`,
+    /// "Error codes"): the link and the session are fine, and other
+    /// commands keep working. A failure on this side (`not_connected`,
+    /// `link_lost`, `timeout`, `unreadable_reply`), `stale_epoch`,
+    /// `not_found` and `failed` are not refusals.
+    pub fn is_refusal(&self) -> bool {
+        matches!(
+            self.code.as_str(),
+            "refused" | "unsupported" | "daemon_error" | "bad_request" | "unknown_command"
+        )
+    }
 }
 
 impl std::fmt::Display for CommandError {

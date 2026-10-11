@@ -326,8 +326,9 @@ impl Switchboard {
     /// did not get onto it (`LegChange::Promotion`, `Startup::abandon`).
     /// The host is told to apply background rules, a busy agent is told
     /// them too, and the agent is published busy or idle. One its host will
-    /// not move, or whose handle has closed (a failed host command leaves it
-    /// unusable), is ended and published finished.
+    /// not move, or whose handle has closed (a command that failed on the
+    /// link leaves it unusable; one the host refused does not, #423), is
+    /// ended and published finished.
     pub(crate) async fn move_to_background(&self, session: ProjectSession) {
         let project = session.label().to_owned();
         if let Err(error) = session.set_mode("background").await {
@@ -381,13 +382,23 @@ impl Switchboard {
             .background_agents
             .start_prompt(project, |number| async move {
                 let result = session.prompt_as(&text, source, utterance.as_deref()).await;
-                if let Err(error) = result {
-                    tracing::warn!(%error, project = %project_id, "background agent prompt failed");
-                    // Prompt transport failure is terminal for this resident. Do
-                    // not leave a dead token reusable or publish an idle notice.
-                    session.close();
-                    closed_callback(project_id.clone(), session_id, instance_id).await;
-                    return;
+                match result {
+                    Ok(_) => {}
+                    // The host refused the prompt, and the session is still
+                    // usable (#423): only that prompt failed. The resident
+                    // stays, and is published idle below.
+                    Err(error) if session.alive() => {
+                        tracing::warn!(%error, project = %project_id, "the host refused the background prompt; the resident stays");
+                    }
+                    // A prompt that failed on the link left the session
+                    // unusable: it is terminal for this resident. Do not
+                    // leave a dead token reusable or publish an idle notice.
+                    Err(error) => {
+                        tracing::warn!(%error, project = %project_id, "background agent prompt failed");
+                        session.close();
+                        closed_callback(project_id.clone(), session_id, instance_id).await;
+                        return;
+                    }
                 }
                 if let Some(callback) = callback {
                     if session.alive()

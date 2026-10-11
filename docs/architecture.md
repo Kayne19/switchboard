@@ -540,12 +540,17 @@ commits or abandons, and the call line is what it commits or rolls back.
 ended, a new agent is published `finished`, and, under the guard's lock,
 the call line rolls back to the leg before it and the guard names that
 leg again. A redial's failure then drops the leg
-(`drop_agent`). A background promotion (`LegChange::Promotion`) does not
+(`drop_agent`), unless the host refused the change before anything changed
+(`SwitchFailed::Unchanged` in `redial.rs`): then the session rejoins the call
+under the token of the leg the line rolled back to, and the caller stays on
+it (#423). A background promotion (`LegChange::Promotion`) does not
 end its session: once the line and the guard are back on the leg before
 it, the resident goes back to the background
 (`Switchboard::move_to_background`, the same step that shelves a
-foreground), so a failed promotion loses no work. A session a failed host
-command left unusable cannot go back; it is published `finished`.
+foreground), so a failed promotion loses no work. A command the host
+refused leaves the session usable, so it goes back too; a session a
+command that failed on the link left unusable cannot go back, and it is
+published `finished`.
 A `Startup` dropped without either (its future aborted, a panic) rolls
 its candidate back in `Drop`; the guard and the session are left to the
 rescue that aborted it. A rollback names the generation its
