@@ -106,3 +106,7 @@ Note the iPadOS version in the pull request.
     toolbars and the home indicator, in landscape and portrait. Tap Damocles
     and speak: the turn goes as on any page. Tap EXIT: the page goes back to
     the chart's own page.
+11. System: ask the agent for the system view. Each picker opens Safari's
+    own picker; pick a thinking level and the line says so when the leg
+    confirms it. HANG UP puts you back with the operator. Rotate: the panel
+    stays clear of MODE and Damocles, and on a phone on its side it scrolls.

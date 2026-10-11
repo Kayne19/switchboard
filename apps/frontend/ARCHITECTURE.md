@@ -101,6 +101,15 @@ right, so push-to-talk still works. It has no rail, aux row, heading or
 footer. `EXIT` and Esc dispatch `auto_view`. The page draws it only while
 something is on stage (`computeEffectiveView`).
 
+The system view (`system`, #277) is another: the line the call runtime
+holds (`LineControls`, registered with the voice runtime by
+`integration/runtime.tsx`) in `SystemPanel` -- who is on it, the route,
+model and thinking pickers, HANG UP and the status line -- in the
+theater's place, with Damocles compact beside it. The panel draws what the
+runtime reports and acts only through it; the runtime owns the pickers'
+locks and posts each control with the page's generation. With no runtime
+(the demo page) it says NO CALL and draws no control.
+
 The shell also owns the main column (`MainWithAux`): a composition's main
 slot over the aux row. A composition names the objects its slot does not
 draw (`SceneContent.aux`), and the shell gives each a framed cell in the row
