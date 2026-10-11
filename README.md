@@ -329,7 +329,8 @@ container, and the post-deploy checklist.
 | `apps/backend/src/page_controls.rs` | the page's HTTP controls (connect, model, thinking, hangup) and the rescue they start with |
 | `apps/backend/src/module_calls.rs` | a project session's `speak`, `request_to_speak`, `display` and `view`, and their admission |
 | `apps/backend/src/caller_input.rs` | clips, streamed clips, typed turns, and transcription |
-| `apps/backend/src/turns.rs` | routing a transcript, the turn worker, host-reported turns |
+| `apps/backend/src/turns.rs` | routing a transcript, the turn worker |
+| `apps/backend/src/host_turns.rs` | host-reported turns: a self-woken run's operation, a caller turn's settle |
 | `apps/backend/src/speech.rs` | the speech worker, continuity, and reply voice |
 | `apps/backend/src/delivery.rs` | ordered browser delivery: the event envelope, per-connection framing, and the audio queue |
 | `apps/backend/src/display.rs` | the stage projection a reconnecting browser replays, and the gate it sits behind |

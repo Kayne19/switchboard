@@ -11,6 +11,7 @@ mod display;
 mod floor;
 mod floor_hooks;
 mod history;
+mod host_turns;
 mod hosts;
 mod jev;
 mod leg_announcer;

@@ -6,6 +6,7 @@ use crate::pbx::{
     board_on, board_with, on_alpha, project, prompts, says, scratch_dir, serve, transcript,
     two_model_catalog, until_named, HOST,
 };
+use crate::pi_client::LegSession;
 use crate::redial::Redial;
 use crate::router::{Action, ConversationMode, Decision};
 use crate::within;
@@ -412,7 +413,7 @@ async fn assert_back_on_the_operator(
     let operator = LegSession::Operator(operator.clone());
     assert!(
         board
-            .active_session
+            .session_control()
             .lock()
             .await
             .as_ref()
@@ -570,7 +571,7 @@ async fn hanging_up_the_operator_discards_its_process_and_the_next_turn_starts_a
 
     assert!(!first.alive().await);
     assert!(board.operator.is_none());
-    assert!(board.active_session.lock().await.is_none());
+    assert!(board.session_control().lock().await.is_none());
     assert_eq!(board.coordinator.route(), OPERATOR);
     assert_eq!(board.operator_note, None);
     let reply = board.handle("are you there?").await;
@@ -620,7 +621,7 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
     let operator_session =
         LegSession::Operator(board.operator.clone().expect("the operator keeps running"));
     assert!(board
-        .active_session
+        .session_control()
         .lock()
         .await
         .as_ref()
@@ -1582,7 +1583,7 @@ async fn bring_up_shown(scene: &BringUp, reply: &Reply) -> String {
             format!("{} {ended}", notice.route)
         })
         .collect();
-    let guard = match board.active_session.lock().await.clone() {
+    let guard = match board.session_control().lock().await.clone() {
         None => "none".to_owned(),
         Some(LegSession::Operator(_)) => "operator".to_owned(),
         Some(LegSession::Project(session)) => session_shown(scene, &session),

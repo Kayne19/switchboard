@@ -45,7 +45,8 @@ browser mic / page controls
           v
   application coordination: app_state.rs (shared state, workers, shutdown),
   caller_input.rs (clips, streams, typed turns), turns.rs (routing, turn
-  dispatch), speech.rs (the speech worker and reply voice),
+  dispatch), host_turns.rs (host-reported turns), speech.rs (the speech
+  worker and reply voice),
   floor_hooks.rs (the floor's gate, rewrite and release hooks),
   leg_announcer.rs (a new leg's announcement and scene reset)
           |
@@ -183,7 +184,8 @@ The application boundary for HTTP, WebSocket, turn dispatch, audio delivery,
 generation checks, and worker coordination is a set of files in
 `apps/backend/src/`, one concern each: `api.rs` (the router), `app_state.rs`,
 `browser.rs`, `page_controls.rs`, `module_calls.rs`, `caller_input.rs`,
-`turns.rs`, `speech.rs`, `floor_hooks.rs`, and `leg_announcer.rs`. They may
+`turns.rs`, `host_turns.rs`, `speech.rs`, `floor_hooks.rs`, and
+`leg_announcer.rs`. They may
 coordinate these concerns, but they must not become the owner of
 provider-specific speech protocols or Pi routing policy.
 
@@ -192,7 +194,7 @@ events, or state transitions. Do not hide a route change, persistence action,
 or cancellation side effect inside an unrelated helper.
 
 Host-reported project turns are admitted through the coordinator
-(`handle_project_turn` in `turns.rs`). A
+(`handle_project_turn` in `host_turns.rs`). A
 `turn_start` with `cause: autonomous` opens a server-owned operation with the
 host's `turn_id`; caller prompts wait behind it. It closes on that turn's
 `turn_end`, or when the session closes (`session_closed`, which a lost host
@@ -206,6 +208,21 @@ than attached to whichever caller operation won the race. An old host may omit
 these additive fields for ordinary caller turns, but its self-wake effects
 and written autonomous output fail closed. Written autonomous replies from
 new hosts use the existing `Reply` event and do not enter the speech worker.
+
+`HostTurn::of` reads each report once, and the application answers it:
+
+| Report | The application |
+|---|---|
+| a start whose token is not the leg on the line's | ignores it |
+| `turn_start`, `input` | binds its turn id to the caller's operation |
+| `turn_start`, `autonomous`, with a turn id | opens an operation for the run if the leg is free, and holds the run (its session instance and operation) until its end; one is held at a time |
+| `turn_start`, `autonomous` or `unknown` without a turn id, `unknown` with one, or any other cause | admits nothing |
+| `turn_end`, `input`, with a turn id | closes the open operation bound to that id (`settle_turn`) |
+| the end of a self-woken run (any other cause) | only for the held run (same session instance and turn id): closes its operation, traces its end, and writes its text, if any, to the transcript |
+
+The table test `a_host_reported_turn_moves_by_its_table`
+(`apps/backend/tests/test_host_turns.rs`) holds every phase of the line against
+every report.
 
 ### 4. Audio is an adapter boundary
 
@@ -434,7 +451,8 @@ removes the real coupling; do not create interfaces for ceremony.
 | `page_controls.rs` | `/status`, `/connect`, `/thinking`, `/model`, `/hangup`, and the rescue each control starts with | leg lifecycle (the PBX's), redial decisions (`RedialPlanner`'s) |
 | `module_calls.rs` | the `/host` upgrade and a project session's `speak`, `request_to_speak`, `display`, `view`, with the one admission every acting call passes | the host link itself (`hosts.rs`), the display projection, who is waiting to speak (`floor.rs`'s) |
 | `caller_input.rs` | clips, streamed clips, typed turns, transcription, and each clip's verdict, up to a logged transcript | routing that transcript |
-| `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker and a caller turn's one end (`TurnRun`), host-reported turns | speech synthesis, PBX policy |
+| `turns.rs` | routing a transcript through Jev without the PBX lock, the turn worker and a caller turn's one end (`TurnRun`) | speech synthesis, PBX policy, host-reported turns (`host_turns.rs`'s) |
+| `host_turns.rs` | host-reported turns: each report read once (`HostTurn`) and answered through the coordinator, and the one self-woken run admitted as an operation (`HostTurns`, its `SelfWokenRun` written only by `hold_self_woken` and `release_self_woken`) | a session's turn (`session_turn.rs`'s), caller turn dispatch |
 | `speech.rs` | the one ordered speech worker, its continuity, audio slots, and reply voice; each request's one completion (`PendingSpeech::complete`, one `SpeechOutcome` per request; `docs/concurrency-and-test-hazards.md`, "How a speech request ends") | the TTS provider's wire format, the audio queue itself, floor policy |
 | `leg_announcer.rs` | announcing a new leg to the browser, once per leg: the speech reset, the `epoch`, the held-scene replay | which leg is current (the coordinator's), the stage's reset (`DisplayGateState::begin_leg`) |
 | `floor.rs` | the background request queue and who is waiting (reported through its `Waiting` hook), the front request's phases (`FrontPhase`, written only by `step`): Jev good-moment holds, stateless rewrites, the release and its retry | lifecycle membership, the agent projection itself, route authority, TTS provider wire format |
@@ -512,14 +530,14 @@ commits or abandons, and the call line is what it commits or rolls back.
 | step | what the `Startup` holds | on failure |
 |---|---|---|
 | `Switchboard::begin_startup` | the staged candidate's identity, the project, the change (`LegChange`: a new agent or a redial) | refused before anything is staged: the caller answers |
-| `attach` | the session, now on the active-session guard, and what it displaced from the guard | `abandon` (nothing attached: the rollback alone) |
+| `attach` | the session, now named on the active-session guard | `abandon` (nothing attached: the rollback alone) |
 | the first turn (a redial has none) | the same | `abandon` |
 | `commit` | consumed: the leg is the PBX's agent and the guard's, and the identity it is on the line under is returned | a failed adoption abandons |
 
 `abandon` is the one failure exit, in one order: the attached session is
-ended, a new agent is published `finished`, and the guard goes back to
-what the attach displaced while, under the guard's lock, the call line
-rolls back to the leg before it. A redial's failure then drops the leg
+ended, a new agent is published `finished`, and, under the guard's lock,
+the call line rolls back to the leg before it and the guard names that
+leg again. A redial's failure then drops the leg
 (`drop_agent`). A `Startup` dropped without either (its future aborted, a
 panic) rolls its candidate back in `Drop`; the guard and the session are
 left to the rescue that aborted it. A rollback names the generation its
@@ -529,6 +547,35 @@ ended (committed, rescued, rolled back) does nothing.
 `apps/backend/tests/test_leg_transitions.rs` pins every bring-up at every
 exit. A new way to bring a leg up holds a `Startup`; a new failure exit
 calls `abandon`.
+
+### The session guard
+
+The active-session guard (`Switchboard::active_session`, shared with the
+application as `AppInner::active_session`) names the session steering and
+a page rescue act on. It is derived state, not a machine:
+`Switchboard::name_leg_on_line` (`pbx.rs`) is its one writer, and it takes
+no session to name. It names, in order:
+
+| case | the guard names |
+|---|---|
+| a bring-up has attached its session (`Startup::attach`) | that session, over whatever is on the line |
+| a project is on the line | the PBX's agent, if it is that project's session (`agent_on_the_line`) and alive |
+| the operator is on the line | the operator's process, if it is alive |
+| otherwise, or the session has ended | nothing |
+
+Each change to the legs calls it after it changes `agent`, `operator` or
+the route: `Startup::attach`, `commit` and `abandon`, `drop_agent`,
+`force_hangup`, the operator's start and recovery (`operator.rs`), and
+`shutdown`. A change that also moves the call line (`abandon`'s rollback,
+`drop_agent`'s return to the operator) moves it inside the writer, under
+the guard's lock, so a rescue finds the guard and the line agreeing. The
+operator answering while a project is on the line leaves the guard on the
+project, because the derivation reads the route, not the caller. A
+rescue's `take` (`page_controls.rs`) is the one other change: it empties
+the guard and ends the session, and since an ended session is never named,
+no later change hands it back. `every_change_to_the_legs_leaves_the_guard_as_the_table_says`
+in `apps/backend/tests/test_pbx.rs` pins six call states against eight
+changes to the legs.
 
 ## Turn lifecycle
 
