@@ -137,6 +137,10 @@ pub struct CandidateNotice {
 
 pub type CandidateCallback = Arc<dyn Fn(&CandidateNotice) + Send + Sync>;
 
+/// Told the call token of a resident that left the background
+/// (`Coordinator::remove_background`).
+pub type BackgroundLeftCallback = Arc<dyn Fn(&str) + Send + Sync>;
+
 /// What becomes of RPC activity from a pi process, decided by the leg the
 /// process was started for (`Coordinator::classify_activity`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -225,6 +229,7 @@ pub struct Coordinator {
     /// settles. The coordinator remains synchronous; API workers await it.
     operation_changed: Arc<Notify>,
     on_candidate: Arc<Mutex<Option<CandidateCallback>>>,
+    on_background_left: Arc<Mutex<Option<BackgroundLeftCallback>>>,
     /// Serializes a background-token check with the projection mutation that
     /// follows it. Promotion/removal takes this same owner lock.
     background_owner: Arc<std::sync::Mutex<()>>,
@@ -247,6 +252,7 @@ impl Coordinator {
             next_operation: Arc::new(AtomicU64::new(1)),
             operation_changed: Arc::new(Notify::new()),
             on_candidate: Arc::new(Mutex::new(None)),
+            on_background_left: Arc::new(Mutex::new(None)),
             background_owner: Arc::new(std::sync::Mutex::new(())),
         }
     }
@@ -257,6 +263,16 @@ impl Coordinator {
     pub fn set_candidate_callback(&mut self, callback: CandidateCallback) {
         *self
             .on_candidate
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(callback);
+    }
+
+    /// Registers a synchronous, non-blocking notice that a resident's token
+    /// left the background. It fires after the token is removed, outside the
+    /// coordinator's state lock, and must not block.
+    pub fn set_background_left_callback(&self, callback: BackgroundLeftCallback) {
+        *self
+            .on_background_left
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(callback);
     }
@@ -569,14 +585,26 @@ impl Coordinator {
         });
     }
 
+    /// Retires a resident's token: it is no longer valid for display and
+    /// request calls. The background-left callback hears of it, so the floor
+    /// lets the resident's requests go (#421).
     pub fn remove_background(&self, token: &str) {
         let _owner = self
             .background_owner
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        self.linearize(|state| {
-            state.background_tokens.remove(token);
-        });
+        let removed = self.linearize(|state| state.background_tokens.remove(token).is_some());
+        if !removed {
+            return;
+        }
+        let callback = self
+            .on_background_left
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        if let Some(callback) = callback {
+            callback(token);
+        }
     }
 
     /// Runs one background projection mutation while owning the token's

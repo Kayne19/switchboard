@@ -106,8 +106,10 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
 }
 
 /// Mirrors the floor's word on who is waiting to speak into the agent
-/// projection, for a token that is still a background resident, and sends the
-/// change to the page. The floor calls it under its lock (`Waiting`).
+/// projection, and sends the change to the page: a request is marked for a
+/// token that is still a background resident, and the mark of the token
+/// whose last request left the floor ends, whatever became of the agent.
+/// The floor calls it under its lock (`Waiting`).
 pub(crate) fn waiting_hook(app: Weak<AppInner>) -> WaitingHook {
     Arc::new(move |waiting: Waiting<'_>| {
         let Some(app) = app.upgrade() else { return };
@@ -121,6 +123,7 @@ pub(crate) fn waiting_hook(app: Weak<AppInner>) -> WaitingHook {
                     .with_background(&request.token, |project| {
                         projection.waiting(
                             project.to_owned(),
+                            request.token.clone(),
                             AgentRequest {
                                 message: request.message.clone(),
                                 reason: request.reason.clone(),
@@ -128,10 +131,12 @@ pub(crate) fn waiting_hook(app: Weak<AppInner>) -> WaitingHook {
                         )
                     })
             }
-            Waiting::Spoken(request) => state
-                .0
-                .coordinator
-                .with_background(&request.token, |project| projection.floor_released(project)),
+            // The agent may be gone (promoted, stopped) or the request stale:
+            // the mark ends all the same, but only if it is still this
+            // token's.
+            Waiting::Left(request) => {
+                Some(projection.floor_released(&request.project, &request.token))
+            }
         };
         if let Some(change) = change {
             publish_agents(&state, change);
@@ -228,7 +233,7 @@ async fn release_floor(
     }
     match result {
         // Spoken. The floor ends the agent's waiting mark when it lets the
-        // request go (`Waiting::Spoken`); a resident that went while it was
+        // request go (`Waiting::Left`); a resident that went while it was
         // spoken is reported gone.
         Ok(()) if state.0.coordinator.is_background(&request.token) => ReleaseOutcome::Played,
         Ok(()) => ReleaseOutcome::Drop,
