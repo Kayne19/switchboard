@@ -309,8 +309,8 @@ impl Switchboard {
 
         // A change the host refused before anything changed keeps the leg
         // as it was (#423, #327); any other failed change loses the leg.
-        let session = match self.switch_live(&leg.model, &spec, &leg_token).await {
-            Ok(session) => session,
+        let switched = match self.switch_live(&leg.model, &spec, &leg_token).await {
+            Ok(switched) => switched,
             Err(SwitchFailed::Unchanged { session, error }) => {
                 tracing::warn!(project = %project.id, %spec, %error, "the host refused the change; the leg stays as it was");
                 startup
@@ -336,11 +336,25 @@ impl Switchboard {
                 return self.lose_the_leg(&project.id, &spec, &spoken, error).await;
             }
         };
+        let Switched {
+            session,
+            level_refused,
+        } = switched;
         startup.attach(self, &session).await;
 
         match startup.commit(self).await {
             Ok(leg) => {
-                let mut reply = self.reply([format!("Now on {spoken}.")], None);
+                let mut reply = match level_refused {
+                    None => self.reply([format!("Now on {spoken}.")], None),
+                    Some(level) => {
+                        let (provider, model, _) = parse_spec(&spec);
+                        tracing::warn!(project = %project.id, %spec, error = %level.error, "the host refused the level; the leg is on the new model at its own level");
+                        self.reply(
+                            [format!("Now on {model} on {provider}{}", level.spoken())],
+                            Some(level.error.to_string()),
+                        )
+                    }
+                };
                 reply.delivery_generation = Some(leg.generation);
                 reply
             }
@@ -353,13 +367,14 @@ impl Switchboard {
 
     /// Changes the live session's model and thinking level from `from` to
     /// `to`, and puts it on the call under `leg_token`. The session keeps its
-    /// history.
+    /// history. A level the host refuses after the model changed is not a
+    /// failed switch: `Switched::level_refused` says so.
     async fn switch_live(
         &self,
         from: &str,
         to: &str,
         leg_token: &str,
-    ) -> Result<ProjectSession, SwitchFailed> {
+    ) -> Result<Switched, SwitchFailed> {
         let Some(session) = self.agent_on_the_line() else {
             return Err(SwitchFailed::Lost(PiSessionError(
                 "the project session is gone".into(),
@@ -368,6 +383,7 @@ impl Switchboard {
         let (from_provider, from_model, from_thinking) = parse_spec(from);
         let (provider, model, thinking) = parse_spec(to);
         let mut state = SessionState::default();
+        let mut level_refused = None;
         let model_changed = (&provider, &model) != (&from_provider, &from_model);
         if model_changed {
             state = session
@@ -378,20 +394,31 @@ impl Switchboard {
         // A new model may come up at its own level, so the level asked for is
         // set again after it.
         if !thinking.is_empty() && (model_changed || thinking != from_thinking) {
-            state = session.set_thinking(&thinking).await.map_err(|error| {
-                if model_changed {
-                    SwitchFailed::Lost(error)
-                } else {
-                    SwitchFailed::before_any_change(&session, error)
+            match session.set_thinking(&thinking).await {
+                Ok(set) => state = set,
+                // The model changed and the host refused only the level: the
+                // leg goes on to the new model at the level the host reports
+                // for it (#423). A session is not ended over a level.
+                Err(error) if model_changed && session.alive() => {
+                    level_refused = Some(LevelRefused {
+                        asked: thinking.clone(),
+                        running: state.thinking.clone(),
+                        error,
+                    });
                 }
-            })?;
+                Err(error) if model_changed => return Err(SwitchFailed::Lost(error)),
+                Err(error) => return Err(SwitchFailed::before_any_change(&session, error)),
+            }
         }
         session
             .join_call(leg_token, &self.persona, self.speech_deadline_ms)
             .await
             .map_err(SwitchFailed::Lost)?;
         self.confirm_thinking(leg_token, &state);
-        Ok(session)
+        Ok(Switched {
+            session,
+            level_refused,
+        })
     }
 
     /// Ends a leg whose change failed: the session it kept is still the
@@ -420,6 +447,40 @@ impl Switchboard {
         session
             .join_call(&token, &self.persona, self.speech_deadline_ms)
             .await
+    }
+}
+
+/// A live switch that went through.
+struct Switched {
+    session: ProjectSession,
+    /// The host refused the level asked for after the model changed: the
+    /// leg is on the new model at the level the model came up at.
+    level_refused: Option<LevelRefused>,
+}
+
+/// A level the host would not set on a model it had just switched to.
+struct LevelRefused {
+    /// The level asked for.
+    asked: String,
+    /// The level the host reported for the new model; empty if it named none.
+    running: String,
+    error: PiSessionError,
+}
+
+impl LevelRefused {
+    /// What the caller hears after `Now on <model>`.
+    fn spoken(&self) -> String {
+        if self.running.is_empty() {
+            format!(
+                ", but it would not take thinking {}, so it keeps the model's own level.",
+                self.asked
+            )
+        } else {
+            format!(
+                ", but it would not take thinking {}, so it runs at {}.",
+                self.asked, self.running
+            )
+        }
     }
 }
 
