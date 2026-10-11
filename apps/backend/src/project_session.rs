@@ -1071,6 +1071,9 @@ impl ProjectSession {
                 continue;
             }
             match event["kind"].as_str() {
+                // Another turn's words are not this prompt's answer: a held
+                // run's words reach the collector too (#512).
+                Some("text") if event["turn_id"].as_str() != Some(turn_id) => {}
                 Some("text") => {
                     let Some(text) = event["text"]
                         .as_str()

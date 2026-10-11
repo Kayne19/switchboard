@@ -405,7 +405,12 @@ impl TurnState {
                 {
                     if run.owns(turn_id.as_deref()) {
                         run.append(&text);
-                        return (phase, Vec::new());
+                        // The run's words also reach a caller's prompt: one
+                        // sent into the held run as a `follow_up` answers
+                        // with them (#512). Any other prompt's `collect`
+                        // passes them over, since they name another turn.
+                        let effects = phase.forward(frame);
+                        return (phase, effects);
                     }
                 }
                 let effects = phase.pass_on(frame);
