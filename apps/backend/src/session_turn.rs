@@ -48,15 +48,15 @@ impl SelfWokenRun {
         }
     }
 
-    /// The run's end: its final text for the debug page, then its report.
-    fn end(self, how: RunEnding) -> TurnEffect {
+    /// The run's end: its report, and its final text for the debug page.
+    fn end(self, how: RunEnding) -> RunEnd {
         let kept = self.text.join("\n").trim().to_owned();
         let (text, reported) = match how {
             RunEnding::Settled { last_text } if kept.is_empty() => (last_text.to_owned(), true),
             RunEnding::Settled { .. } => (kept, true),
             RunEnding::CutShort => (kept, false),
         };
-        TurnEffect::RunEnded {
+        RunEnd {
             report: TurnBoundary {
                 turn_id: self.turn_id,
                 cause: self.cause,
@@ -80,6 +80,13 @@ enum RunEnding<'a> {
     /// Its session closed under it. Its words stay off the caller's
     /// transcript: the report carries none.
     CutShort,
+}
+
+/// A self-woken run's end, as the pump reports it: its final text goes to
+/// the debug page first, then the report to the application.
+pub(crate) struct RunEnd {
+    pub(crate) report: TurnBoundary,
+    pub(crate) final_text: String,
 }
 
 /// A turn boundary as the pump reports it to the application
@@ -173,10 +180,34 @@ impl TurnPhase {
     /// The phase after the held run ends, and the run's end.
     fn ending_run(self, how: RunEnding) -> (Self, Vec<TurnEffect>) {
         match self {
-            Self::SelfWoken { run } => (Self::Idle, vec![run.end(how)]),
-            Self::CallerAndSelfWoken { collector, run } => {
-                (Self::CallerSettled { collector }, vec![run.end(how)])
+            Self::SelfWoken { run } => (Self::Idle, vec![TurnEffect::RunEnded(run.end(how))]),
+            Self::CallerAndSelfWoken { collector, run } => (
+                Self::CallerSettled { collector },
+                vec![TurnEffect::RunEnded(run.end(how))],
+            ),
+            other @ (Self::Idle | Self::Caller { .. } | Self::CallerSettled { .. }) => {
+                (other, Vec::new())
             }
+        }
+    }
+
+    /// The held run ends, settled, and the run `start` opens is held in its
+    /// place. A phase that holds no run is left as it is.
+    fn replacing(self, start: TurnBoundary) -> (Self, Vec<TurnEffect>) {
+        let run = SelfWokenRun::new(&start);
+        let replaced = |held: SelfWokenRun| TurnEffect::RunReplaced {
+            ended: held.end(RunEnding::Settled { last_text: "" }),
+            started: start,
+        };
+        match self {
+            Self::SelfWoken { run: held } => (Self::SelfWoken { run }, vec![replaced(held)]),
+            Self::CallerAndSelfWoken {
+                collector,
+                run: held,
+            } => (
+                Self::CallerAndSelfWoken { collector, run },
+                vec![replaced(held)],
+            ),
             other @ (Self::Idle | Self::Caller { .. } | Self::CallerSettled { .. }) => {
                 (other, Vec::new())
             }
@@ -217,27 +248,26 @@ pub(crate) enum TurnEffect {
     AskAdmission(TurnBoundary, TurnFrame),
     /// A self-woken run ended: publish its final text to the debug page,
     /// then report its end.
-    RunEnded {
-        report: TurnBoundary,
-        final_text: String,
+    RunEnded(RunEnd),
+    /// The held run ended because the host has another turn open, which is
+    /// held in its place: publish the ended run's final text, then report
+    /// the new run's start with that end, for the application to take
+    /// together (`ProjectTurn::replaces`).
+    RunReplaced {
+        ended: RunEnd,
+        started: TurnBoundary,
     },
 }
 
-/// A project session's turn: its phase, and a self-woken start it refused.
+/// A project session's turn.
 pub(crate) struct TurnState {
     phase: TurnPhase,
-    /// The turn id (empty for a legacy host's) of a self-woken start that
-    /// came while a run was already held, and was refused. Its frames are
-    /// dropped, the caller's prompt's included, until its `turn_end`, the
-    /// next self-woken start the session takes, or an input's start.
-    ignored: Option<String>,
 }
 
 impl TurnState {
     pub(crate) fn new() -> Self {
         Self {
             phase: TurnPhase::Idle,
-            ignored: None,
         }
     }
 
@@ -256,14 +286,8 @@ impl TurnState {
         self.phase.run().map(|run| run.cause.clone())
     }
 
-    fn ignores(&self, turn_id: Option<&str>) -> bool {
-        self.ignored
-            .as_deref()
-            .is_some_and(|ignored| ignored == turn_id.unwrap_or_default())
-    }
-
     /// The turn's table: moves the phase on `event`, and returns what is
-    /// left to do. The only writer of both fields.
+    /// left to do. The only writer of the phase.
     pub(crate) fn step(&mut self, event: TurnEvent) -> Vec<TurnEffect> {
         let phase = std::mem::replace(&mut self.phase, TurnPhase::Idle);
         let (next, effects) = match event {
@@ -301,10 +325,7 @@ impl TurnState {
                 admitted: true,
                 start,
                 ..
-            } => {
-                self.ignored = None;
-                (phase.holding(SelfWokenRun::new(&start)), Vec::new())
-            }
+            } => (phase.holding(SelfWokenRun::new(&start)), Vec::new()),
             // Refused, the start stays the caller's turn's.
             TurnEvent::Admitted {
                 admitted: false,
@@ -314,7 +335,7 @@ impl TurnState {
                 let effects = phase.forward(frame);
                 (phase, effects)
             }
-            TurnEvent::Event { seq, event } => self.on_event(phase, seq, event),
+            TurnEvent::Event { seq, event } => Self::on_event(phase, seq, event),
             TurnEvent::Snapshot { seq, info } => Self::on_snapshot(phase, seq, info),
         };
         self.phase = next;
@@ -322,12 +343,7 @@ impl TurnState {
     }
 
     /// A session event from the host (`step`).
-    fn on_event(
-        &mut self,
-        phase: TurnPhase,
-        seq: u64,
-        event: Value,
-    ) -> (TurnPhase, Vec<TurnEffect>) {
+    fn on_event(phase: TurnPhase, seq: u64, event: Value) -> (TurnPhase, Vec<TurnEffect>) {
         let kind = event["kind"].as_str().unwrap_or_default().to_owned();
         let turn_id = event["turn_id"].as_str().map(str::to_owned);
         let cause = event["cause"].as_str().unwrap_or("unknown").to_owned();
@@ -350,34 +366,38 @@ impl TurnState {
                     TurnPhase::Caller { .. } | TurnPhase::CallerSettled { .. } => {
                         (phase, vec![TurnEffect::AskAdmission(start, frame)])
                     }
-                    TurnPhase::CallerAndSelfWoken { .. } => {
-                        let effects = phase.forward(frame);
-                        (phase, effects)
-                    }
                     // With no prompt being collected, a self-woken start is
                     // no caller's turn: it is held whatever the application
                     // answers.
                     TurnPhase::Idle => {
-                        self.ignored = None;
                         let run = SelfWokenRun::new(&start);
                         (
                             TurnPhase::SelfWoken { run },
                             vec![TurnEffect::Report(start)],
                         )
                     }
-                    TurnPhase::SelfWoken { .. } => {
-                        self.ignored = Some(start.turn_id.unwrap_or_default());
+                    // The host opens a turn only once the one before it has
+                    // settled, so a second self-woken start means the held
+                    // run is over: it ends with the words it kept, and the
+                    // new run is held in its place, with the operation. A
+                    // start that names the held run is that run's own.
+                    TurnPhase::SelfWoken { .. } | TurnPhase::CallerAndSelfWoken { .. }
+                        if phase
+                            .run()
+                            .is_some_and(|run| run.owns(start.turn_id.as_deref())) =>
+                    {
                         (phase, Vec::new())
+                    }
+                    TurnPhase::SelfWoken { .. } | TurnPhase::CallerAndSelfWoken { .. } => {
+                        phase.replacing(start)
                     }
                 }
             }
             "turn_start" => {
-                self.ignored = None;
                 let mut effects = vec![TurnEffect::Report(TurnBoundary::opened(turn_id, cause))];
                 effects.extend(phase.pass_on(frame));
                 (phase, effects)
             }
-            "text" if self.ignores(turn_id.as_deref()) => (phase, Vec::new()),
             "text" => {
                 let mut phase = phase;
                 if let TurnPhase::SelfWoken { run } | TurnPhase::CallerAndSelfWoken { run, .. } =
@@ -390,10 +410,6 @@ impl TurnState {
                 }
                 let effects = phase.pass_on(frame);
                 (phase, effects)
-            }
-            "turn_end" if self.ignores(turn_id.as_deref()) => {
-                self.ignored = None;
-                (phase, Vec::new())
             }
             "turn_end" if phase.run().is_some_and(|run| run.owns(turn_id.as_deref())) => {
                 phase.ending_run(RunEnding::Settled { last_text: "" })
@@ -430,21 +446,39 @@ impl TurnState {
         }
     }
 
-    /// A snapshot from the host (`step`).
+    /// A snapshot from the host (`step`). The host sends one after a
+    /// restart or a replay it could not make, so the service may have
+    /// missed the held run's `turn_end`: the snapshot says whether that run
+    /// is still the turn open (#495).
     fn on_snapshot(phase: TurnPhase, seq: u64, info: Value) -> (TurnPhase, Vec<TurnEffect>) {
-        let turn_id = info["turn_id"].as_str();
-        // An idle session settles the held run its snapshot names.
-        if info["turn_open"] == false && phase.run().is_some_and(|run| run.owns(turn_id)) {
-            return phase.ending_run(RunEnding::Settled {
-                last_text: info["last_text"].as_str().unwrap_or_default(),
+        let turn_id = info["turn_id"].as_str().map(str::to_owned);
+        let open = || {
+            TurnBoundary::opened(
+                turn_id.clone(),
+                info["cause"].as_str().unwrap_or("unknown").to_owned(),
+            )
+        };
+        // An idle session has no turn open (its snapshot names none): the
+        // held run settled, whatever its id, and the snapshot then goes to
+        // the caller's prompt.
+        if info["turn_open"] == false && phase.run().is_some() {
+            let last_text = info["last_text"].as_str().unwrap_or_default().to_owned();
+            let (next, mut effects) = phase.ending_run(RunEnding::Settled {
+                last_text: &last_text,
             });
+            effects.extend(next.forward(TurnFrame::Snapshot { seq, info }));
+            return (next, effects);
+        }
+        // Another turn is open: the held run settled, and the open turn is
+        // held in its place.
+        if info["turn_open"] == true && phase.run().is_some_and(|run| !run.owns(turn_id.as_deref()))
+        {
+            let start = open();
+            return phase.replacing(start);
         }
         // An open turn nobody holds or collects is a self-woken run.
         if info["turn_open"] == true && matches!(phase, TurnPhase::Idle) {
-            let start = TurnBoundary::opened(
-                turn_id.map(str::to_owned),
-                info["cause"].as_str().unwrap_or("unknown").to_owned(),
-            );
+            let start = open();
             let run = SelfWokenRun::new(&start);
             return (
                 TurnPhase::SelfWoken { run },

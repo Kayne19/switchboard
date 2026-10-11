@@ -527,7 +527,7 @@ async fn idle_background_split_part_continues_without_a_new_session() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn promoting_a_background_resident_cancels_its_detached_prompt_before_foreground_work() {
+async fn promoting_a_background_resident_ends_its_detached_prompt_before_foreground_work() {
     let mut board = board_on(
         vec![project("alpha", ""), project("beta", "")],
         &[],
@@ -556,7 +556,7 @@ async fn promoting_a_background_resident_cancels_its_detached_prompt_before_fore
                 *calls += 1;
                 if *calls == 1 {
                     entered_for_prompt.notify_one();
-                    return vec![Step::Hold];
+                    return vec![Step::HoldUntilAbort];
                 }
             }
             says("ready")
@@ -586,17 +586,21 @@ async fn promoting_a_background_resident_cancels_its_detached_prompt_before_fore
         )
         .await;
 
-    assert_eq!(reply.route, "beta");
-    let idle_notices = notices
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    let beta: Vec<String> = notices
         .lock()
         .unwrap()
         .iter()
-        .filter(|notice| *notice == "beta:idle")
-        .count();
+        .filter(|notice| notice.starts_with("beta:"))
+        .cloned()
+        .collect();
+    let idle_notices = beta.iter().filter(|notice| *notice == "beta:idle").count();
+    // The interrupted background work ends while beta is still resident,
+    // then the promotion's turn: nothing announces idle after it.
+    assert_eq!(idle_notices, idle_before + 2, "{beta:?}");
     assert_eq!(
-        idle_notices,
-        idle_before + 1,
-        "cancelled background work cannot announce idle later"
+        beta[beta.len() - 3..],
+        ["beta:idle", "beta:busy", "beta:idle"]
     );
     board.shutdown().await;
 }
@@ -1201,7 +1205,7 @@ async fn busy_background_split_part_is_refused_and_fresh_brings_the_live_agent_f
         Box::new(move |session, message| {
             let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
             if session == "s2" {
-                vec![Step::Hold]
+                vec![Step::HoldUntilAbort]
             } else {
                 says("handled")
             }

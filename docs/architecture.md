@@ -474,7 +474,7 @@ removes the real coupling; do not create interfaces for ceremony.
 | `prewarm.rs` | per-host setup and launch plans: catalogs, prepare | routing decisions, model policy |
 | `pi_client.rs` | the operator's and the utility's Pi process/RPC transport and its phase (`ProcessState`: idle, sending, prompting, abandoned, closed; moved only by `PiSession::transition` through the `step` table, with the release on entry to closed), process-tree cleanup, `LegSession` (the leg on the line, operator or project, as the controls see it) | project sessions, route authority or deployment registry |
 | `project_session.rs` | a project session over the host link: its commands, the caller turn it collects, the frame pump and what each turn step leaves to do (reports, admission, frames to the prompt), module-call answers, and its end of life (`Lifecycle`, written only by `ProjectInner::end`; `docs/host-link.md`, "A project session's end"): its release on the host and the subscription to its frames | the host link itself (`hosts.rs`), which leg is on the line, route authority |
-| `session_turn.rs` | a project session's turn (`TurnState`: idle, caller, self-woken, caller and self-woken, caller settled, and a refused self-woken start; written only by `TurnState::step`, which is pure and returns its effects; `docs/host-link.md`, "A project session's turn") | the host link, the session's end of life, admission policy (the application answers it) |
+| `session_turn.rs` | a project session's turn (`TurnState`: idle, caller, self-woken, caller and self-woken, caller settled; written only by `TurnState::step`, which is pure and returns its effects; `docs/host-link.md`, "A project session's turn") | the host link, the session's end of life, admission policy (the application answers it) |
 | `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
 | `display.rs` | the stage projection (`DisplayProjection`); the display gate (`DisplayGateState`: the stage of the leg on the line, the page's `ScreenReport` and its confirmations, whose methods are their only writers); the display-precedence rule for `view` and the snapshot | generation checks, HTTP/WebSocket handling |
 | `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |
@@ -578,8 +578,11 @@ no session to name. It names, in order:
 
 Each change to the legs calls it after it changes `agent`, `operator` or
 the route: `Startup::attach`, `commit` and `abandon`, `drop_agent`,
-`force_hangup`, the operator's start and recovery (`operator.rs`), and
-`shutdown`. A change that also moves the call line (`abandon`'s rollback,
+`force_hangup`, the operator's start and recovery (`operator.rs`),
+`shutdown`, and a transfer that ends the session of the project already
+on the line before it starts another (`transfer_ctx`, #457): from then
+until the new session attaches the guard names nothing, not the ended
+session. A change that also moves the call line (`abandon`'s rollback,
 `drop_agent`'s return to the operator) moves it inside the writer, under
 the guard's lock, so a rescue finds the guard and the line agreeing. The
 operator answering while a project is on the line leaves the guard on the
@@ -710,9 +713,21 @@ are written by `admit` and `retire` only.
 |---|---|---|---|---|
 | `Stopped` | `stop_project` | cancelled and joined | ended | `finished` |
 | `Dead` | work given to a project whose resident's handle has closed (`retire_dead_resident`) | cancelled and joined | left; it is dead | `finished` |
-| `Promoted` | a transfer to the project (`transfer_ctx`) | cancelled and joined | handed to the bring-up (`promote_background`), which readmits it if the promotion fails | nothing; the bring-up does |
+| `Promoted` | a transfer to the project (`transfer_ctx`), once its turn has settled (`take_resident_for_line`) | cancelled and joined (it has ended with its turn) | handed to the bring-up (`promote_background`), which readmits it if the promotion fails | nothing; the bring-up does |
 | `ClosedOnHost` | the host reports the session closed (`session_closed_callback`), and a prompt the host refused | left to end: the report can come from inside it | left; it is dead | `finished` |
 | `Shutdown` | `Switchboard::shutdown` | cancelled and joined | ended | nothing |
+
+A promotion hands the line a session with no turn running, so the
+caller's words are a prompt of their own, not a follow-up the host merges
+into the background work (#239). Before the resident leaves,
+`Switchboard::take_resident_for_line` sends the host `abort` for a turn
+still running and waits, while the resident is still resident, for its
+background prompt to end (it publishes the resident idle) and its session
+to settle. The wait is `ProjectSession::settle_wait`: the host's command
+wait (`SESSION_COMMAND_WAIT`, 30 s), never longer than the session's
+silent-turn deadline. A turn that has not settled by then leaves the
+resident as it was, busy in the background, and the caller is told so
+(`still_busy`): the promotion does not happen.
 
 `ClosedOnHost` retires only the exact session it names (persistent id and
 live-handle instance), so a report about an older handle cannot evict its

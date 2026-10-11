@@ -10,7 +10,9 @@ use crate::pi_client::{
     panic_message, spoken_error, tool_error_text, Activity, ActivityCallback, PiSessionError, Turn,
     SPEAK_TOOL, STREAM_LIMIT,
 };
-use crate::session_turn::{Collector, TurnBoundary, TurnEffect, TurnEvent, TurnFrame, TurnState};
+use crate::session_turn::{
+    Collector, RunEnd, TurnBoundary, TurnEffect, TurnEvent, TurnFrame, TurnState,
+};
 use futures_util::FutureExt;
 use serde_json::{json, Value};
 use std::future::Future;
@@ -18,7 +20,7 @@ use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, PoisonError};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tokio::time::{timeout, Duration};
 
 /// Distinguishes live handles that reopen the same persistent daemon session.
@@ -49,6 +51,11 @@ pub struct ProjectTurn {
     pub cause: String,
     pub ended: bool,
     pub text: String,
+    /// For a self-woken start: the end of the held run it replaces. The
+    /// application takes both under one admission, the end first, so the
+    /// operation passes from the ended run to the new one and no caller
+    /// turn waiting behind them enters in between.
+    pub replaces: Option<Box<ProjectTurn>>,
 }
 /// Answers whether the application admitted a self-woken turn's start as an
 /// operation of its own; false for every other report.
@@ -225,6 +232,9 @@ struct ProjectInner {
     /// Where the session's turn is; written only by `TurnState::step`,
     /// through `step_turn`.
     turn: StdMutex<TurnState>,
+    /// Woken on every step of the turn, for whoever waits for the session
+    /// to settle (`settled`).
+    turn_moved: Notify,
     /// Where the session is in its end of life; written only by `end`.
     lifecycle: StdMutex<Lifecycle>,
     brief: String,
@@ -243,10 +253,13 @@ impl ProjectInner {
     /// lock, and returns what is left to do. A prompt's start and end leave
     /// nothing.
     fn step_turn(&self, event: TurnEvent) -> Vec<TurnEffect> {
-        self.turn
+        let effects = self
+            .turn
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .step(event)
+            .step(event);
+        self.turn_moved.notify_waiters();
+        effects
     }
 
     /// Moves the session's turn on a frame from its host, then does what
@@ -274,9 +287,16 @@ impl ProjectInner {
                         effects.push_front(effect);
                     }
                 }
-                TurnEffect::RunEnded { report, final_text } => {
+                TurnEffect::RunEnded(RunEnd { report, final_text }) => {
                     self.publish_final(report.turn_id.clone(), &final_text);
                     self.report_turn(&report).await;
+                }
+                TurnEffect::RunReplaced {
+                    ended: RunEnd { report, final_text },
+                    started,
+                } => {
+                    self.publish_final(report.turn_id.clone(), &final_text);
+                    self.report_turn_replacing(&started, &report).await;
                 }
             }
         }
@@ -298,21 +318,40 @@ impl ProjectInner {
             .self_woken_cause()
     }
 
-    /// Reports a turn boundary to the application; true when it admitted a
-    /// self-woken start as an operation of its own.
-    async fn report_turn(&self, boundary: &TurnBoundary) -> bool {
-        let Some(callback) = &self.on_turn else {
-            return false;
-        };
-        let callback = Arc::clone(callback);
-        let event = ProjectTurn {
+    /// The application's view of `boundary` on this session.
+    fn project_turn(&self, boundary: &TurnBoundary) -> ProjectTurn {
+        ProjectTurn {
             instance_id: self.instance_id,
             token: self.token(),
             turn_id: boundary.turn_id.clone(),
             cause: boundary.cause.clone(),
             ended: boundary.ended,
             text: boundary.text.clone(),
+            replaces: None,
+        }
+    }
+
+    /// Reports a turn boundary to the application; true when it admitted a
+    /// self-woken start as an operation of its own.
+    async fn report_turn(&self, boundary: &TurnBoundary) -> bool {
+        self.report(self.project_turn(boundary)).await
+    }
+
+    /// Reports the start of a run that replaces a held one, with that run's
+    /// end, for the application to take together.
+    async fn report_turn_replacing(&self, started: &TurnBoundary, ended: &TurnBoundary) {
+        let turn = ProjectTurn {
+            replaces: Some(Box::new(self.project_turn(ended))),
+            ..self.project_turn(started)
         };
+        self.report(turn).await;
+    }
+
+    async fn report(&self, event: ProjectTurn) -> bool {
+        let Some(callback) = &self.on_turn else {
+            return false;
+        };
+        let callback = Arc::clone(callback);
         match AssertUnwindSafe(callback(event)).catch_unwind().await {
             Ok(admitted) => admitted,
             Err(panic) => {
@@ -700,6 +739,7 @@ impl ProjectSession {
             debug: launch.debug,
             turn_lock: Mutex::new(()),
             turn: StdMutex::new(TurnState::new()),
+            turn_moved: Notify::new(),
             lifecycle: StdMutex::new(Lifecycle::Open {
                 _subscription: subscription,
             }),
@@ -857,6 +897,28 @@ impl ProjectSession {
                 });
             }
             Err(error) => tracing::info!(%label, %error, "could not abort the project turn"),
+        }
+    }
+
+    /// How long the host has to settle a turn the service interrupted: as
+    /// long as it has to answer any command (`SESSION_COMMAND_WAIT`), and
+    /// never longer than the session's silent-turn deadline.
+    pub fn settle_wait(&self) -> Duration {
+        SESSION_COMMAND_WAIT.min(self.inner.turn_timeout)
+    }
+
+    /// Waits until the session's turn has settled (it is not busy), or the
+    /// session has ended. The caller bounds the wait.
+    pub async fn settled(&self) {
+        loop {
+            // Listen before the check, so no step between them is lost.
+            let moved = self.inner.turn_moved.notified();
+            tokio::pin!(moved);
+            moved.as_mut().enable();
+            if !self.busy() || !self.alive() {
+                return;
+            }
+            moved.await;
         }
     }
 

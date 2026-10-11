@@ -35,6 +35,7 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         debug: None,
         turn_lock: Mutex::new(()),
         turn: StdMutex::new(TurnState::new()),
+        turn_moved: tokio::sync::Notify::new(),
         lifecycle: StdMutex::new(Lifecycle::Open {
             _subscription: subscription,
         }),
@@ -932,8 +933,8 @@ async fn a_session_whose_host_link_closed_reads_no_more_frames() {
 }
 
 /// Where a project session's turn is when a row of the turn table's event
-/// arrives. The self-woken run the session holds is `auto-1`; a self-woken
-/// start it refused because it held one is `auto-2`; the caller's turn,
+/// arrives. The self-woken run the session holds is `auto-1`; a second
+/// self-woken run, which replaced it, is `auto-2`; the caller's turn,
 /// collected by a prompt, is `t-in`.
 #[derive(Clone, Copy, Debug)]
 enum TurnAt {
@@ -948,24 +949,19 @@ enum TurnAt {
     CallerAndSelfWoken,
     /// That run ended before the caller's prompt let go of its collector.
     CallerSettled,
-    /// A second self-woken start came while a run was held, and was refused.
-    Ignoring,
-    /// The held run ended; the refused one is still remembered.
-    IdleIgnoring,
-    /// A caller's prompt went out while the refused run is remembered.
-    CallerIgnoring,
+    /// A second self-woken start came while `auto-1` was held: `auto-2` is
+    /// held in its place, with text collected.
+    Replaced,
 }
 
 impl TurnAt {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 6] = [
         Self::Idle,
         Self::Caller,
         Self::SelfWoken,
         Self::CallerAndSelfWoken,
         Self::CallerSettled,
-        Self::Ignoring,
-        Self::IdleIgnoring,
-        Self::CallerIgnoring,
+        Self::Replaced,
     ];
 
     /// Whether a caller's prompt is being collected: only then can it be
@@ -974,7 +970,7 @@ impl TurnAt {
     fn collecting(self) -> bool {
         matches!(
             self,
-            Self::Caller | Self::CallerAndSelfWoken | Self::CallerSettled | Self::CallerIgnoring
+            Self::Caller | Self::CallerAndSelfWoken | Self::CallerSettled
         )
     }
 }
@@ -991,17 +987,18 @@ enum TurnHappens {
     StartsInput,
     /// Text of the held run, `auto-1`.
     RunText,
-    /// Text of the refused run, `auto-2`.
-    IgnoredText,
+    /// Text of the second run, `auto-2`.
+    SecondText,
     /// Text of the caller's turn, `t-in`.
     CallerText,
     /// `turn_end` of `auto-1`.
     RunEnds,
     /// `turn_end` of `auto-2`.
-    IgnoredEnds,
+    SecondEnds,
     /// `turn_end` of `t-in`.
     CallerEnds,
-    /// A snapshot of an idle session whose last turn was `auto-1`.
+    /// A snapshot of an idle session: as the host sends it, it names no
+    /// turn.
     SnapshotIdle,
     /// A snapshot of a session with a self-woken turn `snap-1` open.
     SnapshotOpen,
@@ -1019,10 +1016,10 @@ impl TurnHappens {
         Self::StartsSelfWokenAdmitted,
         Self::StartsInput,
         Self::RunText,
-        Self::IgnoredText,
+        Self::SecondText,
         Self::CallerText,
         Self::RunEnds,
-        Self::IgnoredEnds,
+        Self::SecondEnds,
         Self::CallerEnds,
         Self::SnapshotIdle,
         Self::SnapshotOpen,
@@ -1068,17 +1065,26 @@ impl TurnRig {
             let admit = Arc::clone(&admit);
             let reports = Arc::clone(&reports);
             Arc::new(move |turn: ProjectTurn| {
-                let text = if turn.text.is_empty() {
-                    String::new()
-                } else {
-                    format!(" «{}»", turn.text)
+                let line = |turn: &ProjectTurn| {
+                    let text = if turn.text.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" «{}»", turn.text)
+                    };
+                    format!(
+                        "{} {} {}{text}",
+                        if turn.ended { "end" } else { "start" },
+                        turn.cause,
+                        turn.turn_id.as_deref().unwrap_or("-"),
+                    )
                 };
-                reports.lock().unwrap().push(format!(
-                    "{} {} {}{text}",
-                    if turn.ended { "end" } else { "start" },
-                    turn.cause,
-                    turn.turn_id.as_deref().unwrap_or("-"),
-                ));
+                let mut reports = reports.lock().unwrap();
+                // A run that replaces another reports that run's end with
+                // its start, and the application takes them together.
+                if let Some(replaced) = &turn.replaces {
+                    reports.push(line(replaced));
+                }
+                reports.push(line(&turn));
                 let admitted = admit.load(Ordering::Acquire);
                 Box::pin(async move { admitted }) as Pin<Box<dyn Future<Output = bool> + Send>>
             })
@@ -1220,17 +1226,10 @@ impl TurnRig {
                 Box::pin(self.reach(TurnAt::CallerAndSelfWoken)).await;
                 self.event(run_ends);
             }
-            TurnAt::Ignoring => {
+            TurnAt::Replaced => {
                 Box::pin(self.reach(TurnAt::SelfWoken)).await;
                 self.event(start("auto-2", "autonomous"));
-            }
-            TurnAt::IdleIgnoring => {
-                Box::pin(self.reach(TurnAt::Ignoring)).await;
-                self.event(run_ends);
-            }
-            TurnAt::CallerIgnoring => {
-                Box::pin(self.reach(TurnAt::IdleIgnoring)).await;
-                self.prompt("hello").await;
+                self.event(json!({"kind": "text", "text": "second words", "turn_id": "auto-2"}));
             }
         }
         self.settle().await;
@@ -1255,12 +1254,14 @@ impl TurnRig {
                 self.event(json!({"kind": "turn_start", "cause": "input", "turn_id": "t-2"}));
             }
             TurnHappens::RunText => self.event(text("more run words", "auto-1")),
-            TurnHappens::IgnoredText => self.event(text("ignored words", "auto-2")),
+            TurnHappens::SecondText => self.event(text("more second words", "auto-2")),
             TurnHappens::CallerText => self.event(text("caller words", "t-in")),
             TurnHappens::RunEnds => self.event(end("auto-1")),
-            TurnHappens::IgnoredEnds => self.event(end("auto-2")),
+            TurnHappens::SecondEnds => self.event(end("auto-2")),
             TurnHappens::CallerEnds => self.event(end("t-in")),
-            TurnHappens::SnapshotIdle => self.snapshot(json!({"session": "s1", "busy": false, "turn_open": false, "turn_id": "auto-1", "last_text": "last words"})),
+            // The host's snapshots: an idle one names no turn
+            // (`turn_id: null`), a busy one names the turn it has open.
+            TurnHappens::SnapshotIdle => self.snapshot(json!({"session": "s1", "busy": false, "turn_open": false, "turn_id": null, "last_text": "last words"})),
             TurnHappens::SnapshotOpen => self.snapshot(json!({"session": "s1", "busy": true, "turn_open": true, "cause": "autonomous", "turn_id": "snap-1"})),
             TurnHappens::SessionCloses => {
                 self.event(json!({"kind": "session_closed", "reason": "killed"}));
@@ -1350,131 +1351,102 @@ impl TurnRig {
 /// snapshot then settles it with), and the final texts published to the
 /// debug page (`<turn id>: <text>`). `-` is none; `#` starts a comment.
 const TURN_TABLE: &str = "
-phase              | event                   | reports                           | busy | cause      | caller                                | finals
+phase              | event                   | reports                                                       | busy | cause      | caller                                | finals
 
 # Idle: a self-woken start opens a run; every other turn frame has nobody to reach, but a `turn_end`
 # with an id is reported as the end of an input turn.
-Idle               | StartsSelfWoken         | start autonomous auto-3           | busy | autonomous | -                                     | -
-Idle               | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | -                                     | -
-Idle               | StartsInput             | start input t-2                   | -    | -          | -                                     | -
-Idle               | RunText                 | -                                 | -    | -          | -                                     | -
-Idle               | IgnoredText             | -                                 | -    | -          | -                                     | -
-Idle               | CallerText              | -                                 | -    | -          | -                                     | -
-Idle               | RunEnds                 | end input auto-1                  | -    | -          | -                                     | -
-Idle               | IgnoredEnds             | end input auto-2                  | -    | -          | -                                     | -
-Idle               | CallerEnds              | end input t-in                    | -    | -          | -                                     | -
-Idle               | SnapshotIdle            | -                                 | -    | -          | -                                     | -
-Idle               | SnapshotOpen            | start autonomous snap-1           | busy | autonomous | -                                     | -
-Idle               | SessionCloses           | -                                 | -    | gone       | -                                     | -
-Idle               | PromptStarts            | -                                 | busy | -          | running «»                            | -
+Idle               | StartsSelfWoken         | start autonomous auto-3                                       | busy | autonomous | -                                     | -
+Idle               | StartsSelfWokenAdmitted | start autonomous auto-3                                       | busy | autonomous | -                                     | -
+Idle               | StartsInput             | start input t-2                                               | -    | -          | -                                     | -
+Idle               | RunText                 | -                                                             | -    | -          | -                                     | -
+Idle               | SecondText              | -                                                             | -    | -          | -                                     | -
+Idle               | CallerText              | -                                                             | -    | -          | -                                     | -
+Idle               | RunEnds                 | end input auto-1                                              | -    | -          | -                                     | -
+Idle               | SecondEnds              | end input auto-2                                              | -    | -          | -                                     | -
+Idle               | CallerEnds              | end input t-in                                                | -    | -          | -                                     | -
+Idle               | SnapshotIdle            | -                                                             | -    | -          | -                                     | -
+Idle               | SnapshotOpen            | start autonomous snap-1                                       | busy | autonomous | -                                     | -
+Idle               | SessionCloses           | -                                                             | -    | gone       | -                                     | -
+Idle               | PromptStarts            | -                                                             | busy | -          | running «»                            | -
 
 # A caller's turn: its frames go to its collector, and any `turn_end` settles it.
-Caller             | StartsSelfWoken         | start autonomous auto-3           | busy | -          | running «»                            | -
-Caller             | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | running «»                            | -
-Caller             | StartsInput             | start input t-2                   | busy | -          | running «»                            | -
-Caller             | RunText                 | -                                 | busy | -          | running «more run words»              | -
-Caller             | IgnoredText             | -                                 | busy | -          | running «ignored words»               | -
-Caller             | CallerText              | -                                 | busy | -          | running «caller words»                | -
-Caller             | RunEnds                 | end input auto-1                  | -    | -          | returned «»                           | -
-Caller             | IgnoredEnds             | end input auto-2                  | -    | -          | returned «»                           | -
-Caller             | CallerEnds              | end input t-in                    | -    | -          | returned «»                           | -
-Caller             | SnapshotIdle            | -                                 | -    | -          | returned «last words»                 | -: last words
-Caller             | SnapshotOpen            | -                                 | busy | -          | running «»                            | -
-Caller             | SessionCloses           | -                                 | -    | gone       | failed «the project session ended» «» | -
-Caller             | PromptCancelled         | -                                 | -    | -          | -                                     | -
+Caller             | StartsSelfWoken         | start autonomous auto-3                                       | busy | -          | running «»                            | -
+Caller             | StartsSelfWokenAdmitted | start autonomous auto-3                                       | busy | autonomous | running «»                            | -
+Caller             | StartsInput             | start input t-2                                               | busy | -          | running «»                            | -
+Caller             | RunText                 | -                                                             | busy | -          | running «more run words»              | -
+Caller             | SecondText              | -                                                             | busy | -          | running «more second words»           | -
+Caller             | CallerText              | -                                                             | busy | -          | running «caller words»                | -
+Caller             | RunEnds                 | end input auto-1                                              | -    | -          | returned «»                           | -
+Caller             | SecondEnds              | end input auto-2                                              | -    | -          | returned «»                           | -
+Caller             | CallerEnds              | end input t-in                                                | -    | -          | returned «»                           | -
+Caller             | SnapshotIdle            | -                                                             | -    | -          | returned «last words»                 | -: last words
+Caller             | SnapshotOpen            | -                                                             | busy | -          | running «»                            | -
+Caller             | SessionCloses           | -                                                             | -    | gone       | failed «the project session ended» «» | -
+Caller             | PromptCancelled         | -                                                             | -    | -          | -                                     | -
 
-# A self-woken run: it keeps its own text, and swallows every frame that is not its end.
-SelfWoken          | StartsSelfWoken         | -                                 | busy | autonomous | -                                     | -
-SelfWoken          | StartsSelfWokenAdmitted | -                                 | busy | autonomous | -                                     | -
-SelfWoken          | StartsInput             | start input t-2                   | busy | autonomous | -                                     | -
-SelfWoken          | RunText                 | -                                 | busy | autonomous | -                                     | -
-SelfWoken          | IgnoredText             | -                                 | busy | autonomous | -                                     | -
-SelfWoken          | CallerText              | -                                 | busy | autonomous | -                                     | -
-SelfWoken          | RunEnds                 | end autonomous auto-1 «run words» | -    | -          | -                                     | auto-1: run words
-SelfWoken          | IgnoredEnds             | -                                 | busy | autonomous | -                                     | -
-SelfWoken          | CallerEnds              | -                                 | busy | autonomous | -                                     | -
-SelfWoken          | SnapshotIdle            | end autonomous auto-1 «run words» | -    | -          | -                                     | auto-1: run words
-SelfWoken          | SnapshotOpen            | -                                 | busy | autonomous | -                                     | -
-SelfWoken          | SessionCloses           | end autonomous auto-1             | -    | gone       | -                                     | auto-1: run words
-SelfWoken          | PromptStarts            | -                                 | busy | autonomous | running «»                            | -
+# A self-woken run: it keeps its own text, and swallows every frame that is not its end. A second
+# self-woken start, or a snapshot with another turn open, shows that it settled: it ends, and the new
+# run is held in its place. An idle snapshot ends it too.
+SelfWoken          | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | -                                     | auto-1: run words
+SelfWoken          | StartsSelfWokenAdmitted | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | -                                     | auto-1: run words
+SelfWoken          | StartsInput             | start input t-2                                               | busy | autonomous | -                                     | -
+SelfWoken          | RunText                 | -                                                             | busy | autonomous | -                                     | -
+SelfWoken          | SecondText              | -                                                             | busy | autonomous | -                                     | -
+SelfWoken          | CallerText              | -                                                             | busy | autonomous | -                                     | -
+SelfWoken          | RunEnds                 | end autonomous auto-1 «run words»                             | -    | -          | -                                     | auto-1: run words
+SelfWoken          | SecondEnds              | -                                                             | busy | autonomous | -                                     | -
+SelfWoken          | CallerEnds              | -                                                             | busy | autonomous | -                                     | -
+SelfWoken          | SnapshotIdle            | end autonomous auto-1 «run words»                             | -    | -          | -                                     | auto-1: run words
+SelfWoken          | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | -                                     | auto-1: run words
+SelfWoken          | SessionCloses           | end autonomous auto-1                                         | -    | gone       | -                                     | auto-1: run words
+SelfWoken          | PromptStarts            | -                                                             | busy | autonomous | running «»                            | -
 
-# Both: the run swallows the caller's frames too.
-CallerAndSelfWoken | StartsSelfWoken         | -                                 | busy | autonomous | running «»                            | -
-CallerAndSelfWoken | StartsSelfWokenAdmitted | -                                 | busy | autonomous | running «»                            | -
-CallerAndSelfWoken | StartsInput             | start input t-2                   | busy | autonomous | running «»                            | -
-CallerAndSelfWoken | RunText                 | -                                 | busy | autonomous | running «»                            | -
-CallerAndSelfWoken | IgnoredText             | -                                 | busy | autonomous | running «»                            | -
-CallerAndSelfWoken | CallerText              | -                                 | busy | autonomous | running «»                            | -
-CallerAndSelfWoken | RunEnds                 | end autonomous auto-1 «run words» | -    | -          | running «»                            | auto-1: run words
-CallerAndSelfWoken | IgnoredEnds             | -                                 | busy | autonomous | running «»                            | -
-CallerAndSelfWoken | CallerEnds              | -                                 | busy | autonomous | running «»                            | -
-CallerAndSelfWoken | SnapshotIdle            | end autonomous auto-1 «run words» | -    | -          | running «»                            | auto-1: run words
-CallerAndSelfWoken | SnapshotOpen            | -                                 | busy | autonomous | running «»                            | -
-CallerAndSelfWoken | SessionCloses           | end autonomous auto-1             | -    | gone       | failed «the project session ended» «» | auto-1: run words
-CallerAndSelfWoken | PromptCancelled         | -                                 | busy | autonomous | -                                     | -
+# Both: the run swallows the caller's frames too, and a second start replaces it the same way.
+CallerAndSelfWoken | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
+CallerAndSelfWoken | StartsSelfWokenAdmitted | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
+CallerAndSelfWoken | StartsInput             | start input t-2                                               | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | RunText                 | -                                                             | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | SecondText              | -                                                             | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | CallerText              | -                                                             | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | RunEnds                 | end autonomous auto-1 «run words»                             | -    | -          | running «»                            | auto-1: run words
+CallerAndSelfWoken | SecondEnds              | -                                                             | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | CallerEnds              | -                                                             | busy | autonomous | running «»                            | -
+CallerAndSelfWoken | SnapshotIdle            | end autonomous auto-1 «run words»                             | -    | -          | returned «last words»                 | auto-1: run words; -: last words
+CallerAndSelfWoken | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | running «»                            | auto-1: run words
+CallerAndSelfWoken | SessionCloses           | end autonomous auto-1                                         | -    | gone       | failed «the project session ended» «» | auto-1: run words
+CallerAndSelfWoken | PromptCancelled         | -                                                             | busy | autonomous | -                                     | -
 
 # The run behind the caller's turn ended before its collector let go: not busy, frames reach the
 # collector.
-CallerSettled      | StartsSelfWoken         | start autonomous auto-3           | -    | -          | running «»                            | -
-CallerSettled      | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | running «»                            | -
-CallerSettled      | StartsInput             | start input t-2                   | -    | -          | running «»                            | -
-CallerSettled      | RunText                 | -                                 | -    | -          | running «more run words»              | -
-CallerSettled      | IgnoredText             | -                                 | -    | -          | running «ignored words»               | -
-CallerSettled      | CallerText              | -                                 | -    | -          | running «caller words»                | -
-CallerSettled      | RunEnds                 | end input auto-1                  | -    | -          | returned «»                           | -
-CallerSettled      | IgnoredEnds             | end input auto-2                  | -    | -          | returned «»                           | -
-CallerSettled      | CallerEnds              | end input t-in                    | -    | -          | returned «»                           | -
-CallerSettled      | SnapshotIdle            | -                                 | -    | -          | returned «last words»                 | -: last words
-CallerSettled      | SnapshotOpen            | -                                 | -    | -          | running «»                            | -
-CallerSettled      | SessionCloses           | -                                 | -    | gone       | failed «the project session ended» «» | -
-CallerSettled      | PromptCancelled         | -                                 | -    | -          | -                                     | -
+CallerSettled      | StartsSelfWoken         | start autonomous auto-3                                       | -    | -          | running «»                            | -
+CallerSettled      | StartsSelfWokenAdmitted | start autonomous auto-3                                       | busy | autonomous | running «»                            | -
+CallerSettled      | StartsInput             | start input t-2                                               | -    | -          | running «»                            | -
+CallerSettled      | RunText                 | -                                                             | -    | -          | running «more run words»              | -
+CallerSettled      | SecondText              | -                                                             | -    | -          | running «more second words»           | -
+CallerSettled      | CallerText              | -                                                             | -    | -          | running «caller words»                | -
+CallerSettled      | RunEnds                 | end input auto-1                                              | -    | -          | returned «»                           | -
+CallerSettled      | SecondEnds              | end input auto-2                                              | -    | -          | returned «»                           | -
+CallerSettled      | CallerEnds              | end input t-in                                                | -    | -          | returned «»                           | -
+CallerSettled      | SnapshotIdle            | -                                                             | -    | -          | returned «last words»                 | -: last words
+CallerSettled      | SnapshotOpen            | -                                                             | -    | -          | running «»                            | -
+CallerSettled      | SessionCloses           | -                                                             | -    | gone       | failed «the project session ended» «» | -
+CallerSettled      | PromptCancelled         | -                                                             | -    | -          | -                                     | -
 
-# A refused second start is remembered while the held run goes on.
-Ignoring           | StartsSelfWoken         | -                                 | busy | autonomous | -                                     | -
-Ignoring           | StartsSelfWokenAdmitted | -                                 | busy | autonomous | -                                     | -
-Ignoring           | StartsInput             | start input t-2                   | busy | autonomous | -                                     | -
-Ignoring           | RunText                 | -                                 | busy | autonomous | -                                     | -
-Ignoring           | IgnoredText             | -                                 | busy | autonomous | -                                     | -
-Ignoring           | CallerText              | -                                 | busy | autonomous | -                                     | -
-Ignoring           | RunEnds                 | end autonomous auto-1 «run words» | -    | -          | -                                     | auto-1: run words
-Ignoring           | IgnoredEnds             | -                                 | busy | autonomous | -                                     | -
-Ignoring           | CallerEnds              | -                                 | busy | autonomous | -                                     | -
-Ignoring           | SnapshotIdle            | end autonomous auto-1 «run words» | -    | -          | -                                     | auto-1: run words
-Ignoring           | SnapshotOpen            | -                                 | busy | autonomous | -                                     | -
-Ignoring           | SessionCloses           | end autonomous auto-1             | -    | gone       | -                                     | auto-1: run words
-Ignoring           | PromptStarts            | -                                 | busy | autonomous | running «»                            | -
-
-# The refused run is remembered after the held one ended: its frames are dropped, and its `turn_end`
-# only forgets it.
-IdleIgnoring       | StartsSelfWoken         | start autonomous auto-3           | busy | autonomous | -                                     | -
-IdleIgnoring       | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | -                                     | -
-IdleIgnoring       | StartsInput             | start input t-2                   | -    | -          | -                                     | -
-IdleIgnoring       | RunText                 | -                                 | -    | -          | -                                     | -
-IdleIgnoring       | IgnoredText             | -                                 | -    | -          | -                                     | -
-IdleIgnoring       | CallerText              | -                                 | -    | -          | -                                     | -
-IdleIgnoring       | RunEnds                 | end input auto-1                  | -    | -          | -                                     | -
-IdleIgnoring       | IgnoredEnds             | -                                 | -    | -          | -                                     | -
-IdleIgnoring       | CallerEnds              | end input t-in                    | -    | -          | -                                     | -
-IdleIgnoring       | SnapshotIdle            | -                                 | -    | -          | -                                     | -
-IdleIgnoring       | SnapshotOpen            | start autonomous snap-1           | busy | autonomous | -                                     | -
-IdleIgnoring       | SessionCloses           | -                                 | -    | gone       | -                                     | -
-IdleIgnoring       | PromptStarts            | -                                 | busy | -          | running «»                            | -
-
-# A caller's prompt while the refused run is remembered: the refused run's frames do not reach the
-# collector.
-CallerIgnoring     | StartsSelfWoken         | start autonomous auto-3           | busy | -          | running «»                            | -
-CallerIgnoring     | StartsSelfWokenAdmitted | start autonomous auto-3           | busy | autonomous | running «»                            | -
-CallerIgnoring     | StartsInput             | start input t-2                   | busy | -          | running «»                            | -
-CallerIgnoring     | RunText                 | -                                 | busy | -          | running «more run words»              | -
-CallerIgnoring     | IgnoredText             | -                                 | busy | -          | running «»                            | -
-CallerIgnoring     | CallerText              | -                                 | busy | -          | running «caller words»                | -
-CallerIgnoring     | RunEnds                 | end input auto-1                  | -    | -          | returned «»                           | -
-CallerIgnoring     | IgnoredEnds             | -                                 | busy | -          | running «»                            | -
-CallerIgnoring     | CallerEnds              | end input t-in                    | -    | -          | returned «»                           | -
-CallerIgnoring     | SnapshotIdle            | -                                 | -    | -          | returned «last words»                 | -: last words
-CallerIgnoring     | SnapshotOpen            | -                                 | busy | -          | running «»                            | -
-CallerIgnoring     | SessionCloses           | -                                 | -    | gone       | failed «the project session ended» «» | -
-CallerIgnoring     | PromptCancelled         | -                                 | -    | -          | -                                     | -
+# The second run replaced the first: it owns the operation and its own words, and the first run's late
+# frames reach nobody.
+Replaced           | StartsSelfWoken         | end autonomous auto-2 «second words»; start autonomous auto-3 | busy | autonomous | -                                     | auto-2: second words
+Replaced           | StartsSelfWokenAdmitted | end autonomous auto-2 «second words»; start autonomous auto-3 | busy | autonomous | -                                     | auto-2: second words
+Replaced           | StartsInput             | start input t-2                                               | busy | autonomous | -                                     | -
+Replaced           | RunText                 | -                                                             | busy | autonomous | -                                     | -
+Replaced           | SecondText              | -                                                             | busy | autonomous | -                                     | -
+Replaced           | CallerText              | -                                                             | busy | autonomous | -                                     | -
+Replaced           | RunEnds                 | -                                                             | busy | autonomous | -                                     | -
+Replaced           | SecondEnds              | end autonomous auto-2 «second words»                          | -    | -          | -                                     | auto-2: second words
+Replaced           | CallerEnds              | -                                                             | busy | autonomous | -                                     | -
+Replaced           | SnapshotIdle            | end autonomous auto-2 «second words»                          | -    | -          | -                                     | auto-2: second words
+Replaced           | SnapshotOpen            | end autonomous auto-2 «second words»; start autonomous snap-1 | busy | autonomous | -                                     | auto-2: second words
+Replaced           | SessionCloses           | end autonomous auto-2                                         | -    | gone       | -                                     | auto-2: second words
+Replaced           | PromptStarts            | -                                                             | busy | autonomous | running «»                            | -
 ";
 
 #[tokio::test]

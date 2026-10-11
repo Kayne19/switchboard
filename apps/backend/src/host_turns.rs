@@ -133,11 +133,22 @@ impl HostTurn {
 /// written reply is transcript-only: `Reply` updates the caller's view
 /// without entering the speech worker. True when a self-woken start was
 /// admitted.
-pub(crate) async fn handle_project_turn(state: &AppState, turn: ProjectTurn) -> bool {
+pub(crate) async fn handle_project_turn(state: &AppState, mut turn: ProjectTurn) -> bool {
     // Admission, settlement, and the transcript reply share the same turn
     // gate as caller prompt admission. This prevents a queued caller from
     // entering between autonomous finish and its written reply.
     let _transition = state.0.operation_transition.lock().await;
+    // A start that replaces a held run: that run ends first, under the same
+    // gate, so a caller turn waiting behind it cannot take the operation
+    // before the run that replaced it does.
+    if let Some(replaced) = turn.replaces.take() {
+        act_on_turn(state, *replaced).await;
+    }
+    act_on_turn(state, turn).await
+}
+
+/// What a reported boundary does, under the turn gate.
+async fn act_on_turn(state: &AppState, turn: ProjectTurn) -> bool {
     match HostTurn::of(&turn) {
         HostTurn::Opened(start) => open_host_turn(state, &turn, start).await,
         HostTurn::CallerSettled { turn_id } => {
@@ -321,6 +332,7 @@ pub(crate) fn autonomous_turn(
         cause: "autonomous".into(),
         ended: false,
         text: String::new(),
+        replaces: None,
     }
 }
 

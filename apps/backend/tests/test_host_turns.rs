@@ -4,7 +4,9 @@ use crate::delivery::Event;
 use crate::module_calls::{diagram_show, module_call};
 use crate::project_session::AgentCall;
 use crate::turns::foreground_alpha_turn;
+use crate::within;
 use serde_json::json;
+use std::time::Duration;
 
 #[cfg(unix)]
 #[tokio::test]
@@ -84,6 +86,7 @@ async fn delayed_old_autonomous_call_is_refused_after_a_new_caller_operation() {
             cause: "autonomous".into(),
             ended: true,
             text: String::new(),
+            replaces: None,
         },
     )
     .await;
@@ -211,6 +214,102 @@ async fn an_autonomous_project_turn_is_traced_with_its_host_turn_id() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A second self-woken start replaces the held run (#439, decision 18):
+/// the session reports the new start with the held run's end, and the
+/// application takes both under one gate. The held run's words reach the
+/// transcript, and the operation passes to the new run before a caller
+/// turn waiting behind the old one can take it, so the new run can speak.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_run_that_replaces_a_held_one_takes_its_operation_before_a_waiting_caller_turn() {
+    let root = scratch_root("autonomous-replaced");
+    let state = state_with_agents(&root);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    assert!(
+        handle_project_turn(
+            &state,
+            autonomous_turn(token.clone(), instance_id, Some("auto-1")),
+        )
+        .await
+    );
+    // A caller turn waits behind the held run, as the turn worker does.
+    let waiting = tokio::spawn({
+        let state = state.clone();
+        async move {
+            loop {
+                let changed = state.0.coordinator.operation_changed();
+                let notified = changed.notified();
+                {
+                    let _transition = state.0.operation_transition.lock().await;
+                    if let Ok(operation) = state
+                        .0
+                        .coordinator
+                        .begin_prompt(&state.0.coordinator.current_identity())
+                    {
+                        return operation;
+                    }
+                }
+                // unbounded: the test awaits this task within() once the run ends.
+                notified.await;
+            }
+        }
+    });
+    tokio::task::yield_now().await;
+    let replacing = ProjectTurn {
+        replaces: Some(Box::new(ProjectTurn {
+            ended: true,
+            text: "first run words".into(),
+            ..autonomous_turn(token.clone(), instance_id, Some("auto-1"))
+        })),
+        ..autonomous_turn(token.clone(), instance_id, Some("auto-2"))
+    };
+    assert!(
+        handle_project_turn(&state, replacing).await,
+        "the new run is admitted"
+    );
+    let speak = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: token.clone(),
+            turn_id: Some("auto-2".into()),
+            cause: Some("autonomous".into()),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(speak["status"], "accepted", "{speak}");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), async {
+            while !waiting.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_err(),
+        "the caller turn still waits behind the new run"
+    );
+    let entries = state.0.transcript_log.lock().await.entries();
+    assert!(
+        entries.iter().any(|entry| entry.text == "first run words"),
+        "the replaced run's words reach the transcript"
+    );
+    handle_project_turn(
+        &state,
+        ProjectTurn {
+            ended: true,
+            ..autonomous_turn(token, instance_id, Some("auto-2"))
+        },
+    )
+    .await;
+    let operation = within("the caller turn to be admitted", waiting)
+        .await
+        .expect("the waiting task");
+    assert!(state.0.coordinator.finish_operation(&operation));
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
 // A host-reported turn, report by phase (#393, the application's side).
 //
 // The pump reports a project session's turn boundaries to the application
@@ -299,6 +398,7 @@ fn host_report(
         cause: cause.to_owned(),
         ended,
         text: text.to_owned(),
+        replaces: None,
     }
 }
 
