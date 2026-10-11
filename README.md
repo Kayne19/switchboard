@@ -158,7 +158,12 @@ makes the change.
 The conversation survives the change. The change is made on the live
 session: `set_model` and `set_thinking` over the host link, and the session
 keeps its history. There is no fresh-context change; a project agent's own
-`set_model` call is refused.
+`set_model` call is refused. A change the host refuses before anything
+changed (`set_model`, or `set_thinking` on the same model) leaves the leg as
+it was: the caller stays on it, its session rejoins the call under the
+line's token, and the reply says the change was refused. A refusal after the
+model changed, or a command that fails on the link, ends the leg, and the
+caller is back on the operator.
 
 What the caller says goes through speech-to-text and then through a model's
 guess, so `models.rs` refuses rather than guesses. A bare name is resolved
