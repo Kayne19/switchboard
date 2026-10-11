@@ -212,6 +212,14 @@ or says the idle line when nothing does. Streaming is `off`, `on` or
 (`progressWatch.ts`), the level `PlaybackLevel` (`playbackLevel.ts`), and
 every status line playback says is `PlaybackStatus` (`playbackStatus.ts`).
 
+Every utterance keeps its bytes for the whole replay until it has played,
+and `MAX_AUDIO_REPLAY` (64 MiB) bounds what is held at once: the utterances
+arriving, streaming or waiting, the replays queued, and the replay on the
+element. It is read from those (`heldBytes`), not kept as a count, so a clip
+that leaves takes its bytes with it. A count that only a new leg reset
+reached the cap after about 70 minutes of speech, and every reply after it
+was silent (#431). `MAX_AUDIO_UTTERANCE` (32 MiB) bounds one utterance.
+
 A clip that produced no sound is noticed whatever `play()` does with its
 promise. `NO_PROGRESS_MS` is armed when the attempt is made, not when
 `play()` resolves: WebKit takes a `MediaSource` of MP3, buffers every append,

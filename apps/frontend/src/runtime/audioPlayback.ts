@@ -21,6 +21,11 @@ import { ProgressWatch } from "./progressWatch";
 import type { EnvelopeMeter, StreamingEnvelope } from "./speechEnvelope";
 
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
+/**
+ * The most audio held at once for whole replays: every utterance arriving,
+ * streaming or waiting, and every replay queued or on the element. What has
+ * played is no longer held, so a long leg never reaches it (#431).
+ */
 export const MAX_AUDIO_REPLAY = 64 * 1024 * 1024;
 /**
  * The pause between two spoken messages. It is off (0): messages play back to
@@ -189,8 +194,6 @@ export class AudioPlayback {
   private streamQueue: Utterance[] = [];
   /** The utterance whose bytes are arriving now. */
   private arriving: Utterance | null = null;
-  /** The bytes this leg has kept for whole replays. */
-  private replayBytes = 0;
   /** The leg whose audio plays; audio stamped with another is ignored. */
   private generation = 0;
   private readonly level: PlaybackLevel;
@@ -344,13 +347,12 @@ export class AudioPlayback {
     if (!utterance || utterance.generation !== this.generation) return;
     if (
       utterance.bytes + data.byteLength > MAX_AUDIO_UTTERANCE ||
-      this.replayBytes + data.byteLength > MAX_AUDIO_REPLAY
+      this.heldBytes() + data.byteLength > MAX_AUDIO_REPLAY
     ) {
       this.streamFailed(utterance, new Error("audio replay limit"));
       return;
     }
     utterance.bytes += data.byteLength;
-    this.replayBytes += data.byteLength;
     utterance.parts.push(new Blob([data], { type: utterance.mime }));
     utterance.envelope?.append(data);
     utterance.stream?.receive(data);
@@ -485,7 +487,6 @@ export class AudioPlayback {
     this.audioQueue.length = 0;
     this.streamQueue = [];
     this.arriving = null;
-    this.replayBytes = 0;
     // One unload, whatever held the element: a stream that played out left
     // its source there.
     this.enter({ kind: "idle" }, "keep source");
@@ -862,6 +863,24 @@ export class AudioPlayback {
     if (first) this.audioQueue.unshift(replay);
     else this.audioQueue.push(replay);
     this.notifyPlaybackChange();
+  }
+
+  /**
+   * The bytes held for whole replays now (`MAX_AUDIO_REPLAY`). It is read
+   * from what the machine holds, not kept as a count: an utterance or a
+   * replay that leaves the machine takes its bytes with it.
+   */
+  private heldBytes(): number {
+    const utterances = new Set<Utterance>(this.streamQueue);
+    if (this.arriving) utterances.add(this.arriving);
+    const holder = this.holder;
+    if (holder.kind === "stream") utterances.add(holder.clip.utterance);
+    if (holder.kind === "cutOff") utterances.add(holder.utterance);
+    let bytes = 0;
+    for (const utterance of utterances) bytes += utterance.bytes;
+    for (const replay of this.audioQueue) bytes += replay.size;
+    if (holder.kind === "replay") bytes += holder.clip.blob.size;
+    return bytes;
   }
 
   // --- Watch, level, status ---------------------------------------------
