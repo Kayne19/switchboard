@@ -59,8 +59,12 @@ type Trigger =
   | "hangup"
   | "socket drops"
   | "retry"
+  /** A rescue: a new generation no adoption named. */
   | "epoch, new generation"
+  /** A hand-off: a return to the operator, on the generation the page holds. */
   | "epoch, same generation"
+  /** A hand-off: a transfer the page saw adopted, then its epoch. */
+  | "epoch, adopted"
   | "reply closed"
   | "reply failed"
   | "reply closed, old generation"
@@ -84,6 +88,7 @@ type Trigger =
   | "hangup, load lands"
   | "socket drops, load lands"
   | "epoch, load lands"
+  | "epoch, same generation, load lands"
   | "ptt press, load lands"
   | "reply closed, load lands";
 
@@ -117,6 +122,7 @@ const ROUTE = "Hands-free stopped while changing the line.";
 const HANGUP = "Hands-free stopped for hangup.";
 const DISCONNECTED = "Hands-free stopped while disconnected.";
 const CALL_CHANGED = "Hands-free stopped because the call changed.";
+const HANDED_OFF = "The line changed; listening locally for “Damocles”.";
 const PAUSED = "Hands-free paused for push-to-talk.";
 const SENT = "Utterance sent; waiting for the response.";
 const NO_REPLY = "No reply is coming; listening locally for “Damocles”.";
@@ -424,6 +430,11 @@ async function apply(h: Harness, event: Trigger): Promise<void> {
     case "epoch, same generation":
       h.socket().receive({ type: "epoch", generation: 1 });
       break;
+    case "epoch, adopted":
+      h.socket().receive({ type: "candidate", route: "alpha", generation: 1 });
+      h.socket().receive({ type: "candidate_cleared", route: "alpha", generation: 2, reason: "adopted" });
+      h.socket().receive({ type: "epoch", generation: 2 });
+      break;
     case "reply closed":
       h.replyClosed(1);
       break;
@@ -511,6 +522,10 @@ async function apply(h: Harness, event: Trigger): Promise<void> {
       h.socket().receive({ type: "epoch", generation: 2 });
       await h.land();
       break;
+    case "epoch, same generation, load lands":
+      h.socket().receive({ type: "epoch", generation: 1 });
+      await h.land();
+      break;
     case "ptt press, load lands":
       runtime.talk();
       await settle();
@@ -542,7 +557,7 @@ const rows: Row[] = [
   { from: "unloaded", event: "ptt press", seen: { ...STOPPED, said: STANDBY } },
   { from: "unloaded", event: "reply closed", seen: { ...STOPPED, said: STANDBY }, lease: false },
 
-  // Loading: MODE waits for it; a page stop or an epoch ends it, and the next MODE loads again.
+  // Loading: MODE waits for it; a page stop or a rescue epoch ends it, and the next MODE loads again.
   { from: "loading", event: "MODE", seen: { ...ON, said: LOADING, loads: 0, asked: 0 } },
   { from: "loading", event: "load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
   { from: "loading", event: "load fails", seen: { ...STOPPED, said: LOAD_FAILED, error: LOAD_FAILED, asked: 0 } },
@@ -556,6 +571,8 @@ const rows: Row[] = [
   { from: "loading", event: "hangup, load lands", seen: { ...STOPPED, said: HANGUP, asked: 0 } },
   { from: "loading", event: "socket drops, load lands", seen: { ...STOPPED, said: DISCONNECTED, asked: 0 } },
   { from: "loading", event: "epoch, load lands", seen: { ...STOPPED, said: CALL_CHANGED, asked: 0 } },
+  // A hand-off epoch leaves the load running.
+  { from: "loading", event: "epoch, same generation, load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
   { from: "loading", event: "ptt press, load lands", seen: { ...STOPPED, said: PTT_FIRST, error: PTT_FIRST, asked: 0 } },
   { from: "loading", event: "reply closed, load lands", seen: { ...ON, said: LISTENING, asked: 1 }, lease: true },
 
@@ -586,7 +603,9 @@ const rows: Row[] = [
   { from: "armed", event: "socket drops", seen: { ...STOPPED, said: DISCONNECTED } },
   { from: "armed", event: "retry", seen: { ...ON, said: LISTENING } },
   { from: "armed", event: "epoch, new generation", seen: { ...STOPPED, said: CALL_CHANGED } },
-  { from: "armed", event: "epoch, same generation", seen: { ...STOPPED, said: CALL_CHANGED } },
+  // A hand-off epoch keeps listening; a rescue turns hands-free off.
+  { from: "armed", event: "epoch, same generation", seen: { ...ON, said: HANDED_OFF } },
+  { from: "armed", event: "epoch, adopted", seen: { ...ON, said: HANDED_OFF } },
   // A reply to a push-to-talk turn opens the lease from `armed` too.
   { from: "armed", event: "reply closed", seen: { ...ON, said: LISTENING }, lease: true },
   { from: "armed", event: "reply failed", seen: { ...ON, said: LISTENING }, lease: false },
@@ -603,6 +622,7 @@ const rows: Row[] = [
   { from: "paused_ptt", event: "page hidden", seen: { ...STOPPED, said: HIDDEN } },
   { from: "paused_ptt", event: "socket drops", seen: { ...STOPPED, said: DISCONNECTED, asked: 0 } },
   { from: "paused_ptt", event: "epoch, new generation", seen: { ...STOPPED, said: CALL_CHANGED } },
+  { from: "paused_ptt", event: "epoch, adopted", seen: { ...ON, said: PAUSED } },
 
   // Waiting on the clip hands-free sent.
   { from: "awaiting_response", event: "error for the clip", seen: { ...ON, said: NO_REPLY, error: CLIP_ERROR } },
@@ -612,6 +632,7 @@ const rows: Row[] = [
   { from: "awaiting_response", event: "reply closed", seen: { ...ON, said: SENT }, lease: true },
   { from: "awaiting_response", event: "reply closed, old generation", seen: { ...ON, said: SENT }, lease: false },
   { from: "awaiting_response", event: "epoch, new generation", seen: { ...STOPPED, said: CALL_CHANGED } },
+  { from: "awaiting_response", event: "epoch, adopted", seen: { ...ON, said: HANDED_OFF } },
   { from: "awaiting_response", event: "socket drops", seen: { ...STOPPED, said: DISCONNECTED } },
 
   // A reply closed while its audio plays: the lease waits for the drain.
@@ -622,7 +643,8 @@ const rows: Row[] = [
   // MODE off keeps the waiting reply; a page stop drops it.
   { from: "reply playing", event: "MODE twice", seen: { ...ON, said: LISTENING, asked: 1 }, lease: true },
   { from: "reply playing", event: "page hidden, shown, MODE", seen: { ...ON, said: LISTENING, asked: 1 }, lease: false },
-  { from: "reply playing", event: "epoch, same generation", seen: { ...STOPPED, said: CALL_CHANGED }, lease: false },
+  // A hand-off keeps listening but drops the old leg's reply.
+  { from: "reply playing", event: "epoch, same generation", seen: { ...ON, said: HANDED_OFF }, lease: false },
   // A reconnect waits for the snapshot's epoch, which drops the reply.
   { from: "reply playing", event: "retry", seen: { ...ON, said: LISTENING }, lease: false },
   { from: "reply playing", event: "ptt press", seen: { ...ON, said: PAUSED }, lease: false },
@@ -640,6 +662,7 @@ const rows: Row[] = [
   { from: "lease", event: "reply closed", seen: { ...ON, said: LEASE }, lease: true },
   { from: "lease", event: "page hidden", seen: { ...STOPPED, said: HIDDEN } },
   { from: "lease", event: "epoch, new generation", seen: { ...STOPPED, said: CALL_CHANGED } },
+  { from: "lease", event: "epoch, adopted", seen: { ...ON, said: HANDED_OFF } },
 ];
 
 describe("hands-free in the call runtime, phase by event", () => {

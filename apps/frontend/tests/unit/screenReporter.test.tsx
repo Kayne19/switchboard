@@ -13,6 +13,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ControllerProvider } from '../../src/controller/context';
 import { RuntimeIntegration } from '../../src/integration/runtime';
+import { MAX_KEPT_REJECTIONS } from '../../src/app/screenReporter';
 import { helloAck, statusMessage } from '../fixtures/serverMessages';
 
 type Report = Record<string, unknown> & { object_ids?: string[] };
@@ -98,6 +99,13 @@ function shownSince(mark: number): string[][] {
   return sent()
     .slice(mark)
     .map((report) => report.object_ids ?? []);
+}
+
+// The seqs of the rejections the reports sent since `mark` carry, in order.
+function rejectedSince(mark: number): number[] {
+  return sent()
+    .slice(mark)
+    .flatMap((report) => (report.rejected ? [(report.rejected as { seq: number }).seq] : []));
 }
 
 /** Connected, the epoch announced, and every report acknowledged. */
@@ -373,7 +381,7 @@ describe('screen reports: phase x event', () => {
       expect(sent().at(-1)?.rejected).toBeUndefined();
     });
 
-    it('awaiting | two rejections before the ack: today only the newer is sent (#378)', async () => {
+    it('awaiting | two rejections before the ack: both are sent, one per report, oldest first (#378)', async () => {
       await awaiting();
       const mark = sent().length;
       await receive(unknown(5));
@@ -381,10 +389,87 @@ describe('screen reports: phase x event', () => {
       await settle();
       await receive(show('b', 7));
       await settle();
-      const rejected = sent()
-        .slice(mark)
-        .flatMap((report) => (report.rejected ? [(report.rejected as { seq: number }).seq] : []));
-      expect(rejected).toEqual([6]);
+      expect(rejectedSince(mark)).toEqual([5, 6]);
+      // Each rejection went once, and the line rests once they are out.
+      expect(sent().at(-1)?.rejected).toBeUndefined();
+    });
+
+    it('awaiting | two rejections in one task: the second goes on a report of its own after the ack (#378)', async () => {
+      await awaiting();
+      const mark = sent().length;
+      await receive(unknown(5), unknown(6));
+      await receive(ack);
+      expect(rejectedSince(mark)).toEqual([5]);
+      await receive(ack);
+      expect(rejectedSince(mark)).toEqual([5, 6]);
+      await receive(ack);
+      expect(sent().slice(mark)).toHaveLength(2);
+    });
+
+    it('awaiting | two rejections, then an applied display: no report says a seq is applied before its rejection is out (#378)', async () => {
+      // The service answers a display call `rendered: true` once a report's
+      // `applied_seq` reaches its seq with no rejection for it, so a report
+      // that passes a rejection still waiting on the page would confirm it.
+      await awaiting();
+      const mark = sent().length;
+      await receive(unknown(5));
+      await receive(unknown(6));
+      await receive(show('b', 7));
+      await settle();
+      expect(rejectedSince(mark)).toEqual([5, 6]);
+      const out = new Set<number>();
+      for (const report of sent().slice(mark)) {
+        const rejected = report.rejected as { seq: number } | undefined;
+        if (rejected) out.add(rejected.seq);
+        for (const seq of [5, 6]) {
+          if ((report.applied_seq as number) >= seq) expect(out.has(seq)).toBe(true);
+        }
+      }
+      expect(sent().at(-1)?.applied_seq).toBe(7);
+    });
+
+    it('awaiting | a rejection declined after a newer one: no report says a seq is applied before its rejection is out (#378)', async () => {
+      // A frame can be declined out of seq order (a snapshot replayed into
+      // the stage). The ceiling must hold below every rejection still
+      // waiting, not only the next one in arrival order.
+      await awaiting();
+      const mark = sent().length;
+      await receive(unknown(3), unknown(9), unknown(5));
+      await receive(show('b', 10));
+      await settle();
+      expect(rejectedSince(mark)).toEqual([3, 5, 9]);
+      const out = new Set<number>();
+      for (const report of sent().slice(mark)) {
+        const rejected = report.rejected as { seq: number } | undefined;
+        if (rejected) out.add(rejected.seq);
+        for (const seq of [3, 5, 9]) {
+          if ((report.applied_seq as number) >= seq) expect(out.has(seq)).toBe(true);
+        }
+      }
+      expect(sent().at(-1)?.applied_seq).toBe(10);
+    });
+
+    it('awaiting | more rejections than the service keeps: the lowest past the bound are dropped, the rest go one per report (#378)', async () => {
+      await awaiting();
+      const mark = sent().length;
+      const seqs = Array.from({ length: MAX_KEPT_REJECTIONS + 2 }, (_, index) => 10 + index);
+      await receive(...seqs.map((seq) => unknown(seq)));
+      await settle();
+      expect(rejectedSince(mark)).toEqual(seqs.slice(2));
+    });
+
+    it('awaiting with two rejections | no ack by the deadline: the next rejection still goes (#378)', async () => {
+      await awaiting();
+      const mark = sent().length;
+      await receive(unknown(5), unknown(6));
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(rejectedSince(mark)).toEqual([5]);
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(rejectedSince(mark)).toEqual([5, 6]);
     });
 
     it('awaiting with a queued rejection | a newer rejection and the ack in one task: both are sent, the older first', async () => {
@@ -393,10 +478,7 @@ describe('screen reports: phase x event', () => {
       await receive(unknown(5));
       await receive(unknown(6), ack);
       await settle();
-      const rejected = sent()
-        .slice(mark)
-        .flatMap((report) => (report.rejected ? [(report.rejected as { seq: number }).seq] : []));
-      expect(rejected).toEqual([5, 6]);
+      expect(rejectedSince(mark)).toEqual([5, 6]);
     });
 
     it('a rejection not yet sent survives an epoch', async () => {

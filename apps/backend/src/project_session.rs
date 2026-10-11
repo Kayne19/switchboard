@@ -129,8 +129,8 @@ enum Lifecycle {
     /// In use: commands go out and the pump reads its frames. The
     /// subscription is held for its drop.
     Open { _subscription: Subscription },
-    /// A command to it failed. The handle is not used again, but the
-    /// session may still run on its host, so its release is still owed
+    /// A command to it failed on the link (not a refusal by the host). The
+    /// handle is not used again, but the session may still run on its host, so its release is still owed
     /// (#291), and its frames are still read so a turn already running can
     /// settle.
     Unusable { _subscription: Subscription },
@@ -146,9 +146,16 @@ enum Lifecycle {
 /// What moves a project session through its end of life.
 #[derive(Clone, Copy, Debug)]
 enum LifecycleEvent {
-    /// A command to the session failed (any error, the command's wait
-    /// included).
+    /// A command to the session failed on the link: it could not be sent,
+    /// its wait ran out, the link closed before the answer, or the answer
+    /// could not be read; or the host answered with a code that is not a
+    /// refusal of the command (`CommandError::is_refusal`).
     CommandFailed,
+    /// The host answered a command with a refusal of that command
+    /// (`refused`, `unsupported`, `daemon_error`, `bad_request`,
+    /// `unknown_command`). Only that command failed; the session is still
+    /// usable (#423).
+    CommandRefused,
     /// The host reported the session closed.
     HostEnded,
     /// Its owner closed the handle, or the handle's last clone dropped.
@@ -170,12 +177,13 @@ impl Lifecycle {
     /// entering it does. A phase an event does not move comes back as it
     /// was, with `Entry::Nothing`.
     fn after(self, event: LifecycleEvent, provenance: Provenance) -> (Self, Entry) {
-        use LifecycleEvent::{Closed, CommandFailed, HostEnded};
+        use LifecycleEvent::{Closed, CommandFailed, CommandRefused, HostEnded};
         // A subscription not carried into the next phase drops here.
         match (self, event) {
             (Self::Open { _subscription }, CommandFailed) => {
                 (Self::Unusable { _subscription }, Entry::ReportClosed)
             }
+            (phase @ Self::Open { .. }, CommandRefused) => (phase, Entry::Nothing),
             (Self::Open { .. }, HostEnded) => (Self::EndedOnHost, Entry::ReportClosed),
             (Self::Open { .. } | Self::Unusable { .. }, Closed) => (Self::Released, Entry::Release),
             (Self::Unusable { .. }, HostEnded) => (Self::EndedOnHost, Entry::Nothing),
@@ -1177,10 +1185,17 @@ impl HostCommand {
         match self.sent.reply(SESSION_COMMAND_WAIT).await {
             Ok(reply) => Ok(reply),
             Err(error) => {
-                // A failed host command means this resident is no longer
-                // usable. Mark it closed before returning so its owner can
-                // evict it instead of publishing a misleading idle state.
-                self.session.inner.lose(LifecycleEvent::CommandFailed).await;
+                // A command the host refused fails alone, and the session
+                // stays usable (#423). Any other failure means this resident
+                // is no longer usable: mark it so before returning, so its
+                // owner can evict it instead of publishing a misleading idle
+                // state.
+                let event = if error.is_refusal() {
+                    LifecycleEvent::CommandRefused
+                } else {
+                    LifecycleEvent::CommandFailed
+                };
+                self.session.inner.lose(event).await;
                 Err(PiSessionError(error.to_string()))
             }
         }

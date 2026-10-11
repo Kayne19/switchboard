@@ -287,8 +287,13 @@ export class HandsFreeController {
 		this.transition({ kind: "playbackChanged" });
 	}
 
-	epochChanged(): void {
-		this.transition({ kind: "callChanged" });
+	/**
+	 * The server announced an `epoch`. A hand-off (`CallRuntime` says which)
+	 * keeps hands-free listening and discards a capture in flight; any other
+	 * epoch turns it off.
+	 */
+	epochChanged(handoff: boolean): void {
+		this.transition({ kind: "callChanged", handoff });
 	}
 
 	/**

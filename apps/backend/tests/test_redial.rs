@@ -76,26 +76,140 @@ async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() 
     assert_eq!(board.coordinator.status().model, "anthropic/current:high");
 }
 
-/// A command the host refuses leaves the handle unusable, not the session
-/// ended: the service still ends the session it created, so it does not run
-/// on with the caller's conversation and block a desk takeover (#291).
-#[tokio::test]
-async fn a_model_the_daemon_refuses_still_ends_the_session_on_its_host() {
+/// A board on alpha whose host answers `command` with the error `code`,
+/// and the host's log.
+async fn on_alpha_refusing(
+    command: &'static str,
+    code: &'static str,
+) -> (Switchboard, crate::hosts::FakeLog) {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let mut host = FakeHostAgent::new(Box::new(|_, _| says("On it.")));
-    host.on_command = Some(Box::new(|name, _| {
-        (name == "set_model").then(|| {
-            Some(Err((
-                "daemon_error".to_owned(),
-                "unknown model anthropic/next".to_owned(),
-            )))
-        })
+    host.on_command = Some(Box::new(move |name, _| {
+        (name == command).then(|| Some(Err((code.to_owned(), format!("{code} for the test")))))
     }));
     let log = host.serve(board.hosts().connect_fake(HOST));
     let reply = board
         .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
+    (board, log)
+}
+
+/// Runs a redial the way a page control does: its rescue retires the leg
+/// first, and the redial runs on the leg the rescue left (#263).
+async fn redialed_after_its_rescue(board: &mut Switchboard, decided: Redial) -> Reply {
+    let Redial::Planned(plan) = decided else {
+        panic!("the change goes ahead");
+    };
+    let (leg, _rescue) = board
+        .coordinator
+        .begin_rescue_of(plan.leg(), "redial")
+        .expect("the leg is on the line");
+    board
+        .redial(plan.rescued(leg))
+        .await
+        .expect("the leg the redial was planned for is still on the line")
+}
+
+/// A command the host refuses fails only that command (#423, #327): a
+/// model the daemon refuses leaves the session usable on its old model, the
+/// caller on it, and the session on the call under the token of the leg on
+/// the line.
+#[tokio::test]
+async fn a_model_the_daemon_refuses_leaves_the_leg_on_its_old_model() {
+    for code in ["daemon_error", "refused", "unsupported"] {
+        let (mut board, log) = on_alpha_refusing("set_model", code).await;
+        let live = board.agent.clone().expect("alpha is on the line");
+
+        let decided = board.planner.model_change("anthropic/next").await;
+        let reply = redialed_after_its_rescue(&mut board, decided).await;
+
+        assert!(reply.error.is_some(), "{code}: {reply:?}");
+        assert!(live.alive(), "{code}: the session was ended");
+        assert!(
+            board
+                .agent
+                .as_ref()
+                .is_some_and(|agent| agent.same_session(&live)),
+            "{code}: the caller left the session"
+        );
+        assert_eq!(board.coordinator.route(), "alpha", "{code}");
+        assert_eq!(
+            board.coordinator.status().model,
+            "anthropic/current:medium",
+            "{code}"
+        );
+        assert!(
+            log.named("kill").is_empty(),
+            "{code}: the session was killed"
+        );
+        let joins = log.named("join_call");
+        assert_eq!(
+            joins.last().and_then(|join| join["token"].as_str()),
+            Some(board.coordinator.current_identity().token.as_str()),
+            "{code}: the session is not on the call under the line's token"
+        );
+        board.shutdown().await;
+    }
+}
+
+/// A thinking level the daemon refuses changes nothing either: the caller
+/// stays on the leg as it was.
+#[tokio::test]
+async fn a_thinking_level_the_daemon_refuses_leaves_the_leg_as_it_was() {
+    let (mut board, log) = on_alpha_refusing("set_thinking", "daemon_error").await;
+    let live = board.agent.clone().expect("alpha is on the line");
+
+    let decided = board.planner.thinking_change("high").await;
+    let reply = redialed_after_its_rescue(&mut board, decided).await;
+
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert!(live.alive());
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
+    assert!(log.named("kill").is_empty(), "the session was killed");
+    board.shutdown().await;
+}
+
+/// A level the host refuses after the model changed does not end the leg
+/// (#423): the leg goes on to the new model at the level the model came up
+/// at, and the caller hears which.
+#[tokio::test]
+async fn a_level_refused_after_the_model_changed_keeps_the_new_model() {
+    let (mut board, log) = on_alpha_refusing("set_thinking", "daemon_error").await;
+    let live = board.agent.clone().expect("alpha is on the line");
+
+    let decided = board.planner.model_change("anthropic/next").await;
+    let reply = redialed_after_its_rescue(&mut board, decided).await;
+
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert_eq!(
+        reply.text,
+        "Now on next on anthropic, but it would not take thinking medium, so it runs at medium."
+    );
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert!(live.alive());
+    assert!(board
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.same_session(&live)));
+    assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
+    assert!(log.named("kill").is_empty(), "the session was killed");
+    assert_eq!(
+        log.named("join_call")
+            .last()
+            .and_then(|join| join["token"].as_str()),
+        Some(board.coordinator.current_identity().token.as_str())
+    );
+    board.shutdown().await;
+}
+
+/// A command that fails on the link, not by the host's answer, ends the
+/// leg: the service still ends the session it created, so it does not run
+/// on with the caller's conversation and block a desk takeover (#291).
+#[tokio::test]
+async fn a_model_change_the_link_fails_still_ends_the_session_on_its_host() {
+    let (mut board, log) = on_alpha_refusing("set_model", "stale_epoch").await;
     let live = board.agent.clone().expect("alpha is on the line");
 
     let decided = board.planner.model_change("anthropic/next").await;

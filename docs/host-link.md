@@ -188,10 +188,18 @@ Error codes:
 | `daemon_error` | The daemon ran the command and it failed; `message` has the daemon's text. |
 | `failed` | Anything else. |
 
-The service stops using a session after any failed command to it (any code
-above, or no reply within its 30 s wait), but it still releases the
-session: it sends `kill` for one it created and `abort` then `detach` for
-one it took over. Only a `session_closed` event tells it the session is
+A refusal of one command (`refused`, `unsupported`, `daemon_error`,
+`bad_request`, `unknown_command`) fails that command alone: the session
+stays usable, and other commands keep working (#423). A refused caller
+prompt keeps the caller on the leg (they hear that it could not take that,
+with the host's words on screen); a refused background prompt keeps the
+resident, published idle; a refused model change keeps the leg as it was,
+and a level refused after the model changed keeps the new model. The service stops
+using a session after any other failed command to it (`stale_epoch`,
+`not_found`, `failed`, a failure on its own side: `not_connected`,
+`link_lost`, `unreadable_reply`, or no reply within its 30 s wait), but it
+still releases the session: it sends `kill` for one it created and `abort`
+then `detach` for one it took over. Only a `session_closed` event tells it the session is
 already gone; then it sends no `kill`, and still sends `abort` then
 `detach` for a session it took over. "A project session's end" has the
 whole table.
@@ -434,19 +442,23 @@ is its table and `ProjectInner::end` its only writer.
 | Phase | Commands | The session's frames | Release owed |
 |---|---|---|---|
 | open | sent | read | yes |
-| unusable (a command failed) | refused by the service | read, so a turn already running can settle | yes |
+| unusable (a command failed, not refused) | refused by the service | read, so a turn already running can settle | yes |
 | ended on host (`session_closed`) | refused by the service | not read | only by a session it took over |
 | released | refused by the service | not read | no: it went out |
 
-| From | A command fails | `session_closed` | The owner closes it, or its last handle drops |
-|---|---|---|---|
-| open | unusable; the application is told | ended on host; the application is told | released |
-| unusable | unusable | ended on host | released |
-| ended on host | ended on host | ended on host | taken over: released; created: ended on host |
-| released | released | released | released |
+| From | A command fails | The host refuses a command | `session_closed` | The owner closes it, or its last handle drops |
+|---|---|---|---|---|
+| open | unusable; the application is told | open | ended on host; the application is told | released |
+| unusable | unusable | unusable | ended on host | released |
+| ended on host | ended on host | ended on host | ended on host | taken over: released; created: ended on host |
+| released | released | released | released | released |
 
-A failed command is any error code above, or no reply within the 30 s
-wait. `session_closed` includes the service's own `host_link_closed`.
+A refused command is one the host answered `refused`, `unsupported`,
+`daemon_error`, `bad_request` or `unknown_command`
+(`CommandError::is_refusal`); only that command failed. A failed command
+is any other error code above, or no reply within the 30 s wait. A session
+that is no longer open refuses every command itself, so neither reaches
+the host. `session_closed` includes the service's own `host_link_closed`.
 "The application is told" is the session-closed callback, which evicts a
 background resident at once; the owner's close is not reported back to
 it. Entering released sends the release: `kill` for a session the service

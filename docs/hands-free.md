@@ -148,10 +148,12 @@ the start with an `error` that the page shows. A start keeps the context,
 microphone and nodes it makes to itself until its last wait is over. A start
 that a newer one overtook releases only those, never the newer start's graph.
 
-A page hidden or left, a disconnect, a hangup, a route change and every new
+A page hidden or left, a disconnect, a hangup, a route change and a rescue
 `epoch` turn hands-free off, the first load of the detectors included; a
 push-to-talk press pauses it. Each discards a
-running capture and releases the microphone. Secure contexts with
+running capture and releases the microphone. A hand-off `epoch` (the same
+call moved to another leg or agent) discards a running capture too, but
+keeps the microphone and listens for the wake word again. Secure contexts with
 `getUserMedia`, a 16-kHz `AudioContext`, `AudioWorkletNode`, and a supported
 `MediaRecorder` MIME are required. Reduced-motion settings do not change
 listening behavior or accessibility announcements.
@@ -178,7 +180,7 @@ sees is `view()` of the phase, and nothing else.
 | phase (published as) | holds | left by |
 |---|---|---|
 | `off`, `error` | the status line | MODE: `loading` the first time (and after a load failed or was stopped), then `starting`, or `error` when refused (push-to-talk active, page hidden, no secure context, worklet or recorder MIME, no detector) |
-| `loading` (`starting`) | the load (`Load`) | the detectors (`starting`, or `error` when refused), a failed load (`error`), a page stop or an `epoch` (`off`); MODE waits for it |
+| `loading` (`starting`) | the load (`Load`) | the detectors (`starting`, or `error` when refused), a failed load (`error`), a page stop or a rescue `epoch` (`off`); MODE waits for it, and a hand-off `epoch` leaves it running |
 | `starting` | the start (`Attempt`); what it makes stays its own until it hands the graph over | the graph (`armed`), a failed start or a `resume()` past 3 s (`error`) |
 | `paused_ptt` | nothing | push-to-talk ends: a full restart (`starting`), or `error` when refused |
 | `armed` | the graph | the wake word (`wake_grace`), a follow-up lease (`lease`) |
@@ -189,8 +191,11 @@ sees is `view()` of the phase, and nothing else.
 | `lease` | the graph, the lease deadline, its expiry and 250 ms tick | speech (`lease_capturing`), expiry (`armed`) |
 
 Every phase but `off`, `error` and `loading` also leaves for `off` (MODE, a
-hidden or left page, a disconnect, a hangup, a route change, an `epoch`), for
-`paused_ptt` (a push-to-talk press) and for `error` (a detector failure). A
+hidden or left page, a disconnect, a hangup, a route change, a rescue
+`epoch`), for `paused_ptt` (a push-to-talk press) and for `error` (a detector
+failure). A hand-off `epoch` moves every phase that holds the graph to
+`armed` on the same graph, saying "The line changed"; `starting` and
+`paused_ptt` hold no graph and stay as they are. A
 recorder that cannot be made, started or stopped, or that reports an error,
 publishes `error` and then turns hands-free `off`. Before the first load
 nothing stops: the runtime keeps its own line ("Standby") until the first
@@ -203,7 +208,8 @@ once hands-free is listening again and playback has drained. It is set by a
 the 400 ms debounce runs while playback is drained (`playbackChanged`
 cancels it when audio starts again). It ends when the debounce opens the
 lease (which still opens only from the phases below), at the next closed
-reply, at a page stop and at an `epoch`. MODE off keeps it.
+reply, at a page stop and at an `epoch` of either kind: the reply was the old
+leg's. MODE off keeps it.
 
 A follow-up lease opens only from `armed`, `wake_grace`, `awaiting_response`
 or `lease`: never over a start or a running capture. A second stop while
@@ -222,12 +228,18 @@ What `CallRuntime` tells the controller:
 |---|---|
 | MODE (while the line is up) | `toggle()` |
 | page hidden, `pagehide`, `dispose`, route change, hangup, socket closed | `stop(reason)` |
-| `epoch` | `epochChanged()` |
+| `epoch` | `epochChanged(handoff)` |
 | push-to-talk takes or gives back the microphone | `pauseForPtt()`, `resumeAfterPtt()` |
 | `final_response_audio_closed` | `replyClosed(generation, success)` |
 | playback changed | `playbackChanged()` |
 | `error` naming a clip | `clipFailed(id)` |
 | `routing_unavailable` | `endAwaitedTurn()` |
+
+`handoff` is the value that also decides whether playback is handed off or
+cut: an expected `epoch` (the adoption this page saw, or the generation it
+already holds, a return to the operator) on a link that has had its
+snapshot. Any other `epoch` (a rescue, a hangup, a reconnect's snapshot) is
+a rescue here.
 
 "Socket closed" is the link's line down (`apps/frontend/ARCHITECTURE.md`,
 "Transport boundary"). A keepalive miss and `retry()` replace the socket

@@ -625,12 +625,18 @@ async fn foreground_continuation_publishes_busy_before_prompt() {
     board.shutdown().await;
 }
 
-/// A failed promotion returns its resident to the background, but a host
-/// command that fails leaves the handle unusable (#291): this one cannot go
-/// back, so it is closed and finished.
+/// A board on alpha whose host answers the next `prompt`, once armed, with
+/// the error `code`; the host's log, the arming switch, and the agent states
+/// the page was told.
 #[cfg(unix)]
-#[tokio::test]
-async fn a_promotion_whose_host_refuses_a_command_closes_the_resident() {
+async fn board_refusing_the_next_prompt(
+    code: &'static str,
+) -> (
+    Switchboard,
+    crate::hosts::FakeLog,
+    Arc<std::sync::atomic::AtomicBool>,
+    Arc<StdMutex<Vec<String>>>,
+) {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
     let notices_for_callback = notices.clone();
@@ -643,16 +649,151 @@ async fn a_promotion_whose_host_refuses_a_command_closes_the_resident() {
                 .push(format!("{}:{}", notice.project, notice.state));
         })
     })));
-    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("ready")));
-    fake.on_command = Some(Box::new(|name, _| {
-        (name == "set_mode").then(|| Some(Err(("mode_failed".into(), "cannot switch mode".into()))))
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fails = Arc::clone(&armed);
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("On it.")));
+    fake.on_command = Some(Box::new(move |name, _| {
+        (name == "prompt" && fails.swap(false, std::sync::atomic::Ordering::AcqRel))
+            .then(|| Some(Err((code.into(), format!("{code} for the test")))))
     }));
-    fake.serve(board.hosts().connect_fake(HOST));
+    let log = fake.serve(board.hosts().connect_fake(HOST));
+    (board, log, armed, notices)
+}
+
+/// A caller's prompt the host refuses fails alone (#423): the caller stays
+/// on the leg and hears that it could not take that; the session runs on.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caller_prompt_the_host_refuses_keeps_the_leg() {
+    let (mut board, log, armed, _notices) = board_refusing_the_next_prompt("daemon_error").await;
+    board.transfer_to(&transcript("start alpha"), "alpha").await;
+    let alpha = board.agent.clone().expect("alpha is on the line");
+    armed.store(true, std::sync::atomic::Ordering::Release);
+
+    let reply = board.handle_agent_ctx(&transcript("continue work")).await;
+
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    // Said aloud in plain words; the host's own words are screen text.
+    assert_eq!(
+        reply.text,
+        "alpha couldn't take that.\n\ndaemon_error for the test"
+    );
+    assert!(reply.error.is_some());
+    assert!(alpha.alive());
+    assert!(log.named("kill").is_empty(), "the session was killed");
+    let reply = board.handle_agent_ctx(&transcript("try again")).await;
+    assert_eq!(
+        (reply.route.as_str(), reply.text.as_str()),
+        ("alpha", "On it.")
+    );
+    board.shutdown().await;
+}
+
+/// A caller's prompt that fails on the link left the session unusable: the
+/// leg ends, and the caller is back on the operator.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caller_prompt_that_fails_on_the_link_ends_the_leg() {
+    let (mut board, log, armed, _notices) = board_refusing_the_next_prompt("stale_epoch").await;
+    board.transfer_to(&transcript("start alpha"), "alpha").await;
+    let alpha = board.agent.clone().expect("alpha is on the line");
+    armed.store(true, std::sync::atomic::Ordering::Release);
+
+    let reply = board.handle_agent_ctx(&transcript("continue work")).await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert!(!alpha.alive());
+    assert_eq!(
+        crate::pbx::until_named(&log, "kill").await,
+        [serde_json::json!({"session": "s1"})]
+    );
+    board.shutdown().await;
+}
+
+/// A background prompt the host refuses fails alone (#423): the resident
+/// stays, and is published idle.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_background_prompt_the_host_refuses_keeps_the_resident() {
+    let (mut board, log, armed, notices) = board_refusing_the_next_prompt("daemon_error").await;
+    armed.store(true, std::sync::atomic::Ordering::Release);
+
     board
         .start_background_part("alpha", "background work")
         .await
         .expect("background resident");
     let resident = board.background_agents.get("alpha").unwrap().clone();
+    within("the resident published idle", async {
+        while notices.lock().unwrap().last().map(String::as_str) != Some("alpha:idle") {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    })
+    .await;
+
+    assert!(resident.alive());
+    assert!(board.background_agents.contains_key("alpha"));
+    assert!(log.named("kill").is_empty(), "the resident was killed");
+    board.shutdown().await;
+}
+
+/// A background prompt that fails on the link is terminal for the
+/// resident: it is closed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_background_prompt_that_fails_on_the_link_closes_the_resident() {
+    let (mut board, log, armed, _notices) = board_refusing_the_next_prompt("stale_epoch").await;
+    armed.store(true, std::sync::atomic::Ordering::Release);
+
+    board
+        .start_background_part("alpha", "background work")
+        .await
+        .expect("background resident");
+    let resident = board.background_agents.get("alpha").unwrap().clone();
+
+    assert_eq!(
+        crate::pbx::until_named(&log, "kill").await,
+        [serde_json::json!({"session": "s1"})]
+    );
+    assert!(!resident.alive());
+    board.shutdown().await;
+}
+
+/// A failed promotion returns its resident to the background. A command
+/// the host refuses fails alone (#423), so a promotion whose `set_mode` is
+/// refused goes back too.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_promotion_whose_host_refuses_a_command_returns_the_resident() {
+    let (mut board, resident, notices) = resident_failing_set_mode_once("daemon_error").await;
+
+    let reply = board
+        .route_project_part(
+            "bring alpha forward",
+            "alpha",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+
+    assert!(reply.error.is_some());
+    assert!(resident.alive());
+    assert!(board
+        .background_agents
+        .get("alpha")
+        .is_some_and(|session| session.same_session(&resident)));
+    assert_eq!(
+        notices.lock().unwrap().last().map(String::as_str),
+        Some("alpha:idle")
+    );
+    board.shutdown().await;
+}
+
+/// A command that fails on the link leaves the handle unusable (#291): that
+/// resident cannot go back, so it is closed and finished.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_promotion_whose_command_fails_on_the_link_closes_the_resident() {
+    let (mut board, resident, notices) = resident_failing_set_mode_once("stale_epoch").await;
 
     let reply = board
         .route_project_part(
@@ -671,6 +812,46 @@ async fn a_promotion_whose_host_refuses_a_command_closes_the_resident() {
         Some("alpha:finished")
     );
     board.shutdown().await;
+}
+
+/// A board with alpha resident in the background, on a host that answers
+/// the first `set_mode` after that with `code`, and the agent states the
+/// page was told.
+#[cfg(unix)]
+async fn resident_failing_set_mode_once(
+    code: &'static str,
+) -> (
+    Switchboard,
+    crate::project_session::ProjectSession,
+    Arc<StdMutex<Vec<String>>>,
+) {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let notices = notices_for_callback.clone();
+        Box::pin(async move {
+            notices
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", notice.project, notice.state));
+        })
+    })));
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fails = Arc::clone(&armed);
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("ready")));
+    fake.on_command = Some(Box::new(move |name, _| {
+        (name == "set_mode" && fails.swap(false, std::sync::atomic::Ordering::AcqRel))
+            .then(|| Some(Err((code.into(), format!("{code} for the test")))))
+    }));
+    fake.serve(board.hosts().connect_fake(HOST));
+    board
+        .start_background_part("alpha", "background work")
+        .await
+        .expect("background resident");
+    let resident = board.background_agents.get("alpha").unwrap().clone();
+    armed.store(true, std::sync::atomic::Ordering::Release);
+    (board, resident, notices)
 }
 
 #[cfg(unix)]
