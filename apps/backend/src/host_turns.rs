@@ -32,19 +32,25 @@ impl HostTurns {
         *self.self_woken.lock().await = Some(run);
     }
 
-    /// Lets go of the held run if it is session `instance_id`'s run
-    /// `turn_id`, and returns its operation. A late end from an older run
-    /// on the same session does not release a newer one.
+    /// Lets go of the held run if it is session `instance_id`'s run that
+    /// `which` names, and returns its operation. A late end from an older
+    /// run on the same session does not release a newer one.
     async fn release_self_woken(
         &self,
         instance_id: u64,
-        turn_id: &str,
+        which: WhichRun<'_>,
     ) -> Option<OperationIdentity> {
         self.self_woken
             .lock()
             .await
             .take_if(|run| {
-                run.instance_id == instance_id && run.operation.turn_id.as_deref() == Some(turn_id)
+                run.instance_id == instance_id
+                    && match which {
+                        WhichRun::Turn(turn_id) => {
+                            run.operation.turn_id.as_deref() == Some(turn_id)
+                        }
+                        WhichRun::OfClosedSession => true,
+                    }
             })
             .map(|run| run.operation)
     }
@@ -58,6 +64,15 @@ impl HostTurns {
             .as_ref()
             .is_some_and(|run| run.instance_id == instance_id)
     }
+}
+
+/// Which of a session's runs a release names.
+#[derive(Clone, Copy)]
+enum WhichRun<'a> {
+    /// The run with this host turn id.
+    Turn(&'a str),
+    /// Whichever run the session held when it closed.
+    OfClosedSession,
 }
 
 /// A self-woken run the application admitted as an operation of its own:
@@ -154,7 +169,7 @@ async fn act_on_turn(state: &AppState, turn: ProjectTurn) -> bool {
             false
         }
         HostTurn::RunEnded { turn_id, text } => {
-            end_self_woken_run(state, turn.instance_id, &turn_id, text).await;
+            end_self_woken_run(state, &turn, &turn_id, text).await;
             false
         }
         HostTurn::Unnamed { cause } => {
@@ -263,15 +278,51 @@ async fn admit_self_woken_run(
 /// operation closes, it is traced to its end, and its written words reach
 /// the caller's transcript. The end of a run not held, or of one whose
 /// operation a rescue already closed, ends nothing.
-async fn end_self_woken_run(state: &AppState, instance_id: u64, turn_id: &str, text: String) {
+///
+/// A run cut short by its session's close, while that session's leg is
+/// still on the line, is left to the leg's retirement
+/// (`end_run_of_closed_session`), which ends it under the PBX lock once the
+/// dead leg is off the line. A caller turn waiting behind the run then runs
+/// on the leg that replaced it, never on the dead one (#270).
+async fn end_self_woken_run(state: &AppState, turn: &ProjectTurn, turn_id: &str, text: String) {
+    if turn.cut_short && state.0.coordinator.current_identity().token == turn.token {
+        return;
+    }
     let Some(operation) = state
         .0
         .host_turns
-        .release_self_woken(instance_id, turn_id)
+        .release_self_woken(turn.instance_id, WhichRun::Turn(turn_id))
         .await
     else {
         return;
     };
+    close_self_woken_run(state, turn.instance_id, operation, text).await;
+}
+
+/// Ends the self-woken run session `instance_id` held when it closed. The
+/// PBX calls this after it retired the closed session's leg, under its
+/// lock (`app_state.rs`, the foreground-closed callback). A run already
+/// ended ends nothing.
+pub(crate) async fn end_run_of_closed_session(state: &AppState, instance_id: u64) {
+    let Some(operation) = state
+        .0
+        .host_turns
+        .release_self_woken(instance_id, WhichRun::OfClosedSession)
+        .await
+    else {
+        return;
+    };
+    close_self_woken_run(state, instance_id, operation, String::new()).await;
+}
+
+/// Closes a released self-woken run's operation, traces its end, and writes
+/// its words, if any, to the caller's transcript.
+async fn close_self_woken_run(
+    state: &AppState,
+    instance_id: u64,
+    operation: OperationIdentity,
+    text: String,
+) {
     if !state.0.coordinator.finish_operation(&operation) {
         tracing::info!(
             instance = instance_id,
@@ -325,6 +376,7 @@ pub(crate) fn autonomous_turn(
         cause: "autonomous".into(),
         ended: false,
         text: String::new(),
+        cut_short: false,
         replaces: None,
     }
 }

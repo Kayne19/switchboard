@@ -719,6 +719,7 @@ async fn caller_turn_waits_behind_an_autonomous_project_turn() {
             cause: "autonomous".into(),
             ended: true,
             text: String::new(),
+            cut_short: false,
             replaces: None,
         },
     )

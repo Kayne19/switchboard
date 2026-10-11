@@ -462,13 +462,16 @@ impl AppState {
                         // being read. Retire it once the lock is free.
                         tokio::spawn(async move {
                             let state = AppState(app);
-                            let retired = state
-                                .0
-                                .switchboard
-                                .lock()
-                                .await
+                            let mut switchboard = state.0.switchboard.lock().await;
+                            let retired = switchboard
                                 .retire_closed_foreground(&project, &session_id, instance_id)
                                 .await;
+                            // The run the session held ends only now, with its
+                            // leg off the line and the PBX still locked, so a
+                            // caller turn waiting behind it runs on the leg
+                            // that replaced it (#270).
+                            crate::host_turns::end_run_of_closed_session(&state, instance_id).await;
+                            drop(switchboard);
                             if retired {
                                 publish_status(&state);
                             }
