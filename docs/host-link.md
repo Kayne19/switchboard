@@ -425,7 +425,7 @@ waits under the lock.
 | self-woken, caller and self-woken | `turn_start`, `autonomous` or `unknown`, of another turn | unchanged, the new run held in the old one's place | the old run's final text published; its end reported with the new start, taken together |
 | any | `turn_start`, `input` | unchanged | start reported |
 | self-woken, caller and self-woken | `text` of the run | unchanged | the run keeps it |
-| self-woken, caller and self-woken | `turn_end` of the run | idle, caller settled | final text published; end reported with it |
+| self-woken, caller and self-woken | `turn_end` of the run | idle, caller settled | final text published; end reported with it; goes to the prompt, which it ends if the prompt went into the run as a `follow_up` (its reply names the run) |
 | self-woken, caller and self-woken | an idle snapshot (it names no turn) | idle, caller settled | final text published; end reported with it (the snapshot's `last_text` stands in for none); the snapshot goes to the prompt |
 | self-woken, caller and self-woken | a snapshot with another turn open | unchanged, that turn held in the run's place | as for another self-woken start |
 | self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it; goes to the prompt |
