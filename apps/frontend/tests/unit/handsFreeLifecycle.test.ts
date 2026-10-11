@@ -250,7 +250,7 @@ function harness() {
     isPttActive: () => ptt,
     onClip: () => {
       counts.clips += 1;
-      return acceptClips;
+      return acceptClips ? `clip-${counts.clips}` : null;
     },
     onState: (detail) => published.push([detail.state, detail.message]),
   });

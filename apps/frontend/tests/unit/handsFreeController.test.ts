@@ -155,7 +155,7 @@ function controller() {
     isPttActive: () => ptt,
     onClip: (_audio, _mime, epoch) => {
       clips.push(epoch);
-      return acceptClips;
+      return acceptClips ? `clip-${clips.length}` : null;
     },
     onState: (detail) => states.push(detail.state),
   });
@@ -347,7 +347,7 @@ describe("the hands-free controller over fakes", () => {
       isSnapshotReady: () => true,
       currentEpoch: () => 4,
       isPttActive: () => false,
-      onClip: () => true,
+      onClip: () => "clip",
       onState: () => undefined,
     });
 

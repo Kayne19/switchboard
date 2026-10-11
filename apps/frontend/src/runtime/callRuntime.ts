@@ -12,7 +12,7 @@
 
 import {
   HandsFreeController,
-  PLAYBACK_DRAIN_DEBOUNCE_MS,
+  type Detectors,
   type HandsFreeControllerOptions,
   type HandsFreeStateDetail,
   type SpeechEndpointer,
@@ -195,33 +195,21 @@ export class CallRuntime {
   };
   private hangupPending = false;
 
-  private handsFree: HandsFreeController | null = null;
+  // Hands-free's whole lifecycle, from its first load to the follow-up
+  // lease, is the controller's; the runtime only tells it what happened.
+  private readonly handsFree: HandsFreeController;
   private callerVoiceLevel = 0;
   private agentVoiceLevel = 0;
   private callerLevelAvailable = false;
   private agentLevelAvailable = false;
-  private handsFreeStartup: Promise<void> | null = null;
-  // The id of the last clip hands-free sent: an `error` naming it means the
-  // turn hands-free is waiting on will bring no reply.
-  private handsFreeClipId: string | null = null;
-  private pendingResponseBarrier: {
-    responseId: string;
-    generation: number;
-    timer: ReturnType<typeof setTimeout> | null;
-  } | null = null;
 
   private readonly onDocumentGesture = (event: Event) =>
     this.playback.handleGesture(event?.target ?? null);
   private readonly onVisibilityChange = () => {
-    if (this.options.document?.visibilityState === "hidden") {
-      this.handsFree?.disable("Hands-free stopped while the page is hidden.");
-      this.clearResponseBarrier();
-    }
+    if (this.options.document?.visibilityState === "hidden")
+      this.handsFree.stop("hidden");
   };
-  private readonly onPageHide = () => {
-    this.handsFree?.disable("Hands-free stopped when the page was left.");
-    this.clearResponseBarrier();
-  };
+  private readonly onPageHide = () => this.handsFree.stop("pagehide");
 
   constructor(options: CallRuntimeOptions) {
     this.options = options;
@@ -245,7 +233,7 @@ export class CallRuntime {
         // sounding, and frees a waiting line when it is not (#189).
         this.spokenLines.playbackActive(this.playback.isPlaying);
         this.update({ speaking: this.playback.isPlaying });
-        this.maybeCompleteResponseBarrier();
+        this.handsFree.playbackChanged();
       },
       onUtterance: (sequence) => this.spokenLines.reach(sequence),
     });
@@ -254,13 +242,7 @@ export class CallRuntime {
       getUserMedia: options.getUserMedia,
       createRecorder: options.createRecorder,
       createAudioContext: options.createAudioContext,
-      onAudioLevel: (level) => {
-        this.callerVoiceLevel = level;
-        if (!this.callerLevelAvailable) {
-          this.callerLevelAvailable = true;
-          this.update({ voiceLevelAvailable: true });
-        }
-      },
+      onAudioLevel: (level) => this.setCallerLevel(level),
       newClipId: () => this.newClipId(),
       context: () => ({
         epoch: this.turnEpoch,
@@ -274,9 +256,22 @@ export class CallRuntime {
       onStatus: (text, error) => this.setStatus(text, error),
       onActive: (active) =>
         active
-          ? this.handsFree?.pauseForPtt()
-          : this.handsFree?.resumeAfterPtt(),
+          ? this.handsFree.pauseForPtt()
+          : this.handsFree.resumeAfterPtt(),
     });
+    const handsFreeOptions: HandsFreeControllerOptions = {
+      loadDetectors: () => loadDetectors(options),
+      isSnapshotReady: () => this.snapshotReady,
+      currentEpoch: () => this.turnEpoch,
+      isPttActive: () => this.pushToTalk.isActive,
+      isPlaybackDrained: () => this.playback.isDrained(),
+      onClip: (audio, mime, epoch) => this.submitHandsFreeClip(audio, mime, epoch),
+      onAudioLevel: (level) => this.setCallerLevel(level),
+      onState: (detail) => this.renderHandsFreeState(detail),
+    };
+    this.handsFree = options.createHandsFree
+      ? options.createHandsFree(handsFreeOptions)
+      : new HandsFreeController(handsFreeOptions);
     this.applyLine();
   }
 
@@ -341,8 +336,7 @@ export class CallRuntime {
     )
       socket.close();
     this.pushToTalk.stop(false);
-    this.handsFree?.disable("Hands-free stopped when the page was left.");
-    this.clearResponseBarrier();
+    this.handsFree.stop("dispose");
     this.playback.dispose();
     this.spokenLines.clear();
   }
@@ -367,17 +361,11 @@ export class CallRuntime {
   }
 
   toggleHandsFree(): void {
-    if (!this.state.connected || this.handsFreeStartup) return;
-    if (this.handsFree?.isEnabled) {
-      this.handsFree.disable();
-    } else {
-      void this.enableHandsFree();
-    }
+    if (this.state.connected) this.handsFree.toggle();
   }
 
   selectRoute(route: string): void {
-    this.handsFree?.disable("Hands-free stopped while changing the line.");
-    this.clearResponseBarrier();
+    this.handsFree.stop("route");
     this.setStatus(
       route === "operator"
         ? "Going back to the operator..."
@@ -413,8 +401,7 @@ export class CallRuntime {
   // call has moved on from, and says so (#263).
   async hangup(): Promise<void> {
     if (this.hangupPending) return;
-    this.handsFree?.disable("Hands-free stopped for hangup.");
-    this.clearResponseBarrier();
+    this.handsFree.stop("hangup");
     this.hangupPending = true;
     try {
       await this.postJson("/hangup", { generation: this.turnEpoch });
@@ -518,6 +505,14 @@ export class CallRuntime {
       modelDisabled: availability.modelDisabled,
       thinkingDisabled: availability.thinkingDisabled,
     });
+  }
+
+  private setCallerLevel(level: number): void {
+    this.callerVoiceLevel = level;
+    if (!this.callerLevelAvailable) {
+      this.callerLevelAvailable = true;
+      this.update({ voiceLevelAvailable: true });
+    }
   }
 
   private renderHandsFreeState(detail: HandsFreeStateDetail): void {
@@ -643,9 +638,9 @@ export class CallRuntime {
     }
   }
 
-  /** False when the clip was not taken, so hands-free waits for no reply. */
-  private submitHandsFreeClip(audio: Blob, mime: string, epoch: number): boolean {
-    if (!this.snapshotReady || epoch !== this.turnEpoch) return false;
+  /** The id the clip went out under, or null when it was not taken. */
+  private submitHandsFreeClip(audio: Blob, mime: string, epoch: number): string | null {
+    if (!this.snapshotReady || epoch !== this.turnEpoch) return null;
     const clip: Clip = {
       id: this.newClipId(),
       audio,
@@ -656,111 +651,9 @@ export class CallRuntime {
       sent: false,
       streaming: false,
     };
-    if (!this.enqueueOutbox(clip)) return false;
-    this.handsFreeClipId = clip.id;
+    if (!this.enqueueOutbox(clip)) return null;
     this.flushOutbox();
-    return true;
-  }
-
-  // --- Hands-free -------------------------------------------------------
-
-  // `handsFreeStartup` covers only loading the detectors and making the
-  // controller, and MODE is refused while it runs. The controller's own
-  // start is outside it: a start that never finishes (a `resume()` WebKit
-  // leaves pending, a microphone prompt left open) used to hold MODE for the
-  // life of the page (#261). The controller is enabled from the first moment
-  // of its start, so a tap during it turns it off.
-  private async enableHandsFree(): Promise<void> {
-    if (!this.handsFree) {
-      await this.loadHandsFree();
-      if (!this.handsFree) return;
-    }
-    await this.handsFree.enable();
-  }
-
-  private loadHandsFree(): Promise<void> {
-    if (this.handsFreeStartup) return this.handsFreeStartup;
-    this.handsFreeStartup = (async () => {
-      this.renderHandsFreeState({
-        state: "starting",
-        message: "Loading the local wake-word and speech detectors...",
-        leaseRemainingMs: 0,
-      });
-      try {
-        const loadWakeDetector =
-          this.options.loadWakeDetector ?? loadLocalWakeDetector;
-        const loadSpeechEndpointer =
-          this.options.loadSpeechEndpointer ?? loadLocalSpeechEndpointer;
-        const [wakeDetector, speechEndpointer] = await Promise.all([
-          loadWakeDetector(),
-          loadSpeechEndpointer(),
-        ]);
-        if (this.disposed) return;
-        const handsFreeOptions: HandsFreeControllerOptions = {
-          wakeDetector,
-          speechEndpointer,
-          isSnapshotReady: () => this.snapshotReady,
-          currentEpoch: () => this.turnEpoch,
-          isPttActive: () => this.pushToTalk.isActive,
-          onClip: (audio, mime, epoch) =>
-            this.submitHandsFreeClip(audio, mime, epoch),
-          onAudioLevel: (level) => {
-            this.callerVoiceLevel = level;
-            if (!this.callerLevelAvailable) {
-              this.callerLevelAvailable = true;
-              this.update({ voiceLevelAvailable: true });
-            }
-          },
-          onState: (detail) => this.renderHandsFreeState(detail),
-        };
-        this.handsFree = this.options.createHandsFree
-          ? this.options.createHandsFree(handsFreeOptions)
-          : new HandsFreeController(handsFreeOptions);
-      } catch (error) {
-        this.handsFree = null;
-        this.renderHandsFreeState({
-          state: "error",
-          message: `Hands-free detector could not load (${errorText(error)}).`,
-          leaseRemainingMs: 0,
-        });
-      } finally {
-        this.handsFreeStartup = null;
-      }
-    })();
-    return this.handsFreeStartup;
-  }
-
-  private clearResponseBarrier(): void {
-    const barrier = this.pendingResponseBarrier;
-    if (barrier?.timer !== null && barrier?.timer !== undefined) {
-      this.clearTimer(barrier.timer);
-    }
-    this.pendingResponseBarrier = null;
-  }
-
-  // A settled response opens one follow-up lease, but only once the server
-  // has closed the response's audio and everything queued here has played.
-  private maybeCompleteResponseBarrier(): void {
-    const barrier = this.pendingResponseBarrier;
-    if (!barrier || !this.snapshotReady || barrier.generation !== this.turnEpoch)
-      return;
-    if (!this.playback.isDrained()) {
-      if (barrier.timer !== null) this.clearTimer(barrier.timer);
-      barrier.timer = null;
-      return;
-    }
-    if (barrier.timer !== null) return;
-    barrier.timer = setTimeout(() => {
-      if (
-        this.pendingResponseBarrier !== barrier ||
-        !this.playback.isDrained() ||
-        !this.snapshotReady ||
-        barrier.generation !== this.turnEpoch
-      )
-        return;
-      this.pendingResponseBarrier = null;
-      this.handsFree?.openFollowUpLease(barrier.generation);
-    }, PLAYBACK_DRAIN_DEBOUNCE_MS);
+    return clip.id;
   }
 
   // --- Socket -----------------------------------------------------------
@@ -871,8 +764,7 @@ export class CallRuntime {
       // remains locally retryable under the same id.
       if (this.pushToTalk.isRecording() || this.pushToTalk.isStarting)
         this.pushToTalk.stop(true);
-      this.handsFree?.disable("Hands-free stopped while disconnected.");
-      this.clearResponseBarrier();
+      this.handsFree.stop("disconnected");
       this.stopHeartbeat();
       this.outbox.markAllUnsent();
       this.setStatus("Disconnected. Reconnecting...", true);
@@ -977,8 +869,7 @@ export class CallRuntime {
           const neverSent = this.outbox.all.filter(
             (clip) => clip.epoch !== epoch && !clip.transmitted,
           ).length;
-          this.handsFree?.epochChanged();
-          this.clearResponseBarrier();
+          this.handsFree.epochChanged();
           this.outbox.retain(
             (clip) => clip.epoch === epoch || clip.transmitted === true,
           );
@@ -1042,20 +933,7 @@ export class CallRuntime {
         this.playback.receiveAudioDone(message);
         break;
       case "final_response_audio_closed":
-        if (message.generation === this.turnEpoch) {
-          this.clearResponseBarrier();
-          if (!message.success) {
-            // No follow-up lease without a reply; listen for the wake word.
-            this.handsFree?.endAwaitedTurn();
-          } else {
-            this.pendingResponseBarrier = {
-              responseId: message.response_id,
-              generation: message.generation,
-              timer: null,
-            };
-            this.maybeCompleteResponseBarrier();
-          }
-        }
+        this.handsFree.replyClosed(message.generation, message.success);
         break;
       case "pong":
         if (message.nonce === this.pendingPong) {
@@ -1137,21 +1015,29 @@ export class CallRuntime {
         this.applyLine();
         break;
       case "error":
-        if (message.id !== undefined) this.outbox.remove(message.id);
-        if (message.id !== undefined && message.id === this.handsFreeClipId) {
-          this.handsFreeClipId = null;
-          this.handsFree?.endAwaitedTurn();
+        if (message.id !== undefined) {
+          this.outbox.remove(message.id);
+          this.handsFree.clipFailed(message.id);
         }
         this.setStatus("Error: " + message.message, true);
         break;
       case "routing_unavailable":
         // This is deliberately a page error. The backend emits no reply
         // audio when both routing authorities are unavailable.
-        this.handsFree?.endAwaitedTurn();
+        this.handsFree.endAwaitedTurn();
         this.setStatus(message.message, true);
         break;
     }
   }
+}
+
+/** The two detectors, each from the runtime's option or the local module. */
+async function loadDetectors(options: CallRuntimeOptions): Promise<Detectors> {
+  const [wake, speech] = await Promise.all([
+    (options.loadWakeDetector ?? loadLocalWakeDetector)(),
+    (options.loadSpeechEndpointer ?? loadLocalSpeechEndpointer)(),
+  ]);
+  return { wake, speech };
 }
 
 async function loadLocalWakeDetector(): Promise<WakeDetector> {

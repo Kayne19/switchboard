@@ -1,15 +1,22 @@
 // The hands-free lifecycle as data: the phases, the events that move them,
 // and the one step function between them. It is pure: it reads the page
-// through `PageReads` and returns the next phase with the effects to run.
-// `HandsFreeController` (`hands_free.ts`) writes the phase and runs the
+// through `PageReads` and returns the next state with the effects to run.
+// `HandsFreeController` (`hands_free.ts`) writes the state and runs the
 // effects; this file touches no browser API.
 
-import type { HandsFreeState, HandsFreeStateDetail } from "./hands_free.js";
+import type {
+	HandsFreeState,
+	HandsFreeStateDetail,
+	SpeechEndpointer,
+	WakeDetector,
+} from "./hands_free.js";
 
 export const WAKE_PHRASE = "Damocles";
 export const WAKE_SPEECH_GRACE_MS = 2_000;
 export const MAX_HANDS_FREE_UTTERANCE_MS = 30_000;
 export const FOLLOW_UP_LEASE_MS = 8_000;
+/** How long playback must stay drained before a closed reply opens the lease. */
+export const PLAYBACK_DRAIN_DEBOUNCE_MS = 400;
 
 export type Timer = ReturnType<typeof setTimeout>;
 
@@ -19,6 +26,8 @@ const STARTING_MESSAGE =
 	"Starting local microphone listening. Ambient audio stays on this device.";
 const LISTENING_MESSAGE = `Listening locally for “${WAKE_PHRASE}”.`;
 const CAPTURING_MESSAGE = "Capturing speech locally; silence will end it.";
+const LOADING_MESSAGE = "Loading the local wake-word and speech detectors...";
+const NO_REPLY_MESSAGE = `No reply is coming; listening locally for “${WAKE_PHRASE}”.`;
 const LEASE_TICK_MS = 250;
 
 /**
@@ -40,6 +49,17 @@ export interface Graph {
 
 /** What a start has made so far; it is the start's own until `graphReady`. */
 export type GraphParts = { [Part in keyof Graph]: Graph[Part] | null };
+
+/** The wake-word detector and the speech endpointer. */
+export interface Detectors {
+	wake: WakeDetector | null;
+	speech: SpeechEndpointer | null;
+}
+
+/** One load of the detectors; the event it ends in names it. */
+export interface Load {
+	readonly kind: "load";
+}
 
 /** One start of the listening graph; `result` settles when it ends. */
 export interface Attempt {
@@ -81,27 +101,85 @@ interface Recording {
 export type Phase =
 	| { kind: "off"; message: string }
 	| { kind: "error"; message: string }
+	/** The first MODE: the detectors are loading; published as `starting`. */
+	| { kind: "loading"; load: Load }
 	| { kind: "starting"; attempt: Attempt }
 	| { kind: "paused_ptt" }
 	| { kind: "armed"; graph: Graph; message: string }
 	| { kind: "wake_grace"; graph: Graph; grace: Countdown }
 	| ({ kind: "capturing" } & Recording)
 	| ({ kind: "finishing" } & Recording)
-	| { kind: "awaiting_response"; graph: Graph }
+	/** `clipId` is the id the page sent the utterance under. */
+	| { kind: "awaiting_response"; graph: Graph; clipId: string }
 	| { kind: "lease"; graph: Graph; lease: Lease; tick: Countdown };
+
+/**
+ * A reply that closed at `generation`: the follow-up lease opens once its
+ * audio has drained and stayed drained for `PLAYBACK_DRAIN_DEBOUNCE_MS`.
+ * `debounce` is set while that wait runs, and stays set once it fired.
+ */
+export interface FollowUp {
+	generation: number;
+	debounce: Countdown | null;
+}
+
+/**
+ * Everything hands-free holds. `phase` is where it is. The other two outlive
+ * a phase: `detectors` are null until the first load lands and are kept from
+ * then on, and `followUp` is a closed reply that waits for its audio to drain
+ * whatever the phase does meanwhile (a push-to-talk turn and the restart
+ * after it, MODE off and on). Only a page stop, an epoch, the next closed
+ * reply, or the lease it opens ends it.
+ */
+export interface Machine {
+	phase: Phase;
+	detectors: Detectors | null;
+	followUp: FollowUp | null;
+}
+
+/** Why the page stops hands-free; each says so in the status. */
+export type StopReason =
+	| "hidden"
+	| "pagehide"
+	| "dispose"
+	| "route"
+	| "hangup"
+	| "disconnected";
+
+const STOPPED: Record<StopReason, string> = {
+	hidden: "Hands-free stopped while the page is hidden.",
+	pagehide: "Hands-free stopped when the page was left.",
+	dispose: "Hands-free stopped when the page was left.",
+	route: "Hands-free stopped while changing the line.",
+	hangup: "Hands-free stopped for hangup.",
+	disconnected: "Hands-free stopped while disconnected.",
+};
 
 /**
  * What moves hands-free. An event from a start, a recorder or a timer names
  * it, so one that outlives its phase is dropped.
  */
 export type HandsFreeEvent =
+	/** MODE. */
+	| { kind: "toggle" }
 	| { kind: "enable" }
 	| { kind: "turnOff"; message: string }
+	| { kind: "stop"; reason: StopReason }
 	| { kind: "callChanged" }
 	| { kind: "pttActive"; active: boolean }
 	| { kind: "followUp"; generation: number }
 	/** The awaited turn brings no reply: refused, failed, or never sent. */
 	| { kind: "noReply"; message: string }
+	/** The server's `error` naming a clip. */
+	| { kind: "clipFailed"; id: string }
+	/** `final_response_audio_closed`. */
+	| { kind: "replyClosed"; generation: number; success: boolean }
+	| { kind: "playbackChanged" }
+	| { kind: "debounceElapsed"; debounce: Countdown }
+	/** A controller built with its detectors has them from the start. */
+	| { kind: "given"; detectors: Detectors }
+	| { kind: "loaded"; load: Load; detectors: Detectors }
+	| { kind: "loadFailed"; load: Load; error: unknown }
 	| { kind: "graphReady"; attempt: Attempt; graph: Graph }
 	| { kind: "startFailed"; attempt: Attempt; error: unknown }
 	| { kind: "detectorFailed"; what: string; error: unknown }
@@ -114,6 +192,8 @@ export type HandsFreeEvent =
 	| { kind: "capped"; capture: Capture }
 	| { kind: "data"; capture: Capture; blob: Blob }
 	| { kind: "recorderStopped"; capture: Capture }
+	/** The page took the utterance under `clipId`, or could not send it. */
+	| { kind: "delivered"; capture: Capture; clipId: string | null }
 	| { kind: "recorderFailed"; capture: Capture; error: unknown }
 	| { kind: "leaseExpired"; lease: Lease }
 	| { kind: "leaseTick"; tick: Countdown };
@@ -124,6 +204,9 @@ export type Effect =
 	| { kind: "resetEndpointer" }
 	/** The voice indicator falls to zero. */
 	| { kind: "silence" }
+	| { kind: "load"; load: Load }
+	/** Connects the loaded detectors' callbacks to the machine. */
+	| { kind: "install"; detectors: Detectors }
 	| { kind: "start"; attempt: Attempt }
 	| { kind: "arm"; countdown: Countdown; ms: number; event: HandsFreeEvent }
 	| { kind: "openCapture"; graph: Graph }
@@ -133,11 +216,20 @@ export type Effect =
 	| { kind: "deliver"; capture: Capture };
 
 /**
- * One step: the phase to write, the effects to run after it, whether to
- * publish it, and an event the machine sends itself once it is published.
+ * What an event does to the phase: the phase to write, the effects to run
+ * after it, whether to publish it, and an event the machine sends itself
+ * once it is published.
  */
-interface Step {
+interface PhaseStep {
 	to: Phase;
+	effects: Effect[];
+	publish: boolean;
+	then: HandsFreeEvent | null;
+}
+
+/** One step of the whole machine; only a phase step publishes. */
+export interface Step {
+	to: Machine;
 	effects: Effect[];
 	publish: boolean;
 	then: HandsFreeEvent | null;
@@ -148,7 +240,8 @@ export interface PageReads {
 	snapshotReady(): boolean;
 	epoch(): number;
 	pttActive(): boolean;
-	/** Why a start cannot begin now, or null when it can. */
+	playbackDrained(): boolean;
+	/** Why the browser or the page refuses a start now, or null. */
 	refusal(): string | null;
 	now(): number;
 }
@@ -160,12 +253,12 @@ function go(
 	to: Phase,
 	effects: Effect[] = [],
 	then: HandsFreeEvent | null = null,
-): Step {
+): PhaseStep {
 	return { to, effects, publish: true, then };
 }
 
 /** A step that writes `to` without publishing it. */
-function quietly(to: Phase, effects: Effect[]): Step {
+function quietly(to: Phase, effects: Effect[]): PhaseStep {
 	return { to, effects, publish: false, then: null };
 }
 
@@ -185,8 +278,21 @@ function errorName(error: unknown): string {
 	return error instanceof Error ? error.name : "unknown error";
 }
 
+/** As `errorText` in `runtime/errors.ts`; this module imports no values. */
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 export function isEnabled(phase: Phase): boolean {
 	return phase.kind !== "off" && phase.kind !== "error";
+}
+
+/**
+ * On and past the first load. A load in flight answers only to its own
+ * result: a push-to-talk press, an epoch or a detector cannot reach it.
+ */
+function isOn(phase: Phase): boolean {
+	return isEnabled(phase) && phase.kind !== "loading";
 }
 
 export function graphOf(phase: Phase): Graph | null {
@@ -216,20 +322,33 @@ function arm(countdown: Countdown, ms: number, event: HandsFreeEvent): Effect {
 }
 
 /** A start begins, or the page refuses it and says why. */
-function startOrRefuse(page: PageReads): Step {
-	const refusal = page.refusal();
+function startOrRefuse(page: PageReads, detectors: Detectors): PhaseStep {
+	const refusal =
+		page.refusal() ??
+		(!detectors.wake
+			? "Hands-free wake detector is unavailable."
+			: !detectors.speech
+				? "Hands-free speech detector is unavailable."
+				: null);
 	if (refusal) return go({ kind: "error", message: refusal });
 	const attempt = newAttempt();
 	return go({ kind: "starting", attempt }, [{ kind: "start", attempt }]);
 }
 
+/** MODE on: the first time loads the detectors, then every time starts. */
+function turnOn(machine: Machine, page: PageReads): PhaseStep {
+	if (machine.detectors) return startOrRefuse(page, machine.detectors);
+	const load: Load = { kind: "load" };
+	return go({ kind: "loading", load }, [{ kind: "load", load }]);
+}
+
 /** Waiting for the wake word, both detectors starting from silence. */
-function listen(graph: Graph, message: string): Step {
+function listen(graph: Graph, message: string): PhaseStep {
 	return go({ kind: "armed", graph, message }, [RESET]);
 }
 
 /** Hands-free stops listening and says what failed. */
-function fail(what: string, error: unknown): Step {
+function fail(what: string, error: unknown): PhaseStep {
 	const message = `Hands-free ${what} (${errorName(error)}).`;
 	return go({ kind: "error", message }, QUIET);
 }
@@ -238,42 +357,204 @@ function fail(what: string, error: unknown): Step {
  * A recorder that cannot be made, started or stopped, or that reports an
  * error. Today it says so, then turns hands-free off over it.
  */
-function failRecording(what: string, error: unknown): Step {
+function failRecording(what: string, error: unknown): PhaseStep {
 	const message = `Hands-free recording ${what} (${errorName(error)}).`;
 	return go({ kind: "error", message }, [], TURN_OFF);
 }
 
+/** The events that read or write more than the phase; `step` takes them. */
+type MachineEvent = Extract<
+	HandsFreeEvent,
+	{
+		kind:
+			| "toggle"
+			| "enable"
+			| "stop"
+			| "callChanged"
+			| "pttActive"
+			| "replyClosed"
+			| "playbackChanged"
+			| "debounceElapsed"
+			| "given"
+			| "loaded"
+			| "loadFailed";
+	}
+>;
+
 /**
- * The phase x event table (pinned by `handsFreeLifecycle.test.ts`): the step
- * `event` takes from `phase`, or null when the event changes nothing there.
- * It reads the page and acts on nothing; the runner applies its effects
- * after the new phase is written.
+ * The state x event table (pinned by `handsFreeLifecycle.test.ts` and
+ * `handsFreeGlue.test.ts`): the step `event` takes from `machine`, or null
+ * when the event changes nothing. It reads the page and acts on nothing; the
+ * runner applies its effects after the new state is written. The events
+ * that move only the phase are `next`'s.
  */
-export function next(
-	phase: Phase,
+export function step(
+	machine: Machine,
 	event: HandsFreeEvent,
 	page: PageReads,
 ): Step | null {
+	const { phase, detectors, followUp } = machine;
+	const settled = { ...machine, followUp: null };
 	switch (event.kind) {
+		case "toggle":
+			// MODE waits for the first load to land (#261).
+			if (phase.kind === "loading") return null;
+			return moved(
+				machine,
+				machine,
+				isEnabled(phase)
+					? go({ kind: "off", message: OFF_MESSAGE }, QUIET)
+					: turnOn(machine, page),
+			);
 		case "enable":
 			return isEnabled(phase) && phase.kind !== "paused_ptt"
 				? null
-				: startOrRefuse(page);
-		case "turnOff":
-			return go({ kind: "off", message: event.message }, QUIET);
+				: moved(machine, machine, turnOn(machine, page));
+		case "stop": {
+			// Every page stop drops a reply still waiting to drain.
+			const off: Phase = { kind: "off", message: STOPPED[event.reason] };
+			// A stop does not reach a load in flight, which then starts as if
+			// nothing happened; only the page's own end stops it.
+			if (phase.kind === "loading")
+				return moved(machine, settled, event.reason === "dispose" ? go(off) : null);
+			// Before the first load there is nothing to stop and nothing to say.
+			return moved(machine, settled, detectors ? go(off, QUIET) : null);
+		}
 		case "callChanged": {
 			const message = "Hands-free stopped because the call changed.";
-			return isEnabled(phase) ? go({ kind: "off", message }, QUIET) : null;
+			return moved(
+				machine,
+				settled,
+				isOn(phase) ? go({ kind: "off", message }, QUIET) : null,
+			);
 		}
 		case "pttActive":
 			if (event.active)
-				return isEnabled(phase) ? go({ kind: "paused_ptt" }, QUIET) : null;
-			return phase.kind === "paused_ptt" ? startOrRefuse(page) : null;
+				return isOn(phase)
+					? moved(machine, machine, go({ kind: "paused_ptt" }, QUIET))
+					: null;
+			return phase.kind === "paused_ptt" && detectors
+				? moved(machine, machine, startOrRefuse(page, detectors))
+				: null;
+		case "replyClosed":
+			if (event.generation !== page.epoch()) return null;
+			// No follow-up lease without a reply; listen for the wake word.
+			if (!event.success)
+				return moved(
+					machine,
+					settled,
+					phase.kind === "awaiting_response"
+						? listen(phase.graph, NO_REPLY_MESSAGE)
+						: null,
+				);
+			return drain(
+				machine,
+				{ ...machine, followUp: { generation: event.generation, debounce: null } },
+				page,
+			);
+		case "playbackChanged":
+			return followUp ? drain(machine, machine, page) : null;
+		case "debounceElapsed":
+			if (!followUp || followUp.debounce !== event.debounce) return null;
+			if (!ready(followUp, page) || !page.playbackDrained()) return null;
+			return moved(machine, settled, openLease(phase, followUp.generation, page));
+		case "given":
+			if (detectors) return null;
+			return moved(
+				machine,
+				{ ...machine, detectors: event.detectors },
+				go(phase),
+				[{ kind: "install", detectors: event.detectors }],
+			);
+		case "loaded":
+			if (phase.kind !== "loading" || phase.load !== event.load) return null;
+			return moved(
+				machine,
+				{ ...machine, detectors: event.detectors },
+				startOrRefuse(page, event.detectors),
+				[{ kind: "install", detectors: event.detectors }],
+			);
+		case "loadFailed":
+			if (phase.kind !== "loading" || phase.load !== event.load) return null;
+			return moved(
+				machine,
+				machine,
+				go({
+					kind: "error",
+					message: `Hands-free detector could not load (${errorMessage(event.error)}).`,
+				}),
+			);
+		default:
+			return moved(machine, machine, next(phase, event, page));
+	}
+}
+
+/**
+ * The step from `from` to `to` with `phaseStep` applied to its phase, the
+ * effects in `before` running first. Null when nothing changes.
+ */
+function moved(
+	from: Machine,
+	to: Machine,
+	phaseStep: PhaseStep | null,
+	before: Effect[] = [],
+): Step | null {
+	if (!phaseStep && to.followUp === from.followUp && to.detectors === from.detectors)
+		return null;
+	return {
+		to: phaseStep ? { ...to, phase: phaseStep.to } : to,
+		effects: [...before, ...(phaseStep?.effects ?? [])],
+		publish: phaseStep?.publish ?? false,
+		then: phaseStep?.then ?? null,
+	};
+}
+
+/** Whether a closed reply still belongs to the call the page is on. */
+function ready(followUp: FollowUp, page: PageReads): boolean {
+	return page.snapshotReady() && followUp.generation === page.epoch();
+}
+
+/**
+ * Playback changed while `to.followUp` waits: drained starts the debounce
+ * once, playing again cancels it.
+ */
+function drain(from: Machine, to: Machine, page: PageReads): Step | null {
+	const waiting = to.followUp;
+	if (!waiting || !ready(waiting, page)) return moved(from, to, null);
+	if (!page.playbackDrained())
+		return moved(
+			from,
+			waiting.debounce ? { ...to, followUp: { ...waiting, debounce: null } } : to,
+			null,
+		);
+	if (waiting.debounce) return moved(from, to, null);
+	const debounce = countdown();
+	return moved(from, { ...to, followUp: { ...waiting, debounce } }, null, [
+		arm(debounce, PLAYBACK_DRAIN_DEBOUNCE_MS, { kind: "debounceElapsed", debounce }),
+	]);
+}
+
+/**
+ * The phase x event table: the step `event` takes from `phase`, or null
+ * when the event changes nothing there.
+ */
+function next(
+	phase: Phase,
+	event: Exclude<HandsFreeEvent, MachineEvent>,
+	page: PageReads,
+): PhaseStep | null {
+	switch (event.kind) {
+		case "turnOff":
+			return go({ kind: "off", message: event.message }, QUIET);
 		case "followUp":
-			return followUp(phase, event.generation, page);
+			return openLease(phase, event.generation, page);
 		case "noReply":
 			return phase.kind === "awaiting_response"
 				? listen(phase.graph, event.message)
+				: null;
+		case "clipFailed":
+			return phase.kind === "awaiting_response" && phase.clipId === event.id
+				? listen(phase.graph, NO_REPLY_MESSAGE)
 				: null;
 		case "graphReady":
 			return phase.kind === "starting" && phase.attempt === event.attempt
@@ -284,7 +565,7 @@ export function next(
 				? fail("could not start", event.error)
 				: null;
 		case "detectorFailed":
-			return isEnabled(phase)
+			return isOn(phase)
 				? fail(`${event.what} failed`, event.error)
 				: null;
 		case "wake": {
@@ -344,9 +625,23 @@ export function next(
 			// word again (#258).
 			if (!event.capture.chunks.length)
 				return listen(phase.graph, "No utterance was retained.");
-			return go({ kind: "awaiting_response", graph: phase.graph }, [
+			// The capture ends once the page has taken the utterance.
+			return quietly({ ...phase, kind: "finishing" }, [
 				{ kind: "deliver", capture: event.capture },
 			]);
+		case "delivered":
+			if (phase.kind !== "finishing" || phase.capture !== event.capture)
+				return null;
+			if (event.clipId === null)
+				return listen(
+					phase.graph,
+					"The utterance could not be sent; say the wake word again.",
+				);
+			return go({
+				kind: "awaiting_response",
+				graph: phase.graph,
+				clipId: event.clipId,
+			});
 		case "recorderFailed":
 			return captureOf(phase) === event.capture
 				? failRecording("failed", event.error)
@@ -381,7 +676,7 @@ export function next(
 }
 
 /** The recorder is asked to stop; its `stop` event ends the capture. */
-function finish(phase: Phase & { kind: "capturing" }): Step {
+function finish(phase: Phase & { kind: "capturing" }): PhaseStep {
 	return quietly({ ...phase, kind: "finishing" }, [
 		{ kind: "stopRecorder", capture: phase.capture },
 	]);
@@ -392,11 +687,11 @@ function finish(phase: Phase & { kind: "capturing" }): Step {
  * Not over a start, which has no graph to listen with, and not over a
  * capture, which the lease would claim to be waiting for.
  */
-function followUp(
+function openLease(
 	phase: Phase,
 	generation: number,
 	page: PageReads,
-): Step | null {
+): PhaseStep | null {
 	if (generation !== page.epoch() || !page.snapshotReady()) return null;
 	switch (phase.kind) {
 		case "armed":
@@ -416,6 +711,7 @@ function followUp(
 		}
 		case "off":
 		case "error":
+		case "loading":
 		case "starting":
 		case "paused_ptt":
 		case "capturing":
@@ -443,6 +739,8 @@ export function view(phase: Phase, now: number): HandsFreeStateDetail {
 		case "error":
 		case "armed":
 			return detail(phase.kind, phase.message);
+		case "loading":
+			return detail("starting", LOADING_MESSAGE);
 		case "starting":
 			return detail("starting", STARTING_MESSAGE);
 		case "paused_ptt":

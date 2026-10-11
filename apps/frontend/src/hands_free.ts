@@ -2,12 +2,15 @@ import {
 	type Attempt,
 	type Capture,
 	type Countdown,
+	type Detectors,
 	type Effect,
 	type Graph,
 	type GraphParts,
 	type HandsFreeEvent,
+	type Load,
+	type Machine,
 	type PageReads,
-	type Phase,
+	type StopReason,
 	type Timer,
 	OFF_MESSAGE,
 	WAKE_PHRASE,
@@ -17,7 +20,7 @@ import {
 	graphOf,
 	isEnabled,
 	leaseOf,
-	next,
+	step,
 	tickOf,
 	view,
 } from "./hands_free_machine.js";
@@ -27,9 +30,11 @@ import {
 export {
 	FOLLOW_UP_LEASE_MS,
 	MAX_HANDS_FREE_UTTERANCE_MS,
+	PLAYBACK_DRAIN_DEBOUNCE_MS,
 	WAKE_PHRASE,
 	WAKE_SPEECH_GRACE_MS,
 } from "./hands_free_machine.js";
+export type { Detectors, StopReason } from "./hands_free_machine.js";
 
 function normalizeAudioEnergy(energy: number): number {
 	return Number.isFinite(energy) ? Math.max(0, Math.min(1, energy * 8)) : 0;
@@ -46,7 +51,6 @@ export const SPEECH_START_PROBABILITY = 0.5;
 export const SPEECH_END_PROBABILITY = 0.35;
 /** How long a start waits for a suspended audio context to run. */
 export const AUDIO_RESUME_DEADLINE_MS = 3_000;
-export const PLAYBACK_DRAIN_DEBOUNCE_MS = 400;
 
 type DetectorCallback = () => void;
 type DetectorErrorCallback = (error: unknown) => void;
@@ -98,6 +102,11 @@ export interface HandsFreeControllerOptions {
 	createWorkletNode?: (context: AudioContext) => AudioWorkletNode;
 	wakeDetector?: WakeDetector;
 	speechEndpointer?: SpeechEndpointer;
+	/**
+	 * Loads both detectors on the first MODE instead. A controller given this
+	 * says nothing until then.
+	 */
+	loadDetectors?: () => Promise<Detectors>;
 	workletUrl?: string;
 	now?: () => number;
 	setTimeout?: (handler: () => void, timeout: number) => Timer;
@@ -106,8 +115,13 @@ export interface HandsFreeControllerOptions {
 	isSnapshotReady: () => boolean;
 	currentEpoch: () => number;
 	isPttActive: () => boolean;
-	/** Takes a finished utterance; false when the page could not send it. */
-	onClip: (audio: Blob, mime: string, epoch: number) => boolean;
+	/** Whether nothing is playing or waiting to play; true when omitted. */
+	isPlaybackDrained?: () => boolean;
+	/**
+	 * Takes a finished utterance and returns the id it went out under, or
+	 * null when the page could not send it.
+	 */
+	onClip: (audio: Blob, mime: string, epoch: number) => string | null;
 	onAudioLevel?: (level: number) => void;
 	onState: (detail: HandsFreeStateDetail) => void;
 }
@@ -148,10 +162,12 @@ export class HandsFreeController {
 	private readonly setTimer: Option<"setTimeout">;
 	private readonly clearTimer: Option<"clearTimeout">;
 	private readonly isForeground: Option<"isForeground">;
-	private readonly detector: WakeDetector | null;
-	private readonly endpointer: SpeechEndpointer | null;
 	private readonly page: PageReads;
-	private phase: Phase = { kind: "off", message: OFF_MESSAGE };
+	private state: Machine = {
+		phase: { kind: "off", message: OFF_MESSAGE },
+		detectors: null,
+		followUp: null,
+	};
 
 	constructor(options: HandsFreeControllerOptions) {
 		this.options = options;
@@ -181,46 +197,44 @@ export class HandsFreeController {
 			snapshotReady: () => options.isSnapshotReady(),
 			epoch: () => options.currentEpoch(),
 			pttActive: () => options.isPttActive(),
+			playbackDrained: () => options.isPlaybackDrained?.() ?? true,
 			refusal: () => this.refusal(),
 			now,
 		};
-		this.detector = options.wakeDetector || null;
-		this.endpointer = options.speechEndpointer || null;
-		this.detector?.onDetect(() => this.transition({ kind: "wake" }));
-		this.detector?.onError?.((error) =>
-			this.transition({ kind: "detectorFailed", what: "detector", error }),
-		);
-		this.endpointer?.onSpeechStart(() =>
-			this.transition({ kind: "speechStart" }),
-		);
-		this.endpointer?.onSpeechEnd(() => this.transition({ kind: "speechEnd" }));
-		this.endpointer?.onError?.((error) =>
+		// Without a loader the detectors are given now, and the controller
+		// says it is off; with one it says nothing until the first MODE.
+		if (!options.loadDetectors)
 			this.transition({
-				kind: "detectorFailed",
-				what: "speech detector",
-				error,
-			}),
-		);
-		this.publish();
+				kind: "given",
+				detectors: {
+					wake: options.wakeDetector || null,
+					speech: options.speechEndpointer || null,
+				},
+			});
 	}
 
 	get currentState(): HandsFreeState {
-		return view(this.phase, this.page.now()).state;
+		return view(this.state.phase, this.page.now()).state;
 	}
 
 	get isEnabled(): boolean {
-		return isEnabled(this.phase);
+		return isEnabled(this.state.phase);
 	}
 
 	get isCapturing(): boolean {
-		return captureOf(this.phase) !== null;
+		return captureOf(this.state.phase) !== null;
+	}
+
+	/** MODE: loads the detectors the first time, then starts or stops listening. */
+	toggle(): void {
+		this.transition({ kind: "toggle" });
 	}
 
 	/** Settles once the start this call began ends: true when hands-free is listening. */
 	enable(): Promise<boolean> {
-		const before = this.phase;
+		const before = this.state.phase;
 		this.transition({ kind: "enable" });
-		const after = this.phase;
+		const after = this.state.phase;
 		if (after.kind === "starting" && after !== before)
 			return after.attempt.result;
 		return Promise.resolve(isEnabled(after));
@@ -228,6 +242,11 @@ export class HandsFreeController {
 
 	disable(message = OFF_MESSAGE): void {
 		this.transition({ kind: "turnOff", message });
+	}
+
+	/** The page stops hands-free and drops a reply still waiting to drain. */
+	stop(reason: StopReason): void {
+		this.transition({ kind: "stop", reason });
 	}
 
 	pauseForPtt(): void {
@@ -255,36 +274,60 @@ export class HandsFreeController {
 		});
 	}
 
+	/** The server's `error` named the clip `id`. */
+	clipFailed(id: string): void {
+		this.transition({ kind: "clipFailed", id });
+	}
+
+	/**
+	 * The server closed a reply's audio. A reply that could not be produced
+	 * ends the turn hands-free waits on; one that was opens the follow-up
+	 * lease once playback has drained.
+	 */
+	replyClosed(generation: number, success: boolean): void {
+		this.transition({ kind: "replyClosed", generation, success });
+	}
+
+	/** Playback started or stopped; a closed reply waits for it to drain. */
+	playbackChanged(): void {
+		this.transition({ kind: "playbackChanged" });
+	}
+
 	epochChanged(): void {
 		this.transition({ kind: "callChanged" });
 	}
 
 	/**
-	 * The only writer of `phase`. The new phase is written before anything
+	 * The only writer of `state`. The new state is written before anything
 	 * is done about it, so a callback that fires at once (a recorder's `stop`)
-	 * sees the phase it belongs to, or is dropped. Then what the old phase
+	 * sees the phase it belongs to, or is dropped. Then what the old state
 	 * held and the new one does not is released, the step's effects run (no
 	 * more once one of them has moved the machine on), and the phase is
 	 * published.
 	 */
 	private transition(event: HandsFreeEvent): void {
-		const from = this.phase;
-		const step = next(from, event, this.page);
-		if (!step) return;
-		const to = step.to;
-		this.phase = to;
+		const from = this.state;
+		const taken = step(from, event, this.page);
+		if (!taken) return;
+		const to = taken.to;
+		this.state = to;
 		this.leave(from, to);
-		for (const effect of step.effects) {
-			if (this.phase !== to) return;
+		for (const effect of taken.effects) {
+			if (this.state !== to) return;
 			this.run(effect);
 		}
-		if (this.phase !== to) return;
-		if (step.publish) this.publish();
-		if (step.then) this.transition(step.then);
+		if (this.state !== to) return;
+		if (taken.publish) this.publish();
+		if (taken.then) this.transition(taken.then);
 	}
 
 	/** The one teardown: release what `from` holds and `to` does not. */
-	private leave(from: Phase, to: Phase): void {
+	private leave(fromState: Machine, toState: Machine): void {
+		const debounce = fromState.followUp?.debounce;
+		if (debounce && debounce !== toState.followUp?.debounce)
+			this.disarm(debounce);
+		const from = fromState.phase;
+		const to = toState.phase;
 		const grace = graceOf(from);
 		if (grace && grace !== graceOf(to)) this.disarm(grace);
 		const tick = tickOf(from);
@@ -314,15 +357,20 @@ export class HandsFreeController {
 			case "resetDetectors":
 				// Both detectors forget the audio before this moment, so audio
 				// from before cannot open the next turn.
-				this.detector?.reset();
-				this.endpointer?.reset();
+				this.state.detectors?.wake?.reset();
+				this.state.detectors?.speech?.reset();
 				return;
 			case "resetEndpointer":
-				this.endpointer?.reset();
+				this.state.detectors?.speech?.reset();
 				return;
 			case "silence":
 				this.options.onAudioLevel?.(0);
 				return;
+			case "load":
+				void this.load(effect.load);
+				return;
+			case "install":
+				return this.install(effect.detectors);
 			case "start":
 				void this.buildGraph(effect.attempt);
 				return;
@@ -377,25 +425,49 @@ export class HandsFreeController {
 	}
 
 	private publish(): void {
-		this.options.onState(view(this.phase, this.page.now()));
+		this.options.onState(view(this.state.phase, this.page.now()));
 	}
 
-	/** Why a start cannot begin now, or null when it can. */
+	/** Why the browser or the page refuses a start now, or null. */
 	private refusal(): string | null {
 		if (this.options.isPttActive() || !this.isForeground())
 			return "Finish push-to-talk and keep this page visible first.";
 		if (!this.supported())
 			return "Hands-free needs a secure browser with local audio worklet support.";
-		if (!this.detector || !this.endpointer)
-			return this.detector
-				? "Hands-free speech detector is unavailable."
-				: "Hands-free wake detector is unavailable.";
 		return null;
+	}
+
+	/** Loads the detectors for `load`; its result names it. */
+	private async load(load: Load): Promise<void> {
+		try {
+			const detectors = await this.options.loadDetectors!();
+			this.transition({ kind: "loaded", load, detectors });
+		} catch (error) {
+			this.transition({ kind: "loadFailed", load, error });
+		}
+	}
+
+	/** Connects the detectors' callbacks to the machine. */
+	private install({ wake, speech }: Detectors): void {
+		wake?.onDetect(() => this.transition({ kind: "wake" }));
+		wake?.onError?.((error) =>
+			this.transition({ kind: "detectorFailed", what: "detector", error }),
+		);
+		speech?.onSpeechStart(() => this.transition({ kind: "speechStart" }));
+		speech?.onSpeechEnd(() => this.transition({ kind: "speechEnd" }));
+		speech?.onError?.((error) =>
+			this.transition({
+				kind: "detectorFailed",
+				what: "speech detector",
+				error,
+			}),
+		);
 	}
 
 	/** Whether `attempt` is the start hands-free still waits on. */
 	private isCurrent(attempt: Attempt): boolean {
-		return this.phase.kind === "starting" && this.phase.attempt === attempt;
+		const { phase } = this.state;
+		return phase.kind === "starting" && phase.attempt === attempt;
 	}
 
 	/**
@@ -416,7 +488,8 @@ export class HandsFreeController {
 		try {
 			// Two models, one wait: either one failing is the same start
 			// failure, reported by the catch below.
-			await Promise.all([this.detector?.load?.(), this.endpointer?.load?.()]);
+			const { detectors } = this.state;
+			await Promise.all([detectors?.wake?.load?.(), detectors?.speech?.load?.()]);
 			if (!this.isCurrent(attempt)) return attempt.finish(false);
 			const context = this.createAudioContext();
 			parts.context = context;
@@ -448,7 +521,8 @@ export class HandsFreeController {
 			sink.connect(context.destination);
 			const graph: Graph = { context, stream, source, worklet, sink };
 			worklet.port.onmessage = (event: MessageEvent) => {
-				if (graphOf(this.phase) === graph) this.onWorkletMessage(event.data);
+				if (graphOf(this.state.phase) === graph)
+					this.onWorkletMessage(event.data);
 			};
 			this.transition({ kind: "graphReady", attempt, graph });
 			attempt.finish(true);
@@ -521,9 +595,10 @@ export class HandsFreeController {
 			if (!(message.samples instanceof Float32Array)) return;
 			// The endpointer scores every frame; the wake detector only runs
 			// while a wake word could still open a turn.
-			this.endpointer?.process(message.samples);
-			if (this.phase.kind === "armed" || this.phase.kind === "wake_grace")
-				this.detector?.process(message.samples);
+			const { phase, detectors } = this.state;
+			detectors?.speech?.process(message.samples);
+			if (phase.kind === "armed" || phase.kind === "wake_grace")
+				detectors?.wake?.process(message.samples);
 		}
 	}
 
@@ -557,10 +632,7 @@ export class HandsFreeController {
 			type: capture.recorder.mimeType || "audio/webm",
 		});
 		capture.chunks.length = 0;
-		if (!this.options.onClip(blob, blob.type, capture.epoch))
-			this.transition({
-				kind: "noReply",
-				message: "The utterance could not be sent; say the wake word again.",
-			});
+		const clipId = this.options.onClip(blob, blob.type, capture.epoch);
+		this.transition({ kind: "delivered", capture, clipId });
 	}
 }
