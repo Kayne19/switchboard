@@ -333,8 +333,8 @@ The reports themselves belong to `ScreenReporter` (`src/app/screenReporter.ts`);
 `screen_state` is on the wire until its `screen_state_ack`, and the newest
 scene waits behind it. Its state is one value written only by `transition`:
 the phase (`line`), the queued report, the generation of the last `epoch`,
-the highest applied display `seq`, the rejections not yet sent (oldest
-first, one per `seq`), and the scene the page last rendered at this
+the highest applied display `seq`, the rejections not yet sent (lowest `seq` first, one per `seq`, at most
+`MAX_KEPT_REJECTIONS`, the service's own bound), and the scene the page last rendered at this
 generation.
 
 | phase | holds | event | next | effect |
@@ -348,17 +348,16 @@ generation.
 | `awaiting` | the report, its deadline | scene equal to the report on the wire | `awaiting` | the queued report is dropped |
 | `awaiting` | the report, its deadline | another scene | `awaiting` | it replaces the queued report |
 | `awaiting` | the report, its deadline | ack, or `ACK_DEADLINE_MS` (2 s) without one | `idle`, or `awaiting` | the queued report goes; with none queued and a rejection waiting, the scene is reported again to carry it |
-| any | — | display applied / declined | same | the applied `seq` rises / the rejection joins the list, and the next report carries the oldest |
+| any | — | display applied / declined | same | the applied `seq` rises / the rejection joins the list in `seq` order (past the bound the lowest goes), and the next report carries the lowest |
 
 The service does not acknowledge a report it ignores (a tab that is not the
 active one, another generation, a view it does not know), so the deadline is
 what lets an older tab report again once it becomes the active one. The
 deadline names its report and is cleared on leaving `awaiting`, so one that
 fires late is dropped. A report that goes clears the queue: nothing older
-than the report on the wire is sent after it. Each declined display is sent
-once, one per report, oldest first (#378): a report carries the oldest
-rejection, and only the report sent with that same object takes it off the
-list. A report's `applied_seq` stays below the next rejection still waiting,
+than the report on the wire is sent after it. Each declined display is sent once, one per report, lowest `seq` first
+(#378): a report carries the lowest rejection, and only the report sent with that same object takes it off the
+list. A report's `applied_seq` stays below every rejection still waiting,
 because the service takes a display at or under the reported `applied_seq`
 with no rejection as rendered. An `epoch` keeps the rejections (a `seq` is
 the delivery's, and a same-generation epoch leaves their display calls
