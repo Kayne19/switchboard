@@ -1,6 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 import { fixtures } from '../../src/fixtures/scenes';
 import type { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
+import { statusMessage } from '../fixtures/serverMessages';
 
 // What the browser specs share, written once: the geometries the goldens are
 // drawn at, opening a fixture scene, running actions through the page's
@@ -51,6 +52,35 @@ export async function openTheater(page: Page, server: DisplayFixtureServer, scen
   server.broadcast({ type: 'view', target: 'theater', reason: '' });
   await expect(page.locator('.stage')).toHaveAttribute('data-view', 'theater');
   await expect(page.locator('[data-scene="theater"]')).toBeVisible();
+}
+
+/**
+ * Opens the page on the fixture socket with a project on the line (its
+ * models and thinking levels, two other projects), shows a fixture scene as
+ * an agent's displays arrive, and asks for the system view as an agent's
+ * `view` does (system.spec.ts, and its goldens in visual.spec.ts).
+ */
+export async function openSystem(page: Page, server: DisplayFixtureServer, scene: keyof typeof fixtures = 'training'): Promise<void> {
+  const { wsUrl } = await server.start();
+  await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+  await expect.poll(() => server.frames.some((frame) => frame.type === 'hello')).toBe(true);
+  server.broadcast(statusMessage({
+    route: 'switchboard',
+    label: 'switchboard',
+    model: 'openai/gpt-5:high',
+    model_name: 'openai/gpt-5',
+    models: [{ provider: 'openai', model: 'gpt-5', thinks: true }, { provider: 'anthropic', model: 'claude-opus-5', thinks: true }],
+    thinking: 'high',
+    thinking_requested: 'high',
+    thinking_confirmed: true,
+    thinking_default: 'high',
+    levels: ['off', 'low', 'medium', 'high'],
+    projects: ['switchboard', 'homelab', 'llm-wiki'],
+  }));
+  for (const action of fixtures[scene]) server.broadcast({ type: 'display', action });
+  server.broadcast({ type: 'view', target: 'system', reason: '' });
+  await expect(page.locator('.stage')).toHaveAttribute('data-view', 'system');
+  await expect(page.locator('[data-scene="system"] select[name="route"]')).toHaveValue('switchboard');
 }
 
 /** Runs actions through the page's controller, in order, as an agent's display calls arrive. */

@@ -151,7 +151,7 @@ left.
 ## Changing the model mid-call
 
 A caller changes the model or thinking level of the project they are on with
-the page's pickers (`POST /model`, `POST /thinking`). Asking for it out loud
+the pickers in the page's system view (`POST /model`, `POST /thinking`). Asking for it out loud
 reaches the operator, which points them to the picker. `redial.rs` decides and
 makes the change.
 
@@ -218,7 +218,7 @@ effective level from the daemon and sends it with the reply to
 `set_thinking` and in session `state` events (`docs/host-link.md`). Until the
 host reports, the page marks the level as requested rather than stating it.
 
-`POST /thinking` (the picker on the page) sets the level for the rest of the
+`POST /thinking` (the thinking picker in the page's system view) sets the level for the rest of the
 process and switches the live project session onto it, keeping its history.
 The level is kept for the next project call even when that switch is refused. The
 operator is never re-dialled for this; its level is a deployed setting.
@@ -234,7 +234,8 @@ leg is live; its written reply remains in the transcript and on screen.
 ## Connecting without the operator
 
 `POST /connect` (`{"project": "...", "generation": N}`, or `"operator"` to
-come back) puts the caller straight onto a project from the page. The operator
+come back) puts the caller straight onto a project from the page (the route
+picker in its system view). The operator
 is a router, not a gate: when the caller already knows where they want to be,
 saying it out loud and waiting to be understood is pure overhead. Any live leg
 is dropped first, without the turn lock, for the same reason `/hangup` does not
@@ -253,7 +254,7 @@ the current generation for a control that left it out (#263).
 
 ## Getting unstuck
 
-`POST /hangup` (`{"generation": N}`), wired to the button on the page, drops
+`POST /hangup` (`{"generation": N}`), wired to HANG UP in the page's system view, drops
 the project leg and puts the caller back on the operator. Every other way back runs through an agent
 deciding to let go, which is no use when the agent is the problem — a leg on a
 model that cannot hold a thread, a turn that will not settle. So this one asks

@@ -14,6 +14,7 @@ import type {
 } from '../controller/types';
 import { RUNTIME_CONVERSATION_ID, RUNTIME_LINE_ERROR_ID } from '../controller/types';
 import { anchoredNote, cast, type CompositionModel, type SceneKind } from '../app/sceneModel';
+import type { LineControls } from '../controller/context';
 import { useLayoutMotion } from '../hooks/useLayoutMotion';
 import { SurfaceBoundary } from './SurfaceBoundary';
 
@@ -34,8 +35,10 @@ export interface SceneProps {
   onToggleMode?: () => void;
   /** The focus layer or the history, a modal, is open over the scene: the scene is inert behind it (`useModalFocus`). */
   behindModal?: boolean;
-  /** The caller leaves the view the page is in for auto: the theater view's EXIT. */
+  /** The caller leaves the view the page is in for auto: the theater's and the system view's EXIT. */
   onExitView: () => void;
+  /** The line and its controls, for the system view; absent in demo mode, where there is no call. */
+  line?: LineControls;
 }
 
 export function annotationForScene(

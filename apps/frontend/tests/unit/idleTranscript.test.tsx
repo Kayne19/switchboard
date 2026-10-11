@@ -13,6 +13,7 @@ import { sceneKindOf } from './sceneKindOf';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { helloAck } from '../fixtures/serverMessages';
+import { testLine } from './lineControls';
 import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
 
 type Controller = ReturnType<typeof useController>;
@@ -68,6 +69,7 @@ function FakeVoiceRuntime() {
       },
       handsFree: false,
       toggleHandsFree: () => {},
+      line: testLine(),
     });
     return () => registerVoiceRuntime(null);
   }, [registerVoiceRuntime]);
@@ -174,6 +176,7 @@ describe('the transcript toggle on the idle stage', () => {
           sendText: () => true,
           handsFree: false,
           toggleHandsFree: () => {},
+          line: testLine(),
         });
         return () => registerVoiceRuntime(null);
       }, [connected, registerVoiceRuntime]);

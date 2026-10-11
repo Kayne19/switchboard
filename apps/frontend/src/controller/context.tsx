@@ -11,6 +11,39 @@ import {
 import { controllerReducer, createInitialState } from "./reducer";
 import type { ControllerAction, ControllerState, FixtureName } from "./types";
 import { fixtures } from "../fixtures/scenes";
+import type { SelectOption } from "../runtime/lineStatus";
+
+/**
+ * The line as the call runtime holds it (`RuntimeState` in
+ * runtime/callRuntime.ts), and its controls: what the system view draws
+ * (#277). The page draws these values and acts only through these calls;
+ * the runtime owns the pickers' locks and the requests they post.
+ */
+export interface LineControls {
+  /** Whether the socket is up; with it down nothing can be switched. */
+  connected: boolean;
+  route: string;
+  /** Display name for whoever is on the line. */
+  routeLabel: string;
+  routes: SelectOption[];
+  model: string;
+  models: SelectOption[];
+  /** Why the model picker is unavailable, when the catalog failed to load. */
+  modelTitle: string;
+  thinking: string;
+  thinkingLevels: SelectOption[];
+  onProject: boolean;
+  routeDisabled: boolean;
+  modelDisabled: boolean;
+  thinkingDisabled: boolean;
+  /** The runtime's status line, and whether it reports a failure. */
+  status: string;
+  statusError: boolean;
+  selectRoute: (route: string) => void;
+  selectModel: (model: string) => void;
+  selectThinking: (level: string) => void;
+  hangup: () => void;
+}
 
 // The isolated voice transport registers itself here so the on-screen Damocles
 // presence can drive a call turn. It is absent in demo mode, where the presence
@@ -32,6 +65,8 @@ export interface VoiceRuntime {
   handsFree: boolean;
   /** Switches between push-to-talk and hands-free listening (the transport owns the policy). */
   toggleHandsFree: () => void;
+  /** The line and its controls, for the system view. */
+  line: LineControls;
 }
 
 interface ControllerContextValue {
