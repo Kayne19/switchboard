@@ -19,7 +19,7 @@ const panes: Array<[string, string, ControllerAction]> = [
 
 const press = (element: HTMLElement, key: string) => act(() => element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));
 
-// The viewport measures when the list or its box changes (watchElement's
+// The viewport measures when the list or its box changes (useMeasured's
 // MutationObserver), not as it scrolls: a comment appended to the scroll
 // stands in for a change here.
 async function measured(scroll: HTMLElement) {

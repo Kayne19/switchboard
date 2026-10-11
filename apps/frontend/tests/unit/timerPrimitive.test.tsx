@@ -239,6 +239,7 @@ describe('the height the timers ask', () => {
   const observers = new Map<Element, ResizeObserverCallback>();
   const saved = (['offsetWidth', 'offsetHeight'] as const).map((key) => [key, Object.getOwnPropertyDescriptor(HTMLElement.prototype, key)] as const);
   const stub = globalThis.ResizeObserver;
+  const computedStyle = window.getComputedStyle;
   const report = () => act(() => {
     for (const [element, callback] of observers) {
       const height = element.classList.contains('timer-list__rows') ? rows : field.height;
@@ -261,11 +262,18 @@ describe('the height the timers ask', () => {
     } as unknown as typeof ResizeObserver;
     Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get: () => field.width });
     Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => field.height });
+    // The rows' used height, which the field reads from their computed style.
+    window.getComputedStyle = (element: Element, pseudo?: string | null) => {
+      const style = computedStyle.call(window, element, pseudo);
+      if (!element.classList.contains('timer-list__rows')) return style;
+      return new Proxy(style, { get: (target, key) => (key === 'height' ? `${rows}px` : Reflect.get(target, key, target)) });
+    };
   });
 
   afterEach(() => {
     unmountAll();
     globalThis.ResizeObserver = stub;
+    window.getComputedStyle = computedStyle;
     for (const [key, descriptor] of saved) if (descriptor) Object.defineProperty(HTMLElement.prototype, key, descriptor);
   });
 

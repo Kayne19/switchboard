@@ -1,7 +1,7 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
+import { useRef, type CSSProperties } from 'react';
 import type { WeatherData, WeatherDay, WeatherHour } from '../controller/types';
 import { useElementSize } from '../hooks/useElementSize';
-import { watchElement } from '../hooks/watchElement';
+import { useMeasured } from '../hooks/useMeasured';
 import { ListViewport } from './ListViewport';
 import { MetaTitle } from './MetaTitle';
 import { NoteBadge } from './NoteMarker';
@@ -32,6 +32,7 @@ import {
   STRIP_LEAST,
   STRIP_PAD,
   tempScale,
+  weatherCompact,
   weatherLayout,
   type WeatherArrangement,
 } from './weatherLayout';
@@ -193,6 +194,16 @@ function OutlookDay({ day, marked }: { day: WeatherDay; marked: boolean }) {
 }
 
 /**
+ * The condition line's width: its parts at their own widths, with the gap
+ * it stands at under the temperature, whether or not it is set beside it
+ * now.
+ */
+function conditionWidth(line: HTMLElement): number {
+  const parts = Array.from(line.children) as HTMLElement[];
+  return Math.ceil(parts.reduce((sum, part) => sum + part.scrollWidth, 0) + CONDITION_GAP * Math.max(0, parts.length - 1));
+}
+
+/**
  * Whether a spot line's parts, at their own widths, need more room across
  * than the line has: its children's widths (a text's whole width, even
  * where it ends in an ellipsis now or is set aside), the gaps between them
@@ -215,15 +226,11 @@ function lineOverflows(line: HTMLElement): boolean {
 // stay. No reading is left cut in two while another could make room.
 function Spot({ data, marked }: { data: WeatherData; marked: string }) {
   const lineRef = useRef<HTMLDivElement>(null);
-  const [dropped, setDropped] = useState(false);
   const hour = (data.hourly ?? []).find((candidate) => candidate.time === marked);
   const day = hour ? undefined : (data.daily ?? []).find((candidate) => candidate.date === marked);
   const precip = (hour ?? day)?.precip;
-  useLayoutEffect(() => {
-    const line = lineRef.current;
-    if (!line || !precip) return undefined;
-    return watchElement(line, () => setDropped(lineOverflows(line)), { children: true, changes: true });
-  }, [precip]);
+  // Read only where there is a chance of rain to set aside.
+  const dropped = useMeasured(() => (precip ? lineRef.current : null), lineOverflows, { initial: false, children: true, changes: true }, [precip]);
   if (!hour && !day) return null;
   const condition = (hour ?? day)!.condition;
   return (
@@ -374,7 +381,15 @@ export function WeatherPrimitive({ data, marked, slot = 'primary' }: { data: Wea
   // The condition line's own width (its face follows the stage, so it is
   // read, not counted): beside an outlook the figure stands as wide as it
   // or its temperature row, whichever is wider (outlookFigure).
-  const [condition, setCondition] = useState(0);
+  // It is read in a small slot only, where an outlook can stand; elsewhere
+  // the width last read stands.
+  const compact = weatherCompact(size.width, size.height);
+  const condition = useMeasured(
+    () => (compact ? boxRef.current?.querySelector<HTMLElement>('.weather-now__condition') : null),
+    conditionWidth,
+    { initial: 0, children: true, changes: true },
+    [compact],
+  );
   const layout = weatherLayout(size.width, size.height, {
     hourly: hours.length > 0,
     daily: days.length > 0,
@@ -386,17 +401,6 @@ export function WeatherPrimitive({ data, marked, slot = 'primary' }: { data: Wea
     condition,
   });
   const arrangement: WeatherArrangement = layout.arrangement;
-  useLayoutEffect(() => {
-    const line = arrangement === 'compact' ? boxRef.current?.querySelector<HTMLElement>('.weather-now__condition') : null;
-    if (!line) return undefined;
-    // Its parts at their own widths, with the gap it stands at under the
-    // temperature, whether or not it is set beside it now.
-    const measure = () => {
-      const parts = Array.from(line.children) as HTMLElement[];
-      setCondition(Math.ceil(parts.reduce((sum, part) => sum + part.scrollWidth, 0) + CONDITION_GAP * Math.max(0, parts.length - 1)));
-    };
-    return watchElement(line, measure, { children: true, changes: true });
-  }, [arrangement]);
   // Down the box, the forecast is one column read top to bottom, and it
   // scrolls as one when it is longer than the box; beside one another,
   // each part keeps its place and the days scroll in their own.

@@ -6,7 +6,7 @@
 import { act } from 'react';
 import { describe, expect, it } from 'vitest';
 import { FocusableSurface } from '../../src/primitives/FocusableSurface';
-import { drawnScale } from '../../src/hooks/watchElement';
+import { drawnScale } from '../../src/hooks/useMeasured';
 import { keyStop } from '../../src/primitives/drawingScroll';
 import { keyScrollLeft, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
 import { mount, rerender, stubResizeObserver } from './sceneHarness';
@@ -34,7 +34,7 @@ function layOut(scroll: HTMLElement, scrollTop: number, scale = 1) {
 }
 
 // Nothing the viewport reads moves with the scroll: it measures when the
-// list or its box changes (watchElement's MutationObserver), which a
+// list or its box changes (useMeasured's MutationObserver), which a
 // comment appended to the scroll stands in for here.
 async function measured(scroll: HTMLElement) {
   await act(async () => {
