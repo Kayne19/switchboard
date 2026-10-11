@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, MutexGuard};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
 /// One resident: its session and, once one was started, the background
 /// prompt given to it. The prompt's number is what lets the prompt's own
@@ -28,18 +30,21 @@ struct Resident {
 struct BackgroundPrompt {
     number: u64,
     task: JoinHandle<()>,
+    /// Closed when the task ends, however it ends: a promotion waits on it
+    /// for the prompt to end with the turn it interrupted.
+    ended: watch::Receiver<()>,
 }
 
 /// Why a resident leaves the registry. The reason decides all of what
 /// leaving does (`Leaving::exit`):
 ///
-/// | reason         | its turn on the host      | its prompt           | its session        | publishes  |
-/// |----------------|---------------------------|----------------------|--------------------|------------|
-/// | `Stopped`      | left (the session ends)   | cancelled and joined | ended              | `finished` |
-/// | `Dead`         | left (it is dead)         | cancelled and joined | left (it is dead)  | `finished` |
-/// | `Promoted`     | interrupted, waited for   | cancelled and joined | handed to the line | nothing    |
-/// | `ClosedOnHost` | left (it is dead)         | left to end          | left (it is dead)  | `finished` |
-/// | `Shutdown`     | left (the session ends)   | cancelled and joined | ended              | nothing    |
+/// | reason         | its prompt           | its session        | publishes  |
+/// |----------------|----------------------|--------------------|------------|
+/// | `Stopped`      | cancelled and joined | ended              | `finished` |
+/// | `Dead`         | cancelled and joined | left (it is dead)  | `finished` |
+/// | `Promoted`     | cancelled and joined | handed to the line | nothing    |
+/// | `ClosedOnHost` | left to end          | left (it is dead)  | `finished` |
+/// | `Shutdown`     | cancelled and joined | ended              | nothing    |
 ///
 /// Every reason retires the resident's call token first, so no request or
 /// display passes the lifecycle check while the rest runs.
@@ -49,10 +54,8 @@ pub(crate) enum Leaving {
     Stopped,
     /// Its handle was found closed before work was given to it.
     Dead,
-    /// The caller is put through to it: the session goes on the line. A
-    /// turn still running on its host is interrupted, and the session
-    /// handed over once it has settled, so the caller's words are a prompt
-    /// of their own and not a follow-up behind the background work (#239).
+    /// The caller is put through to it: the session goes on the line. Its
+    /// turn has already settled (`Switchboard::take_resident_for_line`).
     /// A promotion that fails brings it back through `admit`
     /// (`Switchboard::move_to_background`).
     Promoted,
@@ -72,7 +75,6 @@ pub(crate) enum Leaving {
 
 /// What leaving does, besides retiring the call token.
 struct Exit {
-    interrupt_turn: bool,
     cancel_prompt: bool,
     end_session: bool,
     publish_finished: bool,
@@ -80,15 +82,14 @@ struct Exit {
 
 impl Leaving {
     fn exit(&self) -> Exit {
-        let (interrupt_turn, cancel_prompt, end_session, publish_finished) = match self {
-            Leaving::Stopped => (false, true, true, true),
-            Leaving::Dead => (false, true, false, true),
-            Leaving::Promoted => (true, true, false, false),
-            Leaving::ClosedOnHost { .. } => (false, false, false, true),
-            Leaving::Shutdown => (false, true, true, false),
+        let (cancel_prompt, end_session, publish_finished) = match self {
+            Leaving::Stopped => (true, true, true),
+            Leaving::Dead => (true, false, true),
+            Leaving::Promoted => (true, false, false),
+            Leaving::ClosedOnHost { .. } => (false, false, true),
+            Leaving::Shutdown => (true, true, false),
         };
         Exit {
-            interrupt_turn,
             cancel_prompt,
             end_session,
             publish_finished,
@@ -107,6 +108,17 @@ impl Leaving {
             Leaving::Stopped | Leaving::Dead | Leaving::Promoted | Leaving::Shutdown => true,
         }
     }
+}
+
+/// What `Switchboard::take_resident_for_line` found.
+pub(crate) enum ResidentForLine {
+    /// The project has no resident (its host closed it meanwhile).
+    NoResident,
+    /// The resident's turn did not settle after it was interrupted; it is
+    /// still the project's resident, unchanged.
+    StillBusy,
+    /// The resident, out of the background with no turn running.
+    Ready(ProjectSession),
 }
 
 /// Owns the residents. A resident's call token is registered with the
@@ -216,13 +228,33 @@ impl BackgroundRegistry {
             return false;
         };
         let number = self.next_prompt.fetch_add(1, Ordering::Relaxed);
+        let (ending, ended) = watch::channel(());
+        let prompt = prompt(number);
         // Spawned under the lock: the task's own check of its number takes
         // this lock, so it finds itself entered.
-        let task = tokio::spawn(prompt(number));
-        if let Some(replaced) = resident.prompt.replace(BackgroundPrompt { number, task }) {
+        let task = tokio::spawn(async move {
+            let _ending = ending;
+            prompt.await;
+        });
+        if let Some(replaced) = resident.prompt.replace(BackgroundPrompt {
+            number,
+            task,
+            ended,
+        }) {
             replaced.task.abort();
         }
         true
+    }
+
+    /// The project's resident, and what closes when its background prompt
+    /// ends, if one was started.
+    fn with_prompt(&self, project: &str) -> Option<(ProjectSession, Option<watch::Receiver<()>>)> {
+        self.lock().get(project).map(|resident| {
+            (
+                resident.session.clone(),
+                resident.prompt.as_ref().map(|prompt| prompt.ended.clone()),
+            )
+        })
     }
 
     /// Whether prompt `number` is still the project's resident's prompt.
@@ -254,13 +286,6 @@ impl BackgroundRegistry {
             self.take_out(&mut residents, project)?
         };
         let exit = why.exit();
-        // The background prompt collecting the turn ends with it, so it is
-        // joined below without being cut off. A host that does not settle
-        // the turn in time leaves it running: the caller's words then go in
-        // behind it, as a follow-up.
-        if exit.interrupt_turn && !session.interrupt_and_settle().await {
-            tracing::warn!(%project, "the resident's turn did not settle after an abort; its work goes on");
-        }
         if let Some(prompt) = prompt.filter(|_| exit.cancel_prompt) {
             prompt.task.abort();
             let _ = prompt.task.await;
@@ -301,6 +326,41 @@ impl Switchboard {
         self.background_agents
             .retire(project, why, self.agent_state_callback.as_ref())
             .await
+    }
+
+    /// Takes the project's resident off the background for the line (a
+    /// promotion). A turn still running on its host is interrupted first,
+    /// and the resident leaves (`Leaving::Promoted`) only once that turn has
+    /// settled, so the caller's words are a prompt of their own, not a
+    /// follow-up the host merges into the background work (#239). A turn
+    /// that has not settled in time (`ProjectSession::settle_wait`) leaves
+    /// the resident as it was: busy, in the background.
+    pub(crate) async fn take_resident_for_line(&self, project: &str) -> ResidentForLine {
+        let Some((session, prompt)) = self.background_agents.with_prompt(project) else {
+            return ResidentForLine::NoResident;
+        };
+        // A prompt whose task has ended has closed its channel.
+        let prompt = prompt.filter(|ended| ended.has_changed().is_ok());
+        if session.busy() || prompt.is_some() {
+            session.interrupt();
+            let settled = timeout(session.settle_wait(), async {
+                // The prompt ends with the turn it collects, publishing the
+                // resident idle while it is still the resident's prompt.
+                if let Some(mut ended) = prompt {
+                    while ended.changed().await.is_ok() {}
+                }
+                session.settled().await;
+            })
+            .await;
+            if settled.is_err() || session.busy() {
+                tracing::warn!(%project, "the resident's turn did not settle after an abort; it stays in the background");
+                return ResidentForLine::StillBusy;
+            }
+        }
+        match self.retire_resident(project, Leaving::Promoted).await {
+            Some(session) => ResidentForLine::Ready(session),
+            None => ResidentForLine::NoResident,
+        }
     }
 
     /// Retires a resident whose handle has closed without its host saying

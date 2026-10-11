@@ -218,7 +218,7 @@ struct ProjectInner {
     /// through `step_turn`.
     turn: StdMutex<TurnState>,
     /// Woken on every step of the turn, for whoever waits for the session
-    /// to settle (`interrupt_and_settle`).
+    /// to settle (`settled`).
     turn_moved: Notify,
     /// Where the session is in its end of life; written only by `end`.
     lifecycle: StdMutex<Lifecycle>,
@@ -859,33 +859,26 @@ impl ProjectSession {
         }
     }
 
-    /// Aborts the running turn, if any, and waits for the session to
-    /// settle: true once it is idle (it was already, or the host settled the
-    /// aborted turn), false when the host has not settled it in time, or the
-    /// session has ended. The host has as long as it has to answer any
-    /// command (`SESSION_COMMAND_WAIT`), and never longer than the session's
-    /// silent-turn deadline. A prompt that collects the aborted turn ends
-    /// with it, so its own end is part of the settling.
-    pub async fn interrupt_and_settle(&self) -> bool {
-        if !self.busy() {
-            return true;
-        }
-        self.interrupt();
-        let within = SESSION_COMMAND_WAIT.min(self.inner.turn_timeout);
-        let settled = timeout(within, async {
-            loop {
-                // Listen before the check, so no step between them is lost.
-                let moved = self.inner.turn_moved.notified();
-                tokio::pin!(moved);
-                moved.as_mut().enable();
-                if !self.busy() || !self.alive() {
-                    return;
-                }
-                moved.await;
+    /// How long the host has to settle a turn the service interrupted: as
+    /// long as it has to answer any command (`SESSION_COMMAND_WAIT`), and
+    /// never longer than the session's silent-turn deadline.
+    pub fn settle_wait(&self) -> Duration {
+        SESSION_COMMAND_WAIT.min(self.inner.turn_timeout)
+    }
+
+    /// Waits until the session's turn has settled (it is not busy), or the
+    /// session has ended. The caller bounds the wait.
+    pub async fn settled(&self) {
+        loop {
+            // Listen before the check, so no step between them is lost.
+            let moved = self.inner.turn_moved.notified();
+            tokio::pin!(moved);
+            moved.as_mut().enable();
+            if !self.busy() || !self.alive() {
+                return;
             }
-        })
-        .await;
-        settled.is_ok() && self.alive() && !self.busy()
+            moved.await;
+        }
     }
 
     pub async fn steer(

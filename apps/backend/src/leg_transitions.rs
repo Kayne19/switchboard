@@ -15,7 +15,7 @@ use crate::prompts::{build_intro_prompt, FOREGROUND_NOTICE};
 use crate::redial::thinking_in_spec;
 use crate::registry::{Project, Registry};
 use crate::reply::Reply;
-use crate::residents::Leaving;
+use crate::residents::{Leaving, ResidentForLine};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -93,10 +93,15 @@ impl Switchboard {
         // handle and could create a second live session for this project.
         if self.coordinator.route() != project.id {
             self.retire_dead_resident(&project.id).await;
-            // The resident's background prompt is cancelled and joined
-            // first: mode and token cannot change while it is running.
-            if let Some(session) = self.retire_resident(&project.id, Leaving::Promoted).await {
-                return self.promote_background(session, context.clone()).await;
+            // The resident's turn is interrupted and waited for, then its
+            // background prompt is cancelled and joined: mode and token
+            // cannot change while it is running.
+            match self.take_resident_for_line(&project.id).await {
+                ResidentForLine::Ready(session) => {
+                    return self.promote_background(session, context.clone()).await;
+                }
+                ResidentForLine::StillBusy => return self.still_busy(&project.id),
+                ResidentForLine::NoResident => {}
             }
         }
 
