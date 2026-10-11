@@ -5,6 +5,7 @@ use crate::module_calls::diagram_show;
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::AgentStateNotice;
 use crate::project_session::AgentCall;
+use crate::protocol::AgentRequest;
 use serde_json::Value;
 use tokio::time::{timeout, Duration};
 
@@ -201,4 +202,138 @@ async fn agents_state_publishes_idle_after_turn_and_finished_after_hangup() {
     }));
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// What moves the agent projection, as the PBX and the floor send it.
+#[derive(Clone, Copy, Debug)]
+enum ProjectionEvent {
+    Busy,
+    Idle,
+    Finished,
+    /// The floor queued a request with this message (`Waiting::Asked`).
+    Asked(&'static str),
+    /// The floor spoke the agent's last request (`Waiting::Spoken`).
+    Spoken,
+}
+
+fn apply_projection_event(projection: &AgentProjection, event: ProjectionEvent) {
+    let notice = |state: &str| AgentStateNotice {
+        project: "alpha".into(),
+        state: state.into(),
+    };
+    let _change = match event {
+        ProjectionEvent::Busy => projection.notice(&notice("busy")),
+        ProjectionEvent::Idle => projection.notice(&notice("idle")),
+        ProjectionEvent::Finished => projection.notice(&notice("finished")),
+        ProjectionEvent::Asked(message) => projection.waiting(
+            "alpha".into(),
+            AgentRequest {
+                message: message.into(),
+                reason: "finished".into(),
+            },
+        ),
+        ProjectionEvent::Spoken => projection.floor_released("alpha"),
+    };
+}
+
+/// The agent projection's phase x event table: the phase the page shows
+/// for a resident after each event, the request it shows as waiting, and
+/// whether the agent's held display survives. `None` is an agent the page
+/// does not list. Row (`waiting`, `busy`) is the projection half of #388:
+/// a busy notice ends the waiting mark while the floor still holds the
+/// request.
+#[tokio::test]
+async fn the_agent_projection_moves_by_its_table() {
+    use ProjectionEvent::{Asked, Busy, Finished, Idle, Spoken};
+    type Row = (
+        &'static [ProjectionEvent],
+        ProjectionEvent,
+        Option<&'static str>,
+        Option<&'static str>,
+    );
+    let rows: &[Row] = &[
+        // (to reach the phase, event, phase after, waiting request after)
+        (&[], Busy, Some("busy"), None),
+        (&[], Idle, Some("idle"), None),
+        (&[], Finished, Some("finished"), None),
+        (&[], Asked("first"), Some("waiting"), Some("first")),
+        (&[], Spoken, None, None),
+        (&[Busy], Busy, Some("busy"), None),
+        (&[Busy], Idle, Some("idle"), None),
+        (&[Busy], Finished, Some("finished"), None),
+        (&[Busy], Asked("first"), Some("waiting"), Some("first")),
+        (&[Busy], Spoken, Some("busy"), None),
+        (&[Idle], Busy, Some("busy"), None),
+        (&[Idle], Idle, Some("idle"), None),
+        (&[Idle], Finished, Some("finished"), None),
+        (&[Idle], Asked("first"), Some("waiting"), Some("first")),
+        (&[Idle], Spoken, Some("idle"), None),
+        (&[Asked("first")], Busy, Some("busy"), None),
+        (&[Asked("first")], Idle, Some("waiting"), Some("first")),
+        (&[Asked("first")], Finished, Some("finished"), None),
+        (
+            &[Asked("first")],
+            Asked("second"),
+            Some("waiting"),
+            Some("second"),
+        ),
+        (&[Asked("first")], Spoken, Some("idle"), None),
+        (&[Finished], Busy, Some("busy"), None),
+        (&[Finished], Idle, Some("idle"), None),
+        (&[Finished], Finished, Some("finished"), None),
+        (&[Finished], Asked("first"), Some("waiting"), Some("first")),
+        (&[Finished], Spoken, Some("finished"), None),
+    ];
+    for &(reach, event, phase, request) in rows {
+        let state = state();
+        let projection = state.0.projection.clone();
+        for &step in reach {
+            apply_projection_event(&projection, step);
+        }
+        projection
+            .hold_display("alpha".into(), &diagram_show()["action"])
+            .expect("the held stage takes a diagram");
+        apply_projection_event(&projection, event);
+
+        let agents = projection.snapshot();
+        let alpha = agents.iter().find(|agent| agent.project == "alpha");
+        let row = format!("{reach:?} then {event:?}");
+        assert_eq!(alpha.map(|agent| agent.state.as_str()), phase, "{row}");
+        assert_eq!(
+            alpha.and_then(|agent| agent.pending_request.as_ref().map(|r| r.message.as_str())),
+            request,
+            "{row}"
+        );
+        assert_eq!(
+            projection.has_held_display("alpha"),
+            !matches!(event, Finished),
+            "{row}: only a finished notice drops the held display"
+        );
+    }
+}
+
+/// The projection lists its agents by project, whatever order they came in.
+#[tokio::test]
+async fn the_agent_projection_lists_agents_by_project() {
+    let state = state();
+    let projection = state.0.projection.clone();
+    for project in ["gamma", "alpha", "beta"] {
+        let _change = projection.notice(&AgentStateNotice {
+            project: project.into(),
+            state: "busy".into(),
+        });
+    }
+    let _change = projection.waiting(
+        "delta".into(),
+        AgentRequest {
+            message: "done".into(),
+            reason: "finished".into(),
+        },
+    );
+    let projects: Vec<String> = projection
+        .snapshot()
+        .into_iter()
+        .map(|agent| agent.project)
+        .collect();
+    assert_eq!(projects, ["alpha", "beta", "delta", "gamma"]);
 }

@@ -445,3 +445,309 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
     let _ = held.await;
     board.shutdown().await;
 }
+
+/// What happens to a resident, in the residents table below.
+#[derive(Clone, Copy, Debug)]
+enum ResidentEvent {
+    /// The caller stops it (`stop_project`).
+    Stop,
+    /// The caller is put through to it (`dial`): a promotion.
+    Promote,
+    /// The caller gives it more work (`start_background_part`).
+    MoreWork,
+    /// Its handle is closed without its host saying so, then the caller
+    /// gives it more work: the dead resident is found and replaced.
+    MoreWorkAfterDeath,
+    /// Its handle is closed without its host saying so, then the caller is
+    /// put through to it: the dead resident is found and a new leg made.
+    DialAfterDeath,
+    /// Its host reports this session closed.
+    ClosedOnHost,
+    /// Its host reports an older instance of the session closed.
+    StaleClosedOnHost,
+    /// The service shuts down, the call line first, as `app_state::shutdown`
+    /// does.
+    Shutdown,
+}
+
+/// What a row of the residents table checks after its event.
+#[derive(Debug, PartialEq)]
+struct ResidentAfter {
+    /// The old session is still the project's resident.
+    same_resident: bool,
+    /// The project has a resident at all (the old one or a new one).
+    resident: bool,
+    /// The coordinator still lets the project's background token act.
+    background: bool,
+    /// The old session's handle is still open.
+    alive: bool,
+    /// The old session is the agent on the line.
+    on_the_line: bool,
+    /// What the projection was told about the project, after the event.
+    notices: Vec<String>,
+}
+
+/// Puts `alpha` in the background with its first turn held (`busy`) or
+/// settled (`idle`), and returns the board, its fake host's log, the
+/// resident session and the notices recorder.
+async fn board_with_a_resident(
+    busy: bool,
+) -> (
+    Switchboard,
+    crate::hosts::FakeLog,
+    ProjectSession,
+    Arc<StdMutex<Vec<String>>>,
+) {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    // A row that waits on a turn fails in seconds, not in ten minutes.
+    board.set_project_turn_timeout_for_test(Duration::from_secs(5));
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let (idle_tx, idle_rx) = tokio::sync::oneshot::channel::<()>();
+    let idle_tx = Arc::new(StdMutex::new(Some(idle_tx)));
+    let recorder = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let line = format!("{}:{}", notice.project, notice.state);
+        if line == "alpha:idle" {
+            if let Some(tx) = idle_tx.lock().unwrap().take() {
+                let _ = tx.send(());
+            }
+        }
+        recorder.lock().unwrap().push(line);
+        Box::pin(async {})
+    })));
+    let mut first = true;
+    let log = serve(
+        &board,
+        Box::new(move |_, _| {
+            if std::mem::take(&mut first) && busy {
+                vec![Step::Hold]
+            } else {
+                says("ready")
+            }
+        }),
+    );
+    board
+        .start_background_part("alpha", "background work")
+        .await
+        .expect("alpha goes to the background");
+    let resident = board
+        .background_agents
+        .get("alpha")
+        .expect("alpha resident");
+    if busy {
+        within("the held turn to start", async {
+            while !resident.busy() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+    } else {
+        within("idle_rx", idle_rx)
+            .await
+            .expect("the settled resident is published idle");
+    }
+    notices.lock().unwrap().clear();
+    (board, log, resident, notices)
+}
+
+async fn resident_after(
+    busy: bool,
+    event: ResidentEvent,
+    notices_wanted: usize,
+) -> (ResidentAfter, Switchboard) {
+    let (mut board, _log, resident, notices) = board_with_a_resident(busy).await;
+    match event {
+        ResidentEvent::Stop => {
+            let reply = board.stop_project("alpha").await;
+            assert_eq!(reply.text, "Stopped alpha.");
+        }
+        ResidentEvent::Promote => {
+            assert_eq!(board.dial("alpha", "").await.route, "alpha");
+        }
+        ResidentEvent::MoreWork => {
+            let result = board.start_background_part("alpha", "more work").await;
+            assert_eq!(result.is_ok(), !busy, "{result:?}");
+        }
+        ResidentEvent::MoreWorkAfterDeath => {
+            resident.close();
+            board
+                .start_background_part("alpha", "more work")
+                .await
+                .expect("a new resident replaces the dead one");
+        }
+        ResidentEvent::DialAfterDeath => {
+            resident.close();
+            assert_eq!(board.dial("alpha", "").await.route, "alpha");
+        }
+        ResidentEvent::ClosedOnHost => {
+            let callback = board.session_closed_callback();
+            callback(
+                "alpha".into(),
+                resident.session_id().into(),
+                resident.instance_id(),
+            )
+            .await;
+        }
+        ResidentEvent::StaleClosedOnHost => {
+            let callback = board.session_closed_callback();
+            callback(
+                "alpha".into(),
+                resident.session_id().into(),
+                resident.instance_id() + 1000,
+            )
+            .await;
+        }
+        ResidentEvent::Shutdown => {
+            assert!(board.coordinator().begin_shutdown());
+            board.shutdown().await;
+        }
+    }
+    // A notice the event's own tasks send late (a settled prompt's idle)
+    // is waited for; one more than the row wants has a moment to show up.
+    within("the row's notices", async {
+        while notices.lock().unwrap().len() < notices_wanted {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let current = board.background_agents.get("alpha");
+    let after = ResidentAfter {
+        same_resident: current
+            .as_ref()
+            .is_some_and(|current| current.same_session(&resident)),
+        resident: current.is_some(),
+        background: board.coordinator().project_is_background("alpha"),
+        alive: resident.alive(),
+        on_the_line: board
+            .agent
+            .as_ref()
+            .is_some_and(|agent| agent.same_session(&resident)),
+        notices: notices.lock().unwrap().clone(),
+    };
+    (after, board)
+}
+
+/// The residents table: every way a resident leaves (or stays), from a
+/// resident whose turn is still running (`busy`) and one whose turn has
+/// settled (`idle`), and what each leaves behind. Written against the
+/// registry's behaviour before it held one entry per resident; the rows
+/// are that behaviour.
+///
+/// Promoting a busy resident has no row: what it should do is #239's open
+/// decision, and the fake host cannot answer a prompt to a busy session as
+/// the real one does (a follow-up, not a turn of its own).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_resident_leaves_by_the_exits_of_its_table() {
+    use ResidentEvent::*;
+    let after = |same_resident: bool,
+                 resident: bool,
+                 background: bool,
+                 alive: bool,
+                 on_the_line: bool,
+                 notices: &[&str]| ResidentAfter {
+        same_resident,
+        resident,
+        background,
+        alive,
+        on_the_line,
+        notices: notices.iter().map(|notice| (*notice).to_owned()).collect(),
+    };
+    let finished = ["alpha:finished"];
+    let rows: Vec<(bool, ResidentEvent, ResidentAfter)> = vec![
+        // (busy, event, after)
+        (
+            true,
+            Stop,
+            after(false, false, false, false, false, &finished),
+        ),
+        (
+            false,
+            Stop,
+            after(false, false, false, false, false, &finished),
+        ),
+        (
+            false,
+            Promote,
+            after(
+                false,
+                false,
+                false,
+                true,
+                true,
+                &["alpha:busy", "alpha:idle"],
+            ),
+        ),
+        (true, MoreWork, after(true, true, true, true, false, &[])),
+        (
+            false,
+            MoreWork,
+            after(true, true, true, true, false, &["alpha:busy", "alpha:idle"]),
+        ),
+        (
+            false,
+            MoreWorkAfterDeath,
+            after(
+                false,
+                true,
+                true,
+                false,
+                false,
+                &["alpha:finished", "alpha:busy", "alpha:idle"],
+            ),
+        ),
+        (
+            false,
+            DialAfterDeath,
+            after(
+                false,
+                false,
+                false,
+                false,
+                false,
+                &["alpha:finished", "alpha:busy", "alpha:idle"],
+            ),
+        ),
+        (
+            true,
+            ClosedOnHost,
+            after(false, false, false, true, false, &finished),
+        ),
+        (
+            false,
+            ClosedOnHost,
+            after(false, false, false, true, false, &finished),
+        ),
+        (
+            true,
+            StaleClosedOnHost,
+            after(true, true, true, true, false, &[]),
+        ),
+        (
+            false,
+            StaleClosedOnHost,
+            after(true, true, true, true, false, &[]),
+        ),
+        (
+            true,
+            Shutdown,
+            after(false, false, false, false, false, &[]),
+        ),
+        (
+            false,
+            Shutdown,
+            after(false, false, false, false, false, &[]),
+        ),
+    ];
+    for (busy, event, want) in rows {
+        let (got, mut board) = resident_after(busy, event, want.notices.len()).await;
+        assert_eq!(
+            got,
+            want,
+            "a {} resident, then {event:?}",
+            if busy { "busy" } else { "idle" }
+        );
+        board.shutdown().await;
+    }
+}
