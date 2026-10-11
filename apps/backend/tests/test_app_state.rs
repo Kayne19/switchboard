@@ -236,9 +236,10 @@ fn apply_projection_event(projection: &AgentProjection, event: ProjectionEvent) 
 /// The agent projection's phase x event table: the phase the page shows
 /// for a resident after each event, the request it shows as waiting, and
 /// whether the agent's held display survives. `None` is an agent the page
-/// does not list. Row (`waiting`, `busy`) is the projection half of #388:
-/// a busy notice ends the waiting mark while the floor still holds the
-/// request.
+/// does not list. What an agent is doing and whether it waits to speak are
+/// independent (Kayne's decision, 2026-10-11, #388): a busy or idle notice
+/// keeps a waiting request, and the floor speaking it shows what the agent
+/// is doing. An agent first heard of through its request is taken as idle.
 #[tokio::test]
 async fn the_agent_projection_moves_by_its_table() {
     use ProjectionEvent::{Asked, Busy, Finished, Idle, Spoken};
@@ -265,7 +266,7 @@ async fn the_agent_projection_moves_by_its_table() {
         (&[Idle], Finished, Some("finished"), None),
         (&[Idle], Asked("first"), Some("waiting"), Some("first")),
         (&[Idle], Spoken, Some("idle"), None),
-        (&[Asked("first")], Busy, Some("busy"), None),
+        (&[Asked("first")], Busy, Some("waiting"), Some("first")),
         (&[Asked("first")], Idle, Some("waiting"), Some("first")),
         (&[Asked("first")], Finished, Some("finished"), None),
         (
@@ -275,6 +276,34 @@ async fn the_agent_projection_moves_by_its_table() {
             Some("second"),
         ),
         (&[Asked("first")], Spoken, Some("idle"), None),
+        (
+            &[Busy, Asked("first")],
+            Busy,
+            Some("waiting"),
+            Some("first"),
+        ),
+        (
+            &[Busy, Asked("first")],
+            Idle,
+            Some("waiting"),
+            Some("first"),
+        ),
+        (&[Busy, Asked("first")], Finished, Some("finished"), None),
+        (
+            &[Busy, Asked("first")],
+            Asked("second"),
+            Some("waiting"),
+            Some("second"),
+        ),
+        (&[Busy, Asked("first")], Spoken, Some("busy"), None),
+        (&[Asked("first"), Busy], Spoken, Some("busy"), None),
+        (
+            &[Asked("first"), Busy],
+            Idle,
+            Some("waiting"),
+            Some("first"),
+        ),
+        (&[Asked("first"), Busy, Idle], Spoken, Some("idle"), None),
         (&[Finished], Busy, Some("busy"), None),
         (&[Finished], Idle, Some("idle"), None),
         (&[Finished], Finished, Some("finished"), None),
