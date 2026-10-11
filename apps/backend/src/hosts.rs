@@ -1370,7 +1370,12 @@ impl FakeHostAgent {
                     let mut settles = true;
                     for step in (self.on_prompt)(&session, &message) {
                         let (token, call, call_args) = match step {
-                            Step::Event(body) => {
+                            Step::Event(mut body) => {
+                                // A protocol 2 host stamps the words of a
+                                // turn with its id: this prompt's turn here.
+                                if body["kind"] == "text" && body.get("turn_id").is_none() {
+                                    body["turn_id"] = json!(turn_id);
+                                }
                                 event(&link, &session, body);
                                 continue;
                             }
