@@ -111,7 +111,15 @@ drawn for the one asked for; the scene (`sceneKind`) and the report
 | `visual` | `visual` when something is on stage: the content scene, as `auto` draws it (the primary in the main slot, the rail beside it); else `auto` |
 | `comms` | `comms`: the conversation page, whatever is on stage |
 | `system` | `auto`: the page has no system scene yet |
-| `theater` | `auto`: the page has no theater scene yet |
+| `theater` | `theater` when something is on stage: the primary alone, in the focus box, with the notes about it, a `THEATER / <TYPE>` header and `EXIT / ESC`; the corner stack, and Damocles, compact, in a column at its right. Else `auto` |
+
+The theater view is the focus box drawn as the scene (`StagedObject`, shared
+with the focus layer), not over it: it is not modal, so Damocles, MODE and
+the history stay reachable. `EXIT` and Esc are the caller dismissing the
+view: the page goes back to `auto` (`auto_view`). A new primary takes the
+theater's stage; an empty stage draws the idle page and reports `auto`, and
+the next visual is drawn in theater again while the request stands. A new
+leg ends it, as it ends every agent request.
 
 The page has no view buttons yet, so the precedence below holds in the
 controller but a caller cannot pin a view: `pinned` is always false.

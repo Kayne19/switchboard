@@ -101,3 +101,8 @@ Note the iPadOS version in the pull request.
    but black lies outside them. CI cannot check this: Playwright has no
    safe-area insets, so the hygiene check only holds the viewport tag
    (see "Sizes worth checking").
+10. Theater: ask the agent to give a chart the whole screen. The chart fills
+    the stage with its note, and EXIT, MODE and Damocles are clear of the
+    toolbars and the home indicator, in landscape and portrait. Tap Damocles
+    and speak: the turn goes as on any page. Tap EXIT: the page goes back to
+    the chart's own page.

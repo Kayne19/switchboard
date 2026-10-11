@@ -62,9 +62,11 @@ after "On screen.".
 - `view(target=None)`: with no target, report what is on the caller's screen.
   With a target, ask the screen to focus `visual` (what `display` put there),
   `comms` (the conversation and tool activity), `system`, `theater` or `auto`
-  (the default). The screen has no `system` or `theater` scene yet and draws
-  `auto` for them, and `visual` with nothing on it is `auto` too. The caller's
-  own choice wins until they dismiss it. From the
+  (the default). `theater` gives your primary the whole screen, with the
+  notes about it, until the caller exits it. The screen has no `system`
+  scene yet and draws `auto` for it, and `visual` or `theater` with nothing
+  on it is `auto` too. The caller's own choice wins until they dismiss it.
+  From the
   background, only the report is answered: a target is refused with
   `caller_away`, and the screen follows your display when the caller brings
   you forward.
