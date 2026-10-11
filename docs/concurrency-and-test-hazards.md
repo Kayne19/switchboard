@@ -116,6 +116,8 @@ the stamp it was recorded under. Any other ending strips the mark. A tab that
 was disconnected through the whole change sees no notice, only the snapshot's
 epoch, so the snapshot sends an `adopted` notice ahead of its epoch while the
 adopted leg is still the one on the line (`Coordinator::generation_and_adoption`).
+On the page, the rule is `follow` in `apps/frontend/src/runtime/callIdentity.ts`
+and `ClipOutbox.carry`/`unmark` in `outbox.ts`.
 A rescue and a return to the operator each give the line a new identity, and
 end that.
 
