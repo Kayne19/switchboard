@@ -64,6 +64,8 @@ export default function App() {
         else if (transcriptOpen) setTranscriptOpen(false);
         else if (controllerOpen) setControllerOpen(false);
         else if (irOpen) setIrOpen(false);
+        // Esc leaves the theater view as its EXIT does.
+        else if (state.workspace.effectiveView === 'theater') dispatch({ op: 'auto_view' });
         return;
       }
 
@@ -83,7 +85,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [controllerOpen, demoMode, dispatch, irOpen, loadFixture, setTranscriptOpen, state.focusId, state.listening, transcriptOpen]);
+  }, [controllerOpen, demoMode, dispatch, irOpen, loadFixture, setTranscriptOpen, state.focusId, state.listening, state.workspace.effectiveView, transcriptOpen]);
 
   useEffect(() => {
     const onTouchStart = (event: TouchEvent) => {

@@ -1,5 +1,5 @@
-import { AnimatePresence, motion } from 'motion/react';
-import { useRef, type MouseEvent } from 'react';
+import { AnimatePresence, motion, type HTMLMotionProps } from 'motion/react';
+import { useRef, type MouseEvent, type RefObject } from 'react';
 import type { ControllerState, NoteData, SceneObject } from '../controller/types';
 import { noteTarget } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
@@ -33,6 +33,64 @@ export function focusNotes(state: ControllerState, object: SceneObject | null): 
 // (`.focus-layer__content--noted`): beside a wide object, as the rail is,
 // and under a tall one. Each card names what its note is about in the
 // object's words, as the rail card does (`noteTarget`).
+/**
+ * An object at the size focus gives it, with the notes about it and a
+ * header line: what it is, and the one way out. Focus draws it over the
+ * scene; the theater view draws it as the scene (`TheaterScene` in
+ * Scenes.tsx), so the two cannot drift on how a staged object reads. The
+ * theater's box carries its own class names beside focus's, for its
+ * placement in the scene.
+ */
+export function StagedObject({
+  object,
+  objects,
+  notes,
+  label,
+  action,
+  onAction,
+  actionRef,
+  variant,
+  motionProps,
+}: {
+  object: SceneObject;
+  objects: Readonly<Record<string, SceneObject>>;
+  notes: Array<SceneObject<NoteData>>;
+  /** The header's left words. */
+  label: string;
+  /** The words of the way out, on the header's right. */
+  action: string;
+  onAction: () => void;
+  actionRef?: RefObject<HTMLButtonElement | null>;
+  variant: 'focus' | 'theater';
+  motionProps?: HTMLMotionProps<'div'>;
+}) {
+  const noted = notes.length > 0;
+  const theater = variant === 'theater';
+  return (
+    <motion.div
+      className={`focus-layer__content focus-layer__content--${object.type}${noted ? ' focus-layer__content--noted' : ''}${theater ? ' theater__box' : ''}`}
+      {...motionProps}
+    >
+      <div className={`focus-layer__header tech micro${theater ? ' theater__header' : ''}`}>
+        <span>{label}</span>
+        <button ref={actionRef} className={`focus-layer__return${theater ? ' theater__exit' : ''}`} type="button" onClick={onAction}>{action}</button>
+      </div>
+      <SurfaceBoundary surfaceId={object.id} resetKey={object}>
+        <ObjectView object={object} slot="focus" onStage={objects} notes={notes.map((note) => note.data)} />
+      </SurfaceBoundary>
+      {noted ? (
+        <aside className="focus-layer__note" data-notes={notes.length}>
+          {notes.map((note) => (
+            <SurfaceBoundary key={note.id} surfaceId={note.id} resetKey={note}>
+              <AnnotationCard data={note.data} named={noteTarget(objects, note.data)} />
+            </SurfaceBoundary>
+          ))}
+        </aside>
+      ) : null}
+    </motion.div>
+  );
+}
+
 export function FocusLayer({
   object,
   objects,
@@ -45,7 +103,6 @@ export function FocusLayer({
   notes?: Array<SceneObject<NoteData>>;
   onClose: () => void;
 }) {
-  const noted = notes.length > 0;
   // The focused object shares its identity with the object in its slot.
   const shared = useLayoutMotion({ layoutId: object ? `switchboard-object-${object.id}` : undefined });
   const returnButton = useRef<HTMLButtonElement>(null);
@@ -66,28 +123,17 @@ export function FocusLayer({
             if (event.target === event.currentTarget) onClose();
           }}
         >
-          <motion.div
-            className={`focus-layer__content focus-layer__content--${object.type}${noted ? ' focus-layer__content--noted' : ''}`}
-            {...shared}
-            transition={{ layout: { duration: 0.46, ease: [0.22, 0.61, 0.36, 1] } }}
-          >
-            <div className="focus-layer__header tech micro">
-              <span>FOCUS / {object.type.toUpperCase()}</span>
-              <button ref={returnButton} className="focus-layer__return" type="button" onClick={onClose}>RETURN / ESC</button>
-            </div>
-            <SurfaceBoundary surfaceId={object.id} resetKey={object}>
-              <ObjectView object={object} slot="focus" onStage={objects} notes={notes.map((note) => note.data)} />
-            </SurfaceBoundary>
-            {noted ? (
-              <aside className="focus-layer__note" data-notes={notes.length}>
-                {notes.map((note) => (
-                  <SurfaceBoundary key={note.id} surfaceId={note.id} resetKey={note}>
-                    <AnnotationCard data={note.data} named={noteTarget(objects, note.data)} />
-                  </SurfaceBoundary>
-                ))}
-              </aside>
-            ) : null}
-          </motion.div>
+          <StagedObject
+            object={object}
+            objects={objects}
+            notes={notes}
+            label={`FOCUS / ${object.type.toUpperCase()}`}
+            action="RETURN / ESC"
+            onAction={onClose}
+            actionRef={returnButton}
+            variant="focus"
+            motionProps={{ ...shared, transition: { layout: { duration: 0.46, ease: [0.22, 0.61, 0.36, 1] } } }}
+          />
         </motion.div>
       ) : null}
     </AnimatePresence>

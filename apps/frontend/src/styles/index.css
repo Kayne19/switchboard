@@ -5358,6 +5358,35 @@ button {
   align-content: start;
 }
 
+/* The theater view (#277): the primary alone on the stage, in the focus
+   box (StagedObject in FocusLayer.tsx) with its header above it, and
+   Damocles, compact, in a column of its own at its right, so a caller on
+   push-to-talk can still speak. The corner stack keeps its place in the
+   bottom-left, so the box stops above it. Everything is sized from the
+   stage, as focus is: never from the viewport (#271). */
+.scene--theater {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
+  column-gap: clamp(12px, 2.4cqw, 40px);
+  align-items: center;
+  padding: max(6cqh, 34px) 4cqw calc(7.3cqh + 44px);
+}
+/* Held to the room between the header and the corner stack at every
+   aspect, over the focus box's own sizes (a noted chart in portrait is
+   86cqh tall there): what is under the object comes out of its room. */
+.scene--theater .theater__box.focus-layer__content {
+  justify-self: center;
+  max-width: 100%;
+  max-height: 100%;
+}
+.scene--theater .channel-stack {
+  left: 4cqw;
+}
+.theater__presence {
+  align-self: end;
+}
+
 /* Development controls */
 .dev-toggle {
   position: fixed;

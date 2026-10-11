@@ -72,7 +72,7 @@ afterEach(() => {
 
 const shell = (state: ControllerState) => (
   <ControllerProvider>
-    <SceneShell kind="training" composition={buildCompositionModel(state)} state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} />
+    <SceneShell kind="training" composition={buildCompositionModel(state)} state={state} onToggleListening={() => {}} onFocus={() => {}} setTranscriptOpen={() => {}} handsFree={false} onExitView={() => {}} />
   </ControllerProvider>
 );
 
