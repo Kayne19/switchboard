@@ -8,6 +8,12 @@
 
 import { errorName, mediaErrorName } from "./errors";
 
+/**
+ * The cap an utterance reached: its own size (`MAX_AUDIO_UTTERANCE`), or all
+ * the audio held at once (`MAX_AUDIO_REPLAY`).
+ */
+export type AudioLimit = "utterance" | "held";
+
 export class PlaybackStatus {
   private readonly idleText: string;
   private readonly onStatus: (text: string, error: boolean) => void;
@@ -88,6 +94,20 @@ export class PlaybackStatus {
         : "Audio started but produced no sound (nothing played in " +
             ms +
             "ms).",
+      true,
+    );
+  }
+
+  /**
+   * An utterance reached a cap and ends there: what arrived plays. It is
+   * not a streaming failure, so it says what happened, not that streaming
+   * failed (#431).
+   */
+  overLimit(limit: AudioLimit): void {
+    this.say(
+      limit === "utterance"
+        ? "This reply is too long to play in full. Its audio stops partway, and its full text is in the transcript."
+        : "Too much reply audio is waiting to play. This reply's audio stops partway, and its full text is in the transcript.",
       true,
     );
   }

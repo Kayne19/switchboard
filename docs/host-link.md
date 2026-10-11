@@ -97,19 +97,25 @@ The host agent sends `hello` as its first frame:
   "type": "hello",
   "host_id": "scriptorium",
   "token": "<per-host bearer token>",
-  "protocol": 1,
+  "protocol": 2,
   "git_sha": "d95f029...",
   "boot_id": "5c2e9a0b41d7",
   "prime_agent": { "client_version": "0.9.5", "daemon_version": "0.9.6", "daemon_protocol": 7 }
 }
 ```
 
-`protocol` is the host-link protocol version (currently `1`). The service
-refuses a bad token or an incompatible protocol and closes the socket:
+`protocol` is the host-link protocol version (currently `2`). Version 2
+added two promises: every turn carries a `turn_id`, an `unknown` one too, and
+the `prompt` and `steer` replies name the turn the input went into. The
+service relies on both: a caller's prompt ends only on the `turn_end` of the
+turn its reply named. So it refuses any other version, version 1 included,
+and the refusal names the fix, a reinstall of the host agent
+(`apps/host-agent/install.mjs`) from the service's commit. It refuses a bad
+token too, and closes the socket:
 
 ```json
 { "type": "refused", "reason": "bad_token", "message": "unknown host or token" }
-{ "type": "refused", "reason": "incompatible_protocol", "message": "host-link protocol 1 is not supported" }
+{ "type": "refused", "reason": "incompatible_protocol", "message": "host-link protocol 1 is not supported; reinstall the host agent from this service's commit (apps/host-agent/install.mjs)" }
 ```
 
 After a refusal the host agent redials with capped backoff (1 s doubling to
@@ -119,7 +125,7 @@ restart.
 On success the service answers `welcome`:
 
 ```json
-{ "type": "welcome", "epoch": 7, "protocol": 1, "cursors": { "a1b2": "5c2e9a0b41d7:42" } }
+{ "type": "welcome", "epoch": 7, "protocol": 2, "cursors": { "a1b2": "5c2e9a0b41d7:42" } }
 ```
 
 - `epoch` is the link epoch. The service gives each accepted link of a host a
@@ -237,8 +243,8 @@ model does not have). `call_mode` is `null` when the session is not on a call.
 | `open_session` | `session_id`, `cwd`, `project?` | `info` |
 | `attach` | `session`, `project`, `cwd` | `info` |
 | `list_sessions` | — | `{sessions: [...]}` |
-| `prompt` | `session`, `message` | `{sent_as: "prompt" \| "follow_up"}` |
-| `steer` | `session`, `message` | `{sent_as: "steer"}` |
+| `prompt` | `session`, `message` | `{sent_as: "prompt" \| "follow_up", turn_id}`: the turn the prompt went into, a new one or the one already open |
+| `steer` | `session`, `message` | `{sent_as: "steer", turn_id}` |
 | `abort` | `session` | `{aborted: true}` |
 | `kill` | `session` | `{killed: true}` |
 | `detach` | `session` | `{detached: true}` |
@@ -339,11 +345,11 @@ The host agent sends every session event with its cursor:
 
 | `event.kind` | Fields | Meaning |
 |---|---|---|
-| `turn_start` | `cause`: `input` \| `autonomous` \| `unknown`, `turn_id?` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). `turn_id` is stable for the turn. A busy snapshot rebuilt after a host-agent restart uses `unknown` and has no delivery authority. |
-| `turn_end` | `error?`, `turn_id?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
+| `turn_start` | `cause`: `input` \| `autonomous` \| `unknown`, `turn_id` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). `turn_id` is stable for the turn. A busy snapshot rebuilt after a host-agent restart uses `unknown`: it has an id, but its cause gives it no delivery authority. |
+| `turn_end` | `turn_id`, `error?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
 | `tool_start` | `tool`, `call_id`, `args?`, `turn_id?` | A tool call started. `args` is the call's arguments. |
 | `tool_end` | `tool`, `call_id`, `error`, `result?`, `turn_id?` | A tool call ended. `error` is true when the tool failed; `result` is what the tool returned. |
-| `text` | `text`, `turn_id?` | An assistant message ended with this text. New hosts stamp the owning turn id. |
+| `text` | `text`, `turn_id?` | An assistant message ended with this text. Inside a turn the host stamps that turn's id; a message that ends with no turn open has none. |
 | `error` | `message` | A model error, or retries exhausted. |
 | `compaction` | `phase`: `start` \| `end`, `reason` | The daemon compacted the context. The service resends the voice brief on the next routed line after `end`. |
 | `state` | `model`, `thinking` | Model and effective thinking level after `set_model` or `set_thinking`. |
@@ -362,7 +368,7 @@ writer, and it sends `turn_start` and `turn_end`:
 | idle | an input is sent (`prompt`, `steer`, or `prompt` resent as `follow_up`) | open, `input` | `turn_start`, then `wait_for_idle` |
 | idle | `agent_start` while an input is in flight | open, `input` | `turn_start` (the input sends the `wait_for_idle`) |
 | idle | `agent_start` with no input in flight | open, `autonomous` | `turn_start`, then `wait_for_idle` |
-| idle | a resync finds the session busy | open, `unknown` (no `turn_id`) | `turn_start`, then `wait_for_idle` |
+| idle | a resync finds the session busy | open, `unknown` | `turn_start`, then `wait_for_idle` |
 | open | an input, or a resync | open | a new `wait_for_idle`; the earlier one no longer settles |
 | idle | `abort` | idle | `resume_queue`; no `wait_for_idle` |
 | open | `abort` | open | `resume_queue`, then a new `wait_for_idle` |
@@ -423,8 +429,8 @@ waits under the lock.
 | self-woken, caller and self-woken | an idle snapshot (it names no turn) | idle, caller settled | final text published; end reported with it (the snapshot's `last_text` stands in for none); the snapshot goes to the prompt |
 | self-woken, caller and self-woken | a snapshot with another turn open | unchanged, that turn held in the run's place | as for another self-woken start |
 | self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it; goes to the prompt |
-| caller, caller settled | `turn_end` | unchanged | goes to the prompt, which it ends; with a turn id, reported as an `input` turn's end |
-| idle | `turn_end` with a turn id | idle | reported as an `input` turn's end |
+| caller, caller settled | `turn_end` | unchanged | goes to the prompt, which it ends only when it names the turn the prompt's reply named; reported as an `input` turn's end |
+| idle | `turn_end` | idle | reported as an `input` turn's end |
 | idle | a snapshot with a turn open | self-woken | start reported, with the snapshot's cause |
 | any | another snapshot | unchanged | goes to the prompt |
 
@@ -557,12 +563,12 @@ The service answers:
 { "type": "module_reply", "id": "m6", "status": "delivered", "reason": null, "result": { "visible": ["..."] } }
 ```
 
-`status` is `delivered`, `accepted`, `refused` or `failed`. `turn_id`,
-`cause`, and the `turn_id` fields on events are additive; an older host
-may omit them. The service checks the token against the session's current call
-and, when present, the turn authority. A self-woken call without an authority
-is refused, while an old host's ordinary caller turn keeps the existing token
-behavior. If no reply arrives in time, or the link is down, the module gets
+`status` is `delivered`, `accepted`, `refused` or `failed`. A call made
+inside a turn carries that turn's `turn_id` and `cause`; one made outside any
+turn carries neither. The service checks the token against the session's
+current call and, when the call names a cause or the operation is bound to a
+host turn, the turn authority. A self-woken call without an authority is
+refused. If no reply arrives in time, or the link is down, the module gets
 `failed`. In time is 30 s, or for `speak` the speech deadline and 5 s more
 (`SPEAK_REPLY_MARGIN_MS` in `skill_socket.ts`). The service starts its own
 speech deadline only when it admits the call, after the frame has crossed the

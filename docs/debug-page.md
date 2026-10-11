@@ -295,9 +295,9 @@ leg.
   `turn_id`. A turn that said nothing has no final event.
 - `turn_id` for the operator and utility is a per-process prompt number
   (`operator-3`); it groups that prompt's input, text, and tools. For a
-  project it is the host agent's turn id, when the host sends one (new hosts
-  stamp text, tool events, and the turn's end; inputs have none, because the
-  host assigns the id after the prompt arrives).
+  project it is the host agent's turn id (the host stamps text, tool events
+  inside a turn, and the turn's end; inputs have none, because the host
+  assigns the id after the prompt arrives).
 - `tool_start` and `tool_end` carry the call's `args` and `result` when known:
   always for the operator and utility, and for a project only when its host
   agent sends them (`docs/host-link.md`, "Session events"). An older host

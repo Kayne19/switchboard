@@ -16,10 +16,15 @@
 import type { AudioDoneMessage, AudioStartMessage } from "../protocol";
 import { MseSource, mseRuntimeSupported } from "./mseStream";
 import { PlaybackLevel } from "./playbackLevel";
-import { PlaybackStatus } from "./playbackStatus";
+import { type AudioLimit, PlaybackStatus } from "./playbackStatus";
 import { ProgressWatch } from "./progressWatch";
 import type { EnvelopeMeter, StreamingEnvelope } from "./speechEnvelope";
 
+/**
+ * The most audio one utterance keeps. An utterance that would pass it, or
+ * pass `MAX_AUDIO_REPLAY`, ends there: what arrived plays, and the caller is
+ * told the rest is only in the transcript (#431).
+ */
 export const MAX_AUDIO_UTTERANCE = 32 * 1024 * 1024;
 /**
  * The most audio held at once for whole replays: every utterance arriving,
@@ -345,11 +350,14 @@ export class AudioPlayback {
   receiveAudioChunk(data: ArrayBuffer): void {
     const utterance = this.arriving;
     if (!utterance || utterance.generation !== this.generation) return;
-    if (
-      utterance.bytes + data.byteLength > MAX_AUDIO_UTTERANCE ||
-      this.heldBytes() + data.byteLength > MAX_AUDIO_REPLAY
-    ) {
-      this.streamFailed(utterance, new Error("audio replay limit"));
+    const limit = this.limitPassed(utterance, data.byteLength);
+    if (limit) {
+      // Too long to keep, which is not a failure of streaming: it ends at
+      // the cap and plays what it has, the rest of its bytes and its own
+      // `audio_done` find nothing arriving, and streaming stays as it is
+      // (#431).
+      this.status.overLimit(limit);
+      this.endUtterance(utterance, true);
       return;
     }
     utterance.bytes += data.byteLength;
@@ -369,9 +377,17 @@ export class AudioPlayback {
       return;
     const utterance = this.arriving;
     if (!utterance || utterance.sequence !== message.sequence) return;
-    utterance.done = message.done === true;
+    this.endUtterance(utterance, message.done === true);
+  }
+
+  /**
+   * `utterance` has no more bytes, on its `audio_done` or at a cap: a
+   * stream is finished with what went in, and a whole utterance is queued.
+   */
+  private endUtterance(utterance: Utterance, done: boolean): void {
+    utterance.done = done;
     this.arriving = null;
-    if (utterance.stream) utterance.stream.finish(utterance.done);
+    if (utterance.stream) utterance.stream.finish(done);
     else {
       this.queueReplay(utterance);
       const holder = this.holder;
@@ -380,6 +396,13 @@ export class AudioPlayback {
       this.startNext();
     }
     this.notifyPlaybackChange();
+  }
+
+  /** Which cap `bytes` more of `utterance` would pass, if any. */
+  private limitPassed(utterance: Utterance, bytes: number): AudioLimit | null {
+    if (utterance.bytes + bytes > MAX_AUDIO_UTTERANCE) return "utterance";
+    if (this.heldBytes() + bytes > MAX_AUDIO_REPLAY) return "held";
+    return null;
   }
 
   // --- The holder -------------------------------------------------------

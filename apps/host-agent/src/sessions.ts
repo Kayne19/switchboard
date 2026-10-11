@@ -46,12 +46,19 @@ export class CommandError extends Error {
 /** The turn a tracked session has open. A session with none is idle. */
 interface OpenTurn {
 	/**
-	 * Stable while this host-agent process tracks one daemon turn. Null for a
-	 * turn rebuilt from a reconnect snapshot, which has no reliable cause or
-	 * authority: the service refuses its self-wake side effects.
+	 * Stable while this host-agent process tracks one daemon turn. A turn
+	 * rebuilt from a reconnect snapshot has one too; its `unknown` cause has
+	 * no reliable authority, so the service refuses its self-wake side
+	 * effects.
 	 */
-	id: string | null;
+	id: string;
 	cause: TurnCause;
+}
+
+/** What a `prompt` or `steer` command answers: how the input was sent, and the turn it went into. */
+export interface SentInput {
+	sent_as: string;
+	turn_id: string;
 }
 
 /** What moves a tracked session's turn (`SessionManager.#turnStep`). */
@@ -526,7 +533,7 @@ export class SessionManager {
 		return t;
 	}
 
-	async prompt(handle: string, message: string): Promise<{ sent_as: string }> {
+	async prompt(handle: string, message: string): Promise<SentInput> {
 		const t = this.#get(handle);
 		if (t.turn) return this.input(handle, "follow_up", message);
 		try {
@@ -538,12 +545,12 @@ export class SessionManager {
 		}
 	}
 
-	async input(handle: string, kind: "steer" | "follow_up", message: string): Promise<{ sent_as: string }> {
+	async input(handle: string, kind: "steer" | "follow_up", message: string): Promise<SentInput> {
 		const t = this.#get(handle);
 		return this.#send(t, kind, () => (kind === "steer" ? this.#port.steer(handle, message) : this.#port.followUp(handle, message)));
 	}
 
-	async #send(t: Tracked, kind: string, send: () => Promise<void>): Promise<{ sent_as: string }> {
+	async #send(t: Tracked, kind: string, send: () => Promise<void>): Promise<SentInput> {
 		t.pending++;
 		try {
 			await send();
@@ -552,7 +559,11 @@ export class SessionManager {
 		}
 		this.#turnStep(t, { kind: "open", cause: "input" });
 		this.#settle(t);
-		return { sent_as: kind };
+		// The turn the input went into: the one it opened, or the one already
+		// open. Only that turn's turn_end ends the service's prompt.
+		const turn = t.turn;
+		if (!turn) throw new CommandError("failed", `session ${t.handle} has no open turn`);
+		return { sent_as: kind, turn_id: turn.id };
 	}
 
 	async abort(handle: string): Promise<{ aborted: true }> {
@@ -661,11 +672,12 @@ export class SessionManager {
 		switch (event.kind) {
 			case "open": {
 				if (t.turn) return;
-				// A reconnect snapshot has no reliable cause or authority. Keep its
-				// turn id absent so the service can refuse self-wake side effects.
-				const id = event.cause === "unknown" ? null : `turn-${randomBytes(8).toString("hex")}`;
+				// Every turn has an id, a reconnect snapshot's `unknown` one too:
+				// its cause, not a missing id, keeps its self-wake side effects
+				// refused.
+				const id = `turn-${randomBytes(8).toString("hex")}`;
 				t.turn = { id, cause: event.cause };
-				this.#emit(t.handle, { kind: "turn_start", cause: event.cause, ...(id ? { turn_id: id } : {}) });
+				this.#emit(t.handle, { kind: "turn_start", cause: event.cause, turn_id: id });
 				return;
 			}
 			case "settled": {
@@ -673,7 +685,7 @@ export class SessionManager {
 				const { id } = t.turn;
 				t.turn = null;
 				if (event.failure === null && t.last) t.last = { ...t.last, busy: false };
-				this.#emit(t.handle, { kind: "turn_end", ...(id ? { turn_id: id } : {}), ...(event.failure === null ? {} : { error: event.failure }) });
+				this.#emit(t.handle, { kind: "turn_end", turn_id: id, ...(event.failure === null ? {} : { error: event.failure }) });
 				return;
 			}
 			case "untracked":

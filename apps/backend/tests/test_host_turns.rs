@@ -119,8 +119,11 @@ async fn delayed_old_autonomous_call_is_refused_after_a_new_caller_operation() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn old_host_self_wake_is_refused_but_legacy_caller_calls_still_work() {
-    let root = scratch_root("autonomous-legacy-host");
+async fn a_self_woken_start_that_names_no_turn_is_refused() {
+    // Every turn a host on this protocol opens has an id, so a start without
+    // one is a malformed report: nothing is admitted for it. A call made
+    // outside any host turn names no cause and keeps the token check.
+    let root = scratch_root("autonomous-unnamed");
     let state = state_with_agents(&root);
     let (token, instance_id) = foreground_alpha_turn(&state).await;
     handle_project_turn(&state, autonomous_turn(token.clone(), instance_id, None)).await;
@@ -136,7 +139,7 @@ async fn old_host_self_wake_is_refused_but_legacy_caller_calls_still_work() {
             token: token.clone(),
             turn_id: None,
             cause: Some("autonomous".into()),
-            args: json!({"text":"legacy self wake"}),
+            args: json!({"text":"unnamed self wake"}),
         },
     )
     .await;
@@ -145,7 +148,7 @@ async fn old_host_self_wake_is_refused_but_legacy_caller_calls_still_work() {
         .as_str()
         .unwrap()
         .contains("no switchboard turn"));
-    let legacy_display = module_call(
+    let outside_a_turn = module_call(
         &state,
         AgentCall {
             call: "display".into(),
@@ -156,7 +159,7 @@ async fn old_host_self_wake_is_refused_but_legacy_caller_calls_still_work() {
         },
     )
     .await;
-    assert_eq!(legacy_display["status"], "accepted");
+    assert_eq!(outside_a_turn["status"], "accepted");
     assert!(state.0.coordinator.finish_operation(&operation));
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);

@@ -794,14 +794,13 @@ pub(crate) async fn foreground_alpha_turn(state: &AppState) -> (String, u64) {
 pub(crate) async fn alpha_caller_turn_in_flight(
     root: &std::path::Path,
 ) -> (AppState, FakeLog, String, u64, tokio::task::JoinHandle<()>) {
-    let mut host = FakeHostAgent::new(Box::new(|_, message| {
+    let host = FakeHostAgent::new(Box::new(|_, message| {
         if message.contains("run the tests") {
             vec![Step::Hold]
         } else {
             vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
         }
     }));
-    host.turn_ids = true;
     let (state, log) = state_with_agents_and_jev(root, host);
     let (token, instance_id) = foreground_alpha_turn(&state).await;
     let generation = state.0.coordinator.generation();

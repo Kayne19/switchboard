@@ -510,6 +510,9 @@ Run this after each foundation pin bump (`acc:host-deploy`), outside CI.
    Every registry host is listed with `connected: true`, `synced: true`,
    `protocol_status: "compatible"` and the pinned `git_sha`. `outdated`
    means the host still runs an older host agent: redeploy it.
+   `incompatible`, with `connected: false`, means the service refused it at
+   hello: a host agent from before host-link protocol 2 (every turn has an
+   id). Reinstall it from the pinned commit (`apps/host-agent/install.mjs`).
 4. Make one call that reaches a project on each host.
 
 If the host agent is not active, `journalctl --user -u switchboard-host-agent`
