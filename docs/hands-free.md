@@ -229,8 +229,10 @@ What `CallRuntime` tells the controller:
 | `error` naming a clip | `clipFailed(id)` |
 | `routing_unavailable` | `endAwaitedTurn()` |
 
-A keepalive miss and `retry()` reconnect without `stop`: hands-free stays as
-it was until the new socket's `epoch` turns it off.
+"Socket closed" is the link's line down (`apps/frontend/ARCHITECTURE.md`,
+"Transport boundary"). A keepalive miss and `retry()` replace the socket
+without it: hands-free stays as it was until the new socket's `epoch` turns
+it off.
 
 ## Asset provenance and licenses
 
