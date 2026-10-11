@@ -5,9 +5,10 @@ This package is the approved React and TypeScript replacement frontend for Switc
 ## Repository integration
 
 V17.2 is the frontend at `/`, and it runs the call itself. `src/runtime/`
-owns the browser's side of a call: `callRuntime.ts` holds the backend
-WebSocket (hello, heartbeat, reconnect, epochs and transfers, the clip
-outbox), `pushToTalk.ts` records the caller, `audioPlayback.ts` plays replies,
+owns the browser's side of a call: `callRuntime.ts` runs the call over the
+backend WebSocket (epochs and transfers, the clip outbox, the line controls),
+`callLink.ts` holds the socket itself (hello, heartbeat, reconnect),
+`pushToTalk.ts` records the caller, `audioPlayback.ts` plays replies,
 and hands-free listening reuses `src/hands_free.ts` and the local wake-word
 detector. The runtime owns no DOM; it reports state and backend messages to
 `src/integration/runtime.tsx`, which turns them into the six-operation display

@@ -430,6 +430,9 @@ const machines = [
 	{ file: "apps/backend/src/page_controls.rs", writer: /\bcoordinator\.generation\(\)/, max: 2, once: [/\.begin_rescue_at\(/, /\.begin_rescue_of\(/, /\bcoordinator\.settle\(/, /\.settle_at\(/] },
 	// modal-focus (#396): `transition` writes a dialog's focus phase; `leave` cancels the give-back's frame.
 	{ file: "apps/frontend/src/hooks/useModalFocus.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/cancelAnimationFrame\(/] },
+	// browser-link: `transition` writes the call socket's link; `leave` clears its timer, and
+	// `close` is the one place a socket is closed (on leaving its phase, or after a failed send).
+	{ file: "apps/frontend/src/runtime/callLink.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.close\(\)/, /clearTimeout\(/] },
 	// operator-utility (#386): a local process slot, not a machine. `LocalProcess::ensure` is the
 	// one place the operator or the utility is started; `close` is the one place a slot is emptied.
 	{ file: "apps/backend/src/operator.rs", writer: /\bself\.session\s*=(?!=)/, max: 1, once: [/\.session\.take\(\)/] },
@@ -464,7 +467,8 @@ const owners = [
 	{ file: "apps/frontend/src/hands_free.ts", owner: "HandsFreeController", fields: 0 },
 	{ file: "apps/frontend/src/hands_free_machine.ts", owner: "Capture", fields: 1 },
 	{ file: "apps/frontend/src/runtime/pushToTalk.ts", owner: "PushToTalk", fields: 0 },
-	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 18 },
+	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 8 },
+	{ file: "apps/frontend/src/runtime/callLink.ts", owner: "CallLink", fields: 0 },
 	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 2 },
 	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 0 },
 	{ file: "apps/frontend/src/app/screenReporter.ts", owner: "ScreenReporter", fields: 0 },

@@ -186,12 +186,47 @@ The production boundary is a bidirectional WebSocket:
 Damocles backend <-> src/runtime/callRuntime.ts <-> src/integration/runtime.tsx <-> controller.dispatch(action)
 ```
 
-`callRuntime.ts` owns the socket and the call's audio and reports runtime
-state and each backend message, decoded into the `ServerMessage` union of
-`src/protocol.ts` (a frame that is not one of its messages is dropped); it
-owns no DOM. `runtime.tsx` validates
+`callRuntime.ts` owns the call's side of the socket and the call's audio and
+reports runtime state and each backend message, decoded into the
+`ServerMessage` union of `src/protocol.ts` (a frame that is not one of its
+messages is dropped); it owns no DOM. `runtime.tsx` validates
 incoming display actions, dispatches them, and reports the rendered scene back
 to the backend. Neither contains layout logic.
+
+The socket itself is `CallLink`'s (`src/runtime/callLink.ts`): it connects,
+says `hello`, pings every 20 s, and reconnects 1.5 s after a socket closes.
+Its state is one `Link` value written only by `transition`. Each phase holds
+what exists only there, and `leave()` clears the timer and closes the socket
+that the old phase held and the new one does not. A socket or timer callback
+names its socket or timer, so one from a socket or timer the link has let go
+of is dropped. The phase x event table in `tests/unit/callLink.test.ts` pins
+each row through `CallRuntime`.
+
+| phase | holds | event | next | effect |
+|---|---|---|---|---|
+| `idle` | nothing | `start()` | `connecting` | a socket is made (`waiting` and "Connection error: …" when it cannot be) |
+| `connecting` | the socket | the socket opens | `open` | line up; `hello` goes; a socket that cannot take `hello` stays `connecting` and is closed |
+| `open` | the socket, the keepalive | `epoch` (`snapshot`) | `ready` | clips and typed turns may go |
+| `open`, `ready` | the socket, the keepalive | `hello_ack` | same | `streaming` is what it chose |
+| `open`, `ready` | the socket, the keepalive | 20 s | same | a ping goes, and its pong is due in 8 s; a ping that cannot go replaces the socket |
+| `open`, `ready` | the socket, the keepalive | the pong, or 8 s without it | same, or `connecting` | the next ping in 20 s, or "Keepalive missed. Reconnecting..." and a new socket |
+| any with a socket | the socket | the socket reports an error | same | "Connection error." |
+| any with a socket | the socket | the socket closes | `waiting` | line down |
+| any with a socket | the socket | a frame cannot go | same | the socket is closed; its close takes the line down |
+| any but `idle`, `disposed` | — | `retry()` | `connecting` | a new socket; the old socket is closed, or the reconnect timer cleared |
+| `waiting` | the reconnect timer | 1.5 s | `connecting` | a new socket |
+| any | — | `dispose()` | `disposed` | the socket is closed, the timer cleared |
+
+Line up and line down are `CallRuntime`'s: line up says the idle line, sets
+`connected` and marks every clip unsent; line down finishes a push-to-talk
+take into the outbox, stops hands-free (`"disconnected"`), marks every clip
+unsent, says "Disconnected. Reconnecting..." and clears `connected`. A
+keepalive miss and `retry()` replace the socket without line down, so the
+line stays up until the replacement opens or closes. Two values outlive the
+socket that set them, on purpose (each pinned by a row): the streaming
+choice holds until a new socket opens, so a take begun while a replacement
+connects still streams, and `waiting` keeps whether the lost socket had its
+snapshot, so a clip finished after the drop is said to wait.
 
 The reports themselves belong to `ScreenReporter` (`src/app/screenReporter.ts`);
 `runtime.tsx` only forwards it events. It sends with stop-and-wait: one
