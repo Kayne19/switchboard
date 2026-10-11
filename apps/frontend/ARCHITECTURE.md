@@ -166,16 +166,57 @@ lifecycle; each reader owns only what it reads.
 | `ListViewport` | `src/primitives/ListViewport.tsx` | whether the list scrolls, across, and the pinned band's depth |
 | `Spot`, `WeatherPrimitive` | `src/primitives/WeatherPrimitive.tsx` | whether the spot line sets the chance of rain aside; the condition line's width in a small slot |
 | `useRailUnder` | `src/components/Scenes.tsx` | whether the rail stands under the main column |
+| `useCalloutPlaced` | `src/components/Scenes.tsx` | whether the main slot's graph draws the scene's note as a callout (see below) |
 | `useCrowded`, `useRailFit` | `src/components/Rail.tsx` | whether the note leads a crowded column; under the column, the rail's fit and the note's floor |
 | `ChartNotes` | `src/components/ChartNotes.tsx` | the chart canvas the notes' layer follows |
 
-`tests/unit/measuredValues.test.tsx` holds every reader to the same rows.
+`tests/unit/measuredValues.test.tsx` holds every reader to the same rows,
+but for `useCalloutPlaced`, which reads what a child drew rather than a
+box: its rows are in `tests/unit/calloutPlacement.test.tsx`.
 Before, each reader observed the layout itself and chose its own commit
 policy; the ones that left a report to React's schedule drew it a frame
 late, and on a loaded WebKit half a second late (#333, #392).
 `scripts/check_hygiene.mjs` (check 22) refuses a layout observer or a
 `flushSync` outside the hook, except where it names why: the scroll pin
 (`usePinnedScroll`), the chart notes' placement pass, and the debug page.
+
+### Where a graph's note is shown
+
+A note that names a node of the main slot's graph is drawn either on the
+drawing, as a callout beside the node, or in the rail, the node carrying the
+NOTE marker. The scene computes which in render, so the rail and the drawing
+agree in every painted frame (#390):
+
+- Whether the graph *may* carry the note is pure: a graph (not a sequence),
+  a node it holds, words that fit the box (`mayCarryCallout` in
+  `src/components/DiagramObject.tsx`, from the same `anchoredNode` and
+  `calloutText` the drawing uses). Where it may not, the note is the rail's.
+- Whether it *does* depends on the room the graph is laid out in (a drawing
+  that scrolls, or is laid out upright, places none), which only the drawing
+  knows. The scene reads it from what is drawn (`drawsCallout`) through
+  `useMeasured`, with `changes`: in the layout effect of the commit the note
+  arrives in, and again whenever the drawing changes, before the frame is
+  painted.
+- Until the drawing has been read for a note, the note keeps the placement
+  the last read gave; with none, it is out of the rail. So a note the
+  drawing takes is never mounted in the rail, and a note updated in place
+  does not move.
+- A graph that goes, or fails to draw, draws no callout, and the read gives
+  the note back to the rail. Nothing is written back on unmount.
+
+| situation | rail | drawing |
+|---|---|---|
+| the graph is read and draws the callout | leaves the note out | callout |
+| the graph is read and draws none (scrolls, upright, no room by the node) | carries the note | NOTE marker |
+| the note may not ride the graph (too long, tag too wide, no node of it, a sequence) | carries the note | marker on the node it names, if any |
+| a new note, not read yet, after a read for another | where the other was | as it draws |
+| a note, not read yet, after none | leaves it out | as it draws |
+| the graph goes or fails to draw | carries the note | -- |
+
+Before, the diagram reported its placement from a passive effect into the
+scene's state, with a cleanup that wrote `false` back: the first frame had
+the note in the rail, and the card then ran its exit unseen for some 300 ms,
+holding rail space and in the accessibility tree.
 
 ## Motion
 

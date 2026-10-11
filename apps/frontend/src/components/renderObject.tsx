@@ -31,8 +31,6 @@ export interface ObjectContext {
    * item; a diagram's node or actor, with its NOTE marker).
    */
   notes: NoteData[];
-  /** The main slot hears whether its graph placed the note as a callout beside the node it names, and the rail then leaves it out. Elsewhere the note is in a panel of its own, never on the drawing. */
-  onCalloutChange?: (placed: boolean) => void;
 }
 
 /**
@@ -46,7 +44,7 @@ export interface ObjectContext {
  * progress under them. A message is no object of this kind: it draws
  * nothing.
  */
-export function renderObject(object: SceneObject, slot: Slot, { onStage, notes, onCalloutChange }: ObjectContext): ReactNode {
+export function renderObject(object: SceneObject, slot: Slot, { onStage, notes }: ObjectContext): ReactNode {
   // The first note about this object of those the page draws there: the
   // rail carries every note on stage, the one about the primary first.
   const note = markingNote(notes, object.id) ?? null;
@@ -58,7 +56,7 @@ export function renderObject(object: SceneObject, slot: Slot, { onStage, notes, 
       return <ChartPrimitive data={chart.data} slot={slot} named={chartNoteAnchors(chart, notes.map((data, index) => ({ key: String(index), data })))} />;
     }
     case 'diagram':
-      return <DiagramObject data={cast.diagram(object).data} id={object.id} slot={slot} note={note} onCalloutChange={onCalloutChange} />;
+      return <DiagramObject data={cast.diagram(object).data} id={object.id} slot={slot} note={note} />;
     case 'document':
       return <DocumentViewport data={cast.document(object).data} slot={slot} />;
     case 'code':

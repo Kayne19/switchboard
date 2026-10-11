@@ -6,7 +6,7 @@ import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
 import { pipelineDiagram, topologyDiagram } from '../../src/fixtures/scenes';
 import { GRAPH_MIN_SCALE } from '../../src/primitives/diagramLayout';
 import { SEMANTIC_COLOR } from '../../src/design/tokens';
-import { mount, referenced, rerender, stubResizeObserver } from './sceneHarness';
+import { mount, referenced, stubResizeObserver } from './sceneHarness';
 
 const data: DiagramData = {
   mode: 'graph',
@@ -325,25 +325,6 @@ describe('anchored note fit and ownership', () => {
     expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
   });
 
-  it('hands a placed callout back to the rail when the diagram unmounts', () => {
-    const placed: boolean[] = [];
-    host = mount(
-      <DiagramPrimitive
-        data={data}
-        id="test-diagram"
-        note={{ tag: 'OBSERVATION', anchor: { target: 'test-diagram', node: 'route' }, segments: [{ text: 'Context moves here.' }] }}
-        onCalloutChange={(value) => placed.push(value)}
-      />,
-    );
-    expect(host.querySelector('.diagram-callout')).not.toBeNull();
-    expect(placed.at(-1)).toBe(true);
-
-    // A surface boundary replacing a diagram that threw unmounts it the same
-    // way; the scene must not keep hiding the note from the rail.
-    rerender(host, <div />);
-    expect(placed.at(-1)).toBe(false);
-  });
-
   it('does not capture a note whose target is another object', () => {
     renderAnchored({
       tag: 'OBSERVATION',
@@ -447,18 +428,15 @@ describe('a graph too large to read whole', () => {
   });
 
   it('keeps a note that names one of its nodes in the rail, the node carrying the marker', () => {
-    const placed: boolean[] = [];
     host = mount(
       <DiagramPrimitive
         data={topologyDiagram}
         id="topology"
         note={{ tag: 'NOTE', anchor: { target: 'topology', node: 'gate' }, segments: [{ text: 'Short enough for a callout.' }] }}
-        onCalloutChange={(value) => placed.push(value)}
       />,
     );
     // A callout rides on the drawing and could sit out of view in a scroll.
     expect(host.querySelector('.diagram-callout')).toBeNull();
-    expect(placed.at(-1)).toBe(false);
     expect(host.querySelector('.diagram-node__marker')).not.toBeNull();
   });
 

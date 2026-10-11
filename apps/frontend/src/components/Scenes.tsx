@@ -10,6 +10,7 @@ import { cast, VISUAL_TYPES, type CompositionModel } from '../app/sceneModel';
 import { useLayoutMotion } from '../hooks/useLayoutMotion';
 import { useMeasured } from '../hooks/useMeasured';
 import { DamoclesPresence } from '../primitives/DamoclesPresence';
+import { drawsCallout } from '../primitives/DiagramPrimitive';
 import { ListViewport } from '../primitives/ListViewport';
 import { SpokenLog } from '../primitives/SpokenLog';
 import { ObjectMotion } from '../primitives/ObjectMotion';
@@ -137,6 +138,42 @@ function useRailUnder(active: boolean, gridRef: RefObject<HTMLDivElement | null>
   return active && under;
 }
 
+// What the main column was last read to draw: the note it was read for
+// (null before the first read), and whether a graph in it carries that
+// note as a callout.
+interface CalloutRead {
+  note: NoteData | null;
+  drawn: boolean;
+}
+const UNREAD: CalloutRead = { note: null, drawn: false };
+const sameRead = (a: CalloutRead, b: CalloutRead) => a.note === b.note && a.drawn === b.drawn;
+
+// Whether the main slot's graph carries `note`, the scene's note where the
+// graph may carry it (`mayCarryCallout`), as a callout: the rail then
+// leaves it out (#390). Only the graph knows whether it does, for the room
+// it is laid out in, so the page reads it from what is drawn (useMeasured):
+// in the commit the note arrives in, and again whenever the drawing
+// changes, before a frame is painted. The placement is computed here, in
+// render, from that read. A graph that goes -- its object changed, or
+// failed to draw -- draws no callout, and the read gives the note back to
+// the rail with no word from the graph.
+function useCalloutPlaced(mainRef: RefObject<HTMLDivElement | null>, note: NoteData | undefined): boolean {
+  const read = useMeasured(
+    () => (note ? mainRef.current : null),
+    (main): CalloutRead => ({ note: note ?? null, drawn: drawsCallout(main) }),
+    { initial: UNREAD, same: sameRead, changes: true },
+    [mainRef, note],
+  );
+  if (!note) return false;
+  // Read for this note: where the drawing put it.
+  if (read.note === note) return read.drawn;
+  // Not read yet: where the drawing put the last note it was read for, the
+  // best guess in the same room (a note updated in place does not move);
+  // with none, out of the rail, so the rail never mounts a card the drawing
+  // then takes.
+  return read.note === null || read.drawn;
+}
+
 // ---- End of the aux row ----
 
 const FALLBACK_MESSAGE: MessageData = {
@@ -170,7 +207,6 @@ function ConversationAnswer({ composition }: { composition: CompositionModel }) 
 
 function sceneContent(
   props: SceneProps,
-  onCalloutChange: (placed: boolean) => void,
   chartRailNote: ChartRailNote | null,
   onChartRailNote: (chartId: string, key: string, away: boolean) => void,
   chartBand: ChartRailNote | null,
@@ -184,7 +220,7 @@ function sceneContent(
     case 'composed':
       return composedContent(props);
     default:
-      return objectContent(props, onCalloutChange);
+      return objectContent(props);
   }
 }
 
@@ -198,10 +234,8 @@ function sceneContent(
 export function SceneShell(props: SceneProps) {
   const { kind, composition, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, behindModal = false } = props;
   const isPresent = useIsPresent();
-  // A diagram can place its note as a callout beside the node it names; the
-  // rail then leaves it out. A chart hands the rail the one note it leaves
-  // out so the others have places clear of its data.
-  const [calloutPlaced, setCalloutPlaced] = useState(false);
+  // A chart hands the rail the one note it leaves out so the others have
+  // places clear of its data.
   const [chartRailNote, setChartRailNote] = useState<ChartRailNote | null>(null);
   // A chart says when a note leaves it and when it is back, and takes back
   // only its own: a chart on its way out may speak after the one that
@@ -222,12 +256,15 @@ export function SceneShell(props: SceneProps) {
   // in less room, or for another note, must not take the note back and
   // hand it out again, the band coming and going under it.
   const [chartBand, setChartBand] = useState<ChartRailNote | null>(null);
-  const content = sceneContent(props, setCalloutPlaced, chartRailNote, onChartRailNote, chartBand);
+  const content = sceneContent(props, chartRailNote, onChartRailNote, chartBand);
   const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : 'idle';
   const gridRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
   const under = useRailUnder(content !== null, gridRef, mainRef, railRef);
+  // A graph can carry the note as a callout beside the node it names; the
+  // rail then leaves it out.
+  const calloutPlaced = useCalloutPlaced(mainRef, content?.calloutNote);
   // How tall the rail's note reads whole in, while the rail stands under the column (RailDetails).
   const [railFloor, setRailFloor] = useState<number | null>(null);
   const banding = under ? content?.chartNotes : undefined;
