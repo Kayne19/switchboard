@@ -326,10 +326,14 @@ candidate's adoption names. The phase x event table in
 | `candidate` R | same | R, none for `operator` | same | "Connecting to R…" |
 | `candidate_cleared` adopted R at N | same | none | R at N | the adoption waits for N |
 | `candidate_cleared` rolled back or rescued R | same | none | none | clips marked for R lose the mark (`outbox.unmark`) |
-| `reply`, `status` | same | none | same | a take begun after it is not marked |
 
 Any `candidate_cleared` puts the idle line back while "Connecting to …" is
 shown. Any `epoch` ends the wait for an adoption, the one it names or not.
+Only these two end the candidate mark: a `reply` or a `status` that arrives
+while a candidate starts (the reply to the turn that started the transfer)
+leaves it, and the service sends a `candidate_cleared` or an `epoch` for
+every way a candidacy ends (`a_candidacy_ends_only_with_a_notice_that_says_so`
+in `apps/backend/tests/test_lifecycle.rs`).
 
 The reports themselves belong to `ScreenReporter` (`src/app/screenReporter.ts`);
 `runtime.tsx` only forwards it events. It sends with stop-and-wait: one

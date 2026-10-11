@@ -1487,6 +1487,71 @@ fn the_call_line_phase_by_event() {
     assert_eq!(rows, expected);
 }
 
+/// The page marks a take recorded while a candidate starts for that
+/// candidate's leg (#70), and keeps the mark until the service says the
+/// candidacy is over (#480): a `candidate_cleared` (a notice that `ended`)
+/// or an `epoch`. So every event that takes the line out of `Starting` owes
+/// the browser exactly one such notice, and no event that leaves the
+/// candidate staged sends one. A reply or a status is not an end: the
+/// caller's turn that started the transfer stays open while the candidate
+/// starts, so its reply reaches the page with the candidate still staged.
+#[test]
+fn a_candidacy_ends_only_with_a_notice_that_says_so() {
+    let mut ends = Vec::new();
+    for name in ["starting", "starting in a turn"] {
+        for (event, run) in TABLE_EVENTS {
+            let cell = table_phase(name);
+            assert!(
+                cell.call.candidate_identity().is_some(),
+                "{name} stages a candidate"
+            );
+            if name == "starting in a turn" {
+                assert!(
+                    open_turn(&cell.call).is_some(),
+                    "the turn that started the transfer is still open"
+                );
+            }
+            run(&cell);
+            let staged = cell.call.candidate_identity().is_some();
+            let ended: Vec<CandidateEnd> = cell
+                .notices
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|notice| notice.ended)
+                .collect();
+            if staged {
+                assert_eq!(
+                    ended,
+                    [],
+                    "{name} | {event} keeps the candidate staged and ends nothing"
+                );
+            } else {
+                assert_eq!(
+                    ended.len(),
+                    1,
+                    "{name} | {event} ends the candidacy and must say so once"
+                );
+                ends.push(format!("{name} | {event} => {:?}", ended[0]));
+            }
+        }
+    }
+    // The ways a candidacy ends, each with the notice the page hears.
+    assert_eq!(
+        ends,
+        [
+            "starting | begin_rescue => Rescued",
+            "starting | adopt_candidate => Adopted",
+            "starting | rollback_startup => RolledBack",
+            "starting | begin_shutdown => Rescued",
+            "starting in a turn | begin_rescue => Rescued",
+            "starting in a turn | adopt_candidate => Adopted",
+            "starting in a turn | rollback_startup => RolledBack",
+            "starting in a turn | begin_shutdown => Rescued",
+        ]
+    );
+}
+
 const CALL_LINE_TABLE: &str = "
 operator | begin_prompt => new turn | turn running operator operator@0 new turn thinking: []
 operator | begin_autonomous => WrongPhase | operator operator operator@0 - thinking: []
