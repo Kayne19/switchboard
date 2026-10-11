@@ -448,6 +448,38 @@ async fn backgrounding_a_busy_foreground_sends_an_away_notice() {
     board.shutdown().await;
 }
 
+/// A busy resident brought onto the line is interrupted first (Kayne's
+/// decision, 2026-10-11, #239): the host is sent `abort`, the service waits
+/// for the turn to settle, and only then sends the caller's words, as a
+/// prompt of their own. The caller's answer carries none of the background
+/// turn's tail.
+#[cfg(unix)]
+#[tokio::test]
+async fn promoting_a_busy_resident_interrupts_its_turn_before_the_callers_words() {
+    let (mut board, log, resident, _notices) = board_with_a_resident(true).await;
+
+    let reply = within("the promotion", board.dial("alpha", "")).await;
+
+    assert_eq!(reply.route, "alpha");
+    assert_eq!(reply.text, "ready", "{reply:?}");
+    assert!(!reply.text.contains("the background tail"));
+    let names = log.names();
+    let abort = names.iter().position(|name| name == "abort");
+    let foreground = log
+        .commands()
+        .iter()
+        .rposition(|command| command["name"] == "prompt");
+    assert!(
+        abort.is_some_and(|abort| foreground.is_some_and(|prompt| abort < prompt)),
+        "abort before the caller's prompt: {names:?}"
+    );
+    assert!(board
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.same_session(&resident)));
+    board.shutdown().await;
+}
+
 /// What happens to a resident, in the residents table below.
 #[derive(Clone, Copy, Debug)]
 enum ResidentEvent {
@@ -522,7 +554,13 @@ async fn board_with_a_resident(
         &board,
         Box::new(move |_, _| {
             if std::mem::take(&mut first) && busy {
-                vec![Step::Hold]
+                // A busy resident's turn runs until it is aborted, and then
+                // settles, as a real host's does; what it writes after the
+                // abort is the tail a promotion must not collect.
+                vec![
+                    Step::WaitFor("abort"),
+                    Step::Event(json!({"kind": "text", "text": "the background tail"})),
+                ]
             } else {
                 says("ready")
             }
@@ -636,9 +674,9 @@ async fn resident_after(
 /// registry's behaviour before it held one entry per resident; the rows
 /// are that behaviour.
 ///
-/// Promoting a busy resident has no row: what it should do is #239's open
-/// decision, and the fake host cannot answer a prompt to a busy session as
-/// the real one does (a follow-up, not a turn of its own).
+/// Promoting a busy resident interrupts its turn on the host and waits for
+/// it to settle before the caller's words go to it (Kayne's decision,
+/// 2026-10-11, #239).
 #[cfg(unix)]
 #[tokio::test]
 async fn a_resident_leaves_by_the_exits_of_its_table() {
@@ -668,6 +706,18 @@ async fn a_resident_leaves_by_the_exits_of_its_table() {
             false,
             Stop,
             after(false, false, false, false, false, &finished),
+        ),
+        (
+            true,
+            Promote,
+            after(
+                false,
+                false,
+                false,
+                true,
+                true,
+                &["alpha:busy", "alpha:idle"],
+            ),
         ),
         (
             false,
