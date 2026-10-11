@@ -512,14 +512,14 @@ commits or abandons, and the call line is what it commits or rolls back.
 | step | what the `Startup` holds | on failure |
 |---|---|---|
 | `Switchboard::begin_startup` | the staged candidate's identity, the project, the change (`LegChange`: a new agent or a redial) | refused before anything is staged: the caller answers |
-| `attach` | the session, now on the active-session guard, and what it displaced from the guard | `abandon` (nothing attached: the rollback alone) |
+| `attach` | the session, now named on the active-session guard | `abandon` (nothing attached: the rollback alone) |
 | the first turn (a redial has none) | the same | `abandon` |
 | `commit` | consumed: the leg is the PBX's agent and the guard's, and the identity it is on the line under is returned | a failed adoption abandons |
 
 `abandon` is the one failure exit, in one order: the attached session is
-ended, a new agent is published `finished`, and the guard goes back to
-what the attach displaced while, under the guard's lock, the call line
-rolls back to the leg before it. A redial's failure then drops the leg
+ended, a new agent is published `finished`, and, under the guard's lock,
+the call line rolls back to the leg before it and the guard names that
+leg again. A redial's failure then drops the leg
 (`drop_agent`). A `Startup` dropped without either (its future aborted, a
 panic) rolls its candidate back in `Drop`; the guard and the session are
 left to the rescue that aborted it. A rollback names the generation its
@@ -529,6 +529,35 @@ ended (committed, rescued, rolled back) does nothing.
 `apps/backend/tests/test_leg_transitions.rs` pins every bring-up at every
 exit. A new way to bring a leg up holds a `Startup`; a new failure exit
 calls `abandon`.
+
+### The session guard
+
+The active-session guard (`Switchboard::active_session`, shared with the
+application as `AppInner::active_session`) names the session steering and
+a page rescue act on. It is derived state, not a machine:
+`Switchboard::name_leg_on_line` (`pbx.rs`) is its one writer, and it takes
+no session to name. It names, in order:
+
+| case | the guard names |
+|---|---|
+| a bring-up has attached its session (`Startup::attach`) | that session, over whatever is on the line |
+| a project is on the line | the PBX's agent, if it is that project's session (`agent_on_the_line`) and alive |
+| the operator is on the line | the operator's process, if it is alive |
+| otherwise, or the session has ended | nothing |
+
+Each change to the legs calls it after it changes `agent`, `operator` or
+the route: `Startup::attach`, `commit` and `abandon`, `drop_agent`,
+`force_hangup`, the operator's start and recovery (`operator.rs`), and
+`shutdown`. A change that also moves the call line (`abandon`'s rollback,
+`drop_agent`'s return to the operator) moves it inside the writer, under
+the guard's lock, so a rescue finds the guard and the line agreeing. The
+operator answering while a project is on the line leaves the guard on the
+project, because the derivation reads the route, not the caller. A
+rescue's `take` (`page_controls.rs`) is the one other change: it empties
+the guard and ends the session, and since an ended session is never named,
+no later change hands it back. `every_change_to_the_legs_leaves_the_guard_as_the_table_says`
+in `apps/backend/tests/test_pbx.rs` pins six call states against eight
+changes to the legs.
 
 ## Turn lifecycle
 

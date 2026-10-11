@@ -416,6 +416,9 @@ const machines = [
 	// mic-hf (#366): `transition` writes the phase; `releaseGraph` is the one place tracks
 	// stop, and `publish` the one call of `onState`, from the phase.
 	{ file: "apps/frontend/src/hands_free.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/, /\.onState\(/] },
+	// session-guard (#359): the active-session guard is derived, not a machine. `name_leg_on_line`
+	// is its one writer and the one place the PBX locks it; a rescue's `take` is the only other change.
+	{ file: "apps/backend/src/pbx.rs", writer: /\*guard\s*=(?!=)/, max: 1, once: [/\.active_session\.lock\(\)/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
