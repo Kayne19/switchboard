@@ -80,5 +80,30 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 820, height: 1180
         await server.stop();
       }
     });
+
+    test('a turn sent from SEND keeps focus in the history, on the field', async ({ page }) => {
+      const server = new DisplayFixtureServer({ initialGeneration: 1 });
+      const { wsUrl } = await server.start();
+      try {
+        await page.goto(`/?ws=${encodeURIComponent(wsUrl)}&chrome=0`);
+        await expect.poll(() => server.frames.some((frame) => frame.type === 'hello')).toBe(true);
+        server.broadcast({ type: 'history', entries: [transcriptEntry({ role: 'caller', text: 'Show me the call path.', id: 'clip-1' })] });
+        await page.locator('.transcript-toggle').focus();
+        await page.keyboard.press('Enter');
+        const drawer = page.getByRole('dialog', { name: 'Conversation history' });
+        const field = drawer.getByRole('textbox', { name: 'Conversation input' });
+        await expect(field).toBeFocused();
+        await page.keyboard.type('run the tests');
+        await drawer.locator('.transcript__send').focus();
+        await page.keyboard.press('Enter');
+        await expect(drawer.locator('.transcript-line').last()).toContainText('run the tests');
+        // SEND turned disabled with the draft gone: focus did not go with it to the body.
+        await expect(field).toHaveValue('');
+        await expect(field).toBeFocused();
+        expect(await where(page)).toBe('history');
+      } finally {
+        await server.stop();
+      }
+    });
   });
 }

@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TranscriptDrawer } from '../../src/components/TranscriptDrawer';
 import { mount, rerender, unmountAll } from './sceneHarness';
 
-type Line = { speaker: string; text: string };
+type Line = { key: number; speaker: string; text: string };
 
 // jsdom lays nothing out. Here a line is 50px tall, or 150px for a long one,
 // the body's window is 300px, and the body scrolls as a browser does: never
@@ -47,13 +47,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-// Lines 1 to 400, one object per line, kept: the page's history hands the
-// drawer the same line objects in each new window of it. Line 201 is long.
+// Lines 1 to 400, each with its key, as the page runtime numbers them.
+// Line 201 is long. Each window is new objects: a row is the line's key's,
+// not its object's, so a clone on the way to the drawer keeps it (#398).
 const said: Line[] = Array.from({ length: 2 * CAP }, (_, index) => ({
+  key: index,
   speaker: index % 2 ? 'DAMOCLES' : 'CALLER',
   text: index + 1 === CAP + 1 ? LONG : `Line ${index + 1}.`,
 }));
-const lines = (from: number, to: number) => said.slice(from - 1, to);
+const lines = (from: number, to: number) => said.slice(from - 1, to).map((line) => ({ ...line }));
 
 const drawer = (shown: Line[]) => <TranscriptDrawer open lines={shown} onClose={() => {}} />;
 const bodyOf = (host: HTMLElement) => host.querySelector<HTMLElement>('.transcript__body')!;

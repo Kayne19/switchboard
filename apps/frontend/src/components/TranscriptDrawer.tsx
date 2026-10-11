@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { useLayoutEffect, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useRef, useState, type FormEvent, type RefObject } from 'react';
 import type { MessageData } from '../controller/types';
 import { useModalFocus } from '../hooks/useModalFocus';
 import { usePinnedScroll } from '../hooks/usePinnedScroll';
@@ -32,6 +32,14 @@ export function TranscriptDrawer({ open, lines, onClose, onSend, behindFocus = f
   const live = Boolean(onSend);
   const returnButton = useRef<HTMLButtonElement>(null);
   const input = useRef<HTMLInputElement>(null);
+  // Opening the history is how a caller who will not speak reaches the
+  // line, so focus goes to the field and they can type at once. A field
+  // disabled for a line with no runtime cannot take focus: RETURN takes it
+  // then. The target follows the line while the history is open: the field
+  // takes focus in the commit that makes it live (`useModalFocus`,
+  // `retarget`). It follows the line, not `onSend` itself: the runtime
+  // registers a fresh `sendText` on every connection or recording change,
+  // and each of those must not pull focus from wherever the caller put it.
   useModalFocus(open, '.transcript', live ? input : returnButton);
   return (
     <AnimatePresence>
@@ -75,12 +83,11 @@ function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
   // to while they reread (#267). It keys on the lines, not on their count,
   // which stops changing once the page's history holds its 200 lines.
   const { ref, onScroll } = usePinnedScroll<HTMLDivElement>(lines);
-  const rowKey = useRowKeys();
 
   return (
     <div className="transcript__body" ref={ref} onScroll={onScroll}>
       {lines.map((line) => (
-        <div className={`transcript-line${line.speaker === 'DAMOCLES' ? ' transcript-line--ai' : ''}`} key={rowKey(line)}>
+        <div className={`transcript-line${line.speaker === 'DAMOCLES' ? ' transcript-line--ai' : ''}`} key={line.key}>
           <span className="transcript-line__speaker tech micro">{transcriptSpeaker(line)}</span>
           <div className="transcript-line__text"><RichText segments={[{ text: line.text }]} allowLinks /></div>
         </div>
@@ -89,54 +96,27 @@ function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
   );
 }
 
-// A row's key is its line's: the page's history hands over the same line
-// object in each new window of it, so dropping the oldest line keeps every
-// other row instead of renumbering, and remounting, all of them (#267).
-function useRowKeys(): (line: TranscriptLine) => number {
-  const keys = useRef(new WeakMap<TranscriptLine, number>());
-  const next = useRef(0);
-  return (line) => {
-    let key = keys.current.get(line);
-    if (key === undefined) {
-      key = next.current++;
-      keys.current.set(line, key);
-    }
-    return key;
-  };
-}
-
 // The draft stays in the field until the runtime has put it on the socket, so
 // a turn typed while the line is down is not lost; the transcript shows it
 // once the server echoes it back.
 function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => boolean; inputRef: RefObject<HTMLInputElement | null> }) {
   const [draft, setDraft] = useState('');
   const [notSent, setNotSent] = useState(false);
-
-  // Opening the history is how a caller who will not speak reaches the line,
-  // so the field takes focus as the drawer opens (`useModalFocus`, in the
-  // drawer) and they can type at once. A field disabled for a line with no
-  // runtime cannot take focus: RETURN takes it then. The field takes focus
-  // here when it turns live while the history is open, in the commit that
-  // makes it live. It keys on the field turning live, not on `onSend`
-  // itself: the runtime registers a fresh `sendText` on every connection or
-  // recording change, and each of those must not pull focus back from
-  // wherever the caller has moved it. Not as it mounts: the drawer has read
-  // what held focus before it, to give focus back to, and focused the field.
-  const live = Boolean(onSend);
-  const wasLive = useRef(live);
-  useLayoutEffect(() => {
-    if (live && !wasLive.current) {
-      inputRef.current?.focus({ preventScroll: true });
-    }
-    wasLive.current = live;
-  }, [live, inputRef]);
+  const sendButton = useRef<HTMLButtonElement>(null);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!onSend || !draft.trim()) return;
+    // SEND turns disabled with the draft gone. Focus on it then went to the
+    // body, outside the dialog: it goes to the field, for the next turn.
+    // Only focus on SEND moves: a send from the field leaves focus there,
+    // and a tap that did not focus SEND (iPadOS Safari's) brings up no
+    // touch keyboard the caller had put away.
+    const fromSend = sendButton.current !== null && document.activeElement === sendButton.current;
     if (onSend(draft)) {
       setDraft('');
       setNotSent(false);
+      if (fromSend) inputRef.current?.focus({ preventScroll: true });
     } else {
       setNotSent(true);
     }
@@ -158,7 +138,7 @@ function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => b
         enterKeyHint="send"
         disabled={!onSend}
       />
-      <button className="transcript__send tech micro" type="submit" disabled={!onSend || !draft.trim()}>
+      <button ref={sendButton} className="transcript__send tech micro" type="submit" disabled={!onSend || !draft.trim()}>
         SEND
       </button>
       {notSent ? (
