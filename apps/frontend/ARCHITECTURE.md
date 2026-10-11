@@ -319,7 +319,7 @@ candidate's adoption names. The phase x event table in
 
 | message | epoch | candidate | adoption | what it means |
 |---|---|---|---|---|
-| `epoch` N | N | none | none | the adoption at N, if one waits, carries its marked unsent clips to N (`outbox.carry`); other unsent clips not at N are dropped and counted; N is *expected* when it is the epoch held or the adoption's, and on a live line playback is then handed off instead of cut |
+| `epoch` N | N | none | none | the adoption at N, if one waits, carries its marked unsent clips to N (`outbox.carry`); other unsent clips not at N are dropped and counted; N is *expected* when it is the epoch held or the adoption's, and on a live line playback is then handed off instead of cut and hands-free keeps listening (`docs/hands-free.md`) |
 | `candidate` R | same | R, none for `operator` | same | "Connecting to R…" |
 | `candidate_cleared` adopted R at N | same | none | R at N | the adoption waits for N |
 | `candidate_cleared` rolled back or rescued R | same | none | none | clips marked for R lose the mark (`outbox.unmark`) |

@@ -80,7 +80,10 @@ Note the iPadOS version in the pull request.
 3. Orb: the presence moves with Damocles' voice and with yours.
 4. Hands-free, where the page offers it: the wake word and a sentence make
    a turn, without a tap. Then tap Damocles, speak, tap again: MODE still
-   says HANDS-FREE, and the wake word still makes a turn.
+   says HANDS-FREE, and the wake word still makes a turn. Ask to be put
+   through to a project, and later back to the operator: after each
+   hand-off MODE still says HANDS-FREE, the microphone light stays on, and
+   the wake word makes a turn with the new agent.
 5. Captions: the answer card's text follows what is said.
 6. Frames: the answer card shows its dark fill and all four edges; the
    corner marks are whole; a chart, a document and a table show their
