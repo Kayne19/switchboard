@@ -301,7 +301,12 @@ async fn slot_row(slot: Slot, phase: SlotPhase, event: SlotEvent) -> SlotOutcome
     match phase {
         SlotPhase::Absent => {}
         SlotPhase::Live => {
-            ensure_slot(&mut board, slot).await.expect("started");
+            let session = ensure_slot(&mut board, slot).await.expect("started");
+            // A `#!` script is opened by path by its interpreter after the
+            // spawn returns: until the process has answered once, removing
+            // the binary (`EnsureWithoutBinary`) can kill it before it runs,
+            // and the live slot reads dead.
+            session.prompt("are you there?").await.expect("answers");
         }
         SlotPhase::Dead => {
             let session = ensure_slot(&mut board, slot).await.expect("started");

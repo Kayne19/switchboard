@@ -445,6 +445,14 @@ failures legible:
 All fake executables must go through this helper. It owns the `#!/bin/sh`
 preamble so that no caller can forget the probe guard.
 
+A fake executable is also needed after its spawn returns. The kernel starts
+`/bin/sh` with the script's path, and the shell opens that path itself, later.
+A test that removes or rewrites the script to make the next start fail
+(`EnsureWithoutBinary` in the local-process slot table) must first wait until
+the running process has answered once. Otherwise, on a loaded machine, the
+shell finds no file, exits, and the process it was meant to keep reads dead.
+A shell loop that starts a script and removes it at once fails 246 times in 300.
+
 ## A test hook that every test shares
 
 Tests run on many threads inside one process, so anything process-global is
