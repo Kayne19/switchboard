@@ -540,6 +540,81 @@ async fn a_rescue_does_not_wait_for_the_host_to_answer_a_steer() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// The clip worker does not wait for the host's answer to a steer (#295):
+/// on a half-open link that answer can take the whole command wait, and the
+/// caller's next line would wait with it. A steer that fails late is queued
+/// as a turn, in the order the lines were spoken: here both steers wait on a
+/// link that never answers, the link drops, both fail, and they reach the
+/// turn queue first line first.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_next_line_does_not_wait_for_the_host_to_answer_a_steer() {
+    let root = scratch_root("steer-answer-off-worker");
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }));
+    // A half-open link: each steer is taken and never answered.
+    fake.on_command = Some(Box::new(|name, _| (name == "steer").then_some(None)));
+    let (state, host) = state_with_agents_and_jev(&root, fake);
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-slow"}),
+    );
+    until_autonomous(&state, instance_id).await;
+    let generation = state.0.coordinator.generation();
+
+    for (id, words) in [
+        ("first-line", "and the docs"),
+        ("second-line", "and the tests"),
+    ] {
+        timeout(
+            Duration::from_secs(1),
+            dispatch_routed_transcript(&state, id, generation, words.into()),
+        )
+        .await
+        .expect("a line does not wait for the host to answer the steer before it");
+    }
+    timeout(Duration::from_secs(5), async {
+        while host.named("steer").len() < 2 {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("both steers reached the host");
+    assert_eq!(
+        host.named("steer")
+            .iter()
+            .map(|args| args["message"].as_str().unwrap_or_default().to_owned())
+            .collect::<Vec<_>>(),
+        vec!["and the docs".to_owned(), "and the tests".to_owned()],
+        "the steers go out in the order they were spoken"
+    );
+    assert_eq!(state.0.turns.queued_for_test(), 0, "nothing is queued yet");
+
+    // The link drops: both steers fail, and each line is queued as a turn.
+    state.0.hosts.disconnect_fake("scriptorium");
+    timeout(Duration::from_secs(5), async {
+        while state.0.turns.queued_for_test() < 2 {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("both lines were queued after their steers failed");
+    let mut receiver = state.0.turns.receiver.lock().await;
+    let receiver = receiver.as_mut().expect("no turn worker took the queue");
+    let order: Vec<String> = [receiver.try_recv(), receiver.try_recv()]
+        .into_iter()
+        .map(|queued| queued.expect("a queued line").0)
+        .collect();
+    assert_eq!(
+        order,
+        vec!["first-line".to_owned(), "second-line".to_owned()]
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn a_turn_resumed_after_an_external_abort_can_speak() {
