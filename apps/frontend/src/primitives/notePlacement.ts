@@ -58,7 +58,7 @@
 // least.
 //
 // The scene lays at most `NOTES_PLACED_IN_FULL` notes on one chart and the
-// rail carries the rest (Scenes.tsx `trainingContent`). Given more, as a
+// rail carries the rest (TrainingScene.tsx `trainingContent`). Given more, as a
 // guard, the work is bounded, so no caller holds the page for seconds: no note is
 // left out for the rail, no card tries a narrower size, and only the first
 // that many cards placed search every place within reach of their points;

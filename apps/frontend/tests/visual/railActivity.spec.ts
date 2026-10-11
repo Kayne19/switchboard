@@ -27,7 +27,7 @@ const shortLandscapes = [
 
 // Under the main column (a portrait stage) a rail with no room at its foot
 // for the panel whole sets it aside, unseen, and Damocles's caption names
-// the tool (Scenes.tsx useRailFit).
+// the tool (Rail.tsx useRailFit).
 async function setAside(page: Page) {
   return (await page.locator('.content-rail__details .tool-activity-slot--away').count()) > 0;
 }

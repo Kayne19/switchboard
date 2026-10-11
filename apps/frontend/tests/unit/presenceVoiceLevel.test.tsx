@@ -5,7 +5,8 @@
 // and its bars fell back to the canned loop.
 import { act, useEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sceneKind, type SceneKind } from '../../src/app/sceneModel';
+import { type SceneKind } from '../../src/app/sceneModel';
+import { sceneKindOf } from './sceneKindOf';
 import { useController } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
@@ -52,7 +53,7 @@ describe('the presence on every scene', () => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback));
     vi.stubGlobal('cancelAnimationFrame', () => {});
     const host = renderScene([...actions, { op: 'listen', on: true }], <Voice />);
-    expect(sceneKind(controllerState())).toBe(kind);
+    expect(sceneKindOf(controllerState())).toBe(kind);
     // The bars settle on the scale the live level maps to; the canned loop
     // they fall back to without a level never reaches it.
     act(() => {

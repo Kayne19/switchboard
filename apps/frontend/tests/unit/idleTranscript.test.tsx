@@ -9,7 +9,7 @@ import { act, useEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../src/App';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
-import { sceneKind } from '../../src/app/sceneModel';
+import { sceneKindOf } from './sceneKindOf';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { helloAck } from '../fixtures/serverMessages';
@@ -295,7 +295,7 @@ describe('the voice-free path from idle', () => {
     // The backend echoes a typed turn as the caller's transcript line.
     await receive({ type: 'transcript', id: typed[0].id, text: 'What is on the line?' });
 
-    expect(sceneKind(controller.state)).toBe('conversation');
+    expect(sceneKindOf(controller.state)).toBe('conversation');
     expect(stage().dataset.sceneKind).toBe('conversation');
     expect(controller.state.runtimeObjects[RUNTIME_CONVERSATION_ID]).toBeDefined();
     expect(drawer()).not.toBeNull();

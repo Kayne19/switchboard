@@ -26,14 +26,18 @@ function SceneContent({
   voiceRuntime,
   onToggleListening,
 }: SceneContentProps) {
-  const kind = sceneKind(state);
+  // The composition is built here, once a render, and every reader takes
+  // it from here: the scene's kind, the scene itself and the history.
+  const composition = buildCompositionModel(state);
+  const kind = sceneKind(composition, state.workspace.effectiveView);
   const focusedObject = state.focusId
     ? (state.objects[state.focusId] ?? null)
     : null;
-  const conversation = buildCompositionModel(state).runtimeConversation;
+  const conversation = composition.runtimeConversation;
   // When a live voice transport is present the Damocles presence drives a real
   // call turn; in demo mode it only toggles the visual listening state.
   const shared = {
+    composition,
     state,
     onToggleListening,
     // MODE in the corner stack (#180) reads and switches the transport's

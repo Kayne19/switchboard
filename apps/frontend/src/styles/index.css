@@ -895,7 +895,7 @@ button {
   min-width: 0;
   min-height: 0;
 }
-/* Every visual that fills the main slot (Scenes.tsx objectContent) has a
+/* Every visual that fills the main slot (ObjectScene.tsx objectContent) has a
    black ground, as a chart's object does (.chart-object). */
 .diagram-object,
 .document-object,

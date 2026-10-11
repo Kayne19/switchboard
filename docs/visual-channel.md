@@ -283,7 +283,7 @@ Kayne approved the portrait goldens:
 - **Damocles keeps its size on every stage.** Nothing in the rail shrinks
   it.
 - **The note reads whole.** It keeps its own height, and the rail is at
-  least that tall (measured, `useRailFit` in `components/Scenes.tsx`): the
+  least that tall (measured, `useRailFit` in `components/Rail.tsx`): the
   main column gives up what the note needs past the rail's share, and
   keeps the larger share. A note longer than half the content grid (about
   two fifths of the stage) scrolls in the rail; a tap on a note object

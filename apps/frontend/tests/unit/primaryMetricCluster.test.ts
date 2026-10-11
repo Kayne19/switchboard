@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildCompositionModel, deriveScreenState, primaryObject, sceneKind } from '../../src/app/sceneModel';
+import { buildCompositionModel, deriveScreenState } from '../../src/app/sceneModel';
+import { sceneKindOf } from './sceneKindOf';
 import { MAX_PRIMARY_METRICS, controllerReducer, createInitialState } from '../../src/controller/reducer';
 import type { ControllerAction, ControllerState, MetricData } from '../../src/controller/types';
 
@@ -255,7 +256,7 @@ describe('Primary Metric Cluster semantics (#38)', () => {
     expect(report.has_visual).toBe(true);
     expect(report.visual_kind).toBe('metric');
     expect(report.title).toBe('CPU LOAD');
-    expect(sceneKind(state)).toBe('composed');
-    expect(primaryObject(state)?.id).toBe('metric-a');
+    expect(sceneKindOf(state)).toBe('composed');
+    expect(buildCompositionModel(state).primary?.id).toBe('metric-a');
   });
 });
