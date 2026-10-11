@@ -408,17 +408,30 @@ waits under the lock.
 | caller and self-woken | the prompt returns or is cancelled | self-woken | |
 | idle | `turn_start`, `autonomous` or `unknown` | self-woken | start reported; the answer is not used |
 | caller, caller settled | `turn_start`, `autonomous` or `unknown` | admitted: caller and self-woken; refused: unchanged | start reported; refused, it goes to the prompt |
-| caller and self-woken | `turn_start`, `autonomous` or `unknown` | unchanged | goes to the prompt; nothing reported |
-| self-woken | `turn_start`, `autonomous` or `unknown` | unchanged | its turn id is remembered as refused |
-| any | `turn_start`, `input` | unchanged | start reported; the refused id is forgotten |
+| self-woken, caller and self-woken | `turn_start`, `autonomous` or `unknown`, of another turn | unchanged, the new run held in the old one's place | the old run's final text published; its end reported with the new start, taken together |
+| any | `turn_start`, `input` | unchanged | start reported |
 | self-woken, caller and self-woken | `text` of the run | unchanged | the run keeps it |
-| self-woken, caller and self-woken | `turn_end` of the run, or an idle snapshot naming it | idle, caller settled | final text published; end reported with it (a snapshot's `last_text` stands in for none) |
+| self-woken, caller and self-woken | `turn_end` of the run | idle, caller settled | final text published; end reported with it |
+| self-woken, caller and self-woken | an idle snapshot (it names no turn) | idle, caller settled | final text published; end reported with it (the snapshot's `last_text` stands in for none); the snapshot goes to the prompt |
+| self-woken, caller and self-woken | a snapshot with another turn open | unchanged, that turn held in the run's place | as for another self-woken start |
 | self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it; goes to the prompt |
 | caller, caller settled | `turn_end` | unchanged | goes to the prompt, which it ends; with a turn id, reported as an `input` turn's end |
 | idle | `turn_end` with a turn id | idle | reported as an `input` turn's end |
 | idle | a snapshot with a turn open | self-woken | start reported, with the snapshot's cause |
 | any | another snapshot | unchanged | goes to the prompt |
-| any | `text` or `turn_end` of the refused turn id | unchanged | dropped; its `turn_end` forgets it |
+
+A self-woken run is held until the host says it is over. Usually its
+`turn_end` says so. The host opens a turn only once the one before it has
+settled, so a second self-woken start says so too: the held run ends with
+the words it kept, and the new run is held in its place. A snapshot says
+so after a host-agent restart or a replay the host could not make (#495):
+an idle one names no turn and ends whatever run is held, and one with
+another turn open ends the held run and holds that turn. When a new run
+replaces the held one, the pump reports the new start with the old run's
+end (`ProjectTurn::replaces`). The application takes both under one gate
+(`handle_project_turn`), so the operation passes from the old run to the
+new one before a caller turn waiting behind the old run can take it, and
+the new run's module calls are accepted.
 
 The session's end of life (below) is a state of its own: `session_closed`
 moves both. The table test `a_project_session_turn_moves_by_its_table`
