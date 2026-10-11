@@ -100,6 +100,13 @@ function shownSince(mark: number): string[][] {
     .map((report) => report.object_ids ?? []);
 }
 
+// The seqs of the rejections the reports sent since `mark` carry, in order.
+function rejectedSince(mark: number): number[] {
+  return sent()
+    .slice(mark)
+    .flatMap((report) => (report.rejected ? [(report.rejected as { seq: number }).seq] : []));
+}
+
 /** Connected, the epoch announced, and every report acknowledged. */
 async function idle(generation = 1) {
   await open();
@@ -373,7 +380,7 @@ describe('screen reports: phase x event', () => {
       expect(sent().at(-1)?.rejected).toBeUndefined();
     });
 
-    it('awaiting | two rejections before the ack: today only the newer is sent (#378)', async () => {
+    it('awaiting | two rejections before the ack: both are sent, one per report, oldest first (#378)', async () => {
       await awaiting();
       const mark = sent().length;
       await receive(unknown(5));
@@ -381,10 +388,57 @@ describe('screen reports: phase x event', () => {
       await settle();
       await receive(show('b', 7));
       await settle();
-      const rejected = sent()
-        .slice(mark)
-        .flatMap((report) => (report.rejected ? [(report.rejected as { seq: number }).seq] : []));
-      expect(rejected).toEqual([6]);
+      expect(rejectedSince(mark)).toEqual([5, 6]);
+      // Each rejection went once, and the line rests once they are out.
+      expect(sent().at(-1)?.rejected).toBeUndefined();
+    });
+
+    it('awaiting | two rejections in one task: the second goes on a report of its own after the ack (#378)', async () => {
+      await awaiting();
+      const mark = sent().length;
+      await receive(unknown(5), unknown(6));
+      await receive(ack);
+      expect(rejectedSince(mark)).toEqual([5]);
+      await receive(ack);
+      expect(rejectedSince(mark)).toEqual([5, 6]);
+      await receive(ack);
+      expect(sent().slice(mark)).toHaveLength(2);
+    });
+
+    it('awaiting | two rejections, then an applied display: no report says a seq is applied before its rejection is out (#378)', async () => {
+      // The service answers a display call `rendered: true` once a report's
+      // `applied_seq` reaches its seq with no rejection for it, so a report
+      // that passes a rejection still waiting on the page would confirm it.
+      await awaiting();
+      const mark = sent().length;
+      await receive(unknown(5));
+      await receive(unknown(6));
+      await receive(show('b', 7));
+      await settle();
+      expect(rejectedSince(mark)).toEqual([5, 6]);
+      const out = new Set<number>();
+      for (const report of sent().slice(mark)) {
+        const rejected = report.rejected as { seq: number } | undefined;
+        if (rejected) out.add(rejected.seq);
+        for (const seq of [5, 6]) {
+          if ((report.applied_seq as number) >= seq) expect(out.has(seq)).toBe(true);
+        }
+      }
+      expect(sent().at(-1)?.applied_seq).toBe(7);
+    });
+
+    it('awaiting with two rejections | no ack by the deadline: the next rejection still goes (#378)', async () => {
+      await awaiting();
+      const mark = sent().length;
+      await receive(unknown(5), unknown(6));
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(rejectedSince(mark)).toEqual([5]);
+      await act(async () => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(rejectedSince(mark)).toEqual([5, 6]);
     });
 
     it('awaiting with a queued rejection | a newer rejection and the ack in one task: both are sent, the older first', async () => {
@@ -393,10 +447,7 @@ describe('screen reports: phase x event', () => {
       await receive(unknown(5));
       await receive(unknown(6), ack);
       await settle();
-      const rejected = sent()
-        .slice(mark)
-        .flatMap((report) => (report.rejected ? [(report.rejected as { seq: number }).seq] : []));
-      expect(rejected).toEqual([5, 6]);
+      expect(rejectedSince(mark)).toEqual([5, 6]);
     });
 
     it('a rejection not yet sent survives an epoch', async () => {
