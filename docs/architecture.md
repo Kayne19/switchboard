@@ -839,9 +839,9 @@ Switchboard is not currently a perfect hexagonal implementation:
   in `display.rs`'s tests and a vitest test, so the two rules cannot drift
   apart unnoticed.
 - `apps/frontend/src/runtime/callRuntime.ts` still coordinates several
-  concerns (call identity, outbox, line requests, the status line); the
-  socket's link (`callLink.ts`), the recorder, playback and hands-free are
-  separate modules, the rest is one class. Hands-free's
+  concerns (outbox, line requests, the status line); the socket's link
+  (`callLink.ts`), the call's identity (`callIdentity.ts`), the recorder,
+  playback and hands-free are separate modules, the rest is one class. Hands-free's
   whole lifecycle, its first load and follow-up lease included, is the
   controller's: the runtime only tells it what happened
   (`docs/hands-free.md`).
