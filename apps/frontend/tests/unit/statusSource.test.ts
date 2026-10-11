@@ -7,6 +7,11 @@
 // the page is given to draw (`status`, `statusError`). The runtime runs over a
 // fake socket, a fake element, a fake microphone and a hands-free stub that
 // reports through the runtime's own `onState`.
+//
+// Errors are keyed by their source (`statusLine.ts`); push-to-talk and
+// hands-free are both the microphone. Before #354 the line was one slot, and
+// any routine status took down any error: the rows "X error standing | Y
+// routine" with X and Y of different sources showed Y's text then.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   HandsFreeController,
@@ -17,6 +22,7 @@ import {
   IDLE_TEXT,
   type RuntimeState,
 } from "../../src/runtime/callRuntime";
+import type { StatusSource } from "../../src/runtime/statusLine";
 import { helloAck } from "../fixtures/serverMessages";
 import { FakeSocket } from "./fakeSocket";
 
@@ -256,16 +262,27 @@ const WRITERS = Object.keys(REPORTS) as Writer[];
 
 type Shown = Pick<RuntimeState, "status" | "statusError">;
 
+const SOURCE: Record<Writer, StatusSource> = {
+  connection: "connection",
+  line: "line",
+  turn: "turn",
+  playback: "playback",
+  "push-to-talk": "microphone",
+  "hands-free": "microphone",
+};
+
 /**
- * Today: one slot. An error replaces whatever is shown, and any routine
- * status takes down any error. A report that says nothing leaves it.
+ * An error is shown, and stands. A routine status takes down its own
+ * source's error and no other, and is only text while none stands. A report
+ * that says nothing leaves the newest status said.
  */
 function expected(standing: Writer | null, writer: Writer, kind: "error" | "routine"): Shown {
   const said = REPORTS[writer][kind].text;
-  if (said !== null) return { status: said, statusError: kind === "error" };
-  return standing
-    ? { status: REPORTS[standing].error.text!, statusError: true }
-    : { status: IDLE_TEXT, statusError: false };
+  if (kind === "error") return { status: said!, statusError: true };
+  const standingText = standing ? REPORTS[standing].error.text! : null;
+  if (standing && SOURCE[standing] !== SOURCE[writer])
+    return { status: standingText!, statusError: true };
+  return { status: said ?? standingText ?? IDLE_TEXT, statusError: false };
 }
 
 beforeEach(() => {
@@ -304,5 +321,91 @@ describe("the status line, phase x report", () => {
         });
       }
     }
+  }
+});
+
+/** One writer's error or routine report, by name. */
+type Step = [Writer, "error" | "routine"] | ((h: Harness) => Promise<void> | void);
+
+const SEQUENCES: Array<{ name: string; steps: Step[]; shown: Shown }> = [
+  {
+    name: "two errors stand: the newer is shown",
+    steps: [["turn", "error"], ["connection", "error"]],
+    shown: { status: "Connection error.", statusError: true },
+  },
+  {
+    name: "the newer is taken down: the older is shown again",
+    steps: [["turn", "error"], ["connection", "error"], ["connection", "routine"]],
+    shown: { status: "Error: The model refused.", statusError: true },
+  },
+  {
+    name: "the older is taken down: the newer stays",
+    steps: [["turn", "error"], ["connection", "error"], ["turn", "routine"]],
+    shown: { status: "Connection error.", statusError: true },
+  },
+  {
+    name: "both taken down: the newest status is text",
+    steps: [["turn", "error"], ["playback", "error"], ["turn", "routine"], ["playback", "routine"]],
+    shown: { status: IDLE_TEXT, statusError: false },
+  },
+  {
+    name: "a source's second error replaces its first",
+    steps: [
+      ["turn", "error"],
+      (h) => h.socket.receive({ type: "routing_unavailable", message: "Routing is unavailable." }),
+      ["turn", "routine"],
+    ],
+    shown: { status: "Operator is listening...", statusError: false },
+  },
+  {
+    name: "a hangup tried again takes down the last one's failure",
+    steps: [
+      ["line", "error"],
+      async (h) => {
+        h.fakes.hangupFails = false;
+        await h.runtime.hangup();
+      },
+    ],
+    shown: { status: "Could not hang up: refused", statusError: false },
+  },
+  {
+    name: "a hangup tried again leaves another source's error",
+    steps: [
+      ["turn", "error"],
+      async (h) => {
+        h.fakes.hangupFails = false;
+        await h.runtime.hangup();
+      },
+    ],
+    shown: { status: "Error: The model refused.", statusError: true },
+  },
+  // The reverse of #354: a pause playback reported is not taken down by
+  // another source, so the clip sounding again is what takes it down.
+  {
+    name: "a playback error outlives a turn, and the clip resuming takes it down",
+    steps: [
+      ["playback", "error"],
+      ["turn", "routine"],
+      async (h) => {
+        h.fakes.playBlocked = false;
+        await h.clip();
+      },
+    ],
+    shown: { status: "Audio resumed.", statusError: false },
+  },
+];
+
+describe("the status line, in sequence", () => {
+  for (const { name, steps, shown } of SEQUENCES) {
+    it(name, async () => {
+      const h = await harness();
+      for (const step of steps) {
+        await (typeof step === "function" ? step(h) : REPORTS[step[0]][step[1]].run(h));
+        await settle();
+      }
+      const { status, statusError } = h.runtime.currentState;
+      expect({ status, statusError }).toEqual(shown);
+      h.runtime.dispose();
+    });
   }
 });
