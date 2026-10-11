@@ -5,9 +5,11 @@
 // the newest scene waits behind it. The service does not acknowledge a report
 // it ignores (a tab that is not the active one, another generation, a view it
 // does not know), so a report unanswered for `ACK_DEADLINE_MS` is taken as
-// ignored and the line moves on. A display the page declines is reported once,
-// on the next report that goes out. `ScreenReporter` is the one owner of
-// that line; its phase x event table is in apps/frontend/ARCHITECTURE.md
+// ignored and the line moves on. Each display the page declines is reported
+// once, one per report, oldest first; the page reports again while one
+// waits, and no report says a seq is applied past a rejection still waiting
+// (#378). `ScreenReporter` is the one owner of that line; its phase x event
+// table is in apps/frontend/ARCHITECTURE.md
 // ("Transport boundary") and pinned by tests/unit/screenReporter.test.tsx.
 
 import type { ControllerState, ScreenStateReport } from "../controller/types";
@@ -44,12 +46,17 @@ interface ReporterState {
   /** The highest display seq the page has applied; it never goes back. */
   appliedSeq: number;
   /**
-   * The rejection no report has carried out yet. Every report built while it
-   * stands carries this same object, and only the one actually sent with it
-   * clears it, so a newer rejection recorded meanwhile is not cleared by an
-   * older report that goes out after it.
+   * The rejections no report has carried out yet, oldest first, one per
+   * seq. A report carries the oldest; only the report actually sent with
+   * it takes it off the list, so a report built earlier and sent later
+   * clears nothing it did not carry.
    */
-  rejection: Rejection | null;
+  rejections: Rejection[];
+  /**
+   * The scene the page last rendered at this generation: a report made only
+   * to carry a waiting rejection says it.
+   */
+  scene: ControllerState | null;
 }
 
 /**
@@ -83,7 +90,8 @@ export class ScreenReporter {
     queued: null,
     generation: 0,
     appliedSeq: 0,
-    rejection: null,
+    rejections: [],
+    scene: null,
   };
 
   /**
@@ -138,17 +146,18 @@ export class ScreenReporter {
     const line = state.line;
     switch (event.kind) {
       case "scene": {
-        const report = this.build(state, event.scene);
+        const shown = { ...state, scene: event.scene };
+        const report = this.build(shown, event.scene);
         switch (line.kind) {
           case "unready":
-            return { ...state, queued: report };
+            return { ...shown, queued: report };
           case "idle":
-            return this.offer(state, report);
+            return this.offer(shown, report);
           case "awaiting":
             // The report on the wire already says this, and a queued one
             // would say what the page no longer shows.
-            if (sameReport(report, line.report)) return { ...state, queued: null };
-            return { ...state, queued: report };
+            if (sameReport(report, line.report)) return { ...shown, queued: null };
+            return { ...shown, queued: report };
           default:
             return unreachable(line);
         }
@@ -164,31 +173,47 @@ export class ScreenReporter {
         return this.waitOver(state);
       case "epoch":
         // A report on the wire is for the generation this replaces: it is
-        // given up, and the next scene goes at once.
-        return { ...state, line: IDLE, queued: null, generation: event.generation };
+        // given up, and the next scene goes at once. Rejections stay: their
+        // seqs are the delivery's, and a same-generation epoch keeps their
+        // display calls waiting.
+        return { ...state, line: IDLE, queued: null, scene: null, generation: event.generation };
       case "lineDown":
         return line.kind === "unready" ? state : { ...state, line: UNREADY };
       case "applied":
         return { ...state, appliedSeq: Math.max(state.appliedSeq, event.seq) };
-      case "rejected":
-        return { ...state, rejection: event.rejection };
+      case "rejected": {
+        const others = state.rejections.filter((each) => each.seq !== event.rejection.seq);
+        return { ...state, rejections: [...others, event.rejection] };
+      }
       default:
         return unreachable(event);
     }
   }
 
-  /** The report of `scene`, carrying the applied seq and the standing rejection. */
+  /**
+   * The report of `scene`, carrying the oldest rejection not yet sent and
+   * the applied seq. The applied seq stays below the next rejection still
+   * waiting: the service takes a display at or under it with no rejection
+   * as rendered.
+   */
   private build(state: ReporterState, scene: ControllerState): ScreenStateReport {
     const report = deriveScreenState(scene, state.generation);
-    report.applied_seq = state.appliedSeq;
-    if (state.rejection) report.rejected = state.rejection;
+    const [carried, waiting] = state.rejections;
+    const applied = waiting ? Math.min(state.appliedSeq, waiting.seq - 1) : state.appliedSeq;
+    // Seq 0 is real, so a ceiling under it means "nothing applied" and the field is left out.
+    if (applied >= 0) report.applied_seq = applied;
+    if (carried) report.rejected = carried;
     return report;
   }
 
-  /** No report waits any more: the queued one, if any, goes. */
+  /**
+   * No report waits any more: the queued one goes, or, while a rejection
+   * waits, the scene is reported again to carry it.
+   */
   private waitOver(state: ReporterState): ReporterState {
-    if (!state.queued) return { ...state, line: IDLE };
-    return this.offer({ ...state, queued: null }, state.queued);
+    if (state.queued) return this.offer({ ...state, queued: null }, state.queued);
+    if (state.rejections.length > 0 && state.scene) return this.offer(state, this.build(state, state.scene));
+    return { ...state, line: IDLE };
   }
 
   /**
@@ -197,12 +222,11 @@ export class ScreenReporter {
    */
   private offer(state: ReporterState, report: ScreenStateReport): ReporterState {
     if (!this.transmit(report)) return { ...state, line: IDLE, queued: report };
-    const carried = state.rejection !== null && report.rejected === state.rejection;
     return {
       ...state,
       line: { kind: "awaiting", report, deadline: this.armDeadline(report) },
       queued: null,
-      rejection: carried ? null : state.rejection,
+      rejections: state.rejections.filter((each) => each !== report.rejected),
     };
   }
 
