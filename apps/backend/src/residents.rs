@@ -326,8 +326,9 @@ impl Switchboard {
     /// did not get onto it (`LegChange::Promotion`, `Startup::abandon`).
     /// The host is told to apply background rules, a busy agent is told
     /// them too, and the agent is published busy or idle. One its host will
-    /// not move, or whose handle has closed (a failed host command leaves it
-    /// unusable), is ended and published finished.
+    /// not move, or whose handle has closed (a command that failed on the
+    /// link leaves it unusable; one the host refused does not, #423), is
+    /// ended and published finished.
     pub(crate) async fn move_to_background(&self, session: ProjectSession) {
         let project = session.label().to_owned();
         if let Err(error) = session.set_mode("background").await {
