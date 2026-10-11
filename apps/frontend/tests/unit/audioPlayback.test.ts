@@ -704,13 +704,68 @@ describe("AudioPlayback streaming", () => {
     expect(urls.get(player.src), "late audio from the old leg is ignored").toBe(greeting);
   });
 
-  it("retires everything on a handoff while an old clip is still arriving", () => {
+  // Kayne's decision on #437 (2026-10-11): at a handoff, what the old leg is
+  // already saying finishes, and the new leg's audio plays after it.
+  it("lets a stream still arriving at a handoff finish, and plays the new leg after it", () => {
+    const { player, urls, playback } = streamingPlayback();
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("put"));
+    const goodbye = urls.get(player.src) as FakeMediaSource;
+
+    playback.handOffToGeneration(1);
+    expect(player.pauseCalls, "the old leg's clip is not cut off").toBe(0);
+    playback.receiveAudioChunk(bytes("through"));
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    goodbye.buffer.emit("updateend");
+    expect(
+      goodbye.buffer.appended.map((part) => new TextDecoder().decode(part)),
+      "the rest of it still arrives",
+    ).toEqual(["put", "through"]);
+
+    playback.receiveAudioStart({ generation: 1, sequence: 2, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("hi"));
+    playback.receiveAudioDone({ generation: 1, sequence: 2, done: true });
+    expect(urls.get(player.src), "the new leg waits for it").toBe(goodbye);
+    player.emit("ended");
+    expect(urls.get(player.src)).not.toBe(goodbye);
+    expect(player.playCalls.length).toBe(2);
+  });
+
+  it("lets a whole replay still arriving at a handoff finish, and plays the new leg after it", async () => {
+    const { player, urls, playback } = streamingPlayback();
+    playback.setStreamingEnabled(false);
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("put"));
+
+    playback.handOffToGeneration(1);
+    expect(player.pauseCalls, "the old leg's clip is not cut off").toBe(0);
+    playback.receiveAudioChunk(bytes("through"));
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    const goodbye = urls.get(player.src) as Blob;
+    expect(goodbye, "the old leg's clip plays whole").toBeInstanceOf(Blob);
+    expect(goodbye.size, "with the bytes that came after the handoff").toBe(10);
+
+    playback.receiveAudioStart({ generation: 1, sequence: 2, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(bytes("hi"));
+    playback.receiveAudioDone({ generation: 1, sequence: 2, done: true });
+    expect(urls.get(player.src), "the new leg waits for it").toBe(goodbye);
+    await Promise.resolve();
+    player.ended = true;
+    player.emit("ended");
+    expect(urls.get(player.src)).not.toBe(goodbye);
+    expect(player.playCalls.length).toBe(2);
+  });
+
+  it("still retires a clip still arriving on a reset", () => {
     const { player, playback } = streamingPlayback();
     playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
     playback.receiveAudioChunk(bytes("half"));
-    playback.handOffToGeneration(1);
+    playback.resetForGeneration(1);
     expect(player.pauseCalls).toBe(1);
     expect(playback.isDrained()).toBe(true);
+    playback.receiveAudioChunk(bytes("rest"));
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    expect(playback.isDrained(), "the rest of a retired clip finds nothing").toBe(true);
   });
 
   it("reports each utterance when its turn to play comes (#112)", () => {
