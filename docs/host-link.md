@@ -396,7 +396,7 @@ waits under the lock.
 |---|---|---|---|
 | idle | no | reaches nobody | has no cause |
 | caller (a prompt is collecting its turn) | yes | goes to the prompt | has no cause |
-| self-woken (a run no prompt collects is held) | yes | is dropped | gets the run's cause |
+| self-woken (a run no prompt collects is held, and perhaps one queued behind it) | yes | is dropped | gets the held run's cause |
 | caller and self-woken (the application admitted a run behind the caller's settled turn before the prompt returned) | yes | is dropped | gets the run's cause |
 | caller settled (that run ended; the prompt has not returned yet) | no | goes to the prompt | has no cause |
 
@@ -408,17 +408,32 @@ waits under the lock.
 | caller and self-woken | the prompt returns or is cancelled | self-woken | |
 | idle | `turn_start`, `autonomous` or `unknown` | self-woken | start reported; the answer is not used |
 | caller, caller settled | `turn_start`, `autonomous` or `unknown` | admitted: caller and self-woken; refused: unchanged | start reported; refused, it goes to the prompt |
-| caller and self-woken | `turn_start`, `autonomous` or `unknown` | unchanged | goes to the prompt; nothing reported |
-| self-woken | `turn_start`, `autonomous` or `unknown` | unchanged | its turn id is remembered as refused |
+| self-woken, caller and self-woken | `turn_start`, `autonomous` or `unknown`, of another turn, none queued | unchanged | queued behind the held run; nothing reported |
+| self-woken, caller and self-woken | `turn_start`, `autonomous` or `unknown`, one queued already or naming the held run's turn | unchanged | its turn id is remembered as refused |
 | any | `turn_start`, `input` | unchanged | start reported; the refused id is forgotten |
-| self-woken, caller and self-woken | `text` of the run | unchanged | the run keeps it |
-| self-woken, caller and self-woken | `turn_end` of the run, or an idle snapshot naming it | idle, caller settled | final text published; end reported with it (a snapshot's `last_text` stands in for none) |
-| self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it; goes to the prompt |
+| self-woken, caller and self-woken | `text` of the held or the queued run | unchanged | that run keeps it |
+| self-woken, caller and self-woken | `turn_end` of the held run, or an idle snapshot naming it | idle, caller settled; with a run queued, unchanged, and the queued run is held | final text published; end reported with it (a snapshot's `last_text` stands in for none); the queued run's start reported |
+| self-woken, caller and self-woken | `turn_end` of the queued run, or an idle snapshot naming it | idle, caller settled | the held run ends as above, then the queued run's start and its end are reported |
+| self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it; a queued run is dropped unreported; goes to the prompt |
 | caller, caller settled | `turn_end` | unchanged | goes to the prompt, which it ends; with a turn id, reported as an `input` turn's end |
 | idle | `turn_end` with a turn id | idle | reported as an `input` turn's end |
 | idle | a snapshot with a turn open | self-woken | start reported, with the snapshot's cause |
 | any | another snapshot | unchanged | goes to the prompt |
 | any | `text` or `turn_end` of the refused turn id | unchanged | dropped; its `turn_end` forgets it |
+
+The host opens a turn only once the one before it settled, so a second
+self-woken start while a run is held means the held run's end was lost
+(a host-agent restart, a replay that dropped it). The second run is queued
+behind the held one with its own text, so its words are not lost: it is
+held next, and reported started, when the held run ends. Its own
+`turn_end` also shows that the held run is over, since the host settles
+turns in order: the held run ends first, then the queued run is reported
+started and ended, and its written words reach the transcript. At most
+one run waits. A third start while one is queued is refused, and its
+frames are dropped until its `turn_end`: it is the newest, and the queued
+run's collected words are kept rather than replaced. A run that waits
+has no operation yet, so a module call that names its turn is refused as
+self-woken without authority until it is held.
 
 The session's end of life (below) is a state of its own: `session_closed`
 moves both. The table test `a_project_session_turn_moves_by_its_table`
