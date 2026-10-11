@@ -31,24 +31,23 @@ type Heartbeat =
   | { kind: "awaiting"; nonce: string; deadline: Timer };
 
 /**
- * Where the link is. `streaming` is what the last `hello_ack` chose. A new
- * socket's open resets it, and nothing else does, so it outlives the socket
- * that heard it: a take begun while a replacement connects still streams.
- * `snapshot` on `waiting` says the socket the link lost had its snapshot.
- * The page still holds that call: a clip finished meanwhile is said to wait,
- * and the next socket made forgets it.
+ * Where the link is. The line is up in `open` and `ready`, and only there.
+ * `streaming` is what this socket's `hello_ack` chose; a socket that has not
+ * been greeted has not chosen. `snapshot` on `waiting` says the socket the
+ * link lost had its snapshot. The page still holds that call: a clip
+ * finished meanwhile is said to wait, and the next socket made forgets it.
  */
 type Link =
   /** The runtime has not started. */
   | { kind: "idle" }
   /** The socket is made and has not opened, or opened and could not say hello. */
-  | { kind: "connecting"; socket: WebSocket; streaming: boolean }
+  | { kind: "connecting"; socket: WebSocket }
   /** Open, `hello` sent; no snapshot `epoch` yet. */
   | { kind: "open"; socket: WebSocket; heartbeat: Heartbeat; streaming: boolean }
   /** The snapshot `epoch` arrived: clips and typed turns may go. */
   | { kind: "ready"; socket: WebSocket; heartbeat: Heartbeat; streaming: boolean }
   /** No socket; `retry` makes the next one. */
-  | { kind: "waiting"; retry: Timer; streaming: boolean; snapshot: boolean }
+  | { kind: "waiting"; retry: Timer; snapshot: boolean }
   | { kind: "disposed" };
 
 /**
@@ -91,8 +90,8 @@ export interface CallLinkOptions {
   /** A socket opened: the line is up. */
   lineUp(): void;
   /**
-   * The current socket closed: the line is down. A keepalive miss or
-   * `retry()` replaces the socket without it.
+   * The line is down: the current socket closed, or a line that was up is
+   * being replaced (a keepalive miss, a ping that cannot go, `retry()`).
    */
   lineDown(): void;
   status(text: string, error: boolean): void;
@@ -125,8 +124,13 @@ function timerOf(link: Link): Timer | null {
   }
 }
 
+/** Whether the line is up: a socket is open and has said hello. */
+function isUp(link: Link): link is Extract<Link, { kind: "open" | "ready" }> {
+  return link.kind === "open" || link.kind === "ready";
+}
+
 function streamingOf(link: Link): boolean {
-  return "streaming" in link ? link.streaming : false;
+  return isUp(link) && link.streaming;
 }
 
 function snapshotOf(link: Link): boolean {
@@ -192,12 +196,17 @@ export class CallLink {
     return this.phase.kind === "disposed";
   }
 
+  /** Whether the line is up: a socket is open and has said hello. */
+  get connected(): boolean {
+    return isUp(this.phase);
+  }
+
   /** Whether the snapshot `epoch` has arrived, so a clip or a typed turn may go. */
   get ready(): boolean {
     return snapshotOf(this.phase);
   }
 
-  /** Whether the backend chose streaming speech-to-text, as its last `hello_ack` said. */
+  /** Whether the backend chose streaming speech-to-text, as this socket's `hello_ack` said. */
   get streaming(): boolean {
     return streamingOf(this.phase);
   }
@@ -212,7 +221,7 @@ export class CallLink {
     this.transition({ kind: "start" });
   }
 
-  /** Replaces the socket now. The line stays up: the replacement's open or close says what it is. */
+  /** Replaces the socket now. A line that was up goes down until the replacement opens. */
   retry(): void {
     this.transition({ kind: "retry" });
   }
@@ -266,7 +275,9 @@ export class CallLink {
       case "retry":
         return link.kind === "idle" || link.kind === "disposed"
           ? unchanged(link)
-          : this.connect(link, []);
+          : this.replace(link, [
+              { kind: "status", text: "Forcing a fresh connection and retrying...", error: false },
+            ]);
       case "dispose":
         return link.kind === "disposed"
           ? unchanged(link)
@@ -278,7 +289,7 @@ export class CallLink {
       case "closed":
         // Any phase holding the socket: `fromCurrentPhase` checked it.
         return {
-          to: this.wait(streamingOf(link), snapshotOf(link)),
+          to: this.wait(snapshotOf(link)),
           effects: [{ kind: "lineDown" }],
         };
       case "sendFailed":
@@ -301,8 +312,8 @@ export class CallLink {
       case "pingDue":
         return link.kind === "open" || link.kind === "ready" ? this.ping(link) : unchanged(link);
       case "pongMissed":
-        if (link.kind !== "open" && link.kind !== "ready") return unchanged(link);
-        return this.connect(link, [
+        if (!isUp(link)) return unchanged(link);
+        return this.replace(link, [
           { kind: "status", text: "Keepalive missed. Reconnecting...", error: true },
         ]);
       case "retryDue":
@@ -315,40 +326,46 @@ export class CallLink {
   }
 
   /**
+   * Replace the socket now: a line that was up goes down first, as a close
+   * takes it down (a running push-to-talk take is finished, hands-free is
+   * stopped), then `effects`, then the replacement connects.
+   */
+  private replace(from: Link, effects: Effect[]): Step {
+    const down: Effect[] = isUp(from) ? [{ kind: "lineDown" }] : [];
+    return this.connect(from, [...down, ...effects]);
+  }
+
+  /**
    * Enter `connecting` with a new socket, or `waiting` if one cannot be
    * made. `from`'s socket, if any, is closed on leaving it.
    */
   private connect(from: Link, effects: Effect[]): Step {
-    const streaming = streamingOf(from);
     let socket: WebSocket;
     try {
       socket = this.options.createSocket(this.options.url);
     } catch (error) {
       const text = "Connection error: " + errorText(error);
       effects.push({ kind: "status", text, error: true });
-      return { to: this.wait(streaming, snapshotOf(from)), effects };
+      return { to: this.wait(snapshotOf(from)), effects };
     }
     socket.binaryType = "arraybuffer";
     socket.onopen = () => this.transition({ kind: "opened", socket });
     socket.onclose = () => this.transition({ kind: "closed", socket });
     socket.onerror = () => this.transition({ kind: "errored", socket });
     socket.onmessage = (event) => this.receive(socket, event.data);
-    return { to: { kind: "connecting", socket, streaming }, effects };
+    return { to: { kind: "connecting", socket }, effects };
   }
 
   /**
    * Enter `open`: the line is up, and the socket says hello. A socket that
-   * cannot say hello stays `connecting` and is closed, and its close takes
-   * the line down again.
+   * cannot say hello never brings the line up: it stays `connecting` and is
+   * closed, and its close says the line is down.
    */
   private open(socket: WebSocket): Step {
     try {
       socket.send(helloMessage());
     } catch {
-      return {
-        to: { kind: "connecting", socket, streaming: false },
-        effects: [{ kind: "lineUp" }, { kind: "close", socket }],
-      };
+      return { to: { kind: "connecting", socket }, effects: [{ kind: "close", socket }] };
     }
     return {
       to: { kind: "open", socket, heartbeat: this.rest(), streaming: false },
@@ -357,12 +374,12 @@ export class CallLink {
   }
 
   /** Enter `waiting`: the next socket is made `RECONNECT_DELAY_MS` from now. */
-  private wait(streaming: boolean, snapshot: boolean): Link {
+  private wait(snapshot: boolean): Link {
     const retry: Timer = setTimeout(
       () => this.transition({ kind: "retryDue", timer: retry }),
       RECONNECT_DELAY_MS,
     );
-    return { kind: "waiting", retry, streaming, snapshot };
+    return { kind: "waiting", retry, snapshot };
   }
 
   private rest(): Heartbeat {
@@ -383,7 +400,7 @@ export class CallLink {
     try {
       link.socket.send(pingMessage(nonce, Date.now()));
     } catch {
-      return this.connect(link, []);
+      return this.replace(link, []);
     }
     const deadline: Timer = setTimeout(
       () => this.transition({ kind: "pongMissed", timer: deadline }),

@@ -745,14 +745,24 @@ The page's view of each agent is the agent projection (`AgentProjection`,
 `app_state.rs`): one `AgentPhase` per project, moved only by
 `AgentPhase::on` through `AgentProjection::apply`. Its events are the PBX's
 and turn settlement's notices (`AgentNotice`: busy, idle, finished) and the
-floor's `Waiting` reports (asked, spoken).
+floor's `Waiting` reports (asked, left).
 
-| phase | busy | idle | finished | asked | spoken |
+One `AgentPhase` is two things that move independently: what the agent
+is doing (busy, idle, finished) and the request the floor holds for it,
+if any. The page sees `waiting`, with the request, while one is held, and
+what the agent is doing otherwise, so a resident that starts or ends a
+turn keeps its place on the floor (#388). The mark carries the call token
+of the agent that asked, and the floor's `left` ends it only for that
+token, so the end of an older resident's request cannot end a newer
+resident's mark (#421).
+
+| phase | busy | idle | finished | asked | left (its token) |
 |---|---|---|---|---|---|
-| not listed | busy | idle | finished | waiting | stays |
-| busy, idle | busy | idle | finished | waiting | stays |
-| waiting (with the request) | busy (the request is dropped) | stays | finished | waiting, the newer request | idle |
-| finished | busy | idle | finished | waiting | stays |
+| not listed | busy | idle | finished | waiting (taken as idle) | stays |
+| busy, idle, finished, not waiting | busy | idle | finished | waiting | stays |
+| waiting (with the request) | busy, still waiting | idle, still waiting | finished, the wait ends | waiting, the newer request | what it is doing: busy, idle or finished |
+
+`left` with another token changes nothing.
 
 Entering `finished` drops the agent's held displays. Every event sends the
 whole projection to the page and the debug bus (`publish_agents`), moved or
@@ -764,11 +774,14 @@ not. `the_agent_projection_moves_by_its_table` in
 A background agent's `request_to_speak` waits on the floor (`floor.rs`)
 until the caller can hear it. The floor is the one owner of who is waiting:
 it marks an agent waiting when it queues the agent's request, and ends the
-mark when the agent's last request on the floor is spoken. It reports both
+mark when the agent's last request leaves the floor, spoken or dropped (a
+rescue made it stale, or its agent is gone): the request is gone, so the
+agent no longer waits, and it can ask again. It reports both
 through its `Waiting` hook, under its lock, and `floor_hooks::waiting_hook`
-mirrors them into the agent projection the page and Jev read. The PBX's
-state notices are the projection's other events: any notice but `idle`
-replaces an agent's waiting mark (see "Background residents").
+mirrors them into the agent projection the page and Jev read; the end of a mark is mirrored whatever became of the agent, since a promoted or stopped agent's token is no longer a background one. A resident that leaves the background (promoted, stopped, gone) leaves the floor at once: `Coordinator::remove_background` tells `Floor::forget`, which drops the resident's requests behind the front and wakes the worker, whose live check then drops a front request of its still waiting for its moment. A front request already on its way (the gate, the rewrite, the release) ends at its next live check, as before. The PBX's
+state notices are the projection's other events: `busy` and `idle` leave
+an agent's waiting mark alone, and `finished` ends it (see "Background
+residents").
 
 The queue holds the front request and, behind it, at most one waiting
 request per agent; a newer one replaces the agent's waiting one. One worker
@@ -780,9 +793,9 @@ a wait.
 
 | phase | what the worker does | next |
 |---|---|---|
-| reading | reads the page and the caller's last words | awaiting the page, awaiting quiet (held), gating (not held), rewriting (held, quiet) |
-| awaiting the page | waits for a floor event | reading |
-| awaiting quiet | waits for the threshold after the hold and after the caller's last words, or a floor event | reading |
+| reading | checks the agent is live, then reads the page and the caller's last words | left, agent gone; awaiting the page, awaiting quiet (held), gating (not held), rewriting (held, quiet) |
+| awaiting the page | waits for a floor event | reading (the live check first) |
+| awaiting quiet | waits for the threshold after the hold and after the caller's last words, or a floor event | reading (the live check first) |
 | gating | asks Jev for a good moment | rewriting (yes); reading, held from now (no, or failed) |
 | rewriting | checks the agent is live, asks the utility for words (the agent's own on failure), checks again | releasing; left, agent gone |
 | releasing | speaks the words through the speech worker | left, played; left, agent gone; retrying (no audio, page there); reading (no page) |
@@ -791,8 +804,8 @@ a wait.
 A held request (Jev said no, or failed) is never gated again; it is spoken
 at the next quiet moment, and its trace says `quiet_after_hold`. Leaving the
 floor is one teardown, whichever phase the request left from: the
-`floor_released` trace, its place in the queue, and, when it was spoken and
-was its agent's last, the agent's waiting mark.
+`floor_released` trace, its place in the queue, and, when it was its
+agent's last, the agent's waiting mark, spoken or not.
 
 ## Streaming rules
 

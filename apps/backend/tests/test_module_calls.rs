@@ -1371,6 +1371,7 @@ async fn background_request_and_display_owner_rejects_after_promotion_removes_to
         .with_background("background-token", |project| {
             state.0.projection.waiting(
                 project.to_owned(),
+                "background-token".into(),
                 AgentRequest {
                     message: "ready".into(),
                     reason: "finished".into(),

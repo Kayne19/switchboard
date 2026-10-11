@@ -227,7 +227,7 @@ What `CallRuntime` tells the controller:
 | page or server event | call |
 |---|---|
 | MODE (while the line is up) | `toggle()` |
-| page hidden, `pagehide`, `dispose`, route change, hangup, socket closed | `stop(reason)` |
+| page hidden, `pagehide`, `dispose`, route change, hangup, line down | `stop(reason)` |
 | `epoch` | `epochChanged(handoff)` |
 | push-to-talk takes or gives back the microphone | `pauseForPtt()`, `resumeAfterPtt()` |
 | `final_response_audio_closed` | `replyClosed(generation, success)` |
@@ -241,10 +241,9 @@ already holds, a return to the operator) on a link that has had its
 snapshot. Any other `epoch` (a rescue, a hangup, a reconnect's snapshot) is
 a rescue here.
 
-"Socket closed" is the link's line down (`apps/frontend/ARCHITECTURE.md`,
-"Transport boundary"). A keepalive miss and `retry()` replace the socket
-without it: hands-free stays as it was until the new socket's `epoch` turns
-it off.
+"Line down" is the link's (`apps/frontend/ARCHITECTURE.md`, "Transport
+boundary"): the socket closed. A keepalive miss, a ping that cannot go and `retry()`
+take the same line down, so they stop hands-free as a close does.
 
 ## Asset provenance and licenses
 

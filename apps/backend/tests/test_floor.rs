@@ -1479,6 +1479,27 @@ fn step_moves_the_front_request_by_its_table() {
             }),
         ),
         (
+            "reading + agent gone -> left, agent gone (#421)",
+            Phase::Reading { hold: None },
+            Event::AgentGone,
+            Step::Left(Left::AgentGone),
+        ),
+        (
+            "awaiting the page + agent gone -> left, agent gone (#421)",
+            Phase::AwaitingPage { hold: None },
+            Event::AgentGone,
+            Step::Left(Left::AgentGone),
+        ),
+        (
+            "awaiting quiet + agent gone -> left, agent gone (#421)",
+            Phase::AwaitingQuiet {
+                held_since: long_ago,
+                until: now,
+            },
+            Event::AgentGone,
+            Step::Left(Left::AgentGone),
+        ),
+        (
             "gating + an event it does not wait for -> unchanged",
             Phase::Gating { quiet: true },
             Event::Played,

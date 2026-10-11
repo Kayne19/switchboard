@@ -62,13 +62,31 @@ pub(crate) struct AgentProjection {
     displays: Arc<StdMutex<HashMap<String, HeldScene>>>,
 }
 
-/// The phase the page shows for one project agent (`agents_state`).
+/// The page's view of one project agent (`agents_state`): what it is
+/// doing, and whether it waits to speak. The two are independent: an agent
+/// whose request the floor holds can start or end a turn without losing the
+/// request, and the floor speaking it shows what the agent is doing.
 #[derive(Clone, Debug)]
-enum AgentPhase {
+struct AgentPhase {
+    activity: AgentActivity,
+    /// The request the floor holds for it, while it holds one.
+    waiting: Option<FloorMark>,
+}
+
+/// An agent's request the floor holds, and the call token of the agent
+/// that asked: the floor's end of the mark names it, so the end of an older
+/// resident's request cannot end a newer resident's mark.
+#[derive(Clone, Debug)]
+struct FloorMark {
+    token: String,
+    request: AgentRequest,
+}
+
+/// What a project agent is doing, as the PBX and turn settlement report it.
+#[derive(Clone, Copy, Debug)]
+enum AgentActivity {
     Busy,
     Idle,
-    /// It asked to speak, and the floor holds its request.
-    Waiting(AgentRequest),
     Finished,
 }
 
@@ -77,43 +95,73 @@ enum AgentEvent {
     /// The PBX or turn settlement said so (`AgentStateNotice`).
     Notice(AgentNotice),
     /// The floor queued a request of the agent's (`floor::Waiting::Asked`).
-    Asked(AgentRequest),
-    /// The floor spoke the agent's last request (`floor::Waiting::Spoken`).
-    Spoken,
+    Asked(FloorMark),
+    /// The last request on the floor of the agent with this token left it,
+    /// spoken or dropped (`floor::Waiting::Left`).
+    Left { token: String },
 }
 
 impl AgentPhase {
     /// The phase `event` moves an agent to from `from` (`None`: an agent the
     /// page does not list yet); `None` when it stays where it is.
+    ///
+    /// | from        | busy, idle         | finished                | asked             | left (its token) |
+    /// |-------------|--------------------|-------------------------|-------------------|------------------|
+    /// | not listed  | that, not waiting  | finished                | idle, waiting     | stays            |
+    /// | not waiting | that               | finished                | waiting           | stays            |
+    /// | waiting     | that, still waits  | finished, the wait ends | the newer request | stops waiting    |
+    ///
+    /// `left` for another token (an older resident's request) leaves the
+    /// mark alone.
     fn on(from: Option<&AgentPhase>, event: AgentEvent) -> Option<AgentPhase> {
-        match (from, event) {
-            // A turn that settles beside a waiting request does not end the
-            // wait: only the floor speaking it does.
-            (Some(AgentPhase::Waiting(_)), AgentEvent::Notice(AgentNotice::Idle)) => None,
-            (_, AgentEvent::Notice(AgentNotice::Idle)) => Some(AgentPhase::Idle),
-            (_, AgentEvent::Notice(AgentNotice::Busy)) => Some(AgentPhase::Busy),
-            (_, AgentEvent::Notice(AgentNotice::Finished)) => Some(AgentPhase::Finished),
-            (_, AgentEvent::Asked(request)) => Some(AgentPhase::Waiting(request)),
-            (Some(AgentPhase::Waiting(_)), AgentEvent::Spoken) => Some(AgentPhase::Idle),
-            (
-                None | Some(AgentPhase::Busy | AgentPhase::Idle | AgentPhase::Finished),
-                AgentEvent::Spoken,
-            ) => None,
+        let current = from.cloned();
+        match event {
+            AgentEvent::Notice(notice) => {
+                let activity = match notice {
+                    AgentNotice::Busy => AgentActivity::Busy,
+                    AgentNotice::Idle => AgentActivity::Idle,
+                    AgentNotice::Finished => AgentActivity::Finished,
+                };
+                // A finished agent waits for nothing: the floor drops its
+                // requests as the agent gone.
+                let waiting = match activity {
+                    AgentActivity::Finished => None,
+                    AgentActivity::Busy | AgentActivity::Idle => {
+                        current.and_then(|phase| phase.waiting)
+                    }
+                };
+                Some(AgentPhase { activity, waiting })
+            }
+            AgentEvent::Asked(mark) => Some(AgentPhase {
+                activity: current.map_or(AgentActivity::Idle, |phase| phase.activity),
+                waiting: Some(mark),
+            }),
+            AgentEvent::Left { token } => {
+                let phase = current?;
+                if phase.waiting.as_ref()?.token != token {
+                    return None;
+                }
+                Some(AgentPhase {
+                    waiting: None,
+                    ..phase
+                })
+            }
         }
     }
 
-    /// The agent as the page and the debug page receive it.
+    /// The agent as the page and the debug page receive it: `waiting`, with
+    /// its request, while the floor holds one; what it is doing otherwise.
     fn to_wire(&self, project: &str) -> AgentState {
-        let (state, pending_request) = match self {
-            AgentPhase::Busy => ("busy", None),
-            AgentPhase::Idle => ("idle", None),
-            AgentPhase::Waiting(request) => ("waiting", Some(request.clone())),
-            AgentPhase::Finished => ("finished", None),
+        let state = match (&self.waiting, self.activity) {
+            (Some(_), _) => "waiting",
+            (None, AgentActivity::Busy) => "busy",
+            (None, AgentActivity::Idle) => "idle",
+            (None, AgentActivity::Finished) => "finished",
         };
         AgentState {
             project: project.to_owned(),
             state: state.into(),
-            pending_request,
+            pending_request: self.waiting.as_ref().map(|mark| mark.request.clone()),
         }
     }
 }
@@ -149,8 +197,9 @@ impl AgentProjection {
             .phases
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let finishes = matches!(event, AgentEvent::Notice(AgentNotice::Finished));
         if let Some(next) = AgentPhase::on(phases.get(project), event) {
-            if matches!(next, AgentPhase::Finished) {
+            if finishes {
                 self.displays
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -170,16 +219,27 @@ impl AgentProjection {
         self.apply(&notice.project, AgentEvent::Notice(notice.state))
     }
 
-    /// The floor queued the agent's request (`floor::Waiting::Asked`).
-    pub(crate) fn waiting(&self, project: String, request: AgentRequest) -> AgentsChange {
-        self.apply(&project, AgentEvent::Asked(request))
+    /// The floor queued the request of the agent with `token`
+    /// (`floor::Waiting::Asked`).
+    pub(crate) fn waiting(
+        &self,
+        project: String,
+        token: String,
+        request: AgentRequest,
+    ) -> AgentsChange {
+        self.apply(&project, AgentEvent::Asked(FloorMark { token, request }))
     }
 
-    /// The floor spoke the agent's last request (`floor::Waiting::Spoken`).
-    /// This is distinct from a normal idle settlement, which deliberately
-    /// preserves a request that a turn finished beside.
-    pub(crate) fn floor_released(&self, project: &str) -> AgentsChange {
-        self.apply(project, AgentEvent::Spoken)
+    /// The last request on the floor of the agent with `token` left it,
+    /// spoken or dropped (`floor::Waiting::Left`). This is distinct from a
+    /// turn settling, which keeps a request the turn finished beside.
+    pub(crate) fn floor_released(&self, project: &str, token: &str) -> AgentsChange {
+        self.apply(
+            project,
+            AgentEvent::Left {
+                token: token.to_owned(),
+            },
+        )
     }
 
     /// Applies a background agent's display to the scene held for it: the
@@ -441,6 +501,21 @@ impl AppState {
         switchboard.set_debug_bus(debug.clone());
         Self(Arc::new_cyclic(|app: &std::sync::Weak<AppInner>| {
             let floor = floor.with_waiting(waiting_hook(app.clone()));
+            // A resident that leaves the background (promoted, stopped,
+            // gone) leaves the floor too: its requests go unspoken, and its
+            // waiting mark ends (#421). The coordinator calls this under its
+            // background lock, so the floor is told from a task of its own.
+            let left_app = app.clone();
+            coordinator.set_background_left_callback(Arc::new(move |token: &str| {
+                let Some(app) = left_app.upgrade() else {
+                    return;
+                };
+                let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+                    return;
+                };
+                let token = token.to_owned();
+                runtime.spawn(async move { app.floor.forget(&token).await });
+            }));
             let state_app = app.clone();
             let state_callback: AgentStateCallback = Arc::new(move |notice: AgentStateNotice| {
                 let app = state_app.upgrade();

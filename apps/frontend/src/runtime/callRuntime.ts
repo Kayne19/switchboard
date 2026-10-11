@@ -78,8 +78,10 @@ export interface RuntimeState {
   thinkingDisabled: boolean;
 }
 
-export const INITIAL_RUNTIME_STATE: RuntimeState = {
-  connected: false,
+/** What `CallRuntime` holds: everything it publishes but `connected`, a read of the link. */
+type HeldState = Omit<RuntimeState, "connected">;
+
+const INITIAL_HELD_STATE: HeldState = {
   recording: false,
   speaking: false,
   voiceLevelAvailable: false,
@@ -101,6 +103,8 @@ export const INITIAL_RUNTIME_STATE: RuntimeState = {
   modelDisabled: true,
   thinkingDisabled: false,
 };
+
+export const INITIAL_RUNTIME_STATE: RuntimeState = { ...INITIAL_HELD_STATE, connected: false };
 
 /**
  * The page events that count as the gesture blocked audio is waiting for.
@@ -149,8 +153,8 @@ export class CallRuntime {
   private readonly spokenLines: SpokenLines;
   private readonly pushToTalk: PushToTalk;
   private readonly outbox = new ClipOutbox();
-  private state: RuntimeState = { ...INITIAL_RUNTIME_STATE };
-  private readonly statusLine = new StatusLine(INITIAL_RUNTIME_STATE.status);
+  private state: HeldState = { ...INITIAL_HELD_STATE };
+  private readonly statusLine = new StatusLine(INITIAL_HELD_STATE.status);
   private statePublishQueued = false;
   private line: LineState = OPERATOR_LINE;
   private clipSequence = 0;
@@ -262,7 +266,7 @@ export class CallRuntime {
   }
 
   get currentState(): RuntimeState {
-    return { ...this.state };
+    return { ...this.state, connected: this.link.connected };
   }
 
   get currentVoiceLevel(): number | null {
@@ -319,7 +323,7 @@ export class CallRuntime {
    * prompt is open cancels it. Ignored while the line is down.
    */
   talk(): void {
-    if (!this.state.connected) return;
+    if (!this.link.connected) return;
     void this.pushToTalk.start();
   }
 
@@ -329,17 +333,17 @@ export class CallRuntime {
 
   /**
    * Forces a fresh connection and resends every clip still in the outbox.
-   * Before `start()` there is no connection to force.
+   * A line that was up goes down first, as a close takes it down. Before
+   * `start()` there is no connection to force.
    */
   retry(): void {
     if (!this.link.started) return;
     this.outbox.markAllUnsent();
-    this.setStatus("connection", "Forcing a fresh connection and retrying...", false);
     this.link.retry();
   }
 
   toggleHandsFree(): void {
-    if (this.state.connected) this.handsFree.toggle();
+    if (this.link.connected) this.handsFree.toggle();
   }
 
   selectRoute(route: string): void {
@@ -432,9 +436,9 @@ export class CallRuntime {
 
   // --- State ------------------------------------------------------------
 
-  private update(patch: Partial<RuntimeState>): void {
+  private update(patch: Partial<HeldState>): void {
     let changed = false;
-    for (const key of Object.keys(patch) as Array<keyof RuntimeState>) {
+    for (const key of Object.keys(patch) as Array<keyof typeof patch>) {
       if (this.state[key] !== patch[key]) {
         changed = true;
         break;
@@ -452,7 +456,7 @@ export class CallRuntime {
     this.statePublishQueued = true;
     queueMicrotask(() => {
       this.statePublishQueued = false;
-      if (!this.link.disposed) this.options.onState({ ...this.state });
+      if (!this.link.disposed) this.options.onState(this.currentState);
     });
   }
 
@@ -647,17 +651,17 @@ export class CallRuntime {
 
   // --- Line ------------------------------------------------------------
 
-  /** A socket opened. */
+  /** A socket opened: `connected` reads true from here. */
   private lineUp(): void {
     this.setStatus("connection", IDLE_TEXT, false);
-    this.update({ connected: true });
+    this.publishState();
     this.outbox.markAllUnsent();
   }
 
   /**
-   * The current socket closed. A keepalive miss or `retry()` replaces the
-   * socket without this: the line stays up until the new socket opens or
-   * closes.
+   * The line went down: the current socket closed, or a line that was up is
+   * being replaced (a keepalive miss, a ping that cannot go, `retry()`).
+   * `connected` reads false from here.
    */
   private lineDown(): void {
     // Finalise the in-flight recording into the outbox rather than
@@ -668,7 +672,7 @@ export class CallRuntime {
     this.handsFree.stop("disconnected");
     this.outbox.markAllUnsent();
     this.setStatus("connection", "Disconnected. Reconnecting...", true);
-    this.update({ connected: false });
+    this.publishState();
   }
 
   private receive(message: ServerMessage, socket: WebSocket): void {

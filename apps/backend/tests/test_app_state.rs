@@ -209,8 +209,11 @@ enum ProjectionEvent {
     Finished,
     /// The floor queued a request with this message (`Waiting::Asked`).
     Asked(&'static str),
-    /// The floor spoke the agent's last request (`Waiting::Spoken`).
-    Spoken,
+    /// The floor let the agent's last request go, spoken or dropped
+    /// (`Waiting::Left`).
+    Left,
+    /// The floor let an older resident's last request go: another token's.
+    LeftOther,
 }
 
 fn apply_projection_event(projection: &AgentProjection, event: ProjectionEvent) {
@@ -224,24 +227,29 @@ fn apply_projection_event(projection: &AgentProjection, event: ProjectionEvent) 
         ProjectionEvent::Finished => projection.notice(&notice(AgentNotice::Finished)),
         ProjectionEvent::Asked(message) => projection.waiting(
             "alpha".into(),
+            "alpha-token".into(),
             AgentRequest {
                 message: message.into(),
                 reason: "finished".into(),
             },
         ),
-        ProjectionEvent::Spoken => projection.floor_released("alpha"),
+        ProjectionEvent::Left => projection.floor_released("alpha", "alpha-token"),
+        ProjectionEvent::LeftOther => projection.floor_released("alpha", "older-token"),
     };
 }
 
 /// The agent projection's phase x event table: the phase the page shows
 /// for a resident after each event, the request it shows as waiting, and
 /// whether the agent's held display survives. `None` is an agent the page
-/// does not list. Row (`waiting`, `busy`) is the projection half of #388:
-/// a busy notice ends the waiting mark while the floor still holds the
-/// request.
+/// does not list. What an agent is doing and whether it waits to speak are
+/// independent (Kayne's decision, 2026-10-11, #388): a busy or idle notice
+/// keeps a waiting request, and the floor speaking it shows what the agent
+/// is doing. The floor ends a mark when the agent's last request leaves it,
+/// spoken or dropped, and only the mark of the agent whose request it was
+/// (#421). An agent first heard of through its request is taken as idle.
 #[tokio::test]
 async fn the_agent_projection_moves_by_its_table() {
-    use ProjectionEvent::{Asked, Busy, Finished, Idle, Spoken};
+    use ProjectionEvent::{Asked, Busy, Finished, Idle, Left, LeftOther};
     type Row = (
         &'static [ProjectionEvent],
         ProjectionEvent,
@@ -254,18 +262,19 @@ async fn the_agent_projection_moves_by_its_table() {
         (&[], Idle, Some("idle"), None),
         (&[], Finished, Some("finished"), None),
         (&[], Asked("first"), Some("waiting"), Some("first")),
-        (&[], Spoken, None, None),
+        (&[], Left, None, None),
+        (&[], LeftOther, None, None),
         (&[Busy], Busy, Some("busy"), None),
         (&[Busy], Idle, Some("idle"), None),
         (&[Busy], Finished, Some("finished"), None),
         (&[Busy], Asked("first"), Some("waiting"), Some("first")),
-        (&[Busy], Spoken, Some("busy"), None),
+        (&[Busy], Left, Some("busy"), None),
         (&[Idle], Busy, Some("busy"), None),
         (&[Idle], Idle, Some("idle"), None),
         (&[Idle], Finished, Some("finished"), None),
         (&[Idle], Asked("first"), Some("waiting"), Some("first")),
-        (&[Idle], Spoken, Some("idle"), None),
-        (&[Asked("first")], Busy, Some("busy"), None),
+        (&[Idle], Left, Some("idle"), None),
+        (&[Asked("first")], Busy, Some("waiting"), Some("first")),
         (&[Asked("first")], Idle, Some("waiting"), Some("first")),
         (&[Asked("first")], Finished, Some("finished"), None),
         (
@@ -274,12 +283,47 @@ async fn the_agent_projection_moves_by_its_table() {
             Some("waiting"),
             Some("second"),
         ),
-        (&[Asked("first")], Spoken, Some("idle"), None),
+        (&[Asked("first")], Left, Some("idle"), None),
+        (&[Asked("first")], LeftOther, Some("waiting"), Some("first")),
+        (
+            &[Busy, Asked("first")],
+            Busy,
+            Some("waiting"),
+            Some("first"),
+        ),
+        (
+            &[Busy, Asked("first")],
+            Idle,
+            Some("waiting"),
+            Some("first"),
+        ),
+        (&[Busy, Asked("first")], Finished, Some("finished"), None),
+        (
+            &[Busy, Asked("first")],
+            Asked("second"),
+            Some("waiting"),
+            Some("second"),
+        ),
+        (&[Busy, Asked("first")], Left, Some("busy"), None),
+        (
+            &[Busy, Asked("first")],
+            LeftOther,
+            Some("waiting"),
+            Some("first"),
+        ),
+        (&[Asked("first"), Busy], Left, Some("busy"), None),
+        (
+            &[Asked("first"), Busy],
+            Idle,
+            Some("waiting"),
+            Some("first"),
+        ),
+        (&[Asked("first"), Busy, Idle], Left, Some("idle"), None),
         (&[Finished], Busy, Some("busy"), None),
         (&[Finished], Idle, Some("idle"), None),
         (&[Finished], Finished, Some("finished"), None),
         (&[Finished], Asked("first"), Some("waiting"), Some("first")),
-        (&[Finished], Spoken, Some("finished"), None),
+        (&[Finished], Left, Some("finished"), None),
     ];
     for &(reach, event, phase, request) in rows {
         let state = state();
@@ -322,6 +366,7 @@ async fn the_agent_projection_lists_agents_by_project() {
     }
     let _change = projection.waiting(
         "delta".into(),
+        "delta-token".into(),
         AgentRequest {
             message: "done".into(),
             reason: "finished".into(),
