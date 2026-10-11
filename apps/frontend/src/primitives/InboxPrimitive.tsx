@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useRef, type RefObject } from 'react';
 import type { InboxData, InboxMessage } from '../controller/types';
 import { parseTimeValue, type TimeValue } from '../controller/validation';
+import { useMeasured } from '../hooks/useMeasured';
 import { countText, type Noun } from './countText';
 import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
@@ -104,29 +105,25 @@ function MessageRow({ message, today, marked, layout }: { message: InboxMessage;
   );
 }
 
+const UNMEASURED = { width: 0, em: 16 };
+
 /**
- * The width a list's rows have and the size of their text, measured before
- * the page paints (a layout effect), so the first frame is already laid out
- * for the list's width rather than stacked and then redrawn. The box is
- * watched for its size; the rows' scroll is read each time, as a new layout
- * draws a new one.
+ * The width a list's rows have and the size of their text, a value read
+ * from the layout (useMeasured): before the page paints, so the first frame
+ * is already laid out for the list's width rather than stacked and then
+ * redrawn. The box is watched for its size; the rows' scroll is read each
+ * time, as a new layout draws a new one.
  */
 function useListMeasure(boxRef: RefObject<HTMLDivElement | null>, scrollRef: RefObject<HTMLDivElement | null>): { width: number; em: number } {
-  const [measure, setMeasure] = useState({ width: 0, em: 16 });
-  useLayoutEffect(() => {
-    const box = boxRef.current;
-    if (!box) return undefined;
-    const read = () => {
+  return useMeasured(
+    () => boxRef.current,
+    (box) => {
       const list = scrollRef.current ?? box;
-      const next = { width: list.clientWidth, em: parseFloat(getComputedStyle(list).fontSize) || 16 };
-      setMeasure((current) => (current.width === next.width && current.em === next.em ? current : next));
-    };
-    read();
-    const observer = new ResizeObserver(read);
-    observer.observe(box);
-    return () => observer.disconnect();
-  }, [boxRef, scrollRef]);
-  return measure;
+      return { width: list.clientWidth, em: parseFloat(getComputedStyle(list).fontSize) || 16 };
+    },
+    { initial: UNMEASURED, same: (held, next) => held.width === next.width && held.em === next.em },
+    [boxRef, scrollRef],
+  );
 }
 
 /**

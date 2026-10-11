@@ -336,13 +336,13 @@ const readers: Record<string, Reader> = {
  */
 const COMMITTED: Record<keyof typeof readers, 'in the callback' | 'on React\'s schedule'> = {
   'useElementSize (a box\'s size)': 'in the callback',
-  'TimerPrimitive (the rows\' height the field asks)': 'on React\'s schedule',
-  'InboxPrimitive (the list\'s width and type)': 'on React\'s schedule',
-  'ListViewport (whether the list scrolls)': 'on React\'s schedule',
-  'WeatherPrimitive (whether the spot line sets the chance of rain aside)': 'on React\'s schedule',
-  'WeatherPrimitive (the condition line\'s width beside an outlook)': 'on React\'s schedule',
+  'TimerPrimitive (the rows\' height the field asks)': 'in the callback',
+  'InboxPrimitive (the list\'s width and type)': 'in the callback',
+  'ListViewport (whether the list scrolls)': 'in the callback',
+  'WeatherPrimitive (whether the spot line sets the chance of rain aside)': 'in the callback',
+  'WeatherPrimitive (the condition line\'s width beside an outlook)': 'in the callback',
   'the scene (whether the rail stands under the main column)': 'in the callback',
-  'RailDetails beside the column (whether the note leads a crowded column)': 'on React\'s schedule',
+  'RailDetails beside the column (whether the note leads a crowded column)': 'in the callback',
   'RailDetails under the column (whether the note leads, by useRailFit)': 'in the callback',
 };
 

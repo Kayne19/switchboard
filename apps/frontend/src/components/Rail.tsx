@@ -2,7 +2,7 @@
 // live response, the notes and tool activity, and how it fits them when it
 // stands under the column (`useRailFit`). Drawn by `SceneShell`.
 import { AnimatePresence } from 'motion/react';
-import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type RefObject } from 'react';
 import type {
   ControllerState,
   MetricData,
@@ -12,7 +12,6 @@ import type {
 } from '../controller/types';
 import { railNoteTarget } from '../app/noteItems';
 import { useMeasured } from '../hooks/useMeasured';
-import { watchElement } from '../hooks/watchElement';
 import { AnnotationCard, type NoteTarget } from '../primitives/AnnotationCard';
 import { LiveChatCard } from '../primitives/LiveChatCard';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
@@ -118,15 +117,7 @@ interface RailDetailsProps {
 // a note may lead it beside the column (a chart's handed-over note); under
 // the column every note may lead, by useRailFit's measure.
 function useCrowded(ref: RefObject<HTMLDivElement | null>, watching: boolean): boolean {
-  const [crowded, setCrowded] = useState(false);
-  useLayoutEffect(() => {
-    const column = ref.current;
-    if (!watching || !column) {
-      setCrowded(false);
-      return undefined;
-    }
-    return watchElement(column, () => setCrowded(column.scrollHeight > column.clientHeight + 1), { children: true });
-  }, [ref, watching]);
+  const crowded = useMeasured(() => (watching ? ref.current : null), (column) => column.scrollHeight > column.clientHeight + 1, { initial: false, children: true }, [ref, watching]);
   return watching && crowded;
 }
 

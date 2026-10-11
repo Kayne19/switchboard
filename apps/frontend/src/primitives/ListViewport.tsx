@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
+import { useLayoutEffect, useRef, type KeyboardEvent, type ReactNode, type RefObject } from 'react';
 import { prefersReducedMotion } from './reducedMotion';
 import { PAGE_SHARE, scrollMove, type ScrollMove } from './drawingScroll';
-import { drawnScale, watchElement } from '../hooks/watchElement';
+import { useMeasured } from '../hooks/useMeasured';
+import { drawnScale } from '../hooks/watchElement';
 
 // The viewport an HTML list is read in when it outgrows its slot (a to-do
 // list, an inbox, an agenda, a forecast's days, a table's rows, source, a
@@ -116,43 +117,48 @@ interface ListViewportProps {
   pinned?: string;
 }
 
+/** How a list stands in its viewport: what ListViewport reads from the layout. */
+interface ScrollShape {
+  /** It scrolls down. */
+  scrolls: boolean;
+  /**
+   * It scrolls across. A pane that scrolls across (a table's, source's or
+   * document's) may overflow only sideways (long lines, a wide table on a
+   * phone): it is a tab stop too, and takes the scroll keys across, so a
+   * reader without a pointer can scroll it, and Space pages it rather than
+   * reaching the surface.
+   */
+  across: boolean;
+  /** How deep the band pinned over its top is, in the list's own pixels. */
+  pinnedDepth: number;
+}
+const STILL: ScrollShape = { scrolls: false, across: false, pinnedDepth: 0 };
+const sameScroll = (a: ScrollShape, b: ScrollShape) => a.scrolls === b.scrolls && a.across === b.across && a.pinnedDepth === b.pinnedDepth;
+
+function readScroll(element: HTMLElement, pinned: string | undefined): ScrollShape {
+  // The box's rect is on screen, scaled with it while a focus opens or a
+  // cell of the aux row settles; the pinned band's depth is brought back
+  // to the list's own pixels, so a depth read mid-animation is the depth
+  // at rest. Nothing reads it again when such an animation ends.
+  const box = element.getBoundingClientRect();
+  const k = drawnScale(box.height, element.offsetHeight);
+  const band = pinned ? element.querySelector<HTMLElement>(pinned) : null;
+  return {
+    scrolls: element.scrollHeight > element.clientHeight + 1,
+    // Across only where the pane can scroll that way: a list clips what
+    // sticks out sideways (overflow-x: hidden), which scrollWidth still counts.
+    across: element.scrollWidth > element.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(element).overflowX),
+    pinnedDepth: band ? band.getBoundingClientRect().height / k : 0,
+  };
+}
+
 export function ListViewport({ children, lead, head, className, scrollClassName, scrollRef: givenRef, label, pinned }: ListViewportProps) {
   const ownRef = useRef<HTMLDivElement>(null);
   const scrollRef = givenRef ?? ownRef;
-  const [scrolls, setScrolls] = useState(false);
-  // A pane that scrolls across (a table's, source's or document's) may
-  // overflow only sideways (long lines, a wide table on a phone): it is a
-  // tab stop too, and takes the scroll keys across, so a reader without a
-  // pointer can scroll it, and Space pages it rather than reaching the
-  // surface.
-  const [across, setAcross] = useState(false);
-  const [pinnedDepth, setPinnedDepth] = useState(0);
-
   // Whether it scrolls, which way, and how deep the band pinned over it
-  // is: read whenever the list or its box changes. Nothing here moves with
-  // the scroll.
-  const measure = useCallback(() => {
-    const element = scrollRef.current;
-    if (!element) return;
-    // The box's rect is on screen, scaled with it while a focus opens or a
-    // cell of the aux row settles; the pinned band's depth is brought back
-    // to the list's own pixels, so a depth read mid-animation is the depth
-    // at rest. Nothing reads it again when such an animation ends.
-    const box = element.getBoundingClientRect();
-    const k = drawnScale(box.height, element.offsetHeight);
-    const band = pinned ? element.querySelector<HTMLElement>(pinned) : null;
-    const depth = band ? band.getBoundingClientRect().height / k : 0;
-    setScrolls(element.scrollHeight > element.clientHeight + 1);
-    // Across only where the pane can scroll that way: a list clips what
-    // sticks out sideways (overflow-x: hidden), which scrollWidth still counts.
-    setAcross(element.scrollWidth > element.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(element).overflowX));
-    setPinnedDepth(depth);
-  }, [scrollRef, pinned]);
-
-  useEffect(() => {
-    const element = scrollRef.current;
-    return element ? watchElement(element, measure, { children: true, changes: true }) : undefined;
-  }, [scrollRef, measure]);
+  // is: a value read from the layout (useMeasured), whenever the list or
+  // its box changes. Nothing here moves with the scroll.
+  const { scrolls, across, pinnedDepth } = useMeasured(() => scrollRef.current, (element) => readScroll(element, pinned), { initial: STILL, same: sameScroll, children: true, changes: true }, [scrollRef, pinned]);
 
   // Opens on the lead, once per shape.
   const led = useRef<string | null>(null);
