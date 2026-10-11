@@ -13,7 +13,6 @@ import {
 	type StopReason,
 	type Timer,
 	OFF_MESSAGE,
-	WAKE_PHRASE,
 	captureOf,
 	countdown,
 	graceOf,
@@ -257,21 +256,16 @@ export class HandsFreeController {
 		this.transition({ kind: "pttActive", active: false });
 	}
 
-	openFollowUpLease(generation: number): void {
-		this.transition({ kind: "followUp", generation });
-	}
-
 	/**
-	 * The turn hands-free is waiting on will bring no reply: the server
-	 * refused the clip, or the reply could not be produced. Only a successful
-	 * reply opens the follow-up lease, so without this the controller would
-	 * wait in `awaiting_response`, where no wake word is heard (#258).
+	 * The turn hands-free is waiting on will bring no reply: routing is
+	 * unavailable, and then the server sends no reply audio. Only a
+	 * successful reply opens the follow-up lease, so without this the
+	 * controller would wait in `awaiting_response`, where no wake word is
+	 * heard (#258). A refused clip and a failed reply say so themselves
+	 * (`clipFailed`, `replyClosed`).
 	 */
 	endAwaitedTurn(): void {
-		this.transition({
-			kind: "noReply",
-			message: `No reply is coming; listening locally for “${WAKE_PHRASE}”.`,
-		});
+		this.transition({ kind: "noReply" });
 	}
 
 	/** The server's `error` named the clip `id`. */

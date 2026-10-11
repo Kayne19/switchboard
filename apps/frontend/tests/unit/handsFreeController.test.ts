@@ -277,7 +277,8 @@ describe("the hands-free controller over fakes", () => {
     stubBrowser();
     const harness = controller();
     expect(await harness.instance.enable()).toBe(true);
-    harness.instance.openFollowUpLease(4);
+    harness.instance.replyClosed(4, true);
+    harness.advance(400);
     expect(harness.instance.currentState).toBe("lease");
     harness.endpointer.speechStarts();
     expect(harness.instance.currentState).toBe("lease_capturing");

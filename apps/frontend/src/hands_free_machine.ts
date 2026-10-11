@@ -167,9 +167,8 @@ export type HandsFreeEvent =
 	| { kind: "stop"; reason: StopReason }
 	| { kind: "callChanged" }
 	| { kind: "pttActive"; active: boolean }
-	| { kind: "followUp"; generation: number }
-	/** The awaited turn brings no reply: refused, failed, or never sent. */
-	| { kind: "noReply"; message: string }
+	/** The awaited turn brings no reply: routing is unavailable. */
+	| { kind: "noReply" }
 	/** The server's `error` naming a clip. */
 	| { kind: "clipFailed"; id: string }
 	/** `final_response_audio_closed`. */
@@ -553,11 +552,9 @@ function next(
 	switch (event.kind) {
 		case "turnOff":
 			return turnOff(phase, event.message);
-		case "followUp":
-			return openLease(phase, event.generation, page);
 		case "noReply":
 			return phase.kind === "awaiting_response"
-				? listen(phase.graph, event.message)
+				? listen(phase.graph, NO_REPLY_MESSAGE)
 				: null;
 		case "clipFailed":
 			return phase.kind === "awaiting_response" && phase.clipId === event.id
