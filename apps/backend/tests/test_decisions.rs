@@ -625,9 +625,12 @@ async fn foreground_continuation_publishes_busy_before_prompt() {
     board.shutdown().await;
 }
 
+/// A failed promotion returns its resident to the background, but a host
+/// command that fails leaves the handle unusable (#291): this one cannot go
+/// back, so it is closed and finished.
 #[cfg(unix)]
 #[tokio::test]
-async fn failed_background_promotion_closes_the_resident_and_finishes_its_state() {
+async fn a_promotion_whose_host_refuses_a_command_closes_the_resident() {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
     let notices_for_callback = notices.clone();
@@ -704,7 +707,11 @@ async fn failed_background_promotion_adoption_rolls_back_the_candidate() {
         .await;
 
     assert!(reply.error.is_some(), "adoption must fail: {reply:?}");
-    assert!(!resident.alive());
+    assert!(resident.alive(), "a failed promotion keeps the resident");
+    assert!(board
+        .background_agents
+        .get("beta")
+        .is_some_and(|session| session.same_session(&resident)));
     // A candidate left staged would hold the call in `Starting`, where the
     // coordinator refuses every later prompt.
     assert!(!board.coordinator.is_candidate());

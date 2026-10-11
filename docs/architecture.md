@@ -531,7 +531,7 @@ commits or abandons, and the call line is what it commits or rolls back.
 
 | step | what the `Startup` holds | on failure |
 |---|---|---|
-| `Switchboard::begin_startup` | the staged candidate's identity, the project, the change (`LegChange`: a new agent or a redial) | refused before anything is staged: the caller answers |
+| `Switchboard::begin_startup` | the staged candidate's identity, the project, the change (`LegChange`: a new agent, a promotion or a redial) | refused before anything is staged: the caller answers, and a promotion's resident goes back to the background |
 | `attach` | the session, now named on the active-session guard | `abandon` (nothing attached: the rollback alone) |
 | the first turn (a redial has none) | the same | `abandon` |
 | `commit` | consumed: the leg is the PBX's agent and the guard's, and the identity it is on the line under is returned | a failed adoption abandons |
@@ -540,9 +540,15 @@ commits or abandons, and the call line is what it commits or rolls back.
 ended, a new agent is published `finished`, and, under the guard's lock,
 the call line rolls back to the leg before it and the guard names that
 leg again. A redial's failure then drops the leg
-(`drop_agent`). A `Startup` dropped without either (its future aborted, a
-panic) rolls its candidate back in `Drop`; the guard and the session are
-left to the rescue that aborted it. A rollback names the generation its
+(`drop_agent`). A background promotion (`LegChange::Promotion`) does not
+end its session: once the line and the guard are back on the leg before
+it, the resident goes back to the background
+(`Switchboard::move_to_background`, the same step that shelves a
+foreground), so a failed promotion loses no work. A session a failed host
+command left unusable cannot go back; it is published `finished`.
+A `Startup` dropped without either (its future aborted, a panic) rolls
+its candidate back in `Drop`; the guard and the session are left to the
+rescue that aborted it. A rollback names the generation its
 startup staged at (`rollback_startup`), so one whose startup has already
 ended (committed, rescued, rolled back) does nothing.
 `every_bring_up_exit_leaves_the_line_as_the_table_says` in
@@ -699,7 +705,7 @@ are written by `admit` and `retire` only.
 |---|---|---|---|---|
 | `Stopped` | `stop_project` | cancelled and joined | ended | `finished` |
 | `Dead` | work given to a project whose resident's handle has closed (`retire_dead_resident`) | cancelled and joined | left; it is dead | `finished` |
-| `Promoted` | a transfer to the project (`transfer_ctx`) | cancelled and joined | handed to the bring-up (`promote_background`) | nothing; the bring-up does |
+| `Promoted` | a transfer to the project (`transfer_ctx`) | cancelled and joined | handed to the bring-up (`promote_background`), which readmits it if the promotion fails | nothing; the bring-up does |
 | `ClosedOnHost` | the host reports the session closed (`session_closed_callback`), and a prompt the host refused | left to end: the report can come from inside it | left; it is dead | `finished` |
 | `Shutdown` | `Switchboard::shutdown` | cancelled and joined | ended | nothing |
 
