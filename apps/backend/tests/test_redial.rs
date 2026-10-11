@@ -171,11 +171,11 @@ async fn a_thinking_level_the_daemon_refuses_leaves_the_leg_as_it_was() {
     board.shutdown().await;
 }
 
-/// A refusal after the model already changed leaves a session the leg no
-/// longer describes, so the leg ends as before and its session is ended on
-/// its host.
+/// A level the host refuses after the model changed does not end the leg
+/// (#423): the leg goes on to the new model at the level the model came up
+/// at, and the caller hears which.
 #[tokio::test]
-async fn a_refusal_after_the_model_changed_ends_the_leg() {
+async fn a_level_refused_after_the_model_changed_keeps_the_new_model() {
     let (mut board, log) = on_alpha_refusing("set_thinking", "daemon_error").await;
     let live = board.agent.clone().expect("alpha is on the line");
 
@@ -183,9 +183,24 @@ async fn a_refusal_after_the_model_changed_ends_the_leg() {
     let reply = redialed_after_its_rescue(&mut board, decided).await;
 
     assert!(reply.error.is_some(), "{reply:?}");
-    assert_eq!(board.coordinator.route(), OPERATOR);
-    assert!(!live.alive());
-    assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
+    assert_eq!(
+        reply.text,
+        "Now on next on anthropic, but it would not take thinking medium, so it runs at medium."
+    );
+    assert_eq!(board.coordinator.route(), "alpha");
+    assert!(live.alive());
+    assert!(board
+        .agent
+        .as_ref()
+        .is_some_and(|agent| agent.same_session(&live)));
+    assert_eq!(board.coordinator.status().model, "anthropic/next:medium");
+    assert!(log.named("kill").is_empty(), "the session was killed");
+    assert_eq!(
+        log.named("join_call")
+            .last()
+            .and_then(|join| join["token"].as_str()),
+        Some(board.coordinator.current_identity().token.as_str())
+    );
     board.shutdown().await;
 }
 
