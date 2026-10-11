@@ -442,6 +442,14 @@ element. It is read from those (`heldBytes`), not kept as a count, so a clip
 that leaves takes its bytes with it. A count that only a new leg reset
 reached the cap after about 70 minutes of speech, and every reply after it
 was silent (#431). `MAX_AUDIO_UTTERANCE` (32 MiB) bounds one utterance.
+An utterance whose next chunk would pass either cap ends there, through the
+same path as its `audio_done` (`endUtterance`): a stream is finished with
+what went in and keeps the element, and a whole utterance is queued with
+what arrived. Its later chunks and its own `audio_done` find nothing
+arriving. The status line says the reply is too long to play in full, or
+that too much audio is waiting, and that its full text is in the transcript
+(`PlaybackStatus.overLimit`). A cap is not a streaming failure: streaming
+stays as it was.
 
 A clip that produced no sound is noticed whatever `play()` does with its
 promise. `NO_PROGRESS_MS` is armed when the attempt is made, not when
