@@ -542,10 +542,11 @@ pub(crate) fn emit(state: &AppState, event: Event) -> bool {
 pub(crate) fn emit_message(state: &AppState, message: ServerMessage) -> bool {
     emit(state, Event::Json(message.to_value()))
 }
-/// Settles the call (see `Coordinator::settle`) and tells the browser where
-/// it is.
+/// Tells the browser where the call is. It settles nothing: a quiet ends
+/// only where its rescue or a delivery at its generation names it
+/// (`Coordinator::settle`, `settle_at`).
 pub(crate) fn publish_status(state: &AppState) {
-    emit_message(state, ServerMessage::Status(state.0.coordinator.settle()));
+    emit_message(state, ServerMessage::Status(state.0.coordinator.status()));
 }
 pub(crate) async fn spawn_registered_operation<F, T>(
     state: &AppState,

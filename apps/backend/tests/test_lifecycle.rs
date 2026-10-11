@@ -197,7 +197,7 @@ fn stale_generation_and_concurrent_prompt_are_rejected() {
         Err(LifecycleError::OperationActive)
     );
     let current = coordinator.begin_rescue("page rescue");
-    assert_eq!(current.generation, old.generation + 1);
+    assert_eq!(current.generation(), old.generation + 1);
     assert!(!coordinator.finish_operation(&operation));
     assert_eq!(
         coordinator.begin_prompt(&old),
@@ -214,17 +214,21 @@ fn a_rescue_at_a_generation_the_call_has_left_rescues_nothing() {
     let held = coordinator.generation();
     let moved = coordinator.begin_rescue("transfer");
     // Past the abandoned candidate's generation too (#280).
-    assert!(moved.generation > held, "{moved:?} after {held}");
+    assert!(moved.generation() > held, "{moved:?} after {held}");
     let told = notices.lock().unwrap().len();
 
     assert!(coordinator.begin_rescue_at(held, "page connect").is_none());
-    assert_eq!(coordinator.current_identity(), moved, "nothing was rescued");
+    assert_eq!(
+        &coordinator.current_identity(),
+        moved.identity(),
+        "nothing was rescued"
+    );
     assert_eq!(notices.lock().unwrap().len(), told, "nothing was announced");
 
     let rescued = coordinator
-        .begin_rescue_at(moved.generation, "page connect")
+        .begin_rescue_at(moved.generation(), "page connect")
         .expect("the generation the call is at is rescued");
-    assert_eq!(rescued.generation, moved.generation + 1);
+    assert_eq!(rescued.generation(), moved.generation() + 1);
     assert_eq!(phase(&coordinator), "quiescing");
 }
 
@@ -298,12 +302,12 @@ fn startup_thinking_is_private_until_candidate_adoption() {
 fn rescue_reopens_only_once_the_call_settles() {
     let coordinator = coordinator();
     let old = coordinator.current_identity();
-    coordinator.begin_rescue("page rescue");
+    let rescued = coordinator.begin_rescue("page rescue");
     assert_eq!(
         coordinator.begin_prompt(&coordinator.current_identity()),
         Err(LifecycleError::WrongPhase)
     );
-    coordinator.settle();
+    coordinator.settle(rescued);
     let operation = coordinator
         .begin_prompt(&coordinator.current_identity())
         .unwrap();
@@ -589,8 +593,8 @@ fn a_return_to_the_operator_retires_the_project_legs_token() {
 
     // At rest, and after the operator itself is rescued, the project's token
     // stays refused.
-    call.begin_rescue("page rescue");
-    call.settle();
+    let rescued = call.begin_rescue("page rescue");
+    call.settle(rescued);
     assert_eq!(
         call.accept_side_effect("cand", None, None),
         Err(LifecycleError::StaleLeg)
@@ -605,25 +609,25 @@ fn settle_brings_a_rescued_call_to_rest_even_when_the_control_is_refused() {
     // and steer, until something else happens to publish a status.
     let call = coordinator();
     on_alpha(&call);
-    call.begin_rescue("model change");
+    let rescued = call.begin_rescue("model change");
     let current = call.current_identity();
     assert_eq!(call.begin_prompt(&current), Err(LifecycleError::WrongPhase));
-    let status = call.settle();
-    assert_eq!(status.route, "alpha");
-    assert_eq!(status, call.status());
+    assert!(call.settle(rescued));
+    assert_eq!(call.status().route, "alpha");
     assert_eq!(phase(&call), "active");
     assert!(call.begin_prompt(&current).is_ok());
 
     // On the operator it comes to rest on the operator.
     let call = coordinator();
-    call.begin_rescue("hangup with nothing on the line");
-    assert_eq!(call.settle().route, "operator");
+    let rescued = call.begin_rescue("hangup with nothing on the line");
+    assert!(call.settle(rescued));
+    assert_eq!(call.status().route, "operator");
     assert_eq!(phase(&call), "operator");
 
     // A call that is not quiescing is left as it is.
     let call = coordinator();
     let operation = call.begin_prompt(&call.current_identity()).unwrap();
-    call.settle();
+    assert!(call.settle_at(call.generation()));
     assert_eq!(phase(&call), "turn running");
     assert!(call.finish_operation(&operation));
 }
@@ -757,9 +761,9 @@ fn activity_is_classified_by_the_leg_it_came_from() {
 
     // Rescued: whatever the retired leg reports before it is reaped is stale,
     // and stays stale once the call settles on a new generation.
-    call.begin_rescue("page rescue");
+    let rescued = call.begin_rescue("page rescue");
     assert_eq!(call.classify_activity("cand"), Discard);
-    call.settle();
+    call.settle(rescued);
     assert_eq!(call.classify_activity("cand"), Discard);
 
     // Back on the operator.
@@ -807,7 +811,7 @@ fn a_rescue_of_a_named_leg_happens_only_while_that_leg_is_on_the_line() {
     let call = coordinator();
     on_alpha(&call);
     let leg = call.project_leg().unwrap();
-    let rescued = call.begin_rescue_of(&leg, "redial").unwrap();
+    let (rescued, _rescue) = call.begin_rescue_of(&leg, "redial").unwrap();
     assert_eq!(rescued.identity, call.current_identity());
     assert_eq!(rescued.identity.generation, leg.identity.generation + 1);
     assert_eq!(
@@ -840,8 +844,8 @@ fn a_rescue_of_a_named_leg_happens_only_while_that_leg_is_on_the_line() {
     let call = coordinator();
     on_alpha(&call);
     let leg = call.project_leg().unwrap();
-    call.begin_rescue("hangup");
-    call.settle();
+    let rescued = call.begin_rescue("hangup");
+    call.settle(rescued);
     refused(&call, &leg);
     // Replaced by another leg.
     let call = coordinator();
@@ -908,12 +912,13 @@ fn a_rescue_during_an_adopted_legs_intro_ends_its_startup() {
     assert_eq!(call.route(), "beta");
 
     let rescued = call.begin_rescue("page rescue");
-    call.settle();
+    let identity = rescued.identity().clone();
+    call.settle(rescued);
 
     assert!(!call.finish_intro());
     assert!(!call.rollback_startup(startup.generation, "late"));
     assert_eq!(call.route(), "beta");
-    assert_eq!(call.current_identity(), rescued);
+    assert_eq!(call.current_identity(), identity);
 }
 
 /// A rescue for a redial is refused while a startup is in flight: the leg
@@ -1270,7 +1275,7 @@ fn candidate_token(phase: &TablePhase) -> String {
         .map_or_else(|| "nobody".into(), |identity| identity.token)
 }
 
-const TABLE_EVENTS: [(&str, TableEvent); 20] = [
+const TABLE_EVENTS: [(&str, TableEvent); 21] = [
     ("begin_prompt", |phase| {
         let call = &phase.call;
         shown(call.begin_prompt(&call.current_identity()), |turn| {
@@ -1314,7 +1319,8 @@ const TABLE_EVENTS: [(&str, TableEvent); 20] = [
         })
     }),
     ("begin_rescue", |phase| {
-        let leg = phase.call.begin_rescue("rescue");
+        let rescued = phase.call.begin_rescue("rescue");
+        let leg = rescued.identity();
         format!("{}@{}", leg.token, leg.generation)
     }),
     ("begin_rescue_of", |phase| {
@@ -1327,10 +1333,21 @@ const TABLE_EVENTS: [(&str, TableEvent); 20] = [
         });
         call.begin_rescue_of(&leg, "redial").map_or_else(
             || "None".into(),
-            |leg| format!("{}@{}", leg.identity.token, leg.identity.generation),
+            |(leg, _)| format!("{}@{}", leg.identity.token, leg.identity.generation),
         )
     }),
-    ("settle", |phase| phase.call.settle().route),
+    // A settle at the generation the call is at: the rescue that left it
+    // there, or a reply delivered at it.
+    ("settle", |phase| {
+        let call = &phase.call;
+        call.settle_at(call.generation());
+        call.status().route
+    }),
+    // A settle that names another rescue's generation ends nothing.
+    ("settle another rescue", |phase| {
+        let call = &phase.call;
+        call.settle_at(call.generation() + 1).to_string()
+    }),
     ("return_to_operator", |phase| {
         phase.call.return_to_operator();
         "()".into()
@@ -1480,6 +1497,7 @@ operator | attach_steer => NoActiveOperation | operator operator operator@0 - th
 operator | begin_rescue => operator-rescue-1@1 | quiescing operator operator-rescue-1@1 - thinking: []
 operator | begin_rescue_of => None | operator operator operator@0 - thinking: []
 operator | settle => operator | operator operator operator@0 - thinking: []
+operator | settle another rescue => false | operator operator operator@0 - thinking: []
 operator | return_to_operator => () | operator operator operator@0 - thinking: []
 operator | begin_candidate => gamma-leg@1 | starting operator operator@0 - startup thinking: [gamma@0 staged]
 operator | thinking from the line => true | operator operator operator@0 - thinking:high* []
@@ -1500,6 +1518,7 @@ operator turn | attach_steer => turn | turn running operator operator@0 turn thi
 operator turn | begin_rescue => operator-rescue-1@1 | quiescing operator operator-rescue-1@1 - thinking: []
 operator turn | begin_rescue_of => None | turn running operator operator@0 turn thinking: []
 operator turn | settle => operator | turn running operator operator@0 turn thinking: []
+operator turn | settle another rescue => false | turn running operator operator@0 turn thinking: []
 operator turn | return_to_operator => () | turn running operator operator@0 turn thinking: []
 operator turn | begin_candidate => gamma-leg@1 | starting operator operator@0 turn startup thinking: [gamma@0 staged]
 operator turn | thinking from the line => true | turn running operator operator@0 turn thinking:high* []
@@ -1520,6 +1539,7 @@ project | attach_steer => NoActiveOperation | active alpha cand@1 - adopted:alph
 project | begin_rescue => cand-rescue-2@2 | quiescing alpha cand-rescue-2@2 - thinking:medium []
 project | begin_rescue_of => cand-rescue-2@2 | quiescing alpha cand-rescue-2@2 - thinking:medium []
 project | settle => alpha | active alpha cand@1 - adopted:alpha thinking:medium []
+project | settle another rescue => false | active alpha cand@1 - adopted:alpha thinking:medium []
 project | return_to_operator => () | operator operator operator@1 - thinking: []
 project | begin_candidate => gamma-leg@2 | starting alpha cand@1 - startup adopted:alpha thinking:medium [gamma@1 staged]
 project | thinking from the line => true | active alpha cand@1 - adopted:alpha thinking:high* []
@@ -1540,6 +1560,7 @@ project turn | attach_steer => turn | turn running alpha cand@1 turn adopted:alp
 project turn | begin_rescue => cand-rescue-2@2 | quiescing alpha cand-rescue-2@2 - thinking:medium []
 project turn | begin_rescue_of => cand-rescue-2@2 | quiescing alpha cand-rescue-2@2 - thinking:medium []
 project turn | settle => alpha | turn running alpha cand@1 turn adopted:alpha thinking:medium []
+project turn | settle another rescue => false | turn running alpha cand@1 turn adopted:alpha thinking:medium []
 project turn | return_to_operator => () | turn running operator operator@1 turn thinking: []
 project turn | begin_candidate => gamma-leg@2 | starting alpha cand@1 turn startup adopted:alpha thinking:medium [gamma@1 staged]
 project turn | thinking from the line => true | turn running alpha cand@1 turn adopted:alpha thinking:high* []
@@ -1560,6 +1581,7 @@ self-woken turn | attach_steer => turn | turn running alpha cand@1 turn adopted:
 self-woken turn | begin_rescue => cand-rescue-2@2 | quiescing alpha cand-rescue-2@2 - thinking:medium []
 self-woken turn | begin_rescue_of => cand-rescue-2@2 | quiescing alpha cand-rescue-2@2 - thinking:medium []
 self-woken turn | settle => alpha | turn running alpha cand@1 turn adopted:alpha thinking:medium []
+self-woken turn | settle another rescue => false | turn running alpha cand@1 turn adopted:alpha thinking:medium []
 self-woken turn | return_to_operator => () | turn running operator operator@1 turn thinking: []
 self-woken turn | begin_candidate => gamma-leg@2 | starting alpha cand@1 turn startup adopted:alpha thinking:medium [gamma@1 staged]
 self-woken turn | thinking from the line => true | turn running alpha cand@1 turn adopted:alpha thinking:high* []
@@ -1580,6 +1602,7 @@ starting | attach_steer => WrongPhase | starting alpha cand@1 - startup adopted:
 starting | begin_rescue => cand-rescue-3@3 | quiescing alpha cand-rescue-3@3 - thinking:medium [beta@3 Rescued]
 starting | begin_rescue_of => None | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | settle => alpha | starting alpha cand@1 - startup adopted:alpha thinking:medium []
+starting | settle another rescue => false | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | return_to_operator => () | starting operator operator@1 - startup thinking: []
 starting | begin_candidate => CandidateActive | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | thinking from the line => true | starting alpha cand@1 - startup adopted:alpha thinking:high* []
@@ -1600,6 +1623,7 @@ starting in a turn | attach_steer => WrongPhase | starting operator operator@0 t
 starting in a turn | begin_rescue => operator-rescue-2@2 | quiescing operator operator-rescue-2@2 - thinking: [alpha@2 Rescued]
 starting in a turn | begin_rescue_of => None | starting operator operator@0 turn startup thinking: []
 starting in a turn | settle => operator | starting operator operator@0 turn startup thinking: []
+starting in a turn | settle another rescue => false | starting operator operator@0 turn startup thinking: []
 starting in a turn | return_to_operator => () | starting operator operator@0 turn startup thinking: []
 starting in a turn | begin_candidate => CandidateActive | starting operator operator@0 turn startup thinking: []
 starting in a turn | thinking from the line => true | starting operator operator@0 turn startup thinking:high* []
@@ -1620,6 +1644,7 @@ adopted | attach_steer => turn | turn running alpha cand@1 turn startup adopted:
 adopted | begin_rescue => cand-rescue-2@2 | quiescing alpha cand-rescue-2@2 - thinking:medium []
 adopted | begin_rescue_of => None | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | settle => alpha | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
+adopted | settle another rescue => false | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | return_to_operator => () | turn running operator operator@1 turn startup thinking: []
 adopted | begin_candidate => gamma-leg@2 | starting alpha cand@1 turn startup adopted:alpha thinking:medium [gamma@1 staged]
 adopted | thinking from the line => true | turn running alpha cand@1 turn startup adopted:alpha thinking:high* []
@@ -1640,6 +1665,7 @@ adopted at rest | attach_steer => NoActiveOperation | active alpha cand@1 - star
 adopted at rest | begin_rescue => cand-rescue-2@2 | quiescing alpha cand-rescue-2@2 - thinking:medium []
 adopted at rest | begin_rescue_of => None | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | settle => alpha | active alpha cand@1 - startup adopted:alpha thinking:medium []
+adopted at rest | settle another rescue => false | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | return_to_operator => () | operator operator operator@1 - startup thinking: []
 adopted at rest | begin_candidate => gamma-leg@2 | starting alpha cand@1 - startup adopted:alpha thinking:medium [gamma@1 staged]
 adopted at rest | thinking from the line => true | active alpha cand@1 - startup adopted:alpha thinking:high* []
@@ -1660,6 +1686,7 @@ quiescing | attach_steer => WrongPhase | quiescing alpha cand-rescue-2@2 - think
 quiescing | begin_rescue => cand-rescue-2-rescue-3@3 | quiescing alpha cand-rescue-2-rescue-3@3 - thinking:medium []
 quiescing | begin_rescue_of => cand-rescue-2-rescue-3@3 | quiescing alpha cand-rescue-2-rescue-3@3 - thinking:medium []
 quiescing | settle => alpha | active alpha cand-rescue-2@2 - thinking:medium []
+quiescing | settle another rescue => false | quiescing alpha cand-rescue-2@2 - thinking:medium []
 quiescing | return_to_operator => () | operator operator operator@2 - thinking: []
 quiescing | begin_candidate => gamma-leg@3 | starting alpha cand-rescue-2@2 - startup thinking:medium [gamma@2 staged]
 quiescing | thinking from the line => StaleLeg | quiescing alpha cand-rescue-2@2 - thinking:medium []
@@ -1680,6 +1707,7 @@ shutdown | attach_steer => WrongPhase | shutdown alpha cand-shutdown-2@2 - think
 shutdown | begin_rescue => cand-shutdown-2-rescue-3@3 | shutdown alpha cand-shutdown-2-rescue-3@3 - thinking:medium []
 shutdown | begin_rescue_of => None | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | settle => alpha | shutdown alpha cand-shutdown-2@2 - thinking:medium []
+shutdown | settle another rescue => false | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | return_to_operator => () | shutdown operator operator@2 - thinking: []
 shutdown | begin_candidate => Shutdown | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | thinking from the line => StaleLeg | shutdown alpha cand-shutdown-2@2 - thinking:medium []
@@ -1700,6 +1728,7 @@ shutdown starting | attach_steer => WrongPhase | shutdown alpha cand-shutdown-3@
 shutdown starting | begin_rescue => cand-shutdown-3-rescue-4@4 | shutdown alpha cand-shutdown-3-rescue-4@4 - thinking:medium []
 shutdown starting | begin_rescue_of => None | shutdown alpha cand-shutdown-3@3 - thinking:medium []
 shutdown starting | settle => alpha | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | settle another rescue => false | shutdown alpha cand-shutdown-3@3 - thinking:medium []
 shutdown starting | return_to_operator => () | shutdown operator operator@3 - thinking: []
 shutdown starting | begin_candidate => Shutdown | shutdown alpha cand-shutdown-3@3 - thinking:medium []
 shutdown starting | thinking from the line => StaleLeg | shutdown alpha cand-shutdown-3@3 - thinking:medium []

@@ -199,14 +199,14 @@ async fn activity_from_a_leg_retired_by_a_rescue_is_not_published() {
 
     // The rescue retires the leg before its process is reaped, and a tool
     // call it reports in that window must not reach the page.
-    state.0.coordinator.begin_rescue("page rescue");
+    let rescued = state.0.coordinator.begin_rescue("page rescue");
     state
         .0
         .leg_announcer
         .on_activity(activity_from("alpha-leg", "end"))
         .await;
     assert!(queued_frames(&mut connection).is_empty());
-    state.0.coordinator.settle();
+    state.0.coordinator.settle(rescued);
     state
         .0
         .leg_announcer

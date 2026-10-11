@@ -819,7 +819,7 @@ pub(crate) async fn deliver_page_reply_if_current(
             );
         }
     }
-    publish_status(state);
+    settle_delivered(state, generation);
     drop(_transition);
     let _ = synthesize_reply_if_current(
         state,
@@ -830,6 +830,15 @@ pub(crate) async fn deliver_page_reply_if_current(
     )
     .await;
     generation == state.0.coordinator.generation()
+}
+
+/// Ends the quiet at `generation`, the one the reply was admitted at
+/// (`Coordinator::settle_at`), and tells the page where the call is. A
+/// delivery checked that generation under the operation transition, but a
+/// rescue does not take that lock: one landing since keeps its quiet.
+fn settle_delivered(state: &AppState, generation: u64) {
+    state.0.coordinator.settle_at(generation);
+    publish_status(state);
 }
 
 /// What a reply may do once it reaches the line. Both delivery paths (the
@@ -869,7 +878,7 @@ async fn admit_reply<'a>(
                 message: "Routing is unavailable. Please try again.".into(),
             },
         );
-        publish_status(state);
+        settle_delivered(state, generation);
         if let Some(voice) = voice {
             voice.give_back(state).await;
         }
@@ -910,7 +919,7 @@ pub(crate) async fn deliver_turn_if_current(
             sequence: voice.as_ref().map(|voice| voice.sequence),
         },
     );
-    publish_status(state);
+    settle_delivered(state, generation);
     drop(_transition);
     let success = synthesize_reply_if_current(
         state,

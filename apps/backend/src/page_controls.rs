@@ -29,7 +29,16 @@ pub(crate) fn current_status(state: &AppState) -> Status {
 /// has taken it over since; that one settles it instead.
 async fn settle_if_current(state: &AppState, generation: u64) {
     let _transition = state.0.operation_transition.lock().await;
-    if generation == state.0.coordinator.generation() {
+    if state.0.coordinator.settle_at(generation) {
+        publish_status(state);
+    }
+}
+
+/// Ends the quiet `rescued` began, unless a newer rescue has taken the call
+/// over since; that one settles it instead.
+async fn settle_rescue(state: &AppState, rescued: crate::lifecycle::Rescued) {
+    let _transition = state.0.operation_transition.lock().await;
+    if state.0.coordinator.settle(rescued) {
         publish_status(state);
     }
 }
@@ -102,7 +111,7 @@ pub(crate) async fn cancel_active_operations(state: &AppState) -> Option<String>
         .0
         .coordinator
         .begin_rescue("operation interrupted")
-        .generation;
+        .generation();
     release_rescued_work(state, generation, false, "operation interrupted").await
 }
 /// `cancel_active_operations` for a page control, only while the call is
@@ -113,14 +122,14 @@ pub(crate) async fn cancel_active_operations(state: &AppState) -> Option<String>
 async fn cancel_active_operations_at(
     state: &AppState,
     generation: u64,
-) -> Result<(u64, Option<String>), LineMoved> {
+) -> Result<(crate::lifecycle::Rescued, Option<String>), LineMoved> {
     let rescued = state
         .0
         .coordinator
         .begin_rescue_at(generation, "operation interrupted")
-        .ok_or(LineMoved)?
-        .generation;
-    let closed = release_rescued_work(state, rescued, false, "operation interrupted").await;
+        .ok_or(LineMoved)?;
+    let closed =
+        release_rescued_work(state, rescued.generation(), false, "operation interrupted").await;
     Ok((rescued, closed))
 }
 /// The call moved on from the generation a page control carried.
@@ -130,10 +139,10 @@ struct LineMoved;
 /// decided keeps whatever they moved to, untouched. Returns the plan for the
 /// leg as the rescue left it.
 async fn cancel_active_operations_for(state: &AppState, plan: RedialPlan) -> Option<RedialPlan> {
-    let rescued = state.0.coordinator.begin_rescue_of(plan.leg(), "redial")?;
+    let (leg, rescued) = state.0.coordinator.begin_rescue_of(plan.leg(), "redial")?;
     // A redial keeps the session, so the rescue only stops its turn.
-    release_rescued_work(state, rescued.identity.generation, true, "redial").await;
-    Some(plan.rescued(rescued))
+    release_rescued_work(state, rescued.generation(), true, "redial").await;
+    Some(plan.rescued(leg))
 }
 /// What a rescue does once the coordinator has retired the leg: drop queued
 /// audio, announce the new epoch, abort registered work, and close the live
@@ -187,7 +196,8 @@ where
     // At the generation this rescue left, not the current one: a newer
     // control that rescued while this one was still releasing the old leg
     // owns the call, and this one must not run on it.
-    let (generation, _) = cancel_active_operations_at(state, generation).await.ok()?;
+    let (rescued, _) = cancel_active_operations_at(state, generation).await.ok()?;
+    let generation = rescued.generation();
     let (task, id) = spawn_registered_operation(state, generation, future).await?;
     Some((task, id, generation))
 }
@@ -385,7 +395,7 @@ pub(crate) async fn hangup(
     // newer one landing after the check only finds the leg already dropped.
     let dropped = {
         let mut board = state.0.switchboard.lock().await;
-        if state.0.coordinator.generation() != rescued {
+        if state.0.coordinator.generation() != rescued.generation() {
             tracing::info!(
                 elapsed = ?started.elapsed(),
                 "superseded: a newer control took the line before the hangup reached the PBX"
@@ -427,7 +437,7 @@ pub(crate) async fn hangup(
     // refuses callbacks and steers until something settles it. Only its own
     // rescue's quiet: a newer control that rescued after the drop owns the
     // call and settles it itself.
-    settle_if_current(&state, rescued).await;
+    settle_rescue(&state, rescued).await;
     match hung_up {
         Some((left, _)) => {
             tracing::info!(%left, elapsed = ?started.elapsed(), "hung up; the caller is back on the operator");

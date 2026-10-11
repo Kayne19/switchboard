@@ -336,7 +336,7 @@ async fn a_redial_whose_leg_has_moved_since_it_was_planned_is_refused() {
         board.redial(*plan).await.unwrap_err(),
         LifecycleError::StaleLeg
     );
-    assert_eq!(board.coordinator.current_identity(), rescued);
+    assert_eq!(&board.coordinator.current_identity(), rescued.identity());
     assert!(!board.coordinator.is_candidate());
     assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
     assert!(board
@@ -344,7 +344,7 @@ async fn a_redial_whose_leg_has_moved_since_it_was_planned_is_refused() {
         .as_ref()
         .is_some_and(|agent| agent.same_session(&live)));
     assert!(live.alive());
-    board.coordinator.settle();
+    board.coordinator.settle(rescued);
 
     // The caller went back to the operator, which keeps the generation.
     let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
@@ -369,7 +369,7 @@ async fn a_redial_whose_leg_has_moved_since_it_was_planned_is_refused() {
     let Redial::Planned(plan) = board.planner.model_change("anthropic/next").await else {
         panic!("a swap to a listed model goes ahead");
     };
-    let rescued = board
+    let (rescued, _rescue) = board
         .coordinator
         .begin_rescue_of(plan.leg(), "redial")
         .expect("the leg is still on the line");

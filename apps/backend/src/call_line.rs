@@ -258,18 +258,38 @@ pub(crate) enum RescueOf<'a> {
 pub(crate) enum Event<'a> {
     BeginPrompt(OperationIdentity),
     BeginAutonomous(OperationIdentity),
-    BindTurn { token: &'a str, turn_id: &'a str },
-    SettleTurn { token: &'a str, turn_id: &'a str },
+    BindTurn {
+        token: &'a str,
+        turn_id: &'a str,
+    },
+    SettleTurn {
+        token: &'a str,
+        turn_id: &'a str,
+    },
     FinishOperation(&'a OperationIdentity),
     Rescue(RescueOf<'a>),
-    Settle,
+    /// The quiet the rescue that left the call at `generation` began ends.
+    Settle {
+        generation: u64,
+    },
     ReturnToOperator,
     BeginCandidate(CandidateLeg),
-    StartupThinking { token: &'a str, level: &'a str },
-    LegThinking { token: &'a str, level: &'a str },
-    Adopt { token: &'a str, intro: u64 },
+    StartupThinking {
+        token: &'a str,
+        level: &'a str,
+    },
+    LegThinking {
+        token: &'a str,
+        level: &'a str,
+    },
+    Adopt {
+        token: &'a str,
+        intro: u64,
+    },
     FinishIntro,
-    Rollback { generation: u64 },
+    Rollback {
+        generation: u64,
+    },
     BeginShutdown,
 }
 
@@ -459,8 +479,12 @@ impl Line {
                 };
                 Ok((next, notice))
             }
-            Event::Settle => match self {
-                Self::Quiescing { leg } => Ok((Self::at_rest(leg.clone()), None)),
+            // Only the quiet of the rescue it names: a newer rescue's is
+            // that rescue's to end.
+            Event::Settle { generation } => match self {
+                Self::Quiescing { leg } if leg.identity.generation == generation => {
+                    Ok((Self::at_rest(leg.clone()), None))
+                }
                 _ => unchanged(),
             },
             // A call quiescing comes to rest on the operator. A turn still
