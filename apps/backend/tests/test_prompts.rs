@@ -43,7 +43,7 @@ fn the_operator_and_the_utility_get_the_same_voice_block_and_persona() {
         two_model_catalog(),
     );
     let operator = board.operator_prompt_suffix();
-    let utility = board.utility_system_prompt();
+    let utility = utility_system_prompt(&board.persona, &board.registry);
     for prompt in [&operator, &utility] {
         assert_eq!(
             prompt.matches("[HOW YOU TALK ON THE CALL]").count(),
@@ -75,7 +75,7 @@ fn the_utility_system_prompt_holds_the_rules_and_the_catalog_once() {
         ],
         true,
     );
-    let prompt = board.utility_system_prompt();
+    let prompt = utility_system_prompt(&board.persona, &board.registry);
     assert!(prompt.contains("[ROUTING REQUEST]"), "{prompt}");
     assert!(prompt.contains("[FLOOR REWRITE]"), "{prompt}");
     assert!(prompt.contains("dispatch_parts"), "{prompt}");

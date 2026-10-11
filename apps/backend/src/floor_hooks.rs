@@ -8,7 +8,6 @@ use crate::floor;
 use crate::floor::{
     FloorHooks, FloorRequest, FloorRewriteInput, ReleaseOutcome, Waiting, WaitingHook,
 };
-use crate::pbx::Switchboard;
 use crate::protocol::AgentRequest;
 use crate::speech::{
     reserve_speech, send_speech, trace_speech, ContinuationScope, SpeakUnder, SpeechAdmission,
@@ -22,7 +21,8 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
     let connected_state = state.clone();
     let live_state = state.clone();
     let gate_state = state.clone();
-    let rewrite_state = state.clone();
+    let utility = state.0.routing_utility();
+    let debug = state.0.debug.clone();
     let release_state = state.clone();
     let hooks = FloorHooks {
         connected: Arc::new(move || connected_state.0.delivery.connected()),
@@ -71,18 +71,15 @@ pub(crate) fn spawn_floor_worker(state: AppState) {
             }) as floor::GateFuture
         }),
         rewrite: Arc::new(move |input: FloorRewriteInput| {
-            let state = rewrite_state.clone();
+            let utility = utility.clone();
+            let debug = debug.clone();
             Box::pin(async move {
                 let project = input.project.clone();
-                // The utility is reached through the PBX lock, which a
-                // foreground turn holds for its whole prompt, so the wait for
-                // it is inside the timeout too.
+                // The utility has its own lock (#386); starting it is
+                // inside the timeout too.
                 let operation = async {
-                    let session = {
-                        let mut board = state.0.switchboard.lock().await;
-                        board.floor_rewrite_session().await.map_err(|_| ())?
-                    };
-                    Switchboard::rewrite_floor_with_session(&session, &input)
+                    utility
+                        .rewrite_floor(&debug, &input)
                         .await
                         .map_err(|error| {
                             tracing::warn!(%project, %error, "floor rewrite failed; speaking the original");

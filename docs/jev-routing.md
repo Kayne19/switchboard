@@ -89,9 +89,9 @@ The gate reads the call from `RoutingView`, as caller routing does, never
 through the PBX lock. The turn worker holds that lock for a whole prompt, and a
 foreground turn is when the caller waits on a quiet line, so a gate that waited
 for it held every background update for the length of the turn (#245). The
-rewrite reaches the routing utility through that lock, so the wait for it counts
-against `REWRITE_TIMEOUT` (5 s); past it the update is spoken as the agent wrote
-it.
+rewrite does not take that lock either: the routing utility has a lock of its
+own (`RoutingUtility`, #386). Starting the utility and its answer count against
+`REWRITE_TIMEOUT` (5 s); past it the update is spoken as the agent wrote it.
 
 ## Call state
 

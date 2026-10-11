@@ -3,19 +3,25 @@
 //! a separate, stateless process for routing second opinions, split dispatch
 //! and floor rewrites, so it never shares the operator's turn lock or history.
 //! Both are started on first use and rebuilt after a failure.
+use crate::debug::DebugBus;
 use crate::floor::FloorRewriteInput;
 use crate::pbx::{Switchboard, OPERATOR};
-use crate::pi_client::{local_argv, PiSession, PiSessionError};
+use crate::pi_client::{local_argv, ActivityCallback, PiSession, PiSessionError};
 use crate::reply::Reply;
 use crate::router::{utility_decision, Decision, UtilityDecision};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::future::Future;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::time::Duration;
 
 /// What the switchboard launches the operator and the routing utility with:
 /// the `pi` binary, the model, the operator's system prompt file, the
 /// extension, and the environment the processes inherit. Read from `Config`
 /// once; only this module uses it.
+#[derive(Clone)]
 pub(crate) struct OperatorLaunch {
     pi_binary: String,
     model: Option<String>,
@@ -34,6 +40,139 @@ impl OperatorLaunch {
             env: config.environment.clone(),
         }
     }
+
+    /// Starts the operator: its system prompt file, when there is one,
+    /// with `appended` after it. The file is read at each start.
+    async fn start_operator(
+        &self,
+        appended: String,
+        on_activity: Option<ActivityCallback>,
+        debug: DebugBus,
+    ) -> Result<PiSession, PiSessionError> {
+        let argv = local_argv(
+            &self.pi_binary,
+            self.model.as_deref(),
+            Some(Path::new(&self.system_prompt)).filter(|path| path.exists()),
+            Some(&appended),
+            self.extension.as_deref(),
+            &["--no-builtin-tools".into(), "--no-session".into()],
+        )?;
+        self.start(argv, OPERATOR, OPERATOR, on_activity, debug)
+            .await
+    }
+
+    /// Starts the routing utility on `system_prompt` alone.
+    async fn start_utility(
+        &self,
+        system_prompt: String,
+        debug: DebugBus,
+    ) -> Result<PiSession, PiSessionError> {
+        let argv = local_argv(
+            &self.pi_binary,
+            self.model.as_deref(),
+            None,
+            Some(&system_prompt),
+            self.extension.as_deref(),
+            &[
+                "--no-builtin-tools".into(),
+                "--no-session".into(),
+                "--switchboard-utility".into(),
+            ],
+        )?;
+        self.start(argv, "routing utility", "utility", None, debug)
+            .await
+    }
+
+    async fn start(
+        &self,
+        argv: Vec<String>,
+        label: &str,
+        leg: &str,
+        on_activity: Option<ActivityCallback>,
+        debug: DebugBus,
+    ) -> Result<PiSession, PiSessionError> {
+        let session = PiSession::start(
+            argv,
+            label,
+            leg,
+            None,
+            Some(self.env.clone()),
+            Duration::from_secs(180),
+            on_activity,
+        )
+        .await?;
+        session.observe(debug);
+        Ok(session)
+    }
+}
+
+/// A local pi process the switchboard starts on first use and replaces
+/// after it dies: the operator, and the routing utility. The slot is empty,
+/// or holds a process that is live or has died. Nothing reports a death:
+/// `ensure` finds it when the process is next needed. `ensure` is the one
+/// place a process is started, and a dead one closed and replaced; `close`
+/// is the one end.
+pub(crate) struct LocalProcess {
+    /// The process's name in the log.
+    name: &'static str,
+    session: Option<PiSession>,
+}
+
+/// What `ensure` did: kept the live process, or started one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ensured {
+    Kept,
+    Started,
+}
+
+impl LocalProcess {
+    pub(crate) fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            session: None,
+        }
+    }
+
+    /// The process the slot holds, live or not.
+    pub(crate) fn session(&self) -> Option<&PiSession> {
+        self.session.as_ref()
+    }
+
+    /// The live process: the one held, or else what `start` starts. A
+    /// process that died is closed first. `start` is polled only when a
+    /// process is started; a failed start leaves the slot empty.
+    async fn ensure(
+        &mut self,
+        start: impl Future<Output = Result<PiSession, PiSessionError>>,
+    ) -> Result<(PiSession, Ensured), PiSessionError> {
+        if let Some(session) = &self.session {
+            if session.alive().await {
+                return Ok((session.clone(), Ensured::Kept));
+            }
+            // The operator is the home base and is meant to outlive every
+            // project leg, so a death is worth a line even though the
+            // restart below hides it from the caller.
+            tracing::warn!(
+                stderr_lines = session.stderr_tail(5).lines().count(),
+                "{} process died; restarting",
+                self.name
+            );
+            self.close().await;
+        }
+        let session = start.await?;
+        self.session = Some(session.clone());
+        Ok((session, Ensured::Started))
+    }
+
+    /// Closes the process, if the slot holds one, and empties the slot.
+    /// True when there was one.
+    pub(crate) async fn close(&mut self) -> bool {
+        let Some(session) = self.session.take() else {
+            return false;
+        };
+        session.close().await;
+        true
+    }
 }
 
 impl Switchboard {
@@ -43,99 +182,23 @@ impl Switchboard {
         self.call_state = call_state;
     }
 
-    pub(crate) async fn ensure_operator(&mut self) -> Result<&PiSession, PiSessionError> {
-        let alive = match self.operator.as_ref() {
-            Some(session) => session.alive().await,
-            None => false,
-        };
-        if !alive {
-            if let Some(session) = self.operator.take() {
-                // The operator is the home base and is meant to outlive every
-                // project leg, so it dying between calls is worth a line even
-                // though the restart below hides it from the caller.
-                tracing::warn!(
-                    stderr_lines = session.stderr_tail(5).lines().count(),
-                    "operator process died; restarting"
-                );
-                session.close().await;
-            }
-        }
-        if self.operator.is_none() {
-            let appended = self.operator_prompt_suffix();
-            let argv = local_argv(
-                &self.launch.pi_binary,
-                self.launch.model.as_deref(),
-                Some(std::path::Path::new(&self.launch.system_prompt)).filter(|p| p.exists()),
-                Some(&appended),
-                self.launch.extension.as_deref(),
-                &["--no-builtin-tools".into(), "--no-session".into()],
-            )?;
-            let session = PiSession::start(
-                argv,
-                OPERATOR,
-                OPERATOR,
-                None,
-                Some(self.launch.env.clone()),
-                Duration::from_secs(180),
-                self.activity_callback.clone(),
-            )
-            .await?;
-            session.observe(self.debug.clone());
-            self.operator = Some(session);
+    /// The operator, started if it is absent or has died. A new operator
+    /// renames the session guard.
+    pub(crate) async fn ensure_operator(&mut self) -> Result<PiSession, PiSessionError> {
+        let start = self.launch.start_operator(
+            self.operator_prompt_suffix(),
+            self.activity_callback.clone(),
+            self.debug.clone(),
+        );
+        let (session, ensured) = self.operator.ensure(start).await?;
+        if ensured == Ensured::Started {
             // The guard names the leg on the line: this operator only while
             // the operator is on it. It also answers some lines while a
             // project stays on the line (status, an unresolved split), and
             // that project keeps the guard: steering and every rescue act on it.
             self.name_leg_on_line(None, || {}).await;
         }
-        self.operator
-            .as_ref()
-            .ok_or_else(|| PiSessionError("operator session was not created".into()))
-    }
-
-    async fn ensure_utility(&mut self) -> Result<&PiSession, PiSessionError> {
-        let alive = match self.utility.as_ref() {
-            Some(session) => session.alive().await,
-            None => false,
-        };
-        if !alive {
-            if let Some(session) = self.utility.take() {
-                tracing::warn!("routing utility process died; restarting");
-                session.close().await;
-            }
-        }
-        if self.utility.is_none() {
-            // The registry is fixed for the life of the service, so the
-            // catalog lives in the system prompt once.
-            let utility_prompt = self.utility_system_prompt();
-            let argv = local_argv(
-                &self.launch.pi_binary,
-                self.launch.model.as_deref(),
-                None,
-                Some(&utility_prompt),
-                self.launch.extension.as_deref(),
-                &[
-                    "--no-builtin-tools".into(),
-                    "--no-session".into(),
-                    "--switchboard-utility".into(),
-                ],
-            )?;
-            let session = PiSession::start(
-                argv,
-                "routing utility",
-                "utility",
-                None,
-                Some(self.launch.env.clone()),
-                Duration::from_secs(180),
-                None,
-            )
-            .await?;
-            session.observe(self.debug.clone());
-            self.utility = Some(session);
-        }
-        self.utility
-            .as_ref()
-            .ok_or_else(|| PiSessionError("utility process was not created".into()))
+        Ok(session)
     }
 
     /// A routing request is data only: Jev's first read, the call state and
@@ -202,7 +265,7 @@ impl Switchboard {
         &mut self,
         request: &str,
     ) -> Result<Option<UtilityDecision>, PiSessionError> {
-        let session = self.ensure_utility().await?.clone();
+        let session = self.utility.session(&self.debug).await?;
         let turn = session.prompt(request).await?;
         if turn.failed {
             return Err(PiSessionError(if turn.error.is_empty() {
@@ -214,17 +277,68 @@ impl Switchboard {
         Ok(utility_decision(&turn.signals))
     }
 
-    /// Take a clone of the utility session while the PBX lock is held. The
-    /// caller must prompt the clone after releasing that lock: utility work is
-    /// allowed to take seconds and must not block caller turns.
-    pub async fn floor_rewrite_session(&mut self) -> Result<PiSession, PiSessionError> {
-        Ok(self.ensure_utility().await?.clone())
+    pub(crate) async fn recover_operator(&mut self, error: String) -> Reply {
+        tracing::warn!(%error, "dropping and rebuilding the operator leg");
+        self.operator.close().await;
+        self.name_leg_on_line(None, || {}).await;
+        tracing::error!(%error, "operator unavailable after a failed turn");
+        self.routing_unavailable()
+    }
+}
+
+/// The routing utility, shared. The switchboard asks it for second
+/// opinions and split dispatch under the PBX lock; the floor asks it to
+/// rewrite a background update without that lock, which a foreground turn
+/// holds for its whole prompt (#386). Its own lock covers only finding or
+/// starting the process: a prompt runs on the session it hands out.
+#[derive(Clone)]
+pub(crate) struct RoutingUtility(Arc<UtilityInner>);
+
+struct UtilityInner {
+    launch: OperatorLaunch,
+    /// The registry is fixed for the life of the service, so the catalog
+    /// lives in the system prompt once.
+    system_prompt: String,
+    process: Mutex<LocalProcess>,
+}
+
+impl RoutingUtility {
+    pub(crate) fn new(launch: OperatorLaunch, system_prompt: String) -> Self {
+        Self(Arc::new(UtilityInner {
+            launch,
+            system_prompt,
+            process: Mutex::new(LocalProcess::new("routing utility")),
+        }))
     }
 
-    pub async fn rewrite_floor_with_session(
-        session: &PiSession,
+    /// The live utility, started if it is absent or has died.
+    pub(crate) async fn session(&self, debug: &DebugBus) -> Result<PiSession, PiSessionError> {
+        let start = self
+            .0
+            .launch
+            .start_utility(self.0.system_prompt.clone(), debug.clone());
+        let (session, _) = self.0.process.lock().await.ensure(start).await?;
+        Ok(session)
+    }
+
+    /// The process the utility holds, live or not.
+    #[cfg(test)]
+    pub(crate) async fn held(&self) -> Option<PiSession> {
+        self.0.process.lock().await.session().cloned()
+    }
+
+    pub(crate) async fn close(&self) {
+        self.0.process.lock().await.close().await;
+    }
+
+    /// The utility's wording of a background update, or `None` when it
+    /// gave none.
+    pub(crate) async fn rewrite_floor(
+        &self,
+        debug: &DebugBus,
         input: &FloorRewriteInput,
     ) -> Result<Option<String>, PiSessionError> {
+        let session = self.session(debug).await?;
         let context = if input.context.trim().is_empty() {
             "(none)"
         } else {
@@ -261,16 +375,6 @@ impl Switchboard {
                     .filter(|text| !text.is_empty())
                     .map(str::to_owned)
             }))
-    }
-
-    pub(crate) async fn recover_operator(&mut self, error: String) -> Reply {
-        tracing::warn!(%error, "dropping and rebuilding the operator leg");
-        if let Some(s) = self.operator.take() {
-            s.close().await;
-        }
-        self.name_leg_on_line(None, || {}).await;
-        tracing::error!(%error, "operator unavailable after a failed turn");
-        self.routing_unavailable()
     }
 }
 

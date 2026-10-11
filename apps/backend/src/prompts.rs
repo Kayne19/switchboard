@@ -4,7 +4,7 @@
 //! transferred project leg gets. The text is code-owned so the operator, the
 //! utility and every project brief carry the same voice.
 use crate::pbx::{Switchboard, TransferContext};
-use crate::registry::Project;
+use crate::registry::{Project, Registry};
 
 /// How anyone on the call talks. One code-owned text, followed by the
 /// persona: the operator's and the utility's system prompts and every voice
@@ -104,17 +104,6 @@ impl Switchboard {
         )
     }
 
-    /// The utility's system prompt: its standing rules, then the voice block
-    /// and the catalog in the same order the operator gets them.
-    /// Requests carry only data.
-    pub(crate) fn utility_system_prompt(&self) -> String {
-        format!(
-            "{UTILITY_SYSTEM_PROMPT}\n\n{}\n\n{}",
-            self.voice_block(),
-            self.registry.prompt_catalog()
-        )
-    }
-
     /// The shared voice block with the persona after it. An empty persona
     /// leaves the character part out.
     fn voice_block(&self) -> String {
@@ -133,6 +122,17 @@ impl Switchboard {
         brief.push_str(AGENT_BRIEF_END);
         brief
     }
+}
+
+/// The utility's system prompt: its standing rules, then the voice block
+/// and the catalog in the same order the operator gets them.
+/// Requests carry only data.
+pub(crate) fn utility_system_prompt(persona: &str, registry: &Registry) -> String {
+    format!(
+        "{UTILITY_SYSTEM_PROMPT}\n\n{}\n\n{}",
+        voice_block(persona),
+        registry.prompt_catalog()
+    )
 }
 
 /// `CALL_VOICE` joined with the persona, or alone when there is none.

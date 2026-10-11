@@ -554,7 +554,7 @@ impl Switchboard {
 
     pub(crate) async fn handle_operator_ctx(&mut self, context: &TransferContext) -> Reply {
         let session = match self.ensure_operator().await {
-            Ok(session) => session.clone(),
+            Ok(session) => session,
             Err(e) => {
                 tracing::error!(error = %e, "operator unavailable");
                 tracing::error!(error = %e, "operator unavailable for routing");
