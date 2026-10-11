@@ -149,7 +149,7 @@ describe('the focus ring', () => {
     const room = ruleNaming('.content-rail__details');
     const holding = rules().find((rule) => rule.selectors.includes('.content-rail__details') && /scroll-padding/.test(rule.body))!;
     expect(room).toBeTruthy();
-    expect(holding.selectors).toEqual(['.content-rail__details', '.composed-aux', '.training-charts--compare']);
+    expect(holding.selectors).toEqual(['.content-rail__details', '.composed-aux', '.system', '.training-charts--compare']);
     expect(holding.body).toMatch(/scroll-padding:\s*var\(--focus-ring-reach\);/);
   });
 });

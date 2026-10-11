@@ -109,8 +109,22 @@ Note the iPadOS version in the pull request.
    but black lies outside them. CI cannot check this: Playwright has no
    safe-area insets, so the hygiene check only holds the viewport tag
    (see "Sizes worth checking").
-10. Theater: ask the agent to give a chart the whole screen. The chart fills
+11. Hand-off speech: ask the operator to put you through to a project while
+    it is still speaking. What it is saying is heard to its end, and the
+    project's first words follow it; nothing is cut off and nothing
+    overlaps. The page streams through `MediaSource` where Safari offers it
+    for MP3 (it does not use `ManagedMediaSource`), and replays a clip
+    whole where it does not or where a stream stops sounding; if the
+    status line says a stream fell back to the complete replay, note that
+    the order held there too. `streamPlayback.spec.ts`, "a
+    handoff in this engine", plays the same order in WebKit on CI, without
+    the iPad's audio session.
+12. Theater: ask the agent to give a chart the whole screen. The chart fills
     the stage with its note, and EXIT, MODE and Damocles are clear of the
     toolbars and the home indicator, in landscape and portrait. Tap Damocles
     and speak: the turn goes as on any page. Tap EXIT: the page goes back to
     the chart's own page.
+13. System: ask the agent for the system view. Each picker opens Safari's
+    own picker; pick a thinking level and the line says so when the leg
+    confirms it. HANG UP puts you back with the operator. Rotate: the panel
+    stays clear of MODE and Damocles, and on a phone on its side it scrolls.

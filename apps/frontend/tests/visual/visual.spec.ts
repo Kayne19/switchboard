@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
-import { GEOMETRIES, openScene, openTheater } from './helpers';
+import { GEOMETRIES, openScene, openSystem, openTheater } from './helpers';
 
 // The pixel goldens: each canonical scene as the stage draws it, at the four
 // golden geometries, against the images in apps/frontend/reference/golden.
@@ -123,6 +123,26 @@ for (const geometry of GEOMETRIES) {
       await openTheater(page, server);
       await page.evaluate(() => document.body.classList.add('presentation-mode'));
       await expect(page.locator('.stage')).toHaveScreenshot(`${geometry.name}-theater.png`, {
+        animations: 'disabled',
+        caret: 'hide',
+        maxDiffPixelRatio: 0.008,
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+}
+
+// The system view (#277): an agent's view("system") with a project on the
+// line, through the page's own socket (system.spec.ts holds its geometry).
+for (const geometry of GEOMETRIES) {
+  test(`system remains visually locked / ${geometry.name}`, GOLDEN, async ({ page }) => {
+    await page.setViewportSize({ width: geometry.width, height: geometry.height });
+    const server = new DisplayFixtureServer({ initialGeneration: 3 });
+    try {
+      await openSystem(page, server);
+      await page.evaluate(() => document.body.classList.add('presentation-mode'));
+      await expect(page.locator('.stage')).toHaveScreenshot(`${geometry.name}-system.png`, {
         animations: 'disabled',
         caret: 'hide',
         maxDiffPixelRatio: 0.008,

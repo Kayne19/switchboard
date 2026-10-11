@@ -110,7 +110,7 @@ drawn for the one asked for; the scene (`sceneKind`) and the report
 | `auto` | `auto`: the content scene when something is on stage, else the conversation or the idle page |
 | `visual` | `visual` when something is on stage: the content scene, as `auto` draws it (the primary in the main slot, the rail beside it); else `auto` |
 | `comms` | `comms`: the conversation page, whatever is on stage |
-| `system` | `auto`: the page has no system scene yet |
+| `system` | `system`, whatever is on stage: the line (who is on it), the route, model and thinking pickers, HANG UP and the status line, from the call runtime (`SystemPanel`); Damocles compact beside it, the corner stack in its corner. On the demo page, with no call: `NO CALL` |
 | `theater` | `theater` when something is on stage: the primary alone, in the focus box, with the notes about it, a `THEATER / <TYPE>` header and `EXIT / ESC`; the corner stack, and Damocles, compact, in a column at its right. Else `auto` |
 
 The theater view is the focus box drawn as the scene (`StagedObject`, shared
@@ -120,6 +120,14 @@ view: the page goes back to `auto` (`auto_view`). A new primary takes the
 theater's stage; an empty stage draws the idle page and reports `auto`, and
 the next visual is drawn in theater again while the request stands. A new
 leg ends it, as it ends every agent request.
+
+The system view draws the line the call runtime holds and acts only through
+it (`selectRoute`, `selectModel`, `selectThinking`, `hangup` in
+`runtime/callRuntime.ts`): the runtime locks the pickers while a request
+runs and posts each one with the generation the page holds (#263). A pick is
+shown as made only when the next `status` says so. `EXIT` and Esc leave it
+for `auto`. A route or model change that moves the call to a new leg ends the
+view with the leg, as a new leg ends every agent request.
 
 The page has no view buttons yet, so the precedence below holds in the
 controller but a caller cannot pin a view: `pinned` is always false.

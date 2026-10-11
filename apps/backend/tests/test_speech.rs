@@ -1,5 +1,5 @@
 use super::*;
-use crate::app_state::{debug_events, state, AppState};
+use crate::app_state::{begin_alpha_candidate, debug_events, state, AppState};
 use crate::audio::{Speaker, SttAdapter, SttStreamAdapter, TestTtsGate, TtsContinuity};
 use crate::browser::frame_json;
 use crate::browser::PageFeed;
@@ -385,6 +385,102 @@ async fn speech_a_rescue_stops_is_not_shown_to_the_caller_as_an_error() {
     }
 }
 
+/// What the page was sent of each utterance's audio, in order: `start`,
+/// `chunk` and `done`, each with its generation.
+fn audio_sent(connection: &mut DeliveryConnection) -> Vec<String> {
+    std::iter::from_fn(|| connection.receiver.try_recv().ok())
+        .filter_map(|frame| match frame {
+            DeliveryFrame::Event { event, .. } => match event {
+                Event::AudioStart { generation, .. } => Some(format!("start {generation}")),
+                Event::AudioChunk { .. } => Some("chunk".to_owned()),
+                Event::AudioDone { generation, .. } => Some(format!("done {generation}")),
+                Event::Json(_) => None,
+            },
+            DeliveryFrame::Message(_) => None,
+        })
+        .collect()
+}
+
+/// Kayne's decision on #437 (2026-10-11): at a hand-off (a transfer's
+/// adoption), what the old leg is already saying finishes, and the new
+/// leg's speech plays after it. It is not cut off.
+#[tokio::test]
+async fn the_new_legs_speech_waits_for_what_the_old_leg_is_already_saying() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let gate = TestTtsGate::new();
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_gated(100, Duration::from_millis(25_000), gate.clone()),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    start_speech_worker_for_test(&state);
+    let admission = |text: &str, generation: u64| SpeechAdmission {
+        text: text.into(),
+        route: OPERATOR.into(),
+        generation,
+        deadline: std::time::Instant::now() + Duration::from_secs(5),
+        scope: ContinuationScope::FreshTurn,
+        group: state.0.new_speech_group(),
+        log_spoken: false,
+    };
+    let old = state.0.coordinator.generation();
+    let saying = async {
+        let reserved = reserve_speech(&state, SpeakUnder::Generation(old), WhenQueueFull::Wait)
+            .await
+            .unwrap_or_else(|failure| panic!("the request gets a place: {failure}"));
+        send_speech(&state, admission("Putting you through.", old), reserved).await
+    };
+    let handed_off = async {
+        within("the old leg's speech starts", gate.wait_started()).await;
+        begin_alpha_candidate(&state, "alpha-leg");
+        state
+            .0
+            .coordinator
+            .adopt_candidate("alpha-leg")
+            .expect("the candidate is adopted");
+        let new = state.0.coordinator.generation();
+        let reserved = reserve_speech(&state, SpeakUnder::Generation(new), WhenQueueFull::Wait)
+            .await
+            .unwrap_or_else(|failure| panic!("the request gets a place: {failure}"));
+        gate.release();
+        let intro = send_speech(&state, admission("Alpha here.", new), reserved);
+        let released = async {
+            within("the new leg's speech starts", gate.wait_started()).await;
+            gate.release();
+        };
+        (futures_util::future::join(intro, released).await.0, new)
+    };
+    let (said, (intro, new)) = within(
+        "both utterances",
+        futures_util::future::join(saying, handed_off),
+    )
+    .await;
+
+    let answer = |sent: Result<(), SpeechFailure>| sent.map_err(|failure| failure.to_string());
+    assert_eq!(answer(said), Ok(()), "the old leg's utterance was cut off");
+    assert_eq!(answer(intro), Ok(()));
+    assert_eq!(
+        audio_sent(&mut connection),
+        [
+            format!("start {old}"),
+            "chunk".to_owned(),
+            format!("done {old}"),
+            format!("start {new}"),
+            "chunk".to_owned(),
+            format!("done {new}"),
+        ]
+    );
+}
+
 /// What happens to a speech request on its way through the worker, for the
 /// completion table below.
 #[derive(Clone, Copy, Debug)]
@@ -392,12 +488,22 @@ enum SpeechEvent {
     /// A rescue retires the generation after the request's place was
     /// reserved, before the worker admits it.
     RetiredBeforeAdmission,
+    /// The call adopts a new leg after the request's place was reserved,
+    /// before the worker admits it: nothing new is said under the leg the
+    /// call has left.
+    HandedOffBeforeAdmission,
     /// The provider refuses the request when it is admitted.
     ProviderRefuses,
     /// A rescue retires the generation and aborts the drain.
     RescueDuringDrain,
-    /// The generation moves on while the body drains; nothing is aborted.
-    RetiredDuringDrain,
+    /// The call adopts a new leg while the body drains (a hand-off, as a
+    /// transfer's adoption is): nothing is aborted, and the utterance
+    /// already streaming finishes before the new leg's speech (#437).
+    HandedOffDuringDrain,
+    /// The same, for an utterance queued behind another one's audio, so
+    /// none of its own has reached the page yet: it is not said, as nothing
+    /// new from the old leg is after a hand-off (#437).
+    HandedOffBeforeHeard,
     /// The provider's body fails partway.
     BodyFails,
     /// The body drains to its end with a browser connected.
@@ -436,10 +542,12 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
     let speaker = match event {
         SpeechEvent::ProviderRefuses => Speaker::offline(100, deadline),
         SpeechEvent::RetiredBeforeAdmission
+        | SpeechEvent::HandedOffBeforeAdmission
         | SpeechEvent::BodyDrained
         | SpeechEvent::BodyDrainedNoBrowser => Speaker::test_success(100, deadline),
         SpeechEvent::RescueDuringDrain
-        | SpeechEvent::RetiredDuringDrain
+        | SpeechEvent::HandedOffDuringDrain
+        | SpeechEvent::HandedOffBeforeHeard
         | SpeechEvent::BodyFails => Speaker::test_gated(100, deadline, gate.clone()),
     };
     if matches!(event, SpeechEvent::BodyFails) {
@@ -468,6 +576,12 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
         group: state.0.new_speech_group(),
         log_spoken,
     };
+    // Another utterance's audio holds the page ahead of this one's.
+    let ahead = if matches!(event, SpeechEvent::HandedOffBeforeHeard) {
+        Some(state.0.audio.lock().await.reserve(generation))
+    } else {
+        None
+    };
     let reserved = reserve_speech(
         &state,
         SpeakUnder::Generation(generation),
@@ -478,12 +592,21 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
     if matches!(event, SpeechEvent::RetiredBeforeAdmission) {
         state.0.coordinator.begin_rescue("test rescue");
     }
+    if matches!(event, SpeechEvent::HandedOffBeforeAdmission) {
+        begin_alpha_candidate(&state, "alpha-leg");
+        state
+            .0
+            .coordinator
+            .adopt_candidate("alpha-leg")
+            .expect("the candidate is adopted");
+    }
     // `send_speech` borrows the place it is given, so the request is sent
     // from this task while the event is driven beside it.
     let drive = async {
         match event {
             SpeechEvent::RescueDuringDrain
-            | SpeechEvent::RetiredDuringDrain
+            | SpeechEvent::HandedOffDuringDrain
+            | SpeechEvent::HandedOffBeforeHeard
             | SpeechEvent::BodyFails => {
                 timeout(Duration::from_secs(1), gate.wait_started())
                     .await
@@ -492,8 +615,13 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
                     SpeechEvent::RescueDuringDrain => {
                         cancel_active_operations(&state).await;
                     }
-                    SpeechEvent::RetiredDuringDrain => {
-                        state.0.coordinator.begin_rescue("test rescue");
+                    SpeechEvent::HandedOffDuringDrain | SpeechEvent::HandedOffBeforeHeard => {
+                        begin_alpha_candidate(&state, "alpha-leg");
+                        state
+                            .0
+                            .coordinator
+                            .adopt_candidate("alpha-leg")
+                            .expect("the candidate is adopted");
                     }
                     _ => {}
                 }
@@ -511,6 +639,9 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
     // completion task next yields.
     for _ in 0..8 {
         tokio::task::yield_now().await;
+    }
+    if let Some(ahead) = ahead {
+        state.0.audio.lock().await.finish(ahead, generation);
     }
     let sent = page
         .as_mut()
@@ -554,6 +685,14 @@ async fn every_end_of_a_speech_request_completes_it_once() {
             spoken_line: false,
         },
         Row {
+            phase: "queued",
+            event: SpeechEvent::HandedOffBeforeAdmission,
+            log_spoken: true,
+            answer: Err(superseded),
+            page_error: false,
+            spoken_line: false,
+        },
+        Row {
             phase: "admitting",
             event: SpeechEvent::ProviderRefuses,
             log_spoken: true,
@@ -571,7 +710,15 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         },
         Row {
             phase: "draining",
-            event: SpeechEvent::RetiredDuringDrain,
+            event: SpeechEvent::HandedOffDuringDrain,
+            log_spoken: true,
+            answer: Ok(()),
+            page_error: false,
+            spoken_line: true,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::HandedOffBeforeHeard,
             log_spoken: true,
             answer: Err(superseded),
             page_error: false,

@@ -11,6 +11,7 @@ import { useController } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { mapVoiceLevelToBar } from '../../src/primitives/VoiceIndicator';
+import { testLine } from './lineControls';
 import { controllerState, renderScene, stubResizeObserver, unmountAll } from './sceneHarness';
 
 const composed: ControllerAction[] = [
@@ -36,7 +37,7 @@ let frames: FrameRequestCallback[];
 // actions run.
 function Voice() {
   const { registerVoiceRuntime } = useController();
-  useEffect(() => registerVoiceRuntime({ toggleTurn: () => {}, sendText: () => true, getVoiceLevel: () => 1, handsFree: false, toggleHandsFree: () => {} }), [registerVoiceRuntime]);
+  useEffect(() => registerVoiceRuntime({ toggleTurn: () => {}, sendText: () => true, getVoiceLevel: () => 1, handsFree: false, toggleHandsFree: () => {}, line: testLine() }), [registerVoiceRuntime]);
   return null;
 }
 

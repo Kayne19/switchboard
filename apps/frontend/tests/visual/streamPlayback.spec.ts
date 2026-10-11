@@ -108,3 +108,82 @@ test.describe("streaming playback in this engine", () => {
     }
   });
 });
+
+// Kayne's decision on #437 (2026-10-11): at a handoff (a transfer this tab
+// saw adopted), what the old leg is already saying finishes, and the new
+// leg's audio plays after it. Before, a clip still arriving at the handoff
+// was cut off. It runs in both engines, as the test above does.
+test.describe("a handoff in this engine", () => {
+  test("a clip still arriving at a handoff is heard, then the new leg's", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const result = await page.evaluate(async (base64: string) => {
+      const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+      const specifier = "/src/runtime/audioPlayback.ts";
+      const module = (await import(/* @vite-ignore */ specifier)) as {
+        AudioPlayback: new (options: Record<string, unknown>) => {
+          setStreamingEnabled(enabled: boolean): void;
+          handOffToGeneration(generation: number): void;
+          receiveAudioStart(message: Record<string, unknown>): void;
+          receiveAudioChunk(data: ArrayBuffer): void;
+          receiveAudioDone(message: Record<string, unknown>): void;
+          dispose(): void;
+        };
+      };
+      const player = document.createElement("audio");
+      document.body.appendChild(player);
+      // Which utterance holds the element: its turn to play came. A stream
+      // this engine takes and never sounds is replayed whole on another
+      // source, so time heard is kept by utterance, not by source.
+      let playing = 0;
+      const playback = new module.AudioPlayback({
+        player,
+        idleText: "idle",
+        onStatus: () => {},
+        onChange: () => {},
+        onUtterance: (sequence: number) => {
+          playing = sequence;
+        },
+        gapMs: 0,
+      });
+      playback.setStreamingEnabled(true);
+      const send = (generation: number, sequence: number, from: number, to: number) => {
+        if (from === 0)
+          playback.receiveAudioStart({ generation, sequence, mime: "audio/mpeg" });
+        for (let at = from; at < to; at += 1_500)
+          playback.receiveAudioChunk(
+            bytes.slice(at, Math.min(at + 1_500, to)).buffer as ArrayBuffer,
+          );
+        if (to === bytes.length)
+          playback.receiveAudioDone({ generation, sequence, done: true });
+      };
+      // The old leg's clip is half here when the call hands off.
+      const half = Math.floor(bytes.length / 2);
+      send(0, 1, 0, half);
+      playback.handOffToGeneration(1);
+      send(0, 1, half, bytes.length);
+      send(1, 2, 0, bytes.length);
+
+      // Each clip is 1.6s: the old leg's is heard to its end, then the new
+      // leg's after it.
+      const heard = new Map<number, number>();
+      const order: number[] = [];
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (!playing) continue;
+        if (!order.includes(playing)) order.push(playing);
+        heard.set(playing, Math.max(heard.get(playing) ?? 0, player.currentTime));
+        if ((heard.get(2) ?? 0) > 1.2) break;
+      }
+      playback.dispose();
+      player.remove();
+      return { order, first: heard.get(1) ?? 0, second: heard.get(2) ?? 0 };
+    }, clip);
+
+    expect(result.order, "the old leg's clip, then the new leg's").toEqual([1, 2]);
+    expect(result.first, "the old leg's clip is heard to its end").toBeGreaterThan(1.2);
+    expect(result.second, "the new leg's clip is heard after it").toBeGreaterThan(1.2);
+  });
+});
