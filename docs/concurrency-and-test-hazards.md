@@ -248,9 +248,20 @@ browser tells a handoff from a rescue: an `epoch` at the generation it already
 holds (a return to the operator), or at the generation of an adoption it saw
 announced, lets what is playing finish and queues the new leg behind it
 (`handOffToGeneration`). Any other `epoch` (a hangup, a rescue, the first one on
-a new connection) still retires everything at once (`resetForGeneration`). A
-clip from the old leg that is still arriving could never finish, so it retires
-everything too.
+a new connection) still retires everything at once (`resetForGeneration`).
+
+A clip of the old leg that is still arriving at a handoff finishes too
+(Kayne's decision on #437): what the old leg is already saying finishes, and
+the new leg's speech plays after it. Both halves hold it. The speech worker's
+drain stops at a moved generation only when none of its audio has reached
+the page yet (`drain_speech_stream`), so the utterance being said goes on and
+nothing new from the old leg starts; a rescue or a shutdown aborts the drain
+as before. The audio order holds the new leg's audio until the old clip's
+`audio_done`. The page takes the arriving clip's bytes and `audio_done` after
+the handoff and plays it whole. The wait is bounded: the speech deadline ends
+the old clip's stream (`TtsChunkStream`), and its slot then closes, and once
+it plays the silence watch (`NO_PROGRESS_MS`) ends a clip that stops
+sounding.
 
 Promotion only ever adopts the leg that asked for it. Module calls name their
 leg by its call token. Activity names it too: the operator's pi process is
