@@ -251,9 +251,6 @@ impl AudioQueue {
         }
         self.drain_ready()
     }
-    pub(crate) fn cancel(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
-        self.finish(sequence, generation)
-    }
     pub(crate) fn barrier(&mut self, sequence: u64, generation: u64, value: Value) -> Vec<Event> {
         let Some(slot) = self.slots.get_mut(&sequence) else {
             return Vec::new();

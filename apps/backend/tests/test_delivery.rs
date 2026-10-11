@@ -105,8 +105,9 @@ fn audio_queue_cancellation_releases_following_audio() {
     let mut queue = AudioQueue::new();
     let first = queue.reserve(1);
     let second = queue.reserve(1);
+    // An utterance given up before any audio closes its slot the same way.
     assert!(matches!(
-        queue.cancel(first, 1).as_slice(),
+        queue.finish(first, 1).as_slice(),
         [
             Event::AudioStart { sequence: 0, .. },
             Event::AudioDone { sequence: 0, .. }
