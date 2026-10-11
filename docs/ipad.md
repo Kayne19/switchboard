@@ -109,7 +109,7 @@ Note the iPadOS version in the pull request.
    but black lies outside them. CI cannot check this: Playwright has no
    safe-area insets, so the hygiene check only holds the viewport tag
    (see "Sizes worth checking").
-10. Hand-off speech: ask the operator to put you through to a project while
+11. Hand-off speech: ask the operator to put you through to a project while
     it is still speaking. What it is saying is heard to its end, and the
     project's first words follow it; nothing is cut off and nothing
     overlaps. The page streams through `MediaSource` where Safari offers it
