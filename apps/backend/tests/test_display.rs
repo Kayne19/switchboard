@@ -3,6 +3,7 @@ use crate::app_state::{begin_alpha_candidate, state, AppState};
 use crate::browser::{frames_until, handle_text_frame};
 use crate::delivery::DeliveryConnection;
 use crate::module_calls::{agent_call_json, post_display_in_task};
+use crate::page_controls::cancel_active_operations;
 use crate::pbx::OPERATOR;
 use crate::within;
 use axum::http::StatusCode;
@@ -569,12 +570,32 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
     state.0.leg_announcer.announce_route().await;
     assert_eq!(seen(&state).await, want, "the same leg is announced again");
 
-    // A rescue moves the generation without announcing a leg: the gate is
-    // left alone until the page reports at the new generation, which starts
-    // that generation's confirmations.
-    let rescue = state.0.coordinator.begin_rescue("a table row");
-    state.0.coordinator.settle(rescue);
+    // A rescue retires the leg on the line without announcing another. It
+    // clears the stage, as the page clears it on the rescue's `epoch`, and
+    // starts the new generation's confirmations, so a display still waiting
+    // on the retired leg is answered at once. The stage belongs to no leg
+    // until the next one is announced (Kayne's decision, 2026-10-11).
+    let (waiting, seq) = show_metric(&state, &mut second, OPERATOR, "m3").await;
+    want.objects = vec!["m2".into(), "m3".into()];
+    want.watermark = seq;
+    assert_eq!(seen(&state).await, want, "a display waits on the page");
+    cancel_active_operations(&state).await;
     let rescued = state.0.coordinator.generation();
+    assert!(state.0.coordinator.settle_at(rescued));
+    let (code, body) = within("the display call", waiting).await.unwrap();
+    assert_eq!(
+        (code, &body["rendered"], &body["reason"]),
+        (
+            StatusCode::OK,
+            &json!(false),
+            &json!("the caller's screen moved to a new leg before this was confirmed")
+        ),
+        "a display waiting on the rescued leg"
+    );
+    want.leg = None;
+    want.objects = vec![];
+    want.stale = true;
+    want.confirmed = (rescued, None);
     assert_eq!(seen(&state).await, want, "a rescue");
     report(
         &state,
@@ -582,7 +603,7 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
         json!({"view": "visual", "generation": rescued}),
     )
     .await;
-    want.confirmed = (rescued, None);
+    want.stale = false;
     assert_eq!(
         seen(&state).await,
         want,

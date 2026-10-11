@@ -106,16 +106,16 @@ just as `speak` does, and reach the page over the browser's existing
 WebSocket; display output does not change routing or speech synthesis.
 
 The visual stage is not a permanent empty dashboard panel. It appears when an
-artifact exists and collapses completely when it does not. The caller can focus
-Visual, Comms, System, or Theater by touch or by asking the agent. A caller's
-explicit selection remains pinned until they return to Auto, so an agent cannot
-pull the screen away from something they chose to read.
+artifact exists and collapses completely when it does not. The agent can ask
+for the Visual, Comms, System or Theater view; the page draws a view only
+where it has a scene for it (`docs/frontend-command-station-architecture.md`,
+"What the page draws").
 
-The browser reports its rendered `screen_state` over the WebSocket. Calling the
-agent's `view` tool without a target returns the active view, artifact kind and
-title, stale status, and browser connection state; calling it with a target
-requests the same workspace change exposed by the visible controls. This lets
-the agent know what the caller can actually see instead of guessing.
+The browser reports its rendered `screen_state` over the WebSocket, naming the
+view it draws. Calling the agent's `view` tool without a target returns that
+view, the artifact kind and title, stale status, and browser connection state;
+calling it with a target requests a workspace change. This lets the agent know
+what the caller can actually see instead of guessing.
 
 Display actions are strictly validated before acceptance; structured graphs,
 tables, and text are sanitized by the browser renderer. The product and layout

@@ -97,6 +97,25 @@ page and the service still read older names (`stage`, `bay2`, `transcript`,
 `routing`, `magi`, `overview` and others) as one of the five, but no agent
 can send them.
 
+### What the page draws
+
+The page draws a view only where it has a scene for it, and its screen-state
+report names the view it draws, never one it was asked for and does not
+draw (#277). `computeEffectiveView` (`controller/reducer.ts`) gives the view
+drawn for the one asked for; the scene (`sceneKind`) and the report
+(`deriveScreenState`) both read it.
+
+| Asked for | Drawn and reported |
+| --- | --- |
+| `auto` | `auto`: the content scene when something is on stage, else the conversation or the idle page |
+| `visual` | `visual` when something is on stage: the content scene, as `auto` draws it (the primary in the main slot, the rail beside it); else `auto` |
+| `comms` | `comms`: the conversation page, whatever is on stage |
+| `system` | `auto`: the page has no system scene yet |
+| `theater` | `auto`: the page has no theater scene yet |
+
+The page has no view buttons yet, so the precedence below holds in the
+controller but a caller cannot pin a view: `pinned` is always false.
+
 ### Focus precedence
 
 Screen control follows a simple precedence rule:
@@ -164,7 +183,8 @@ back to the bottom pins it again (#267).
 
 ## Shared screen-state contract
 
-The browser reports the state it actually rendered over the existing WebSocket:
+The browser reports the state it actually rendered over the existing WebSocket.
+Its `view` is the view the page draws ("What the page draws", above):
 
 ```json
 {

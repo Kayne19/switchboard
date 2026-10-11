@@ -7,11 +7,12 @@
 The visual stage exists to answer questions that are expensive to ask or answer out loud over audio. Visual payloads must compose with speech rather than compete with it (e.g. "I am on step three of five" is effective spoken prose because the screen presents the full plan).
 
 The stage exists only while there is something real to show. With no artifact,
-it collapses and conversation becomes the workspace. The same canonical views
-(`auto`, `visual`, `comms`, `system`, `theater`) are controlled by visible
-buttons and the agent's `view` tool. Explicit caller focus remains pinned until
-the caller returns to Auto. The browser reports the resulting `screen_state`,
-so an agent can inspect what is visible rather than assuming its request won.
+it collapses and conversation becomes the workspace. The agent's `view` tool
+names one of the canonical views (`auto`, `visual`, `comms`, `system`,
+`theater`). The browser reports the resulting `screen_state`, whose `view` is
+the one the page draws (a view it has no scene for is drawn and reported as
+`auto`), so an agent can inspect what is visible rather than assuming its
+request won.
 
 `docs/frontend-command-station-architecture.md` is the product contract for
 this composition behavior.
@@ -810,13 +811,20 @@ fields together:
 |---|---|---|---|
 | an agent's display | `publish` | `display()` (`module_calls.rs`); the held-scene replay in `LegAnnouncer::begin_scene` | sends the action, applies it to `projection` at its `seq`, `watermark` = that `seq` |
 | a new leg (once per `SceneLeg`) | `begin_leg` | `LegAnnouncer::begin_scene` | `projection` cleared, `screen` stale, `confirmations` start the leg's generation, `scene_leg` = the leg; nothing when the stage already belongs to it |
+| a rescue | `rescue` | `release_rescued_work` (`page_controls.rs`), the release every page control's rescue and shutdown share | `projection` cleared, `screen` stale, `confirmations` start the rescue's generation, `scene_leg` = none |
 | a page connects; the active page retires | `mark_stale` | `register_connection`, `retire_connection` (`browser.rs`) | `screen` stale |
 | the active page reports, in the current generation | `report` | `apply_screen_state` (`browser.rs`) | `screen` replaced; the report folded into `confirmations` |
 
-The `watermark` is the delivery's sequence, not the leg's: a new leg leaves
-it. A rescue moves the generation without a new leg, so it does not reset
-the gate; the page's first report at the new generation starts that
-generation's confirmations (`ConfirmState::fold_report`).
+The `watermark` is the delivery's sequence, not the leg's: a new leg and a
+rescue leave it. A rescue moves the generation without a new leg, and the
+page drops the old leg's objects on its `epoch`; the gate is reset with
+that `epoch`, under its lock, so the stage, `view` and a page that
+reconnects before the next leg is announced all agree with the page. A
+display still waiting on the rescued leg is answered at once ("moved to a
+new leg"). The stage belongs to no leg until the next announcement, which
+resets it as any other would. A redial that keeps the session clears it
+too: the page drops the objects on the rescue's `epoch`, and the agent
+draws again on the new leg.
 
 Every `screen_state` report folds its `applied_seq` into the confirmations as
 a running per-generation maximum, and adds its `rejected`, if it carries
