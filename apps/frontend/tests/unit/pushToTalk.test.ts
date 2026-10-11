@@ -132,10 +132,9 @@ describe("PushToTalk", () => {
     };
 
     const firstStart = h.ptt.start();
-    const duplicateStart = h.ptt.start();
-    expect(h.getUserMediaCalls(), "permission request is deduplicated").toBe(1);
+    expect(h.getUserMediaCalls(), "one press asks once").toBe(1);
     h.resolveMedia(stream());
-    await Promise.all([firstStart, duplicateStart]);
+    await firstStart;
     expect(FakeRecorder.created, "one stream creates one recorder").toBe(1);
     expect(h.ptt.isRecording()).toBe(true);
     h.ptt.stop(false);
@@ -204,6 +203,22 @@ describe("PushToTalk", () => {
     expect(h.ptt.isActive).toBe(false);
     expect(h.outbox.length).toBe(0);
     expect(h.status.text).toBe("idle");
+  });
+
+  it("cancels the take on a second tap while the permission prompt is open", async () => {
+    FakeRecorder.created = 0;
+    const h = harness();
+    const stream = fakeStream();
+    const start = h.ptt.start();
+    const secondTap = h.ptt.start();
+    expect(h.getUserMediaCalls(), "the second tap does not ask again").toBe(1);
+    h.resolveMedia(stream);
+    await Promise.all([start, secondTap]);
+    expect(FakeRecorder.created, "a cancelled take records nothing").toBe(0);
+    expect(stream.stops(), "the granted microphone is let go").toBe(1);
+    expect(h.ptt.isActive).toBe(false);
+    expect(h.outbox.length).toBe(0);
+    expect(h.status).toEqual({ text: "idle", error: false });
   });
 
   it("stamps the clip with the epoch and transfer it started under", async () => {
@@ -696,8 +711,10 @@ describe("push-to-talk lifecycle: phase x event", () => {
     { from: "idle", event: "discard", seen: {}, then: "idle" },
     { from: "idle", event: "abandoned", seen: {}, then: "idle" },
 
-    // A second tap while the permission prompt is open is swallowed (#365).
-    { from: "acquiring", event: "press", seen: {}, then: "acquiring" },
+    // A second tap while the permission prompt is open cancels the take,
+    // as Discard does: the caller changed their mind (#434). It does not ask
+    // for the microphone again.
+    { from: "acquiring", event: "press", seen: {}, then: "cancelled" },
     { from: "acquiring", event: "send", seen: {}, then: "cancelled" },
     { from: "acquiring", event: "discard", seen: {}, then: "cancelled" },
     {

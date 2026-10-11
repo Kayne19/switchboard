@@ -542,7 +542,7 @@ releases what the old phase holds and the new one does not:
 | phase | holds | left by |
 |---|---|---|
 | `idle` | nothing | a press (`acquiring`) |
-| `acquiring` | the press's meter context; `cancelled` once Send or Discard came during the prompt | the grant (`recording`, or `idle` when cancelled or no recorder can be made), the refusal (`idle`) |
+| `acquiring` | the press's meter context; `cancelled` once Send, Discard or a second press came during the prompt | the grant (`recording`, or `idle` when cancelled or no recorder can be made), the refusal (`idle`) |
 | `recording` | the take: recorder, stream, meter, clip id, epoch and transfer stamp, chunks | Send or Discard (`stopping`), the recorder stopping by itself (`idle`, the clip sent, #262), a recorder error or a failed `start()` (`idle`) |
 | `stopping` | the take, and whether to send it | the recorder's `stop` event (`idle`, sent or discarded), a recorder error (`idle`) |
 
@@ -552,7 +552,9 @@ page is told it is not recording, then the clip goes to the outbox and one
 status line says how the press ended. A recorder or permission callback
 names its take or press, so one that arrives after its phase is dropped (a
 recorder fires `stop` after its `error`). A second press while the
-permission prompt is open is ignored.
+permission prompt is open cancels the take, as Discard does: the caller
+changed their mind, and nothing is recorded when the prompt is answered. A
+press after that, with the prompt still open, waits for the answer.
 
 ## Extension strategy
 
