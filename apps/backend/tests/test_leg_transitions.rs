@@ -1469,11 +1469,12 @@ async fn a_bring_up_dropped_before_it_ends_rolls_its_candidate_back() {
 // residents, the agent states the page was told, and whether the session it
 // brought up still runs. A promotion that fails while its session is still
 // usable puts the resident back in the background (Kayne's decision,
-// 2026-10-11); a host command that fails leaves the handle unusable (#291),
-// so those exits end it as before.
+// 2026-10-11). A command the host refuses fails alone and leaves the
+// session usable (#423), so a refused promotion goes back too, and a
+// refused redial keeps the leg as it was.
 
-/// Where a bring-up is made to fail: the host refuses a command (which
-/// leaves the session's handle unusable), the agent's model call fails in
+/// Where a bring-up is made to fail: the host refuses a command
+/// (`daemon_error`, which leaves the session usable), the agent's model call fails in
 /// its first turn (the session stays usable), or a competing owner
 /// restages the candidate when the host sees a command, so the bring-up's
 /// adoption fails.
@@ -1552,7 +1553,7 @@ async fn bring_up_scene() -> BringUp {
         match *armed {
             Some(Fault::Refuse(command)) if command == name => {
                 *armed = None;
-                Some(Some(Err(("failed".into(), format!("{name} failed")))))
+                Some(Some(Err(("daemon_error".into(), format!("{name} failed")))))
             }
             Some(Fault::Restage(command)) if command == name => {
                 *armed = None;
@@ -1768,10 +1769,10 @@ transfer | first turn fails => alpha error "I couldn't open beta." | line alpha 
 transfer | first turn errors => alpha error "I couldn't open beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
 transfer | adoption fails => alpha error "I couldn't open beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
 transfer | commits => beta "" | line beta [beta staged, beta Adopted] | guard beta | agent beta | residents [alpha] | states [beta:busy, alpha:idle, beta:idle] | brought up runs
-promotion | set_mode fails => alpha error "I couldn't pick beta back up." | line alpha [] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:finished] | brought up ended
-promotion | join fails => alpha error "I couldn't pick beta back up." | line alpha [] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:finished] | brought up ended
+promotion | set_mode fails => alpha error "I couldn't pick beta back up." | line alpha [] | guard alpha (before) | agent alpha (before) | residents [beta] | states [beta:idle] | brought up runs
+promotion | join fails => alpha error "I couldn't pick beta back up." | line alpha [] | guard alpha (before) | agent alpha (before) | residents [beta] | states [beta:idle] | brought up runs
 promotion | refused => alpha error "I couldn't pick beta back up." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [beta] | states [beta:busy, beta:idle] | brought up runs
-promotion | first turn fails => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
+promotion | first turn fails => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [beta] | states [beta:busy, beta:idle] | brought up runs
 promotion | first turn errors => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [beta] | states [beta:busy, beta:idle] | brought up runs
 promotion | adoption fails => alpha error "I couldn't pick beta back up." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [beta] | states [beta:busy, beta:idle] | brought up runs
 promotion | commits => beta "" | line beta [beta staged, beta Adopted] | guard beta | agent beta | residents [alpha] | states [beta:busy, alpha:idle, beta:idle] | brought up runs
@@ -1783,7 +1784,7 @@ takeover | first turn errors => alpha error "I couldn't take over beta." | line 
 takeover | adoption fails => alpha error "I couldn't take over beta." | line alpha [beta staged, beta RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [beta:busy, beta:finished] | brought up ended
 takeover | commits => beta "" | line beta [beta staged, beta Adopted] | guard beta | agent beta | residents [alpha] | states [beta:busy, alpha:idle, beta:idle] | brought up runs
 redial | refused => alpha error "I couldn't change the model on alpha." | line alpha starting [] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up runs
-redial | model fails => operator error "I couldn't bring alpha back up on next on anthropic, thinking medium." | line operator [alpha staged, alpha RolledBack] | guard none | agent none | residents [] | states [alpha:finished] | brought up ended
+redial | model fails => alpha error "I couldn't move alpha to next on anthropic, thinking medium, so it stays as it was." | line alpha [alpha staged, alpha RolledBack] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up runs
 redial | adoption fails => operator error "I couldn't bring alpha back up on next on anthropic, thinking medium." | line operator [alpha staged, alpha RolledBack] | guard none | agent none | residents [] | states [alpha:finished] | brought up ended
 redial | commits => alpha "Now on next on anthropic, thinking medium." | line alpha [alpha staged, alpha Adopted] | guard alpha (before) | agent alpha (before) | residents [] | states [] | brought up runs
 "#;

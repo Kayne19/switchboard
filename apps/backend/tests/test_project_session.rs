@@ -465,8 +465,13 @@ enum EndPhase {
 /// What happens to a session in a row of the end-of-life table.
 #[derive(Clone, Copy, Debug)]
 enum EndEvent {
-    /// A command to it fails on the host.
+    /// A command to it fails on the link (`stale_epoch` here; a timeout,
+    /// `not_connected`, `link_lost` and `unreadable_reply` are the others).
     CommandFails,
+    /// The host answers a command with a refusal of that command
+    /// (`daemon_error` here; `refused`, `unsupported`, `bad_request` and
+    /// `unknown_command` are the others).
+    CommandRefused,
     /// The host reports it closed (`session_closed`).
     HostEnds,
     /// Its owner closes it.
@@ -527,10 +532,20 @@ fn end_table() -> Vec<EndRow> {
     vec![
         // Created: a release is a kill, owed until the host says the session is gone.
         row(Created, Open, CommandFails, Some(false), 1, NONE, KILL),
+        row(Created, Open, CommandRefused, Some(true), 0, NONE, KILL),
         row(Created, Open, HostEnds, Some(false), 1, NONE, NONE),
         row(Created, Open, OwnerCloses, Some(false), 0, KILL, NONE),
         row(Created, Open, LastHandleDrops, gone, 0, KILL, NONE),
         row(Created, Unusable, CommandFails, Some(false), 1, NONE, KILL),
+        row(
+            Created,
+            Unusable,
+            CommandRefused,
+            Some(false),
+            1,
+            NONE,
+            KILL,
+        ),
         row(Created, Unusable, HostEnds, Some(false), 1, NONE, NONE),
         row(Created, Unusable, OwnerCloses, Some(false), 1, KILL, NONE),
         row(Created, Unusable, LastHandleDrops, gone, 1, KILL, NONE),
@@ -538,6 +553,15 @@ fn end_table() -> Vec<EndRow> {
             Created,
             EndedOnHost,
             CommandFails,
+            Some(false),
+            1,
+            NONE,
+            NONE,
+        ),
+        row(
+            Created,
+            EndedOnHost,
+            CommandRefused,
             Some(false),
             1,
             NONE,
@@ -555,11 +579,21 @@ fn end_table() -> Vec<EndRow> {
         ),
         row(Created, EndedOnHost, LastHandleDrops, gone, 1, NONE, NONE),
         row(Created, Released, CommandFails, Some(false), 0, NONE, NONE),
+        row(
+            Created,
+            Released,
+            CommandRefused,
+            Some(false),
+            0,
+            NONE,
+            NONE,
+        ),
         row(Created, Released, HostEnds, Some(false), 0, NONE, NONE),
         row(Created, Released, OwnerCloses, Some(false), 0, NONE, NONE),
         row(Created, Released, LastHandleDrops, gone, 0, NONE, NONE),
         // Taken over: a release is an abort then a detach, owed until it went out.
         row(TakenOver, Open, CommandFails, Some(false), 1, NONE, DETACH),
+        row(TakenOver, Open, CommandRefused, Some(true), 0, NONE, DETACH),
         row(TakenOver, Open, HostEnds, Some(false), 1, NONE, DETACH),
         row(TakenOver, Open, OwnerCloses, Some(false), 0, DETACH, NONE),
         row(TakenOver, Open, LastHandleDrops, gone, 0, DETACH, NONE),
@@ -567,6 +601,15 @@ fn end_table() -> Vec<EndRow> {
             TakenOver,
             Unusable,
             CommandFails,
+            Some(false),
+            1,
+            NONE,
+            DETACH,
+        ),
+        row(
+            TakenOver,
+            Unusable,
+            CommandRefused,
             Some(false),
             1,
             NONE,
@@ -587,6 +630,15 @@ fn end_table() -> Vec<EndRow> {
             TakenOver,
             EndedOnHost,
             CommandFails,
+            Some(false),
+            1,
+            NONE,
+            DETACH,
+        ),
+        row(
+            TakenOver,
+            EndedOnHost,
+            CommandRefused,
             Some(false),
             1,
             NONE,
@@ -628,14 +680,24 @@ fn end_table() -> Vec<EndRow> {
             NONE,
             NONE,
         ),
+        row(
+            TakenOver,
+            Released,
+            CommandRefused,
+            Some(false),
+            0,
+            NONE,
+            NONE,
+        ),
         row(TakenOver, Released, HostEnds, Some(false), 0, NONE, NONE),
         row(TakenOver, Released, OwnerCloses, Some(false), 0, NONE, NONE),
         row(TakenOver, Released, LastHandleDrops, gone, 0, NONE, NONE),
     ]
 }
 
-/// A session for one row of the end-of-life table, on a fake host whose
-/// `set_mode` always fails, with the release commands it is sent and the
+/// A session for one row of the end-of-life table, on a fake host that
+/// refuses `set_mode` (`daemon_error`) and fails `set_thinking` as a link
+/// would (`stale_epoch`), with the release commands it is sent and the
 /// application's session-closed reports counted.
 struct EndRig {
     hosts: crate::hosts::Hosts,
@@ -652,12 +714,12 @@ impl EndRig {
         let mut fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
         fake.on_command = Some(Box::new(move |name, _| {
             let _ = command_tx.send(name.to_owned());
-            (name == "set_mode").then(|| {
-                Some(Err((
-                    "daemon_error".to_owned(),
-                    "refused for the test".to_owned(),
-                )))
-            })
+            let code = match name {
+                "set_mode" => "daemon_error",
+                "set_thinking" => "stale_epoch",
+                _ => return None,
+            };
+            Some(Some(Err((code.to_owned(), format!("{code} for the test")))))
         }));
         let _log = fake.serve(hosts.connect_fake("scriptorium"));
         let reports = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -747,8 +809,12 @@ impl EndRig {
     async fn apply(&mut self, event: EndEvent) {
         match event {
             EndEvent::CommandFails => {
-                let failed = self.session().set_mode("background").await;
-                assert!(failed.is_err(), "set_mode fails on this host");
+                let failed = self.session().set_thinking("high").await;
+                assert!(failed.is_err(), "set_thinking fails on this host");
+            }
+            EndEvent::CommandRefused => {
+                let refused = self.session().set_mode("background").await;
+                assert!(refused.is_err(), "set_mode is refused on this host");
             }
             EndEvent::HostEnds => {
                 self.hosts.send_fake(
