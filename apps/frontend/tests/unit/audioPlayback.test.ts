@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AudioPlayback,
   MAX_AUDIO_REPLAY,
+  MAX_AUDIO_UTTERANCE,
 } from "../../src/runtime/audioPlayback";
 import { mp3FrameBoundary } from "../../src/runtime/speechEnvelope";
 
@@ -1408,7 +1409,116 @@ describe("AudioPlayback replay cap", () => {
     expect(playback.isDrained()).toBe(true);
   });
 
-  it("still refuses audio past the cap while it is all held unplayed", () => {
+  it("ends an utterance at the held cap with its own message, and plays what it had (#431)", () => {
+    const player = fakePlayer();
+    const { urls } = stubObjectUrls();
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const reached: number[] = [];
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: (text, error) => statuses.push([text, error]),
+      onChange: () => {},
+      onUtterance: (sequence) => reached.push(sequence),
+      gapMs: 0,
+    });
+    const mebibyte = new ArrayBuffer(1024 * 1024);
+    const utterances = MAX_AUDIO_REPLAY / mebibyte.byteLength;
+    for (let sequence = 1; sequence < utterances; sequence += 1) {
+      playback.receiveAudioStart({ generation: 0, sequence, mime: "audio/mpeg" });
+      playback.receiveAudioChunk(mebibyte);
+      playback.receiveAudioDone({ generation: 0, sequence, done: true });
+    }
+    expect(statuses.filter(([, error]) => error)).toEqual([]);
+    // Nothing has played: the first replay holds the element, and the rest
+    // wait. The last utterance takes half a mebibyte, then passes the cap.
+    const last = utterances;
+    playback.receiveAudioStart({ generation: 0, sequence: last, mime: "audio/mpeg" });
+    playback.receiveAudioChunk(new ArrayBuffer(512 * 1024));
+    playback.receiveAudioChunk(mebibyte);
+    expect(statuses).toEqual([
+      [
+        "Too much reply audio is waiting to play. This reply's audio stops partway, and its full text is in the transcript.",
+        true,
+      ],
+    ]);
+    // The utterance ended at the cap: a later chunk that would fit and its
+    // own `audio_done` change nothing, and it plays what it had.
+    playback.receiveAudioChunk(new ArrayBuffer(1));
+    playback.receiveAudioDone({ generation: 0, sequence: last, done: true });
+    expect(playback.audioQueue.at(-1)?.size).toBe(512 * 1024);
+    for (let sequence = 1; sequence < last; sequence += 1) {
+      player.ended = true;
+      player.emit("ended");
+    }
+    expect((urls.get(player.src) as Blob).size).toBe(512 * 1024);
+    expect(reached.at(-1)).toBe(last);
+    expect(statuses.filter(([text]) => text.startsWith("Streaming"))).toEqual([]);
+  });
+});
+
+describe("AudioPlayback utterance cap", () => {
+  // #431: an utterance past `MAX_AUDIO_UTTERANCE` was reported as
+  // "Streaming audio failed", even on a page that never streamed, and
+  // streaming was refused for the rest of the call. Now it ends at the cap
+  // with its own message: what arrived plays, and the rest is dropped.
+  const mebibyte = new ArrayBuffer(1024 * 1024);
+  const tooLong =
+    "This reply is too long to play in full. Its audio stops partway, and its full text is in the transcript.";
+
+  it("streaming: the stream ends at the cap, says why, and the next utterance still streams", () => {
+    const { urls } = stubObjectUrls();
+    const player = fakePlayer((url) => {
+      const source = urls.get(url);
+      if (source instanceof FakeMediaSource) source.attach();
+    });
+    player.play = () => {
+      player.playCalls.push(player.src);
+      return Promise.resolve();
+    };
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    const statuses: Array<[string, boolean | undefined]> = [];
+    const playback = new AudioPlayback({
+      player: player as unknown as HTMLAudioElement,
+      idleText: "idle",
+      onStatus: (text, error) => statuses.push([text, error]),
+      onChange: () => {},
+      gapMs: 0,
+    });
+    playback.setStreamingEnabled(true);
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    const source = urls.get(player.src);
+    expect(source).toBeInstanceOf(FakeMediaSource);
+    if (!(source instanceof FakeMediaSource)) return;
+    const drain = () => {
+      while (source.buffer.updating) source.buffer.emit("updateend");
+    };
+    for (let part = 0; part < MAX_AUDIO_UTTERANCE / mebibyte.byteLength; part += 1) {
+      playback.receiveAudioChunk(mebibyte);
+      drain();
+    }
+    expect(statuses).toEqual([]);
+    playback.receiveAudioChunk(mebibyte);
+    drain();
+    expect(statuses).toEqual([[tooLong, true]]);
+    expect(playback.streamingEnabled).toBe(true);
+    // The stream keeps the element and ends with what it had.
+    expect(urls.get(player.src)).toBe(source);
+    expect(source.ended).toBe(true);
+    const heard = () => source.buffer.appended.reduce((sum, part) => sum + part.byteLength, 0);
+    expect(heard()).toBe(MAX_AUDIO_UTTERANCE);
+    playback.receiveAudioChunk(new ArrayBuffer(1));
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    drain();
+    expect(heard()).toBe(MAX_AUDIO_UTTERANCE);
+    player.ended = true;
+    player.emit("ended");
+    playback.receiveAudioStart({ generation: 0, sequence: 2, mime: "audio/mpeg" });
+    expect(urls.get(player.src)).toBeInstanceOf(FakeMediaSource);
+    expect(urls.get(player.src)).not.toBe(source);
+  });
+
+  it("whole replay: the replay holds what came before the cap, and nothing after it", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
@@ -1419,25 +1529,23 @@ describe("AudioPlayback replay cap", () => {
       onChange: () => {},
       gapMs: 0,
     });
-    const mebibyte = new ArrayBuffer(1024 * 1024);
-    const utterances = MAX_AUDIO_REPLAY / mebibyte.byteLength;
-    for (let sequence = 1; sequence <= utterances; sequence += 1) {
-      playback.receiveAudioStart({ generation: 0, sequence, mime: "audio/mpeg" });
-      playback.receiveAudioChunk(mebibyte);
-      playback.receiveAudioDone({ generation: 0, sequence, done: true });
-    }
-    expect(statuses.filter(([, error]) => error)).toEqual([]);
-    // Nothing has played: the first replay holds the element, and the rest
-    // wait. One byte more is past the cap.
-    playback.receiveAudioStart({
-      generation: 0,
-      sequence: utterances + 1,
-      mime: "audio/mpeg",
-    });
-    playback.receiveAudioChunk(new ArrayBuffer(1));
-    expect(statuses.filter(([, error]) => error)).toEqual([
-      [expect.stringContaining("audio replay limit"), true],
+    // Something holds the element, so the replay waits in the queue.
+    playback.audioQueue.push(new Blob(["first"]));
+    playback.playNext();
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    const half = new ArrayBuffer(512 * 1024);
+    const parts = MAX_AUDIO_UTTERANCE / mebibyte.byteLength - 1;
+    for (let part = 0; part < parts; part += 1) playback.receiveAudioChunk(mebibyte);
+    playback.receiveAudioChunk(half);
+    playback.receiveAudioChunk(mebibyte);
+    expect(statuses).toEqual([[tooLong, true]]);
+    // A smaller chunk that would still fit is not spliced in after the gap.
+    playback.receiveAudioChunk(half);
+    playback.receiveAudioDone({ generation: 0, sequence: 1, done: true });
+    expect(playback.audioQueue.map((blob) => blob.size)).toEqual([
+      parts * mebibyte.byteLength + half.byteLength,
     ]);
+    expect(statuses).toEqual([[tooLong, true]]);
   });
 });
 

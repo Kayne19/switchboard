@@ -76,7 +76,10 @@ Note the iPadOS version in the pull request.
    tap Damocles again while its prompt is open, then allow: nothing is
    recorded, the microphone light goes off, and the next tap records.
 2. Playback: Damocles' reply is heard, on the first call after the page
-   loads as well as later ones.
+   loads as well as later ones. (A reply past a playback cap, 32 MiB in one
+   utterance or 64 MiB waiting unplayed, is cut there and the status line
+   says so; it keeps streaming on WebKit too. A run cannot reach the caps,
+   so unit tests in `audioPlayback.test.ts` hold this, not the device.)
 3. Orb: the presence moves with Damocles' voice and with yours.
 4. Hands-free, where the page offers it: the wake word and a sentence make
    a turn, without a tap. Then tap Damocles, speak, tap again: MODE still
