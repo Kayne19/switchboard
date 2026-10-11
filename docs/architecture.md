@@ -701,13 +701,23 @@ out: it takes the resident and retires its token under the same lock, then
 does what the reason says leaving does. The coordinator's background tokens
 are written by `admit` and `retire` only.
 
-| `Leaving` | from | its prompt | its session | publishes |
-|---|---|---|---|---|
-| `Stopped` | `stop_project` | cancelled and joined | ended | `finished` |
-| `Dead` | work given to a project whose resident's handle has closed (`retire_dead_resident`) | cancelled and joined | left; it is dead | `finished` |
-| `Promoted` | a transfer to the project (`transfer_ctx`) | cancelled and joined | handed to the bring-up (`promote_background`), which readmits it if the promotion fails | nothing; the bring-up does |
-| `ClosedOnHost` | the host reports the session closed (`session_closed_callback`), and a prompt the host refused | left to end: the report can come from inside it | left; it is dead | `finished` |
-| `Shutdown` | `Switchboard::shutdown` | cancelled and joined | ended | nothing |
+| `Leaving` | from | its turn on the host | its prompt | its session | publishes |
+|---|---|---|---|---|---|
+| `Stopped` | `stop_project` | left: the session ends | cancelled and joined | ended | `finished` |
+| `Dead` | work given to a project whose resident's handle has closed (`retire_dead_resident`) | left; it is dead | cancelled and joined | left; it is dead | `finished` |
+| `Promoted` | a transfer to the project (`transfer_ctx`) | interrupted, and waited for until it settles | cancelled and joined | handed to the bring-up (`promote_background`), which readmits it if the promotion fails | nothing; the bring-up does |
+| `ClosedOnHost` | the host reports the session closed (`session_closed_callback`), and a prompt the host refused | left; it is dead | left to end: the report can come from inside it | left; it is dead | `finished` |
+| `Shutdown` | `Switchboard::shutdown` | left: the session ends | cancelled and joined | ended | nothing |
+
+A promotion hands the line a session with no turn running, so the
+caller's words are a prompt of their own, not a follow-up the host merges
+into the background work (#239). `retire` sends the host `abort` and waits
+for the session to settle (`ProjectSession::interrupt_and_settle`); the
+background prompt collecting that turn ends with it. The wait is the
+host's command wait (`SESSION_COMMAND_WAIT`, 30 s), never longer than the
+session's silent-turn deadline. A host that has not settled the turn by
+then leaves it running, and the caller's words go in behind it as a
+follow-up.
 
 `ClosedOnHost` retires only the exact session it names (persistent id and
 live-handle instance), so a report about an older handle cannot evict its
