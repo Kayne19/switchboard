@@ -314,7 +314,10 @@ export class CallRuntime {
 
   // --- Commands ---------------------------------------------------------
 
-  /** Starts a push-to-talk recording. Ignored while the line is down. */
+  /**
+   * Starts a push-to-talk recording; a second press while the permission
+   * prompt is open cancels it. Ignored while the line is down.
+   */
   talk(): void {
     if (!this.state.connected) return;
     void this.pushToTalk.start();
