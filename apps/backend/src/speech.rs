@@ -401,25 +401,12 @@ async fn append_audio(state: &AppState, sequence: u64, generation: u64, bytes: V
     publish_audio_events(state, events).await
 }
 
-pub(crate) async fn finish_audio(
-    state: &AppState,
-    sequence: u64,
-    generation: u64,
-    bytes: Vec<u8>,
-) -> bool {
-    let (events, current) = {
-        let mut audio = state.0.audio.lock().await;
-        let current = generation == state.0.coordinator.generation();
-        let events = if current {
-            let mut events = audio.append(sequence, generation, bytes);
-            events.extend(audio.finish(sequence, generation));
-            events
-        } else {
-            audio.cancel(sequence, generation)
-        };
-        (events, current)
-    };
-    publish_audio_events(state, events).await && current
+/// Closes an utterance's audio slot, which lets the slots behind it go out.
+/// One a rescue cleared is gone, and closing it sends nothing. True when a
+/// page took what it sent.
+pub(crate) async fn finish_audio(state: &AppState, sequence: u64, generation: u64) -> bool {
+    let events = state.0.audio.lock().await.finish(sequence, generation);
+    publish_audio_events(state, events).await
 }
 
 fn continuity_for_request(
@@ -477,18 +464,20 @@ impl Utterance {
             Some(self.sequence),
             &self.text,
         );
-        finish_audio(state, self.sequence, self.generation, Vec::new()).await;
+        finish_audio(state, self.sequence, self.generation).await;
     }
 }
 
-/// Why the worker stopped a request on purpose. Only a rescue stops one, and
-/// a rescue retires the generation first, so a stopped request always
-/// belongs to a retired generation.
+/// Why the worker stopped a request on purpose. A rescue stops one, and a
+/// hand-off stops one none of whose audio the page has had; either way the
+/// generation moved first, so a stopped request always belongs to a
+/// generation the call has left.
 #[derive(Clone, Copy, Debug)]
 enum Stopped {
     /// The rescue aborted its admission or its drain.
     Cancelled,
-    /// Its generation was retired before it was admitted or while it drained.
+    /// Its generation was left before it was admitted, or while it drained
+    /// before any of its audio reached the page (#437).
     Superseded,
 }
 
@@ -648,7 +637,14 @@ async fn drain_speech_stream(
     let mut delivered = start_audio(&state, sequence, generation).await;
     let mut bytes = 0usize;
     while let Some(chunk) = stream.next().await {
-        if generation != state.0.coordinator.generation() {
+        // The call has moved on without a rescue: a hand-off (a transfer's
+        // adoption). What the old leg is already saying finishes, and the
+        // new leg's audio waits behind it in the audio order; an utterance
+        // none of whose audio has reached the page yet is not said, so
+        // nothing new from the old leg starts after the hand-off (#437). A
+        // rescue or a shutdown aborts the drain instead. The stream's own
+        // deadline (`TtsChunkStream`) bounds how long the new leg waits.
+        if generation != state.0.coordinator.generation() && !delivered {
             utterance.abandon(&state).await;
             return SpeechOutcome::Stopped(Stopped::Superseded);
         }
@@ -664,7 +660,7 @@ async fn drain_speech_stream(
             delivered |= append_audio(&state, sequence, generation, part.to_vec()).await;
         }
     }
-    delivered |= finish_audio(&state, sequence, generation, Vec::new()).await;
+    delivered |= finish_audio(&state, sequence, generation).await;
     // A request id is useful only after the complete body has been consumed.
     // The epoch/model/generation checks reject a late drain after a reset.
     state.0.commit_continuity_ordered(
@@ -1055,7 +1051,7 @@ impl ReservedSpeech<'_> {
     /// behind it.
     pub(crate) async fn give_back(self, state: &AppState) {
         drop(self.permit);
-        finish_audio(state, self.sequence, self.generation, Vec::new()).await;
+        finish_audio(state, self.sequence, self.generation).await;
     }
 }
 

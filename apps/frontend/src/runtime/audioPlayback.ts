@@ -251,15 +251,16 @@ export class AudioPlayback {
 
   /**
    * Moves to `generation` on a handoff (a transfer this tab saw adopted, or a
-   * return to the operator): the goodbye already here keeps playing, and the
-   * new leg's audio queues behind it. A clip from another leg that is still
-   * arriving could never finish, so that case retires everything instead.
+   * return to the operator): what the old leg is already saying finishes,
+   * and the new leg's audio queues behind it (#437). A clip that has
+   * arrived keeps playing, and one still arriving keeps arriving: its bytes
+   * and its `audio_done` are taken, and it plays whole. Another clip of the
+   * old leg is ignored, as the backend does not send it. The backend sends
+   * the new leg's audio only after the old clip's `audio_done`, and its
+   * speech deadline bounds that clip's arrival; once it plays, the silence
+   * watch (`NO_PROGRESS_MS`) bounds a clip that stops sounding.
    */
   handOffToGeneration(generation: number): void {
-    if (this.arriving && this.arriving.generation !== generation) {
-      this.resetForGeneration(generation);
-      return;
-    }
     this.generation = generation;
   }
 
@@ -348,8 +349,10 @@ export class AudioPlayback {
   }
 
   receiveAudioChunk(data: ArrayBuffer): void {
+    // The utterance arriving is the current leg's, or the one a handoff let
+    // finish: a reset leaves nothing arriving.
     const utterance = this.arriving;
-    if (!utterance || utterance.generation !== this.generation) return;
+    if (!utterance) return;
     const limit = this.limitPassed(utterance, data.byteLength);
     if (limit) {
       // Too long to keep, which is not a failure of streaming: it ends at
@@ -370,13 +373,13 @@ export class AudioPlayback {
   receiveAudioDone(
     message: Pick<AudioDoneMessage, "generation" | "sequence" | "done">,
   ): void {
+    const utterance = this.arriving;
     if (
-      message.generation !== this.generation ||
-      typeof message.sequence !== "number"
+      !utterance ||
+      message.generation !== utterance.generation ||
+      message.sequence !== utterance.sequence
     )
       return;
-    const utterance = this.arriving;
-    if (!utterance || utterance.sequence !== message.sequence) return;
     this.endUtterance(utterance, message.done === true);
   }
 
