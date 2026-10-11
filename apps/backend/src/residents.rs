@@ -302,13 +302,6 @@ impl Switchboard {
         }
     }
 
-    /// Takes a resident for a foreground promotion. Its background prompt is
-    /// cancelled and joined first: this is the reservation boundary, so mode
-    /// and token cannot change while the old background task is running.
-    pub(crate) async fn take_background(&mut self, project: &str) -> Option<ProjectSession> {
-        self.retire_resident(project, Leaving::Promoted).await
-    }
-
     /// Shelves the former foreground leg when another project takes the line.
     /// Foreign desk sessions are released, never made resident: the service
     /// owns only sessions it created.
@@ -341,27 +334,15 @@ impl Switchboard {
         } else {
             AgentNotice::Idle
         };
-        let admitted = self.register_background_session(previous_label.clone(), previous);
+        let admitted = self
+            .background_agents
+            .admit(previous_label.clone(), previous, || {});
         let state = if admitted {
             state
         } else {
             AgentNotice::Finished
         };
         self.announce_agent_state(&previous_label, state).await;
-    }
-
-    fn register_background_session(&self, project: String, session: ProjectSession) -> bool {
-        self.background_agents.admit(project, session, || {})
-    }
-
-    #[cfg(test)]
-    fn register_background_session_with_fake_death(
-        &self,
-        project: String,
-        session: ProjectSession,
-    ) -> bool {
-        self.background_agents
-            .admit(project, session.clone(), || session.close())
     }
 
     /// Prompts a background agent without waiting for its turn. `source` is
@@ -463,7 +444,10 @@ impl Switchboard {
             &project,
             plan.prepare_report.as_ref(),
         );
-        if !self.register_background_session(project.id.clone(), session.clone()) {
+        if !self
+            .background_agents
+            .admit(project.id.clone(), session.clone(), || {})
+        {
             self.announce_agent_state(&project.id, AgentNotice::Finished)
                 .await;
             return Err(format!(

@@ -93,7 +93,9 @@ impl Switchboard {
         // handle and could create a second live session for this project.
         if self.coordinator.route() != project.id {
             self.retire_dead_resident(&project.id).await;
-            if let Some(session) = self.take_background(&project.id).await {
+            // The resident's background prompt is cancelled and joined
+            // first: mode and token cannot change while it is running.
+            if let Some(session) = self.retire_resident(&project.id, Leaving::Promoted).await {
                 return self.promote_background(session, context.clone()).await;
             }
         }

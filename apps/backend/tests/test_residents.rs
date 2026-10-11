@@ -109,7 +109,7 @@ async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() 
 }
 
 #[tokio::test]
-async fn dead_background_handle_is_evicted_after_registration_recheck() {
+async fn a_handle_that_closes_during_admission_is_refused_and_leaves_no_token() {
     let mut board = board_with(vec![project("alpha", "")], false);
     let fake = FakeHostAgent::new(Box::new(|_, _| vec![]));
     let _log = fake.serve(board.hosts().connect_fake(HOST));
@@ -130,9 +130,11 @@ async fn dead_background_handle_is_evicted_after_registration_recheck() {
         .await
         .unwrap()
         .0;
-    // The fake dies synchronously after token registration and before map
-    // insertion, exactly the window the helper must close.
-    assert!(!board.register_background_session_with_fake_death("alpha".into(), session));
+    // The handle closes after the resident is entered and before admission
+    // checks it: admission refuses it and leaves no token.
+    assert!(!board
+        .background_agents
+        .admit("alpha".into(), session.clone(), || session.close()));
     assert!(!board.background_agents.contains_key("alpha"));
     assert!(!board.coordinator.project_is_background("alpha"));
     board.shutdown().await;
