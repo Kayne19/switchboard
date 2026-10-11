@@ -19,6 +19,8 @@ import {
 import type { HeardLine } from "../runtime/spokenLines";
 
 interface TranscriptLine {
+  /** The line's page-local key: the history keys its rows by it (`MessageData['transcript']`). */
+  key: number;
   speaker: string;
   text: string;
   id?: string;
@@ -28,11 +30,12 @@ interface TranscriptLine {
   agent?: string;
 }
 
-function normalizeHistory(entries: TranscriptEntry[]): TranscriptLine[] {
+function normalizeHistory(entries: TranscriptEntry[], nextKey: () => number): TranscriptLine[] {
   return entries.flatMap((entry) =>
     entry.text
       ? [
           {
+            key: nextKey(),
             speaker: entry.role === "caller" ? "CALLER" : "DAMOCLES",
             text: entry.text,
             id: entry.id || undefined,
@@ -66,6 +69,9 @@ export function RuntimeIntegration() {
   const { state, dispatch, registerVoiceRuntime } = useController();
   const [callRuntime, setCallRuntime] = useState<CallRuntime | null>(null);
   const transcriptRef = useRef<TranscriptLine[]>([]);
+  // Each transcript line's key, from the one counter here: the runtime
+  // makes the lines, so it numbers them (#398).
+  const nextTranscriptKeyRef = useRef(0);
   const currentResponseRef = useRef("");
   // The rendered scene goes to the backend through the runtime the page
   // holds now; with none, the report waits.
@@ -118,16 +124,19 @@ export function RuntimeIntegration() {
   // The runtime is created once; these handlers are replaced as the scene
   // callbacks they close over change.
   useEffect(() => {
-    const appendTranscript = (line: TranscriptLine) => {
+    // A line replaced by id keeps its key, so its row stays; a new line
+    // takes the next one.
+    const appendTranscript = (line: Omit<TranscriptLine, "key">) => {
       const existing = line.id
         ? transcriptRef.current.findIndex((entry) => entry.id === line.id)
         : -1;
       if (existing >= 0) {
         transcriptRef.current = transcriptRef.current.map((entry, index) =>
-          index === existing ? line : entry,
+          index === existing ? { ...line, key: entry.key } : entry,
         );
       } else {
-        transcriptRef.current = [...transcriptRef.current, line].slice(-200);
+        const added = { ...line, key: nextTranscriptKeyRef.current++ };
+        transcriptRef.current = [...transcriptRef.current, added].slice(-200);
       }
     };
 
@@ -143,7 +152,7 @@ export function RuntimeIntegration() {
           break;
         }
         case "history": {
-          transcriptRef.current = normalizeHistory(message.entries);
+          transcriptRef.current = normalizeHistory(message.entries, () => nextTranscriptKeyRef.current++);
           // The log restarts from the lines the history says were voiced.
           spokenLogRef.current = transcriptRef.current
             .filter((entry) => entry.voiced)

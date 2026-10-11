@@ -14,11 +14,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TranscriptDrawer } from '../../src/components/TranscriptDrawer';
 import { mount, rerender, unmountAll } from './sceneHarness';
 
-type Line = { speaker: string; text: string };
+type Line = { key: number; speaker: string; text: string };
 
 const lines: Line[] = [
-  { speaker: 'CALLER', text: 'Where are the docs?' },
-  { speaker: 'DAMOCLES', text: 'They are in [the docs](https://example.com/docs).' },
+  { key: 0, speaker: 'CALLER', text: 'Where are the docs?' },
+  { key: 1, speaker: 'DAMOCLES', text: 'They are in [the docs](https://example.com/docs).' },
 ];
 
 // Frames run when the test says, not on a clock.

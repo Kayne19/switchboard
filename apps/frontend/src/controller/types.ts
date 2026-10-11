@@ -442,8 +442,13 @@ export interface MessageData {
    * it in the corner stack (#180, `ChannelStack`).
    */
   channel?: { name: string };
-  /** `agent` names the project agent that spoke, when one did. */
-  transcript?: Array<{ speaker: string; text: string; agent?: string }>;
+  /**
+   * The conversation history, oldest first. `key` is the line's own, set
+   * by the page runtime as it makes the line (`integration/runtime.tsx`)
+   * and kept when a line is replaced by id: the history keys its rows by
+   * it. `agent` names the project agent that spoke, when one did.
+   */
+  transcript?: Array<{ key: number; speaker: string; text: string; agent?: string }>;
 }
 
 export interface NoteData {

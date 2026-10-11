@@ -83,34 +83,17 @@ function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
   // to while they reread (#267). It keys on the lines, not on their count,
   // which stops changing once the page's history holds its 200 lines.
   const { ref, onScroll } = usePinnedScroll<HTMLDivElement>(lines);
-  const rowKey = useRowKeys();
 
   return (
     <div className="transcript__body" ref={ref} onScroll={onScroll}>
       {lines.map((line) => (
-        <div className={`transcript-line${line.speaker === 'DAMOCLES' ? ' transcript-line--ai' : ''}`} key={rowKey(line)}>
+        <div className={`transcript-line${line.speaker === 'DAMOCLES' ? ' transcript-line--ai' : ''}`} key={line.key}>
           <span className="transcript-line__speaker tech micro">{transcriptSpeaker(line)}</span>
           <div className="transcript-line__text"><RichText segments={[{ text: line.text }]} allowLinks /></div>
         </div>
       ))}
     </div>
   );
-}
-
-// A row's key is its line's: the page's history hands over the same line
-// object in each new window of it, so dropping the oldest line keeps every
-// other row instead of renumbering, and remounting, all of them (#267).
-function useRowKeys(): (line: TranscriptLine) => number {
-  const keys = useRef(new WeakMap<TranscriptLine, number>());
-  const next = useRef(0);
-  return (line) => {
-    let key = keys.current.get(line);
-    if (key === undefined) {
-      key = next.current++;
-      keys.current.set(line, key);
-    }
-    return key;
-  };
 }
 
 // The draft stays in the field until the runtime has put it on the socket, so
