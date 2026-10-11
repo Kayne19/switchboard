@@ -411,9 +411,13 @@ describe("the hands-free controller over fakes", () => {
       harness.instance.pauseForPtt();
       harness.instance.resumeAfterPtt();
     },
-    epochChanged: async (harness: ReturnType<typeof controller>) => {
-      harness.instance.epochChanged();
+    "a rescue epoch": async (harness: ReturnType<typeof controller>) => {
+      harness.instance.epochChanged(false);
       await harness.instance.enable();
+    },
+    // A hand-off keeps listening: the next wake word needs no MODE.
+    "a hand-off epoch": async (harness: ReturnType<typeof controller>) => {
+      harness.instance.epochChanged(true);
     },
     "a detector failure": async (harness: ReturnType<typeof controller>) => {
       harness.detector.breakDown(new Error("engine gone"));
