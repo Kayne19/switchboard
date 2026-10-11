@@ -420,6 +420,9 @@ const machines = [
 	{ file: "apps/frontend/src/app/screenReporter.ts", writer: /\bthis\.state\s*=(?!=)/, max: 1, once: [/clearTimeout\(/] },
 	// host-turns: `hold_self_woken` holds the admitted self-woken run; `release_self_woken` is its one end.
 	{ file: "apps/backend/src/host_turns.rs", writer: /\bself_woken\.lock\(\)\.await\s*=(?!=)/, max: 1, once: [/\.take_if\(/] },
+	// session-guard (#359): the active-session guard is derived, not a machine. `name_leg_on_line`
+	// is its one writer and the one place the PBX locks it; a rescue's `take` is the only other change.
+	{ file: "apps/backend/src/pbx.rs", writer: /\*guard\s*=(?!=)/, max: 1, once: [/\.active_session\.lock\(\)/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];
