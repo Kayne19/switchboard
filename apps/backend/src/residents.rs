@@ -33,13 +33,13 @@ struct BackgroundPrompt {
 /// Why a resident leaves the registry. The reason decides all of what
 /// leaving does (`Leaving::exit`):
 ///
-/// | reason         | its prompt           | its session        | publishes  |
-/// |----------------|----------------------|--------------------|------------|
-/// | `Stopped`      | cancelled and joined | ended              | `finished` |
-/// | `Dead`         | cancelled and joined | left (it is dead)  | `finished` |
-/// | `Promoted`     | cancelled and joined | handed to the line | nothing    |
-/// | `ClosedOnHost` | left to end          | left (it is dead)  | `finished` |
-/// | `Shutdown`     | cancelled and joined | ended              | nothing    |
+/// | reason         | its turn on the host      | its prompt           | its session        | publishes  |
+/// |----------------|---------------------------|----------------------|--------------------|------------|
+/// | `Stopped`      | left (the session ends)   | cancelled and joined | ended              | `finished` |
+/// | `Dead`         | left (it is dead)         | cancelled and joined | left (it is dead)  | `finished` |
+/// | `Promoted`     | interrupted, waited for   | cancelled and joined | handed to the line | nothing    |
+/// | `ClosedOnHost` | left (it is dead)         | left to end          | left (it is dead)  | `finished` |
+/// | `Shutdown`     | left (the session ends)   | cancelled and joined | ended              | nothing    |
 ///
 /// Every reason retires the resident's call token first, so no request or
 /// display passes the lifecycle check while the rest runs.
@@ -50,7 +50,10 @@ pub(crate) enum Leaving {
     /// Its handle was found closed before work was given to it.
     Dead,
     /// The caller is put through to it: the session goes on the line. A
-    /// promotion that fails brings it back through `admit`
+    /// turn still running on its host is interrupted, and the session
+    /// handed over once it has settled, so the caller's words are a prompt
+    /// of their own and not a follow-up behind the background work (#239).
+    /// A promotion that fails brings it back through `admit`
     /// (`Switchboard::move_to_background`).
     Promoted,
     /// Its host reported this session closed. Only the exact session (its
@@ -69,6 +72,7 @@ pub(crate) enum Leaving {
 
 /// What leaving does, besides retiring the call token.
 struct Exit {
+    interrupt_turn: bool,
     cancel_prompt: bool,
     end_session: bool,
     publish_finished: bool,
@@ -76,14 +80,15 @@ struct Exit {
 
 impl Leaving {
     fn exit(&self) -> Exit {
-        let (cancel_prompt, end_session, publish_finished) = match self {
-            Leaving::Stopped => (true, true, true),
-            Leaving::Dead => (true, false, true),
-            Leaving::Promoted => (true, false, false),
-            Leaving::ClosedOnHost { .. } => (false, false, true),
-            Leaving::Shutdown => (true, true, false),
+        let (interrupt_turn, cancel_prompt, end_session, publish_finished) = match self {
+            Leaving::Stopped => (false, true, true, true),
+            Leaving::Dead => (false, true, false, true),
+            Leaving::Promoted => (true, true, false, false),
+            Leaving::ClosedOnHost { .. } => (false, false, false, true),
+            Leaving::Shutdown => (false, true, true, false),
         };
         Exit {
+            interrupt_turn,
             cancel_prompt,
             end_session,
             publish_finished,
@@ -249,6 +254,13 @@ impl BackgroundRegistry {
             self.take_out(&mut residents, project)?
         };
         let exit = why.exit();
+        // The background prompt collecting the turn ends with it, so it is
+        // joined below without being cut off. A host that does not settle
+        // the turn in time leaves it running: the caller's words then go in
+        // behind it, as a follow-up.
+        if exit.interrupt_turn && !session.interrupt_and_settle().await {
+            tracing::warn!(%project, "the resident's turn did not settle after an abort; its work goes on");
+        }
         if let Some(prompt) = prompt.filter(|_| exit.cancel_prompt) {
             prompt.task.abort();
             let _ = prompt.task.await;

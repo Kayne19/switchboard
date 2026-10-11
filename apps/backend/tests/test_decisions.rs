@@ -533,6 +533,10 @@ async fn promoting_a_background_resident_cancels_its_detached_prompt_before_fore
         &[],
         two_model_catalog(),
     );
+    // The background turn is held past its abort, as a host that does not
+    // settle it would: the promotion waits for it no longer than the
+    // silent-turn deadline, then goes ahead.
+    board.set_project_turn_timeout_for_test(Duration::from_secs(1));
     let entered = Arc::new(tokio::sync::Notify::new());
     let calls = Arc::new(StdMutex::new(0usize));
     let entered_for_prompt = entered.clone();
@@ -1014,6 +1018,9 @@ async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
 #[tokio::test]
 async fn busy_background_split_part_is_refused_and_fresh_brings_the_live_agent_forward() {
     let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    // Beta's turn is held past the abort its promotion sends; the promotion
+    // waits for it no longer than the silent-turn deadline.
+    board.set_project_turn_timeout_for_test(Duration::from_secs(2));
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
     let log = serve(
         &board,

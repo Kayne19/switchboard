@@ -35,6 +35,7 @@ async fn releasing_a_closed_taken_over_session_still_aborts_before_detaching() {
         debug: None,
         turn_lock: Mutex::new(()),
         turn: StdMutex::new(TurnState::new()),
+        turn_moved: tokio::sync::Notify::new(),
         lifecycle: StdMutex::new(Lifecycle::Open {
             _subscription: subscription,
         }),
