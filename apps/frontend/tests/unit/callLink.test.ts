@@ -483,9 +483,18 @@ const DROPPED: Seen = {
   stops: ["disconnected"],
   reconnects: 1,
 };
-/** A ready socket replaced by `retry()`: the line stays up, the snapshot goes. */
-const REPLACING: Seen = { ...CONNECTING, connected: true, status: RETRYING };
-const DISPOSED: Seen = { ...READY, ready: null, open: false };
+/**
+ * A line that was up, replaced by `retry()`, a keepalive miss or a ping that
+ * cannot go: the line goes down as a close takes it down, and the
+ * replacement connects at once.
+ */
+const REPLACED: Seen = { ...CONNECTING, status: DISCONNECTED, error: true, stops: ["disconnected"], sockets: 1 };
+/** `retry()` on a line that was up: the same, and it says it is retrying. */
+const RETRIED: Seen = { ...REPLACED, status: RETRYING, error: false };
+/** The phase `retry()` leaves: the replacement connecting, the line down. */
+const REPLACING: Seen = { ...CONNECTING, status: RETRYING };
+/** After `dispose()` there is no line: `connected` reads the link. */
+const DISPOSED: Seen = { ...READY, connected: false, ready: null, open: false };
 
 const rows: Row[] = [
   // idle
@@ -512,19 +521,19 @@ const rows: Row[] = [
   { from: "open", event: "epoch", seen: READY },
   { from: "open", event: "drops", seen: DROPPED },
   { from: "open", event: "20 s", seen: { ...OPEN, frames: ["ping"] } },
-  { from: "open", event: "retry", seen: { ...REPLACING, sockets: 1 } },
-  { from: "open", event: "dispose", seen: { ...OPEN, ready: null, open: false, stops: ["dispose"] } },
+  { from: "open", event: "retry", seen: RETRIED },
+  { from: "open", event: "dispose", seen: { ...OPEN, connected: false, ready: null, open: false, stops: ["dispose"] } },
 
   // ready
   { from: "ready", event: "epoch", seen: READY },
   { from: "ready", event: "drops", seen: { ...DROPPED, ready: true } },
   { from: "ready", event: "error", seen: { ...READY, status: "Connection error.", error: true } },
   { from: "ready", event: "20 s", seen: { ...READY, frames: ["ping"] } },
-  // A ping that cannot go replaces the socket at once, saying nothing.
-  { from: "ready", event: "20 s, ping fails", seen: { ...CONNECTING, sockets: 1, connected: true, status: IDLE_TEXT } },
+  // A ping that cannot go replaces the socket at once and takes the line down.
+  { from: "ready", event: "20 s, ping fails", seen: REPLACED },
   { from: "ready", event: "clip send fails", seen: { ...DROPPED, ready: true } },
-  { from: "ready", event: "retry", seen: { ...REPLACING, sockets: 1 } },
-  { from: "ready", event: "retry, socket cannot be made", seen: { ...REPLACING, ready: true, status: CANNOT_CONNECT, error: true, reconnects: 1 } },
+  { from: "ready", event: "retry", seen: RETRIED },
+  { from: "ready", event: "retry, socket cannot be made", seen: { ...DROPPED, ready: true, status: CANNOT_CONNECT } },
   { from: "ready", event: "talk", seen: { ...READY, status: RECORDING, recording: true } },
   { from: "ready", event: "dispose", seen: { ...DISPOSED, stops: ["dispose"] } },
 
@@ -535,15 +544,15 @@ const rows: Row[] = [
   { from: "awaiting pong", event: "pong", seen: READY },
   { from: "awaiting pong", event: "pong, other nonce", seen: READY },
   { from: "awaiting pong", event: "pong, 8 s", seen: READY },
-  { from: "awaiting pong", event: "8 s", seen: { ...REPLACING, sockets: 1, status: KEEPALIVE, error: true } },
+  { from: "awaiting pong", event: "8 s", seen: { ...REPLACED, status: KEEPALIVE } },
   { from: "awaiting pong", event: "drops", seen: { ...DROPPED, ready: true } },
 
-  // recording: a dropped socket finishes the take into the outbox; a replace leaves it recording.
+  // recording: a dropped socket or a replace finishes the take into the outbox.
   { from: "recording", event: "drops", seen: { ...DROPPED, ready: true } },
   // The take ends after the line went down, and the snapshot outlives the
   // socket: the clip is said to wait.
   { from: "recording, slow recorder", event: "drops", seen: { ...DROPPED, ready: true, status: "Waiting to send 1 clip(s)..." } },
-  { from: "recording", event: "retry", seen: { ...REPLACING, sockets: 1, recording: true } },
+  { from: "recording", event: "retry", seen: RETRIED },
   { from: "recording", event: "dispose", seen: { ...DISPOSED, status: IDLE_TEXT, stops: ["dispose"] } },
 
   // waiting
@@ -554,28 +563,27 @@ const rows: Row[] = [
   { from: "waiting", event: "dispose", seen: { ...DROPPED, stops: ["dispose"], ready: null, reconnects: 0 } },
   { from: "waiting, never open", event: "1.5 s", seen: { ...DROPPED, sockets: 1, stops: [], reconnects: 0 } },
 
-  // replacing: the line stays up until the new socket closes or opens.
+  // replacing: the line is down until the new socket opens.
   { from: "replacing", event: "opens", seen: { ...OPEN, frames: ["hello"] } },
   { from: "replacing", event: "drops", seen: DROPPED },
-  { from: "replacing", event: "talk", seen: { ...REPLACING, status: RECORDING, recording: true } },
+  // Nothing can start a take while the line is down.
+  { from: "replacing", event: "talk", seen: REPLACING },
   { from: "replacing", event: "old socket opens", seen: REPLACING },
   { from: "replacing", event: "old socket closes", seen: REPLACING },
   { from: "replacing", event: "old socket says epoch", seen: REPLACING },
   { from: "replacing", event: "1.5 s", seen: REPLACING },
   { from: "replacing", event: "dispose", seen: { ...REPLACING, ready: null, stops: ["dispose"] } },
-  // The last `hello_ack`'s choice holds until the new socket opens: a take
-  // begun meanwhile is a stream, though the new socket's `hello_ack` did not
-  // choose streaming.
-  { from: "replacing", event: "talk, send, new socket greeted", seen: { ...READY, frames: ["hello", "clip"], status: "Waiting for the server to accept your clip..." } },
-  { from: "replacing, streaming", event: "talk, send, new socket greeted", seen: { ...READY, frames: ["hello", "stt_start", "stt_chunk", "stt_end"], status: "Waiting for the server to accept your clip..." } },
-  { from: "replace failed", event: "1.5 s", seen: { ...REPLACING, status: CANNOT_CONNECT, error: true, sockets: 1 } },
-  // The link's error stands over the recording's routine status: only the
-  // link takes its own error down (#354).
-  { from: "replace failed", event: "talk", seen: { ...REPLACING, ready: true, status: CANNOT_CONNECT, error: true, recording: true, reconnects: 1 } },
+  // No take begins during a replace, so the old socket's streaming choice
+  // has nothing to carry over: only the new socket's `hello_ack` chooses.
+  { from: "replacing", event: "talk, send, new socket greeted", seen: { ...READY, frames: ["hello"] } },
+  { from: "replacing, streaming", event: "talk, send, new socket greeted", seen: { ...READY, frames: ["hello"] } },
+  { from: "replace failed", event: "1.5 s", seen: { ...CONNECTING, status: CANNOT_CONNECT, error: true, sockets: 1 } },
+  // The link's error stands, and no take starts with the line down.
+  { from: "replace failed", event: "talk", seen: { ...DROPPED, ready: true, status: CANNOT_CONNECT, stops: [] } },
 
   // disposed
   { from: "disposed", event: "start", seen: DISPOSED },
-  { from: "disposed", event: "retry", seen: { ...DISPOSED, status: RETRYING } },
+  { from: "disposed", event: "retry", seen: DISPOSED },
   { from: "disposed", event: "1.5 s", seen: DISPOSED },
 ];
 
