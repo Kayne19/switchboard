@@ -263,6 +263,30 @@ choice holds until a new socket opens, so a take begun while a replacement
 connects still streams, and `waiting` keeps whether the lost socket had its
 snapshot, so a clip finished after the drop is said to wait.
 
+The call's identity is one `CallIdentity` value (`src/runtime/callIdentity.ts`):
+the epoch the server last announced, the candidate leg it said is starting
+(`candidate`), and the adoption whose epoch has not come yet
+(`candidate_cleared` with `reason: "adopted"`). `follow` gives the next value
+for a message and says what it means; `CallRuntime` writes it only in
+`followIdentity` and stamps every take, clip, typed turn and line control
+from it (`docs/architecture.md` rule 7). The candidate mark and the adoption
+are independent, so it is a value, not a machine. Its rule is #70's
+(`docs/concurrency-and-test-hazards.md`): a take is marked for the candidate
+starting when it began, and is carried to the new leg only on the epoch that
+candidate's adoption names. The phase x event table in
+`tests/unit/callIdentity.test.ts` pins each row through `CallRuntime`.
+
+| message | epoch | candidate | adoption | what it means |
+|---|---|---|---|---|
+| `epoch` N | N | none | none | the adoption at N, if one waits, carries its marked unsent clips to N (`outbox.carry`); other unsent clips not at N are dropped and counted; N is *expected* when it is the epoch held or the adoption's, and on a live line playback is then handed off instead of cut |
+| `candidate` R | same | R, none for `operator` | same | "Connecting to R…" |
+| `candidate_cleared` adopted R at N | same | none | R at N | the adoption waits for N |
+| `candidate_cleared` rolled back or rescued R | same | none | none | clips marked for R lose the mark (`outbox.unmark`) |
+| `reply`, `status` | same | none | same | a take begun after it is not marked |
+
+Any `candidate_cleared` puts the idle line back while "Connecting to …" is
+shown. Any `epoch` ends the wait for an adoption, the one it names or not.
+
 The reports themselves belong to `ScreenReporter` (`src/app/screenReporter.ts`);
 `runtime.tsx` only forwards it events. It sends with stop-and-wait: one
 `screen_state` is on the wire until its `screen_state_ack`, and the newest

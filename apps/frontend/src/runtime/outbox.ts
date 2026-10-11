@@ -8,6 +8,8 @@
 // what keeps a backend restart from destroying the only copy of something
 // the caller said, and a dropped socket from leaving a clip unanswered.
 
+import type { Adoption } from "./callIdentity";
+
 export const MAX_OUTBOX_CLIPS = 16;
 export const MAX_OUTBOX_BYTES = 128 * 1024 * 1024;
 
@@ -26,7 +28,6 @@ export interface Clip {
   // reconnect does not clear it: the server keeps the first stamp it saw for
   // a clip id, so from then on the clip belongs to that stamp for good.
   transmitted?: boolean;
-  accepted?: boolean;
   streaming?: boolean;
   chunks?: Blob[];
 }
@@ -37,10 +38,6 @@ export class ClipOutbox {
 
   get size(): number {
     return this.clips.length;
-  }
-
-  get all(): readonly Clip[] {
-    return this.clips;
   }
 
   /** Adds a clip, or returns false when the outbox is already full. */
@@ -76,53 +73,63 @@ export class ClipOutbox {
   markAllUnsent(): void {
     for (const clip of this.clips) clip.sent = false;
   }
-}
 
-/// A candidate leg that became the leg on the line: its route, and the
-/// epoch it was adopted at.
-export interface Adoption {
-  route: string;
-  generation: number;
-}
-
-// A clip recorded while the browser knew a transfer was in flight is
-// addressed to the leg being started, not to the leg that was live. When that
-// leg is adopted, re-stamp those clips to its epoch so the flush that follows
-// delivers them. Any other stale clip is left to be discarded: that is the
-// server's safety invariant for speech begun before the transfer was known.
-//
-// Only the adoption of the very candidate the clip was recorded for counts:
-// the same route, one epoch on from the stamp the clip was recorded under. A
-// hangup while connecting moves the epoch the same way an adoption does, and
-// words addressed to the incoming leg must not run on the operator (#70).
-//
-// A clip that already went out is not re-stamped. The server holds it under
-// the stamp it went out with and drops it with a `stale_epoch` error that
-// names it, which is how the caller hears about it; sent again under a new
-// stamp it would be taken as the clip the server already has.
-export function restampStaleClips(
-  clips: readonly Clip[],
-  adoption: Adoption,
-): number {
-  let resubmitted = 0;
-  for (const clip of clips) {
-    if (
-      clip.transferEra === adoption.route &&
-      clip.epoch + 1 === adoption.generation &&
-      !clip.transmitted
-    ) {
-      clip.epoch = adoption.generation;
-      resubmitted += 1;
-    }
+  /**
+   * The line moved to `epoch`. The clips stamped with another epoch that
+   * never went out are dropped, and their count returned: the server never
+   * saw them, so the page tells the caller. A clip that did go out stays
+   * until the server answers for it: after a reconnect it is sent again
+   * under the stamp it went out with, and the server replies with the
+   * verdict the tab missed.
+   */
+  retireOtherEpochs(epoch: number): number {
+    const before = this.clips.length;
+    this.retain((clip) => clip.epoch === epoch || clip.transmitted === true);
+    return before - this.clips.length;
   }
-  return resubmitted;
-}
 
-// The candidate on `route` ended without being adopted: the clips recorded
-// for it were never addressed to a leg the caller reached, and stay on the
-// stamp they were recorded under.
-export function forgetTransfer(clips: readonly Clip[], route: string): void {
-  for (const clip of clips) {
-    if (clip.transferEra === route) clip.transferEra = undefined;
+  /**
+   * The epoch of `adoption` arrived. A clip recorded while the browser knew
+   * a transfer was in flight is addressed to the leg being started, not to
+   * the leg that was live, so the ones for this leg are re-stamped to its
+   * epoch and the flush that follows delivers them. Returns how many. Any
+   * other stale clip is left to be discarded: that is the server's safety
+   * invariant for speech begun before the transfer was known.
+   *
+   * Only the adoption of the very candidate the clip was recorded for
+   * counts: the same route, one epoch on from the stamp the clip was
+   * recorded under. A hangup while connecting moves the epoch the same way
+   * an adoption does, and words addressed to the incoming leg must not run
+   * on the operator (#70).
+   *
+   * A clip that already went out is not re-stamped. The server holds it
+   * under the stamp it went out with and drops it with a `stale_epoch` error
+   * that names it, which is how the caller hears about it; sent again under
+   * a new stamp it would be taken as the clip the server already has.
+   */
+  carry(adoption: Adoption): number {
+    let carried = 0;
+    for (const clip of this.clips) {
+      if (
+        clip.transferEra === adoption.route &&
+        clip.epoch + 1 === adoption.generation &&
+        !clip.transmitted
+      ) {
+        clip.epoch = adoption.generation;
+        carried += 1;
+      }
+    }
+    return carried;
+  }
+
+  /**
+   * The candidate on `route` ended without being adopted: the clips recorded
+   * for it were never addressed to a leg the caller reached, and stay on the
+   * stamp they were recorded under.
+   */
+  unmark(route: string): void {
+    for (const clip of this.clips) {
+      if (clip.transferEra === route) clip.transferEra = undefined;
+    }
   }
 }

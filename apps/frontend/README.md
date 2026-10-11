@@ -8,6 +8,8 @@ V17.2 is the frontend at `/`, and it runs the call itself. `src/runtime/`
 owns the browser's side of a call: `callRuntime.ts` runs the call over the
 backend WebSocket (epochs and transfers, the clip outbox, the line controls),
 `callLink.ts` holds the socket itself (hello, heartbeat, reconnect),
+`callIdentity.ts` the call's identity (the epoch, the candidate, the
+adoption) every clip and control is stamped with,
 `pushToTalk.ts` records the caller, `audioPlayback.ts` plays replies,
 and hands-free listening reuses `src/hands_free.ts` and the local wake-word
 detector. The runtime owns no DOM; it reports state and backend messages to
