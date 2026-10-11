@@ -115,7 +115,7 @@ interface Take {
  */
 type Phase =
   | { kind: "idle" }
-  /** The permission prompt is open. `cancelled`: Send or Discard came first. */
+  /** The permission prompt is open. `cancelled`: Send, Discard or a second tap came first. */
   | { kind: "acquiring"; press: Press; cancelled: boolean; answered: Promise<void> }
   | { kind: "recording"; take: Take }
   /** `stop()` was called; the recorder's `stop` event has not fired yet. */
@@ -261,8 +261,11 @@ export class PushToTalk {
   private next(phase: Phase, event: PttEvent): Phase | Ended {
     switch (event.kind) {
       case "press":
-        // A second tap while the permission prompt is open is swallowed.
-        return phase.kind === "idle" ? this.ask() : phase;
+        if (phase.kind === "idle") return this.ask();
+        // A second tap while the permission prompt is open cancels the take,
+        // as Discard does: the caller changed their mind.
+        if (phase.kind === "acquiring") return this.release(phase, false);
+        return phase;
       case "release":
         return this.release(phase, event.send);
       case "abandonStreaming": {

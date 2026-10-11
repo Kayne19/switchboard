@@ -72,7 +72,9 @@ Run this on the iPad, in Safari, against the build the pin will deploy.
 Note the iPadOS version in the pull request.
 
 1. Microphone: tap Damocles, speak, tap again. The words arrive as a turn,
-   and the microphone light goes off.
+   and the microphone light goes off. Where Safari asks for the microphone,
+   tap Damocles again while its prompt is open, then allow: nothing is
+   recorded, the microphone light goes off, and the next tap records.
 2. Playback: Damocles' reply is heard, on the first call after the page
    loads as well as later ones.
 3. Orb: the presence moves with Damocles' voice and with yours.
