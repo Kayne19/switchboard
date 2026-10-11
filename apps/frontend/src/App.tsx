@@ -64,8 +64,8 @@ export default function App() {
         else if (transcriptOpen) setTranscriptOpen(false);
         else if (controllerOpen) setControllerOpen(false);
         else if (irOpen) setIrOpen(false);
-        // Esc leaves the theater view as its EXIT does.
-        else if (state.workspace.effectiveView === 'theater') dispatch({ op: 'auto_view' });
+        // Esc leaves the theater and the system view as their EXIT does.
+        else if (state.workspace.effectiveView === 'theater' || state.workspace.effectiveView === 'system') dispatch({ op: 'auto_view' });
         return;
       }
 

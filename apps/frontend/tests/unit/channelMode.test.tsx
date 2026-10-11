@@ -17,6 +17,7 @@ import { useController, type VoiceRuntime } from '../../src/controller/context';
 import type { ControllerAction } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { WAKE_PHRASE } from '../../src/hands_free';
+import { testLine } from './lineControls';
 import { controllerState, lastScene, renderScene, stubResizeObserver } from './sceneHarness';
 
 const composed: ControllerAction[] = [
@@ -46,7 +47,7 @@ function Voice({ runtime }: { runtime: VoiceRuntime }) {
 }
 
 function voiceRuntime(over: Partial<VoiceRuntime> = {}): VoiceRuntime {
-  return { toggleTurn: () => {}, sendText: () => true, handsFree: false, toggleHandsFree: () => {}, ...over };
+  return { toggleTurn: () => {}, sendText: () => true, handsFree: false, toggleHandsFree: () => {}, line: testLine(), ...over };
 }
 
 // The scene just drawn: the page a fixture replaces stays mounted until its

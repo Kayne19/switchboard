@@ -53,6 +53,7 @@ function SceneContent({
     // The caller dismisses the view the agent chose, or the one they
     // pinned: the screen goes back to auto (docs/frontend-command-station-architecture.md, "Focus precedence").
     onExitView: () => dispatch({ op: "auto_view" }),
+    line: voiceRuntime?.line,
   };
 
   return (

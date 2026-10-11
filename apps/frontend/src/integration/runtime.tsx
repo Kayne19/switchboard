@@ -3,10 +3,10 @@
 // listening presence, and the rendered scene goes back to the backend as
 // screen-state reports.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { interpretDisplayMessage } from "../app/displayMessage";
 import { ScreenReporter } from "../app/screenReporter";
-import { useController } from "../controller/context";
+import { useController, type LineControls } from "../controller/context";
 import type { MessageData, SpokenLine } from "../controller/types";
 import { RUNTIME_CONVERSATION_ID, RUNTIME_LINE_ERROR_ID } from "../controller/types";
 import { two } from "../primitives/timeLabels";
@@ -372,11 +372,59 @@ export function RuntimeIntegration() {
     screenReporter.sceneChanged(state);
   }, [screenReporter, state, reportNonce]);
 
+  // The line as the runtime holds it, and its controls, for the system
+  // view (#277). The runtime owns the pickers' locks and the requests they
+  // post, each carrying the epoch the page holds (#263).
+  const line = useMemo<LineControls | null>(
+    () =>
+      callRuntime
+        ? {
+            connected: runtime.connected,
+            route: runtime.route,
+            routeLabel: runtime.routeLabel,
+            routes: runtime.routes,
+            model: runtime.model,
+            models: runtime.models,
+            modelTitle: runtime.modelTitle,
+            thinking: runtime.thinking,
+            thinkingLevels: runtime.thinkingLevels,
+            onProject: runtime.onProject,
+            routeDisabled: runtime.routeDisabled,
+            modelDisabled: runtime.modelDisabled,
+            thinkingDisabled: runtime.thinkingDisabled,
+            status: runtime.status,
+            statusError: runtime.statusError,
+            selectRoute: (route) => callRuntime.selectRoute(route),
+            selectModel: (model) => callRuntime.selectModel(model),
+            selectThinking: (level) => callRuntime.selectThinking(level),
+            hangup: () => void callRuntime.hangup(),
+          }
+        : null,
+    [
+      callRuntime,
+      runtime.connected,
+      runtime.route,
+      runtime.routeLabel,
+      runtime.routes,
+      runtime.model,
+      runtime.models,
+      runtime.modelTitle,
+      runtime.thinking,
+      runtime.thinkingLevels,
+      runtime.onProject,
+      runtime.routeDisabled,
+      runtime.modelDisabled,
+      runtime.thinkingDisabled,
+      runtime.status,
+      runtime.statusError,
+    ],
+  );
+
   // The page's controls on the call: the Damocles presence starts a turn,
   // sends the one being recorded, or forces a reconnect when the line is
   // down, and the corner stack's MODE switches hands-free listening.
   useEffect(() => {
-    if (!callRuntime) return;
+    if (!callRuntime || !line) return;
     const toggleTurn = () => {
       if (!runtime.connected) {
         callRuntime.retry();
@@ -394,9 +442,10 @@ export function RuntimeIntegration() {
       // first switch and refuses one while the line is down.
       handsFree: runtime.handsFree,
       toggleHandsFree: () => callRuntime.toggleHandsFree(),
+      line,
     });
     return () => registerVoiceRuntime(null);
-  }, [callRuntime, registerVoiceRuntime, runtime.connected, runtime.handsFree, runtime.recording]);
+  }, [callRuntime, line, registerVoiceRuntime, runtime.connected, runtime.handsFree, runtime.recording]);
 
   return null;
 }

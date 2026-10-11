@@ -232,6 +232,8 @@ button {
 .channel-stack__mode:focus-visible,
 .transcript-toggle:focus-visible,
 .focus-layer__return:focus-visible,
+.system__select:focus-visible,
+.system__hangup:focus-visible,
 .transcript__return:focus-visible,
 .transcript__send:focus-visible {
   outline: var(--focus-ring);
@@ -257,6 +259,7 @@ button {
 .rich-text__code-block:focus-visible,
 .progress-primitive__steps:focus-visible,
 .content-rail__details:focus-visible,
+.system:focus-visible,
 .training-charts--compare:focus-visible {
   outline: var(--focus-ring);
   outline-offset: calc(-1px - var(--focus-ring-inset));
@@ -266,6 +269,7 @@ button {
    it). Nothing scrolls these into view but focus. */
 .content-rail__details,
 .composed-aux,
+.system,
 .training-charts--compare {
   scroll-padding: var(--focus-ring-reach);
 }
@@ -5364,7 +5368,8 @@ button {
    push-to-talk can still speak. The corner stack keeps its place in the
    bottom-left, so the box stops above it. Everything is sized from the
    stage, as focus is: never from the viewport (#271). */
-.scene--theater {
+.scene--theater,
+.scene--system {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: minmax(0, 1fr);
@@ -5380,11 +5385,140 @@ button {
   max-width: 100%;
   max-height: 100%;
 }
-.scene--theater .channel-stack {
+.scene--theater .channel-stack,
+.scene--system .channel-stack {
   left: 4cqw;
 }
 .theater__presence {
   align-self: end;
+}
+/* The system view (#277): the line and its controls in the theater's
+   place, read as the history drawer reads -- a header over a rule, rows
+   split by hairlines, a label column in micro type. Every control is at
+   least 44px tall, a touch target; the pickers are the browser's own
+   selects, so a touch screen opens its platform's picker for them. */
+/* Where the stage is too short for every row (a phone on its side) the
+   panel scrolls; its inline padding keeps a control's focus ring inside
+   the box that scrolls. */
+.system {
+  justify-self: center;
+  width: min(100%, 920px);
+  max-height: 100%;
+  padding: 0 8px;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.42) transparent;
+}
+.system__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 44px;
+  color: rgba(var(--paper-rgb), 0.48);
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.5);
+}
+.system__header button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.system__line,
+.system__row {
+  display: grid;
+  grid-template-columns: minmax(96px, 12cqw) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 2cqw;
+  padding: clamp(10px, 1.8cqh, 20px) 0;
+  border-bottom: 1px solid rgba(var(--paper-rgb), 0.08);
+}
+.system__label {
+  color: rgba(var(--paper-rgb), 0.42);
+}
+.system__who {
+  color: var(--paper);
+  font-family: var(--font-prose);
+  font-size: clamp(20px, 2.2cqw, 34px);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+/* A select drawn without the browser's arrow says it is one by a mark of
+   its own at its right, which takes no tap. */
+.system__picker {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+.system__picker::after {
+  content: "";
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 1px solid rgba(var(--orange-rgb), 0.8);
+  border-bottom: 1px solid rgba(var(--orange-rgb), 0.8);
+  transform: translateY(-70%) rotate(45deg);
+  z-index: 1;
+  pointer-events: none;
+}
+.system__select {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 36px 0 14px;
+  border: 1px solid rgba(var(--paper-rgb), 0.17);
+  border-left: 1px solid rgba(var(--orange-rgb), 0.56);
+  border-radius: 0;
+  background: #050505;
+  color: var(--paper);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: clamp(13px, 1cqw, 16px);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.system__select:disabled {
+  color: rgba(var(--paper-rgb), 0.3);
+  border-left-color: rgba(var(--paper-rgb), 0.17);
+  cursor: default;
+}
+.system__hangup-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px clamp(14px, 1.6cqw, 24px);
+}
+.system__hangup {
+  min-height: 44px;
+  padding: 0 22px;
+  border: 1px solid var(--red);
+  border-radius: 0;
+  background: transparent;
+  color: var(--red);
+  cursor: pointer;
+}
+.system__hangup:disabled {
+  border-color: rgba(var(--paper-rgb), 0.17);
+  color: rgba(var(--paper-rgb), 0.3);
+  cursor: default;
+}
+.system__note {
+  min-width: 0;
+  color: rgba(var(--paper-rgb), 0.5);
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1cqw, 16px);
+  line-height: 1.4;
+}
+.system__status,
+.system__none {
+  padding: clamp(10px, 1.8cqh, 20px) 0;
+  color: rgba(var(--paper-rgb), 0.42);
+  overflow-wrap: anywhere;
+}
+.system__status--error {
+  color: var(--red);
 }
 
 /* Development controls */

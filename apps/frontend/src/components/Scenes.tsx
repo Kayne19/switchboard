@@ -26,6 +26,7 @@ import { composedContent } from './ComposedScene';
 import { focusNotes, StagedObject } from './FocusLayer';
 import { objectContent } from './ObjectScene';
 import { RailDetails } from './Rail';
+import { SystemPanel } from './SystemPanel';
 import { ObjectSurface, StageColumn, type SceneContent, type SceneProps } from './sceneContent';
 import { trainingContent, type ChartRailNote } from './TrainingScene';
 
@@ -216,6 +217,7 @@ function sceneContent(
     case 'idle':
     case 'conversation':
     case 'theater':
+    case 'system':
       return null;
     case 'training':
       return trainingContent(props, chartRailNote, onChartRailNote, chartBand);
@@ -234,7 +236,7 @@ function sceneContent(
  * primary object; a content kind with nothing to show draws the idle page.
  */
 export function SceneShell(props: SceneProps) {
-  const { kind, composition, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, onExitView, behindModal = false } = props;
+  const { kind, composition, state, onToggleListening, onFocus, onOpenHistory, setTranscriptOpen, handsFree, onToggleMode, onExitView, line, behindModal = false } = props;
   const isPresent = useIsPresent();
   // A chart hands the rail the one note it leaves out so the others have
   // places clear of its data.
@@ -261,7 +263,7 @@ export function SceneShell(props: SceneProps) {
   const content = sceneContent(props, chartRailNote, onChartRailNote, chartBand);
   // The theater view's subject: the primary, alone on the stage.
   const staged = kind === 'theater' ? composition.primary : null;
-  const layout = content ? 'content' : kind === 'conversation' ? 'conversation' : staged ? 'theater' : 'idle';
+  const layout = content ? 'content' : kind === 'conversation' || kind === 'system' ? kind : staged ? 'theater' : 'idle';
   const gridRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLElement>(null);
@@ -289,7 +291,7 @@ export function SceneShell(props: SceneProps) {
       listening={state.listening}
       onToggleListening={onToggleListening}
       context={content?.context}
-      size={content ? 'rail' : layout === 'conversation' ? 'conversation' : layout === 'theater' ? 'compact' : 'idle'}
+      size={content ? 'rail' : layout === 'conversation' ? 'conversation' : layout === 'theater' || layout === 'system' ? 'compact' : 'idle'}
       showCaption={content !== null}
       activity={state.activity}
     />
@@ -364,6 +366,13 @@ export function SceneShell(props: SceneProps) {
             onAction={onExitView}
             variant="theater"
           />
+          <div className="theater__presence">{presence}</div>
+        </>
+      ) : layout === 'system' ? (
+        <>
+          {/* The system view (#277): the line and its controls, with
+              Damocles compact beside them, as in the theater. */}
+          <SystemPanel line={line} onExit={onExitView} />
           <div className="theater__presence">{presence}</div>
         </>
       ) : (
