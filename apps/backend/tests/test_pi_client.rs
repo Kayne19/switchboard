@@ -648,7 +648,11 @@ async fn prompting_and_the_turn_deadline_passes_closes_before_the_failure_return
 async fn prompting_and_an_oversized_line_closes_before_the_failure_returns() {
     let size = STREAM_LIMIT + 1;
     let script = format!("read line; head -c {size} /dev/zero | tr '\\0' a; sleep 30");
-    let session = fake_agent(&script, Duration::from_secs(5)).await;
+    // The turn deadline is not what this row is about: the oversized line
+    // must end the turn, however long the 16 MiB take to make and read on a
+    // loaded machine. A 5 s deadline there could fire first, and the turn
+    // then ended "the agent stopped responding" (seen under parallel load).
+    let session = fake_agent(&script, Duration::from_secs(60)).await;
     failed_with(
         within("the oversized prompt", session.prompt("one")).await,
         "the agent sent something too big to read",
