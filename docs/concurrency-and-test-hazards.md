@@ -63,7 +63,11 @@ Two properties are load-bearing and easy to break by accident:
   have been steered or queued, and a line headed straight for the queue
   while a steer ahead is unanswered waits behind it, off the caller's line.
   Such a line keeps its own stamp, so if the line changed meanwhile the turn
-  worker drops it as stale. `the_next_line_does_not_wait_for_the_host_to_answer_a_steer`
+  worker drops it as stale. `LineOrder`'s lock (a `std` mutex beside the
+  turn state's) is a leaf: it is held only to take and set `tail` and to
+  spawn the next task, never across an `await`, and no other lock is taken
+  under it, so it adds nothing to the lock order.
+  `the_next_line_does_not_wait_for_the_host_to_answer_a_steer`
   in `apps/backend/tests/test_turns.rs` steers two lines into a link that
   never answers, then drops the link.
 
