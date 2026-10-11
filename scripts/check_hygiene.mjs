@@ -430,6 +430,9 @@ const machines = [
 	{ file: "apps/backend/src/page_controls.rs", writer: /\bcoordinator\.generation\(\)/, max: 2, once: [/\.begin_rescue_at\(/, /\.begin_rescue_of\(/, /\bcoordinator\.settle\(/, /\.settle_at\(/] },
 	// modal-focus (#396): `transition` writes a dialog's focus phase; `leave` cancels the give-back's frame.
 	{ file: "apps/frontend/src/hooks/useModalFocus.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/cancelAnimationFrame\(/] },
+	// operator-utility (#386): a local process slot, not a machine. `LocalProcess::ensure` is the
+	// one place the operator or the utility is started; `close` is the one place a slot is emptied.
+	{ file: "apps/backend/src/operator.rs", writer: /\bself\.session\s*=(?!=)/, max: 1, once: [/\.session\.take\(\)/] },
 ];
 function machineFindings(file, text, machine) {
 	const out = [];

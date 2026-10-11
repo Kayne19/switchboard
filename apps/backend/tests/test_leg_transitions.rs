@@ -408,7 +408,10 @@ async fn assert_back_on_the_operator(
 ) {
     assert_eq!(coordinator.route(), OPERATOR);
     assert!(board.agent.is_none() && coordinator.project_leg().is_none());
-    let operator = board.operator.as_ref().expect("the operator keeps running");
+    let operator = board
+        .operator
+        .session()
+        .expect("the operator keeps running");
     assert!(operator.alive().await);
     let operator = LegSession::Operator(operator.clone());
     assert!(
@@ -565,12 +568,16 @@ async fn hanging_up_the_operator_discards_its_process_and_the_next_turn_starts_a
         two_model_catalog(),
     );
     board.handle("hello").await;
-    let first = board.operator.clone().expect("the operator started");
+    let first = board
+        .operator
+        .session()
+        .cloned()
+        .expect("the operator started");
 
     assert_eq!(board.force_hangup().await.as_deref(), Some(OPERATOR));
 
     assert!(!first.alive().await);
-    assert!(board.operator.is_none());
+    assert!(board.operator.session().is_none());
     assert!(board.session_control().lock().await.is_none());
     assert_eq!(board.coordinator.route(), OPERATOR);
     assert_eq!(board.operator_note, None);
@@ -580,7 +587,7 @@ async fn hanging_up_the_operator_discards_its_process_and_the_next_turn_starts_a
         reply.voiced,
         "the operator reply should be voiced: {reply:?}"
     );
-    let second = board.operator.as_ref().expect("a fresh operator");
+    let second = board.operator.session().expect("a fresh operator");
     assert!(!second.same_session(&first));
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
@@ -618,8 +625,13 @@ async fn hanging_up_a_project_leg_returns_the_caller_to_the_operator_and_tells_i
     assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
     assert_eq!(board.coordinator.route(), OPERATOR);
     assert!(board.agent.is_none() && board.coordinator.project_leg().is_none());
-    let operator_session =
-        LegSession::Operator(board.operator.clone().expect("the operator keeps running"));
+    let operator_session = LegSession::Operator(
+        board
+            .operator
+            .session()
+            .cloned()
+            .expect("the operator keeps running"),
+    );
     assert!(board
         .session_control()
         .lock()

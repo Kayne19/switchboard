@@ -625,8 +625,8 @@ an idle operator looked like a running turn to steer into.
 Dropped before that, it is the `Cancelled` event: the process's state
 (`ProcessState` in `apps/backend/src/pi_client.rs`) moves to `Abandoned`,
 which is not busy and not alive, and its close runs in the background, since
-a drop cannot await. `alive()` is false at once, so `ensure_operator` and
-`ensure_utility` start a fresh process for the next prompt. Both get the call
+a drop cannot await. `alive()` is false at once, so `LocalProcess::ensure`
+(`operator.rs`) starts a fresh operator or utility for the next prompt. Both get the call
 state with every prompt, so a restart loses only the process's own memory of
 its earlier prompts. Draining the old turn before the next prompt would also
 work, but it keeps a process of unknown state alive.

@@ -25,10 +25,11 @@ use crate::lifecycle::CandidateLeg;
 use crate::lifecycle::{Coordinator, StatusConfig};
 #[cfg(test)]
 use crate::models::ModelCatalog;
-use crate::operator::OperatorLaunch;
-use crate::pi_client::{ActivityCallback, LegSession, PiSession};
+use crate::operator::{LocalProcess, OperatorLaunch, RoutingUtility};
+use crate::pi_client::{ActivityCallback, LegSession};
 use crate::prewarm::Prewarm;
 use crate::project_session::{ProjectSession, SessionClosedCallback};
+use crate::prompts::utility_system_prompt;
 #[cfg(test)]
 use crate::redial::thinking_in_spec;
 use crate::redial::RedialPlanner;
@@ -95,10 +96,12 @@ pub struct Switchboard {
     /// on. It is derived, never set: `name_leg_on_line` is its one writer,
     /// and a rescue's `take` (`page_controls.rs`) its one other change.
     active_session: Arc<Mutex<Option<LegSession>>>,
-    pub(crate) operator: Option<PiSession>,
-    /// A separate process for second opinions and split dispatch. It must not
-    /// share the operator's turn lock or conversation history.
-    pub(crate) utility: Option<PiSession>,
+    pub(crate) operator: LocalProcess,
+    /// A separate process for second opinions, split dispatch and floor
+    /// rewrites. It must not share the operator's turn lock or conversation
+    /// history. `operator.rs` asks it under the PBX lock; it is shared
+    /// (`routing_utility`), so the floor reaches it without that lock.
+    pub(crate) utility: RoutingUtility,
     pub(crate) agent: Option<ProjectSession>,
     /// Resident project sessions and their guarded background prompts.
     pub(crate) background_agents: BackgroundRegistry,
@@ -166,6 +169,11 @@ impl Switchboard {
             config.agent_thinking.clone(),
         );
         let registry = Arc::new(registry);
+        let launch = OperatorLaunch::from_config(config);
+        let utility = RoutingUtility::new(
+            launch.clone(),
+            utility_system_prompt(&config.persona, &registry),
+        );
         let planner = RedialPlanner::new(
             coordinator.clone(),
             Arc::clone(&registry),
@@ -184,7 +192,7 @@ impl Switchboard {
         );
         Self {
             registry,
-            launch: OperatorLaunch::from_config(config),
+            launch,
             persona: config.persona.clone(),
             speech_deadline_ms: config.speech_deadline_ms,
             activity_callback: None,
@@ -193,8 +201,8 @@ impl Switchboard {
             foreground_closed_callback: None,
             legs: LegLaunch::default(),
             active_session: Arc::new(Mutex::new(None)),
-            operator: None,
-            utility: None,
+            operator: LocalProcess::new(OPERATOR),
+            utility,
             agent: None,
             background_agents: BackgroundRegistry::default(),
             operator_note: None,
@@ -220,6 +228,11 @@ impl Switchboard {
     /// The project hosts' links; the application serves them on `/host`.
     pub fn hosts(&self) -> Hosts {
         self.hosts.clone()
+    }
+    /// The routing utility; the application shares it, so the floor reaches
+    /// it without the PBX lock.
+    pub(crate) fn routing_utility(&self) -> RoutingUtility {
+        self.utility.clone()
     }
     /// The coordinator this switchboard reports to; the application shares it.
     pub fn coordinator(&self) -> Coordinator {
@@ -358,7 +371,7 @@ impl Switchboard {
             return Some(LegSession::Project(session.clone()));
         }
         let leg = if self.coordinator.route() == OPERATOR {
-            self.operator.clone().map(LegSession::Operator)
+            self.operator.session().cloned().map(LegSession::Operator)
         } else {
             self.agent_on_the_line().map(LegSession::Project)
         }?;
@@ -402,12 +415,8 @@ impl Switchboard {
         for session in self.background_agents.drain_sessions() {
             session.close();
         }
-        if let Some(session) = self.operator.take() {
-            session.close().await;
-        }
-        if let Some(session) = self.utility.take() {
-            session.close().await;
-        }
+        self.operator.close().await;
+        self.utility.close().await;
         self.name_leg_on_line(None, || {}).await;
         // Idempotent: the service's shutdown path may reach here twice.
         self.prewarm.shutdown();

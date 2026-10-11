@@ -714,9 +714,8 @@ impl Switchboard {
     pub async fn force_hangup(&mut self) -> Option<String> {
         let route = self.coordinator.route();
         if route == OPERATOR {
-            if let Some(session) = self.operator.take() {
+            if self.operator.close().await {
                 tracing::info!("caller hung up a wedged operator turn from the page");
-                session.close().await;
                 self.name_leg_on_line(None, || {}).await;
                 return Some(OPERATOR.into());
             }

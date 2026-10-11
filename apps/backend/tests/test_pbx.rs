@@ -277,7 +277,7 @@ async fn guard_row(start: &str, change: &str) -> String {
         None => "none".to_owned(),
         Some(session) => leg_shown(&session).await,
     };
-    let operator = match board.operator.clone() {
+    let operator = match board.operator.session().cloned() {
         None => "none".to_owned(),
         Some(session) => leg_shown(&LegSession::Operator(session)).await,
     };
@@ -319,7 +319,7 @@ async fn the_guard_names_a_bring_up_else_the_live_session_on_the_line() {
 
     board
         .operator
-        .as_ref()
+        .session()
         .expect("the operator runs")
         .close()
         .await;
