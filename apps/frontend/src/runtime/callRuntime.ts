@@ -839,12 +839,8 @@ export class CallRuntime {
       }
       case "reply":
         this.setStatus("turn", IDLE_TEXT, false);
-        this.followIdentity(message);
         break;
       case "status":
-        // A settled status means any in-flight transfer is over, one way or
-        // the other.
-        this.followIdentity(message);
         this.line = lineStateFromStatus(message);
         for (const control of Object.keys(this.lineRequestIds) as LineControl[])
           this.lineRequestIds[control] += 1;
