@@ -747,12 +747,17 @@ The page's view of each agent is the agent projection (`AgentProjection`,
 and turn settlement's notices (`AgentNotice`: busy, idle, finished) and the
 floor's `Waiting` reports (asked, spoken).
 
+One `AgentPhase` is two things that move independently: what the agent
+is doing (busy, idle, finished) and the request the floor holds for it,
+if any. The page sees `waiting`, with the request, while one is held, and
+what the agent is doing otherwise, so a resident that starts or ends a
+turn keeps its place on the floor (#388).
+
 | phase | busy | idle | finished | asked | spoken |
 |---|---|---|---|---|---|
-| not listed | busy | idle | finished | waiting | stays |
-| busy, idle | busy | idle | finished | waiting | stays |
-| waiting (with the request) | busy (the request is dropped) | stays | finished | waiting, the newer request | idle |
-| finished | busy | idle | finished | waiting | stays |
+| not listed | busy | idle | finished | waiting (taken as idle) | stays |
+| busy, idle, finished, not waiting | busy | idle | finished | waiting | stays |
+| waiting (with the request) | busy, still waiting | idle, still waiting | finished, the wait ends | waiting, the newer request | what it is doing: busy, idle or finished |
 
 Entering `finished` drops the agent's held displays. Every event sends the
 whole projection to the page and the debug bus (`publish_agents`), moved or
@@ -767,8 +772,9 @@ it marks an agent waiting when it queues the agent's request, and ends the
 mark when the agent's last request on the floor is spoken. It reports both
 through its `Waiting` hook, under its lock, and `floor_hooks::waiting_hook`
 mirrors them into the agent projection the page and Jev read. The PBX's
-state notices are the projection's other events: any notice but `idle`
-replaces an agent's waiting mark (see "Background residents").
+state notices are the projection's other events: `busy` and `idle` leave
+an agent's waiting mark alone, and `finished` ends it (see "Background
+residents").
 
 The queue holds the front request and, behind it, at most one waiting
 request per agent; a newer one replaces the agent's waiting one. One worker
