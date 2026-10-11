@@ -213,10 +213,12 @@ async fn hosts_welcome_a_host_with_its_token_and_report_it_on_healthz() {
         ])
     );
 
-    let (mut agent, welcome) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, welcome) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     assert_eq!(
         welcome,
-        json!({"type":"welcome","epoch":1,"protocol":1,"cursors":{}})
+        json!({"type":"welcome","epoch":1,"protocol":2,"cursors":{}})
     );
     send(&mut agent, json!({"type":"synced","epoch":1})).await;
     let host = served
@@ -224,7 +226,7 @@ async fn hosts_welcome_a_host_with_its_token_and_report_it_on_healthz() {
         .await;
     assert_eq!(
         host,
-        json!({"host":"scriptorium","connected":true,"epoch":1,"synced":true,"protocol":1,
+        json!({"host":"scriptorium","connected":true,"epoch":1,"synced":true,"protocol":2,
                "protocol_status":"compatible","git_sha":"d95f029",
                "prime_agent":{"client_version":"0.9.5","daemon_version":"0.9.6","daemon_protocol":7}})
     );
@@ -249,7 +251,7 @@ async fn hosts_refuse_a_bad_token_or_an_unknown_host() {
         ("scriptorium", "test-token-forge"),
         ("elsewhere", TOKEN),
     ] {
-        let (mut agent, refused) = served.hello(host, token, json!(1)).await;
+        let (mut agent, refused) = served.hello(host, token, json!(HOST_LINK_PROTOCOL)).await;
         assert_eq!(
             refused,
             json!({"type":"refused","reason":"bad_token","message":"unknown host or token"})
@@ -268,13 +270,15 @@ async fn hosts_refuse_a_bad_token_or_an_unknown_host() {
 #[tokio::test]
 async fn hosts_refuse_an_incompatible_protocol_and_report_it() {
     let served = Served::start(slow()).await;
-    for protocol in [json!(2), json!(0), json!("1"), Value::Null] {
+    // Protocol 1 is a host agent from before every turn carried its id: it
+    // is refused, and told to reinstall.
+    for protocol in [json!(1), json!(3), json!(0), json!("2"), Value::Null] {
         let (mut agent, refused) = served.hello("scriptorium", TOKEN, protocol.clone()).await;
         assert_eq!(refused["type"], "refused");
         assert_eq!(refused["reason"], "incompatible_protocol", "{protocol}");
         assert_eq!(
             refused["message"],
-            format!("host-link protocol {protocol} is not supported")
+            format!("host-link protocol {protocol} is not supported; reinstall the host agent from this service's commit (apps/host-agent/install.mjs)")
         );
         assert_eq!(close_code(&mut agent).await, Some(CLOSE_POLICY));
     }
@@ -314,7 +318,9 @@ async fn hosts_close_a_socket_that_sends_no_hello() {
 #[tokio::test]
 async fn hosts_fence_the_older_link_when_a_newer_one_is_accepted() {
     let served = Served::start(slow()).await;
-    let (mut older, welcome) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut older, welcome) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     assert_eq!(welcome["epoch"], 1);
     send(
         &mut older,
@@ -326,7 +332,9 @@ async fn hosts_fence_the_older_link_when_a_newer_one_is_accepted() {
         .until_host("scriptorium", |host| host["synced"] == true)
         .await;
 
-    let (mut newer, welcome) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut newer, welcome) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     assert_eq!(welcome["type"], "welcome");
     assert_eq!(welcome["epoch"], 2, "a newer link gets a larger epoch");
     assert_eq!(welcome["cursors"], json!({"a1b2":"boot:1"}));
@@ -358,7 +366,9 @@ async fn hosts_fence_the_older_link_when_a_newer_one_is_accepted() {
     served
         .until_host("scriptorium", |host| host["synced"] == true)
         .await;
-    let (mut third, welcome) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut third, welcome) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     assert_eq!(welcome["epoch"], 3);
     assert_eq!(welcome["cursors"], json!({"a1b2":"boot:1","c3d4":"boot:2"}));
     assert_eq!(close_code(&mut newer).await, Some(CLOSE_FENCED));
@@ -381,7 +391,7 @@ async fn hosts_ignore_frames_from_a_fenced_link() {
         kind: kind.to_owned(),
         host_id: "scriptorium".to_owned(),
         token: TOKEN.to_owned(),
-        protocol: json!(1),
+        protocol: json!(HOST_LINK_PROTOCOL),
         git_sha: None,
         prime_agent: None,
     };
@@ -438,7 +448,9 @@ async fn hosts_ignore_frames_from_a_fenced_link() {
 #[tokio::test]
 async fn hosts_welcome_a_reconnect_with_the_last_cursor_per_session() {
     let served = Served::start(slow()).await;
-    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, _) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     for frame in [
         json!({"type":"event","session":"a1b2","cursor":"boot:3","event":{"kind":"turn_start","cause":"input"}}),
         json!({"type":"event","session":"a1b2","cursor":"boot:4","event":{"kind":"turn_end"},"replayed":true}),
@@ -462,7 +474,9 @@ async fn hosts_welcome_a_reconnect_with_the_last_cursor_per_session() {
         .until_host("scriptorium", |host| host["connected"] == false)
         .await;
 
-    let (_agent, welcome) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (_agent, welcome) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     assert_eq!(welcome["epoch"], 2);
     assert_eq!(
         welcome["cursors"],
@@ -474,7 +488,9 @@ async fn hosts_welcome_a_reconnect_with_the_last_cursor_per_session() {
 #[tokio::test]
 async fn hosts_heartbeat_keeps_a_link_that_answers() {
     let served = Served::start(fast()).await;
-    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, _) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     // The service answers the host's pings too.
     send(&mut agent, json!({"type":"ping"})).await;
     until_frame(&mut agent, |frame| frame["type"] == "pong").await;
@@ -491,7 +507,9 @@ async fn hosts_heartbeat_keeps_a_link_that_answers() {
 #[tokio::test]
 async fn hosts_heartbeat_drops_a_link_that_misses_three_pongs() {
     let served = Served::start(fast()).await;
-    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, _) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     served
         .until_host("scriptorium", |host| host["connected"] == true)
         .await;
@@ -517,7 +535,9 @@ async fn hosts_heartbeat_drops_a_link_that_misses_three_pongs() {
 #[tokio::test]
 async fn hosts_close_links_on_shutdown() {
     let served = Served::start(slow()).await;
-    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, _) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     crate::app_state::shutdown(&served.state).await;
     assert_eq!(close_code(&mut agent).await, Some(CLOSE_GOING_AWAY));
 }
@@ -537,7 +557,9 @@ async fn hosts_send_commands_on_the_current_link_and_match_their_replies() {
         .unwrap_err();
     assert_eq!(not_connected.code, "not_connected");
 
-    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, _) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     served
         .until_host("scriptorium", |host| host["connected"] == true)
         .await;
@@ -640,7 +662,9 @@ async fn hosts_send_commands_on_the_current_link_and_match_their_replies() {
 async fn hosts_route_session_frames_and_refuse_module_calls_nobody_waits_for() {
     let served = Served::start(slow()).await;
     let hosts = served.state.0.switchboard.lock().await.hosts();
-    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, _) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     served
         .until_host("scriptorium", |host| host["connected"] == true)
         .await;
@@ -749,7 +773,9 @@ fn the_depth_the_service_reads_is_the_depth_it_names() {
 async fn hosts_refuse_a_module_call_they_cannot_read_at_once() {
     let served = Served::start(slow()).await;
     let hosts = served.state.0.switchboard.lock().await.hosts();
-    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, _) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     served
         .until_host("scriptorium", |host| host["connected"] == true)
         .await;
@@ -785,7 +811,9 @@ async fn hosts_refuse_a_module_call_they_cannot_read_at_once() {
 async fn hosts_refuse_a_module_call_whose_session_stopped_listening() {
     let served = Served::start(slow()).await;
     let hosts = served.state.0.switchboard.lock().await.hosts();
-    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, _) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     served
         .until_host("scriptorium", |host| host["connected"] == true)
         .await;
@@ -810,7 +838,9 @@ async fn hosts_refuse_a_module_call_whose_session_stopped_listening() {
 async fn hosts_fail_a_command_whose_reply_they_cannot_read_at_once() {
     let served = Served::start(slow()).await;
     let hosts = served.state.0.switchboard.lock().await.hosts();
-    let (mut agent, _) = served.hello("scriptorium", TOKEN, json!(1)).await;
+    let (mut agent, _) = served
+        .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
+        .await;
     served
         .until_host("scriptorium", |host| host["connected"] == true)
         .await;
@@ -996,7 +1026,7 @@ async fn hosts_report_link_up_and_down_but_not_a_fenced_close() {
         kind: "hello".to_owned(),
         host_id: "scriptorium".to_owned(),
         token: TOKEN.to_owned(),
-        protocol: json!(1),
+        protocol: json!(HOST_LINK_PROTOCOL),
         git_sha: None,
         prime_agent: None,
     };

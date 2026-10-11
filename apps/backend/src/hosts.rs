@@ -1193,9 +1193,6 @@ pub(crate) struct FakeHostAgent {
     pub(crate) on_prompt: OnPrompt,
     pub(crate) on_command: Option<Override>,
     pub(crate) models: Value,
-    /// Stamps each prompt's `turn_start` and `turn_end` with a `turn_id`
-    /// (`turn-1`, `turn-2`, ...), as a current host agent does.
-    pub(crate) turn_ids: bool,
 }
 
 #[cfg(test)]
@@ -1208,7 +1205,6 @@ impl FakeHostAgent {
                 {"provider": "anthropic", "id": "current", "name": "Current", "reasoning": true},
                 {"provider": "anthropic", "id": "next", "name": "Next", "reasoning": true},
             ]),
-            turn_ids: false,
         }
     }
 
@@ -1323,8 +1319,11 @@ impl FakeHostAgent {
                     "run_prepare" => Ok(
                         json!({"outcome": "succeeded", "exit_code": 0, "signal": null, "stdout": "", "stderr": "", "truncated": false, "duration_ms": 1}),
                     ),
-                    "prompt" => Ok(json!({"sent_as": "prompt"})),
-                    "steer" => Ok(json!({"sent_as": "steer"})),
+                    // Each prompt opens turn `turn-<n>`, and its reply names it.
+                    "prompt" => {
+                        Ok(json!({"sent_as": "prompt", "turn_id": format!("turn-{}", turns + 1)}))
+                    }
+                    "steer" => Ok(json!({"sent_as": "steer", "turn_id": format!("turn-{turns}")})),
                     "abort" => Ok(json!({"aborted": true})),
                     "kill" => Ok(json!({"killed": true})),
                     _ => Ok(json!({})),
@@ -1343,13 +1342,9 @@ impl FakeHostAgent {
             match name.as_str() {
                 "prompt" => {
                     turns += 1;
-                    let turn_id = self.turn_ids.then(|| format!("turn-{turns}"));
-                    let mut start = json!({"kind": "turn_start", "cause": "input"});
-                    let mut end = json!({"kind": "turn_end"});
-                    if let Some(turn_id) = &turn_id {
-                        start["turn_id"] = json!(turn_id);
-                        end["turn_id"] = json!(turn_id);
-                    }
+                    let turn_id = format!("turn-{turns}");
+                    let start = json!({"kind": "turn_start", "cause": "input", "turn_id": turn_id});
+                    let end = json!({"kind": "turn_end", "turn_id": turn_id});
                     event(&link, &session, start);
                     let message = args["message"].as_str().unwrap_or_default().to_owned();
                     let mut settles = true;
@@ -1374,7 +1369,7 @@ impl FakeHostAgent {
                                             .unwrap()
                                             .commands
                                             .push(json!({"name": wanted, "args": frame["args"]}));
-                                        link.send(json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": {"sent_as": wanted}}));
+                                        link.send(json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": {"sent_as": wanted, "turn_id": turn_id}}));
                                         break;
                                     }
                                     stash.push_back(frame);
@@ -1390,7 +1385,7 @@ impl FakeHostAgent {
                         };
                         calls += 1;
                         let call_id = format!("m{calls}");
-                        link.send(json!({"type": "module_call", "id": call_id, "session": session, "token": token, "call": call, "args": call_args}));
+                        link.send(json!({"type": "module_call", "id": call_id, "session": session, "token": token, "turn_id": turn_id, "cause": "input", "call": call, "args": call_args}));
                         // The cell that made the call waits for its answer.
                         loop {
                             let Some(frame) = link.recv().await else {

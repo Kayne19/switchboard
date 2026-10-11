@@ -191,7 +191,7 @@ fn debug_launch(bus: &crate::debug::DebugBus, on_module: Option<ModuleCallback>)
 async fn project_conversation_is_mirrored_to_the_debug_bus() {
     use crate::hosts::Step;
     let hosts = debug_hosts();
-    let mut fake = crate::hosts::FakeHostAgent::new(Box::new(|_, message| {
+    let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, message| {
         if message.contains("second") {
             // An older host: tool events without args or results.
             return vec![
@@ -211,7 +211,6 @@ async fn project_conversation_is_mirrored_to_the_debug_bus() {
             Step::Event(json!({"kind": "text", "text": "Done.", "turn_id": "turn-1"})),
         ]
     }));
-    fake.turn_ids = true;
     let _log = fake.serve(hosts.connect_fake("scriptorium"));
     let bus = crate::debug::DebugBus::new();
     let (session, _) = ProjectSession::create(&hosts, debug_launch(&bus, None))
@@ -336,7 +335,7 @@ async fn module_calls_and_their_answers_are_mirrored_without_the_token() {
                 call_id: "m1".into(),
                 name: "speak".into(),
                 args: json!({"text": "The build passes."}),
-                turn_id: None,
+                turn_id: Some("turn-1".into()),
             },
             DebugEvent::ModuleResult {
                 agent: "alpha".into(),
@@ -349,7 +348,7 @@ async fn module_calls_and_their_answers_are_mirrored_without_the_token() {
                 call_id: "m2".into(),
                 name: "speak".into(),
                 args: json!({"text": "stale"}),
-                turn_id: None,
+                turn_id: Some("turn-1".into()),
             },
             DebugEvent::ModuleResult {
                 agent: "alpha".into(),
@@ -364,10 +363,11 @@ async fn module_calls_and_their_answers_are_mirrored_without_the_token() {
     session.close();
 }
 
-/// The project session ends its turn on the `turn_end` that settles it, not
-/// on the tail of an earlier, aborted turn that arrives first.
+/// A prompt ends on the `turn_end` of the turn its reply names, not on the
+/// tail of an earlier, aborted turn that arrives first, nor on another
+/// turn's end that arrives while it runs.
 #[tokio::test]
-async fn a_turn_ends_only_on_the_settled_turn_end() {
+async fn a_turn_ends_only_on_the_turn_end_that_names_it() {
     let hosts = crate::hosts::Hosts::new(Default::default(), Default::default());
     let mut link = hosts.connect_fake("scriptorium");
     let creating = tokio::spawn({
@@ -415,20 +415,38 @@ async fn a_turn_ends_only_on_the_settled_turn_end() {
     assert_eq!(prompt["args"]["message"], "BRIEF\n\nhello");
     // The tail of an earlier, aborted turn arrives before the prompt is
     // answered; it is not this turn's.
-    event(&link, 1, json!({"kind": "text", "text": "cut off"}));
-    event(&link, 2, json!({"kind": "turn_end"}));
-    reply(&link, &prompt, json!({"sent_as": "prompt"}));
-    event(&link, 3, json!({"kind": "turn_start", "cause": "input"}));
-    event(&link, 4, json!({"kind": "text", "text": "Done."}));
+    event(
+        &link,
+        1,
+        json!({"kind": "text", "text": "cut off", "turn_id": "t-old"}),
+    );
+    event(&link, 2, json!({"kind": "turn_end", "turn_id": "t-old"}));
+    reply(
+        &link,
+        &prompt,
+        json!({"sent_as": "prompt", "turn_id": "t-1"}),
+    );
+    event(
+        &link,
+        3,
+        json!({"kind": "turn_start", "cause": "input", "turn_id": "t-1"}),
+    );
+    event(
+        &link,
+        4,
+        json!({"kind": "text", "text": "Done.", "turn_id": "t-1"}),
+    );
     event(
         &link,
         5,
         json!({"kind": "tool_end", "tool": "ipython", "call_id": "t1", "error": false}),
     );
+    // Another turn's end, after the reply: it does not end this prompt.
+    event(&link, 6, json!({"kind": "turn_end", "turn_id": "t-other"}));
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert!(!prompting.is_finished(), "the turn ended before it settled");
     assert!(session.busy());
-    event(&link, 6, json!({"kind": "turn_end"}));
+    event(&link, 7, json!({"kind": "turn_end", "turn_id": "t-1"}));
     let turn = within("prompting", prompting).await.unwrap().unwrap();
     assert_eq!(turn.text, "Done.");
     assert!(!turn.failed);
@@ -1130,7 +1148,12 @@ impl TurnRig {
     async fn prompt(&mut self, message: &'static str) {
         let session = self.session.clone();
         self.prompting = Some(tokio::spawn(async move { session.prompt(message).await }));
-        Self::answer(&mut self.link, "prompt", json!({"sent_as": "prompt"})).await;
+        Self::answer(
+            &mut self.link,
+            "prompt",
+            json!({"sent_as": "prompt", "turn_id": "t-in"}),
+        )
+        .await;
     }
 
     async fn reach(&mut self, at: TurnAt) {
@@ -1302,15 +1325,16 @@ Idle               | SnapshotOpen            | start autonomous snap-1          
 Idle               | SessionCloses           | -                                                             | -    | gone       | -                                     | -
 Idle               | PromptStarts            | -                                                             | busy | -          | running «»                            | -
 
-# A caller's turn: its frames go to its collector, and any `turn_end` settles it.
+# A caller's turn: its frames go to its collector, and only the `turn_end` of the turn its prompt's
+# reply named settles it. Another turn's end is still reported as an input turn's end.
 Caller             | StartsSelfWoken         | start autonomous auto-3                                       | busy | -          | running «»                            | -
 Caller             | StartsSelfWokenAdmitted | start autonomous auto-3                                       | busy | autonomous | running «»                            | -
 Caller             | StartsInput             | start input t-2                                               | busy | -          | running «»                            | -
 Caller             | RunText                 | -                                                             | busy | -          | running «more run words»              | -
 Caller             | SecondText              | -                                                             | busy | -          | running «more second words»           | -
 Caller             | CallerText              | -                                                             | busy | -          | running «caller words»                | -
-Caller             | RunEnds                 | end input auto-1                                              | -    | -          | returned «»                           | -
-Caller             | SecondEnds              | end input auto-2                                              | -    | -          | returned «»                           | -
+Caller             | RunEnds                 | end input auto-1                                              | busy | -          | running «»                            | -
+Caller             | SecondEnds              | end input auto-2                                              | busy | -          | running «»                            | -
 Caller             | CallerEnds              | end input t-in                                                | -    | -          | returned «»                           | -
 Caller             | SnapshotIdle            | -                                                             | -    | -          | returned «last words»                 | -: last words
 Caller             | SnapshotOpen            | -                                                             | busy | -          | running «»                            | -
@@ -1357,8 +1381,8 @@ CallerSettled      | StartsInput             | start input t-2                  
 CallerSettled      | RunText                 | -                                                             | -    | -          | running «more run words»              | -
 CallerSettled      | SecondText              | -                                                             | -    | -          | running «more second words»           | -
 CallerSettled      | CallerText              | -                                                             | -    | -          | running «caller words»                | -
-CallerSettled      | RunEnds                 | end input auto-1                                              | -    | -          | returned «»                           | -
-CallerSettled      | SecondEnds              | end input auto-2                                              | -    | -          | returned «»                           | -
+CallerSettled      | RunEnds                 | end input auto-1                                              | -    | -          | running «»                            | -
+CallerSettled      | SecondEnds              | end input auto-2                                              | -    | -          | running «»                            | -
 CallerSettled      | CallerEnds              | end input t-in                                                | -    | -          | returned «»                           | -
 CallerSettled      | SnapshotIdle            | -                                                             | -    | -          | returned «last words»                 | -: last words
 CallerSettled      | SnapshotOpen            | -                                                             | -    | -          | running «»                            | -
