@@ -573,8 +573,11 @@ no session to name. It names, in order:
 
 Each change to the legs calls it after it changes `agent`, `operator` or
 the route: `Startup::attach`, `commit` and `abandon`, `drop_agent`,
-`force_hangup`, the operator's start and recovery (`operator.rs`), and
-`shutdown`. A change that also moves the call line (`abandon`'s rollback,
+`force_hangup`, the operator's start and recovery (`operator.rs`),
+`shutdown`, and a transfer that ends the session of the project already
+on the line before it starts another (`transfer_ctx`, #457): from then
+until the new session attaches the guard names nothing, not the ended
+session. A change that also moves the call line (`abandon`'s rollback,
 `drop_agent`'s return to the operator) moves it inside the writer, under
 the guard's lock, so a rescue finds the guard and the line agreeing. The
 operator answering while a project is on the line leaves the guard on the
