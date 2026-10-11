@@ -68,7 +68,7 @@ async fn utility_second_opinion_does_not_wait_on_the_conversational_turn_lock() 
         two_model_catalog(),
     );
     let _log = serve(&board, Box::new(|_, _| says("Alpha handled it.")));
-    let operator = board.ensure_operator().await.expect("operator").clone();
+    let operator = board.ensure_operator().await.expect("operator");
     let held = tokio::spawn({
         let operator = operator.clone();
         async move { operator.prompt("hold the operator turn").await }
@@ -144,7 +144,10 @@ async fn an_operator_started_while_a_project_is_on_the_line_leaves_the_guard_on_
         Box::new(|_, _| says("Alpha handled it.")),
     )
     .await;
-    assert!(board.operator.is_none(), "no operator is running yet");
+    assert!(
+        board.operator.session().is_none(),
+        "no operator is running yet"
+    );
 
     let reply = board
         .handle_decision(
@@ -154,7 +157,7 @@ async fn an_operator_started_while_a_project_is_on_the_line_leaves_the_guard_on_
         .await;
 
     assert_eq!(reply.text, "Alpha is running.", "{reply:?}");
-    assert!(board.operator.is_some(), "the operator answered");
+    assert!(board.operator.session().is_some(), "the operator answered");
     assert_eq!(board.coordinator.route(), "alpha");
     assert_eq!(
         guard_label(&board).await.as_deref(),
@@ -190,7 +193,7 @@ async fn a_failed_operator_turn_while_a_project_is_on_the_line_leaves_the_guard_
         .await;
 
     assert!(
-        board.operator.is_none(),
+        board.operator.session().is_none(),
         "the failed operator was dropped: {reply:?}"
     );
     assert_eq!(board.coordinator.route(), "alpha");
@@ -366,15 +369,15 @@ async fn slot_row(slot: Slot, phase: SlotPhase, event: SlotEvent) -> SlotOutcome
 #[cfg(unix)]
 async fn ensure_slot(board: &mut Switchboard, slot: Slot) -> Result<PiSession, PiSessionError> {
     match slot {
-        Slot::Operator => board.ensure_operator().await.cloned(),
-        Slot::Utility => board.ensure_utility().await.cloned(),
+        Slot::Operator => board.ensure_operator().await,
+        Slot::Utility => board.ensure_utility().await,
     }
 }
 
 #[cfg(unix)]
 async fn slot_session(board: &Switchboard, slot: Slot) -> Option<PiSession> {
     match slot {
-        Slot::Operator => board.operator.clone(),
-        Slot::Utility => board.utility.clone(),
+        Slot::Operator => board.operator.session().cloned(),
+        Slot::Utility => board.utility.session().cloned(),
     }
 }

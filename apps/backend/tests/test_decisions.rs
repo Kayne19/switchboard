@@ -95,7 +95,7 @@ async fn unsure_jev_gets_a_utility_second_opinion_before_the_operator_asks() {
     assert_eq!(reply.route, "alpha");
     assert_eq!(reply.text, "Alpha handled it.");
     assert!(
-        board.operator.is_none(),
+        board.operator.session().is_none(),
         "the conversational operator was not asked"
     );
     assert!(prompts(&log)

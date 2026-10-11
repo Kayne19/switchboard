@@ -25,8 +25,8 @@ use crate::lifecycle::CandidateLeg;
 use crate::lifecycle::{Coordinator, StatusConfig};
 #[cfg(test)]
 use crate::models::ModelCatalog;
-use crate::operator::OperatorLaunch;
-use crate::pi_client::{ActivityCallback, LegSession, PiSession};
+use crate::operator::{LocalProcess, OperatorLaunch};
+use crate::pi_client::{ActivityCallback, LegSession};
 use crate::prewarm::Prewarm;
 use crate::project_session::{ProjectSession, SessionClosedCallback};
 #[cfg(test)]
@@ -95,10 +95,10 @@ pub struct Switchboard {
     /// on. It is derived, never set: `name_leg_on_line` is its one writer,
     /// and a rescue's `take` (`page_controls.rs`) its one other change.
     active_session: Arc<Mutex<Option<LegSession>>>,
-    pub(crate) operator: Option<PiSession>,
+    pub(crate) operator: LocalProcess,
     /// A separate process for second opinions and split dispatch. It must not
     /// share the operator's turn lock or conversation history.
-    pub(crate) utility: Option<PiSession>,
+    pub(crate) utility: LocalProcess,
     pub(crate) agent: Option<ProjectSession>,
     /// Resident project sessions and their guarded background prompts.
     pub(crate) background_agents: BackgroundRegistry,
@@ -193,8 +193,8 @@ impl Switchboard {
             foreground_closed_callback: None,
             legs: LegLaunch::default(),
             active_session: Arc::new(Mutex::new(None)),
-            operator: None,
-            utility: None,
+            operator: LocalProcess::new(OPERATOR),
+            utility: LocalProcess::new("routing utility"),
             agent: None,
             background_agents: BackgroundRegistry::default(),
             operator_note: None,
@@ -358,7 +358,7 @@ impl Switchboard {
             return Some(LegSession::Project(session.clone()));
         }
         let leg = if self.coordinator.route() == OPERATOR {
-            self.operator.clone().map(LegSession::Operator)
+            self.operator.session().cloned().map(LegSession::Operator)
         } else {
             self.agent_on_the_line().map(LegSession::Project)
         }?;
@@ -402,12 +402,8 @@ impl Switchboard {
         for session in self.background_agents.drain_sessions() {
             session.close();
         }
-        if let Some(session) = self.operator.take() {
-            session.close().await;
-        }
-        if let Some(session) = self.utility.take() {
-            session.close().await;
-        }
+        self.operator.close().await;
+        self.utility.close().await;
         self.name_leg_on_line(None, || {}).await;
         // Idempotent: the service's shutdown path may reach here twice.
         self.prewarm.shutdown();
