@@ -452,7 +452,8 @@ impl ScreenReport {
 /// writers, so the stage's rules hold here and nowhere else. A display is
 /// published, applied at its sequence, and raises the watermark together
 /// (`publish`); a new leg clears the stage, marks the screen stale and starts
-/// the leg's confirmations together (`begin_leg`); a page's report replaces
+/// the leg's confirmations together (`begin_leg`), and so does a rescue,
+/// which leaves the stage to no leg (`rescue`); a page's report replaces
 /// the screen and is folded into the confirmations together (`report`).
 /// Callers hold `AppInner::display_gate`'s lock around each call, which is
 /// what keeps a display from landing between a leg's reset and its epoch, or
@@ -463,14 +464,14 @@ pub(crate) struct DisplayGateState {
     /// connects or the active one retires or a new leg begins.
     screen: ScreenReport,
     /// The leg the projection was last reset for; `None` until one is
-    /// announced.
+    /// announced, and again from a rescue until the next one is.
     scene_leg: Option<SceneLeg>,
     /// The delivery sequence of the newest display applied to the stage. A
     /// new leg leaves it: sequences are the delivery's, not the leg's.
     watermark: u64,
     /// What the page has confirmed or rejected in the current generation. A
-    /// display call waits on it (`confirmations`); a new leg or a report
-    /// from a newer generation starts it again.
+    /// display call waits on it (`confirmations`); a new leg, a rescue or a
+    /// report from a newer generation starts it again.
     confirmations: watch::Sender<ConfirmState>,
 }
 
@@ -522,12 +523,28 @@ impl DisplayGateState {
         if self.scene_leg.as_ref() == Some(&leg) {
             return false;
         }
+        self.clear_for(leg.generation);
+        self.scene_leg = Some(leg);
+        true
+    }
+
+    /// A rescue has retired the leg on the line and moved the call to
+    /// `generation`: the stage is cleared as the page clears it on the
+    /// rescue's `epoch`, the screen is stale, and nothing is confirmed in
+    /// `generation`. The stage belongs to no leg until the next one is
+    /// announced, so that announcement resets it as any other would.
+    pub(crate) fn rescue(&mut self, generation: u64) {
+        self.clear_for(generation);
+        self.scene_leg = None;
+    }
+
+    /// The stage emptied for `generation`: no objects, the screen stale, and
+    /// the confirmations started again at `generation`.
+    fn clear_for(&mut self, generation: u64) {
         self.projection.clear();
         self.mark_stale();
         self.confirmations
-            .send_modify(|confirm| confirm.begin_generation(leg.generation));
-        self.scene_leg = Some(leg);
-        true
+            .send_modify(|confirm| confirm.begin_generation(generation));
     }
 
     /// The screen the agent was told about may no longer be what the caller
