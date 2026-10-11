@@ -341,7 +341,7 @@ The host agent sends every session event with its cursor:
 | `turn_end` | `turn_id`, `error?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
 | `tool_start` | `tool`, `call_id`, `args?`, `turn_id?` | A tool call started. `args` is the call's arguments. |
 | `tool_end` | `tool`, `call_id`, `error`, `result?`, `turn_id?` | A tool call ended. `error` is true when the tool failed; `result` is what the tool returned. |
-| `text` | `text`, `turn_id` | An assistant message ended with this text. New hosts stamp the owning turn id. |
+| `text` | `text`, `turn_id?` | An assistant message ended with this text. Inside a turn the host stamps that turn's id; a message that ends with no turn open has none. |
 | `error` | `message` | A model error, or retries exhausted. |
 | `compaction` | `phase`: `start` \| `end`, `reason` | The daemon compacted the context. The service resends the voice brief on the next routed line after `end`. |
 | `state` | `model`, `thinking` | Model and effective thinking level after `set_model` or `set_thinking`. |
