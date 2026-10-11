@@ -18,9 +18,12 @@ beforeAll(() => {
     private readonly fire: () => void;
     constructor(callback: () => void) {
       this.fire = () => callback();
+    }
+    // Watching from observe() on, as a browser's does: an observer that
+    // disconnects and observes again is watching again.
+    observe() {
       observers.add(this.fire);
     }
-    observe() {}
     unobserve() {}
     disconnect() {
       observers.delete(this.fire);
