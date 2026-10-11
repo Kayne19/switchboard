@@ -717,12 +717,13 @@ export class CallRuntime {
         const epoch = message.generation;
         const { carry, expected } = this.followIdentity(message);
         // A handoff on a live connection lets the goodbye already playing
-        // finish: a transfer this tab saw adopted, or a return to the
-        // operator (same generation, new route). A hangup, a rescue or a
-        // reconnect's first epoch still cuts playback off at once.
+        // finish and keeps hands-free listening: a transfer this tab saw
+        // adopted, or a return to the operator (same generation, new route).
+        // A hangup, a rescue or a reconnect's first epoch still cuts
+        // playback off at once and turns hands-free off.
         const handoff = this.link.ready && expected;
         const resubmitted = carry ? this.outbox.carry(carry) : 0;
-        this.handsFree.epochChanged();
+        this.handsFree.epochChanged(handoff);
         const neverSent = this.outbox.retireOtherEpochs(epoch);
         this.link.snapshot(socket);
         if (resubmitted > 0) {

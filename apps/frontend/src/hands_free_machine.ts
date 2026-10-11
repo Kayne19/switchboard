@@ -28,6 +28,7 @@ const LISTENING_MESSAGE = `Listening locally for “${WAKE_PHRASE}”.`;
 const CAPTURING_MESSAGE = "Capturing speech locally; silence will end it.";
 const LOADING_MESSAGE = "Loading the local wake-word and speech detectors...";
 const NO_REPLY_MESSAGE = `No reply is coming; listening locally for “${WAKE_PHRASE}”.`;
+const HANDED_OFF_MESSAGE = `The line changed; listening locally for “${WAKE_PHRASE}”.`;
 const LEASE_TICK_MS = 250;
 
 /**
@@ -128,8 +129,8 @@ export interface FollowUp {
  * a phase: `detectors` are null until the first load lands and are kept from
  * then on, and `followUp` is a closed reply that waits for its audio to drain
  * whatever the phase does meanwhile (a push-to-talk turn and the restart
- * after it, MODE off and on). Only a page stop, an epoch, the next closed
- * reply, or the lease it opens ends it.
+ * after it, MODE off and on). Only a page stop, an epoch (either kind), the
+ * next closed reply, or the lease it opens ends it.
  */
 export interface Machine {
 	phase: Phase;
@@ -165,7 +166,12 @@ export type HandsFreeEvent =
 	| { kind: "enable" }
 	| { kind: "turnOff"; message: string }
 	| { kind: "stop"; reason: StopReason }
-	| { kind: "callChanged" }
+	/**
+	 * An `epoch`. `handoff`: the same call moved to another leg or agent (a
+	 * transfer this page saw adopted, or a return to the operator, on a live
+	 * line); false for a rescue, a hangup or a reconnect's snapshot.
+	 */
+	| { kind: "callChanged"; handoff: boolean }
 	| { kind: "pttActive"; active: boolean }
 	/** The awaited turn brings no reply: routing is unavailable. */
 	| { kind: "noReply" }
@@ -354,6 +360,17 @@ function listen(graph: Graph, message: string): PhaseStep {
 	return go({ kind: "armed", graph, message }, [RESET]);
 }
 
+/**
+ * A hand-off epoch: where hands-free listens, it listens for the wake word
+ * again, and a capture in flight is discarded on the way (`leave` stops its
+ * recorder, and the recorder's `stop` names a capture no phase holds). A
+ * start, a load or a push-to-talk pause holds no graph and carries on.
+ */
+function handOff(phase: Phase): PhaseStep | null {
+	const graph = graphOf(phase);
+	return graph ? listen(graph, HANDED_OFF_MESSAGE) : null;
+}
+
 /** Hands-free stops listening and says what failed. */
 function fail(what: string, error: unknown): PhaseStep {
 	const message = `Hands-free ${what} (${errorName(error)}).`;
@@ -427,6 +444,8 @@ export function step(
 					: null,
 			);
 		case "callChanged":
+			// The reply waiting to drain was the old leg's, whichever kind.
+			if (event.handoff) return moved(machine, dropped, handOff(phase));
 			return moved(
 				machine,
 				dropped,
