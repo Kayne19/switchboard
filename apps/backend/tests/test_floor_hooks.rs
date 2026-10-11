@@ -553,6 +553,113 @@ async fn a_request_a_rescue_made_stale_is_dropped_before_the_rewrite() {
     );
 }
 
+/// What the page shows for `project`, and the request it shows waiting.
+fn shown(state: &AppState, project: &str) -> (String, Option<String>) {
+    let agent = state
+        .0
+        .projection
+        .snapshot()
+        .into_iter()
+        .find(|agent| agent.project == project)
+        .expect("the agent is on the page");
+    (
+        agent.state,
+        agent.pending_request.map(|request| request.message),
+    )
+}
+
+/// Waits until the floor has let its front request `floor_id` go. The floor
+/// reports the waiting mark under its lock, so once the lock is free again
+/// the projection shows the report.
+async fn until_floor_released(state: &AppState, floor_id: &str) {
+    until_debug(state, |event| {
+        matches!(event, crate::debug::DebugEvent::FloorReleased { floor_id: Some(id), .. } if id == floor_id)
+    })
+    .await;
+    let _ = state.0.floor.queue_len().await;
+}
+
+/// A request a rescue made stale leaves the floor unspoken, and its agent
+/// stops waiting: the floor no longer holds a request of its (Kayne's
+/// decision, 2026-10-11, #421). It was told `accepted`, and can ask again.
+#[tokio::test]
+async fn a_request_a_rescue_made_stale_ends_its_agents_waiting_mark() {
+    let (client, _, _) = fake_jev_client();
+    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
+    assert_eq!(
+        shown(&state, "alpha"),
+        ("waiting".into(), Some("alpha finished".into()))
+    );
+    state.0.coordinator.begin_rescue("new foreground leg");
+    spawn_floor_worker(state.clone());
+
+    until_floor_released(&state, "floor-1").await;
+
+    assert_eq!(shown(&state, "alpha"), ("idle".into(), None));
+}
+
+/// An agent brought onto the line while its request waits: its token leaves
+/// the background, the floor drops the request as its agent gone, and the
+/// agent, busy on the line, is no longer shown waiting.
+#[tokio::test]
+async fn a_request_dropped_as_its_agent_gone_ends_the_waiting_mark() {
+    let (client, _, _) = fake_jev_client();
+    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
+    state.0.coordinator.remove_background("alpha-token");
+    crate::app_state::update_agent_state(
+        &state,
+        crate::pbx::AgentStateNotice {
+            project: "alpha".into(),
+            state: crate::pbx::AgentNotice::Busy,
+        },
+    )
+    .await;
+    spawn_floor_worker(state.clone());
+
+    until_floor_released(&state, "floor-1").await;
+
+    assert_eq!(shown(&state, "alpha"), ("busy".into(), None));
+}
+
+/// The mark an older resident's dropped request ends is that resident's:
+/// a newer resident of the same project that is waiting keeps its request.
+#[tokio::test]
+async fn an_older_residents_dropped_request_keeps_a_newer_residents_mark() {
+    let (client, _, _) = fake_jev_client();
+    let (state, _connection) = floor_update_queued_on_a_quiet_line(client).await;
+    state.0.coordinator.remove_background("alpha-token");
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "alpha-new-token");
+    state
+        .0
+        .floor
+        .enqueue(FloorRequest {
+            floor_id: 0,
+            project: "alpha".into(),
+            token: "alpha-new-token".into(),
+            generation: state.0.coordinator.generation(),
+            context: "caller: previous line".into(),
+            message: "new update".into(),
+            reason: "finished".into(),
+            held_display: false,
+        })
+        .await;
+    assert_eq!(
+        shown(&state, "alpha"),
+        ("waiting".into(), Some("new update".into()))
+    );
+    spawn_floor_worker(state.clone());
+
+    until_floor_released(&state, "floor-1").await;
+
+    assert_eq!(
+        shown(&state, "alpha"),
+        ("waiting".into(), Some("new update".into()))
+    );
+}
+
 /// An agent that asks to speak again while its first request is on its way
 /// out stays waiting once the first is spoken: the floor still holds the
 /// newer request, and the page and Jev see what the floor holds (#388).
