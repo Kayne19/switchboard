@@ -556,7 +556,9 @@ export interface ToolRunState {
 }
 
 export interface WorkspaceState {
+  /** The view last asked for, by the agent or by the caller's pin. */
   requestedView: string | null;
+  /** The view the page draws for it, and the one its screen-state report names (`computeEffectiveView`). */
   effectiveView: string;
   callerPinned: boolean;
   stale: boolean;
