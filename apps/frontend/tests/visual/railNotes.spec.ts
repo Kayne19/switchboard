@@ -49,12 +49,11 @@ test('a second note about a diagram whose first is a callout carries no badge', 
     { op: 'show', id: 'gate-note', type: 'note', data: { tag: 'GATE', anchor: { target: 'flow', node: 'gate' }, segments: [{ text: 'The gate stamps each action.' }] } },
   ]);
   await expect(page.locator('.diagram-callout')).toBeVisible();
-  // The rail draws the note until the diagram says it placed the callout,
-  // then lets the card go; the leaving card stays in the page, unseen
-  // (opacity 0 in every frame sampled), for some 300 ms. A second note sent
-  // before it went was a second card, and the count below could pass on the
-  // leaving one alone, before the new one was drawn: the tag read then found
-  // GATE and PLANNER in WebKit on a loaded runner (#341).
+  // The rail once drew the note until the diagram said it placed the
+  // callout, then let the card go: the leaving card stayed in the page,
+  // unseen, for some 300 ms, and the count below could pass on it alone
+  // (#341). The scene now never mounts it (#390); the rail is still checked
+  // empty before the second note is sent.
   await expect(page.locator('.content-rail .annotation-card')).toHaveCount(0);
   await runActions(page, [{ op: 'show', id: 'planner-note', type: 'note', data: { tag: 'PLANNER', anchor: { target: 'flow', node: 'planner' }, segments: [{ text: 'The planner writes the plan.' }] } }]);
   const card = page.locator('.content-rail .annotation-card');
@@ -62,4 +61,32 @@ test('a second note about a diagram whose first is a callout carries no badge', 
   await expect(card.locator('.annotation-card__tag')).toHaveText('PLANNER');
   await expect(card.locator('.note-badge')).toHaveCount(0);
   await expect(page.locator('.diagram-node__body--anchored')).toHaveCount(1);
+});
+
+// A note the drawing carries as a callout is never mounted in the rail: the
+// rail once drew it until the diagram's passive effect said it placed the
+// callout, and the card then ran its exit, unseen, for some 300 ms (#390).
+// Each frame is sampled where it is drawn, from before the actions on.
+test('a note the drawing carries is in no rail card in any frame', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openScene(page, 'idle');
+  await page.evaluate(() => {
+    const seen: number[] = [];
+    (window as unknown as { railCards: number[] }).railCards = seen;
+    const sample = () => {
+      seen.push(document.querySelectorAll('.content-rail .annotation-card').length);
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  await runActions(page, [
+    { op: 'show', id: 'flow', type: 'diagram', role: 'primary', data: { mode: 'graph', nodes: [{ id: 'gate', label: 'GATE' }, { id: 'planner', label: 'PLANNER' }, { id: 'pool', label: 'POOL' }], edges: [{ from: 'gate', to: 'planner' }, { from: 'planner', to: 'pool' }] } },
+    { op: 'show', id: 'gate-note', type: 'note', data: { tag: 'GATE', anchor: { target: 'flow', node: 'gate' }, segments: [{ text: 'The gate stamps each action.' }] } },
+  ]);
+  await expect(page.locator('.diagram-callout')).toBeVisible();
+  // Past the length of a card's exit.
+  await page.waitForTimeout(600);
+  const seen = await page.evaluate(() => (window as unknown as { railCards: number[] }).railCards);
+  expect(seen.length).toBeGreaterThan(10);
+  expect(Math.max(...seen)).toBe(0);
 });
