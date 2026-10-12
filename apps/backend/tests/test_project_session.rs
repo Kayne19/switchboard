@@ -460,6 +460,150 @@ async fn a_turn_ends_only_on_the_turn_end_that_names_it() {
     );
 }
 
+/// A self-woken start the application refuses after the caller's prompt
+/// that was collected when it arrived has returned, and the next caller's
+/// prompt has started in between (#441). The refused start and the run's
+/// later frames reach the new prompt's collector, but the prompt keeps only
+/// the words and the `turn_end` of the turn its reply named: the run's
+/// words are not its answer, and the run's end does not end it.
+#[tokio::test]
+async fn a_refused_start_that_reaches_the_next_prompt_is_not_its_answer() {
+    let hosts = crate::hosts::Hosts::new(Default::default(), Default::default());
+    let mut link = hosts.connect_fake("scriptorium");
+    // The application's answer to the self-woken start waits for `answer`;
+    // `asked` says the pump is waiting for it.
+    let (asked_tx, mut asked) = tokio::sync::mpsc::unbounded_channel::<()>();
+    let (answer, answer_rx) = tokio::sync::oneshot::channel::<bool>();
+    let answer_rx = Arc::new(StdMutex::new(Some(answer_rx)));
+    let on_turn: TurnCallback = Arc::new(move |turn: ProjectTurn| {
+        let pending = (!turn.ended && turn.cause == "autonomous")
+            .then(|| answer_rx.lock().unwrap().take())
+            .flatten();
+        if pending.is_some() {
+            let _ = asked_tx.send(());
+        }
+        Box::pin(async move {
+            match pending {
+                // unbounded: the fake application answers when the test sends its answer.
+                Some(answer) => answer.await.unwrap_or(false),
+                None => false,
+            }
+        }) as Pin<Box<dyn Future<Output = bool> + Send>>
+    });
+    let creating = tokio::spawn({
+        let hosts = hosts.clone();
+        async move {
+            ProjectSession::create(
+                &hosts,
+                ProjectLaunch {
+                    host: "scriptorium".into(),
+                    project: "alpha".into(),
+                    cwd: "/srv/alpha".into(),
+                    spec: String::new(),
+                    brief: "BRIEF".into(),
+                    turn_timeout: std::time::Duration::from_secs(10),
+                    on_activity: None,
+                    on_module: None,
+                    on_turn: Some(on_turn),
+                    on_closed: None,
+                    debug: None,
+                },
+            )
+            .await
+        }
+    });
+    let reply = |link: &crate::hosts::FakeLink, command: &Value, result: Value| {
+        link.send(json!({"type": "reply", "id": command["id"], "epoch": link.epoch, "ok": true, "result": result}));
+    };
+    let event = |link: &crate::hosts::FakeLink, cursor: u64, body: Value| {
+        link.send(json!({"type": "event", "session": "s1", "cursor": format!("b:{cursor}"), "event": body}));
+    };
+    let create = within("link", link.recv()).await.unwrap();
+    reply(&link, &create, json!({"session": "s1"}));
+    let (session, _) = within("creating", creating).await.unwrap().unwrap();
+
+    // Caller turn A settles on the host, and a self-woken run starts right
+    // behind it while A's prompt still holds its collector: the pump asks
+    // the application whether it admits the run, and waits.
+    let prompting_a = tokio::spawn({
+        let session = session.clone();
+        async move { session.prompt("first").await }
+    });
+    let prompt_a = within("link", link.recv()).await.unwrap();
+    reply(
+        &link,
+        &prompt_a,
+        json!({"sent_as": "prompt", "turn_id": "t-a"}),
+    );
+    event(
+        &link,
+        1,
+        json!({"kind": "turn_start", "cause": "input", "turn_id": "t-a"}),
+    );
+    event(
+        &link,
+        2,
+        json!({"kind": "text", "text": "A words", "turn_id": "t-a"}),
+    );
+    event(&link, 3, json!({"kind": "turn_end", "turn_id": "t-a"}));
+    event(
+        &link,
+        4,
+        json!({"kind": "turn_start", "cause": "autonomous", "turn_id": "auto-1"}),
+    );
+    within("the admission to be asked", asked.recv())
+        .await
+        .unwrap();
+    let turn_a = within("prompt A", prompting_a).await.unwrap().unwrap();
+    assert_eq!(turn_a.text, "A words");
+
+    // Caller turn B starts in the window: its collector is the turn's when
+    // the application answers.
+    let prompting_b = tokio::spawn({
+        let session = session.clone();
+        async move { session.prompt("second").await }
+    });
+    let prompt_b = within("link", link.recv()).await.unwrap();
+    assert_eq!(prompt_b["args"]["message"], "second");
+    reply(
+        &link,
+        &prompt_b,
+        json!({"sent_as": "prompt", "turn_id": "t-b"}),
+    );
+    answer.send(false).unwrap();
+
+    // The run's words and its end follow, then B's own turn. They arrive
+    // after B's reply here, the worst order for B: a protocol 2 host opens
+    // B's turn only after the run's end.
+    event(
+        &link,
+        5,
+        json!({"kind": "text", "text": "run words", "turn_id": "auto-1"}),
+    );
+    event(&link, 6, json!({"kind": "turn_end", "turn_id": "auto-1"}));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !prompting_b.is_finished(),
+        "the run's end ended the next caller's prompt"
+    );
+    event(
+        &link,
+        7,
+        json!({"kind": "turn_start", "cause": "input", "turn_id": "t-b"}),
+    );
+    event(
+        &link,
+        8,
+        json!({"kind": "text", "text": "B words", "turn_id": "t-b"}),
+    );
+    event(&link, 9, json!({"kind": "turn_end", "turn_id": "t-b"}));
+    let turn_b = within("prompt B", prompting_b).await.unwrap().unwrap();
+    assert_eq!(turn_b.text, "B words");
+    assert!(!turn_b.failed);
+    assert!(!session.busy());
+    session.close();
+}
+
 /// How a project session came to the service, as the end-of-life table
 /// below names it.
 #[derive(Clone, Copy, Debug)]
