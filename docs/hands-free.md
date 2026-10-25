@@ -23,11 +23,10 @@ shell draws in every page's bottom-left corner (#180,
 the registered voice runtime and switches it by calling `toggleHandsFree()`;
 while listening it names the wake word (`MODE / HANDS-FREE · HEY JARVIS`).
 The page holds no listening state of its own, and the refusals below stay the
-runtime's. A switch while the line is down, or while the detectors are still
-loading, does nothing and says nothing. The controller's own start is outside
-that wait: the controller is enabled from the first moment of its start, so a
-switch during it turns hands-free off, and a start that never finishes cannot
-hold MODE for the life of the page (#261). A
+runtime's. A switch while the line is down does nothing and says nothing.
+The controller is enabled from the first moment of MODE, so a switch while
+the detectors load or while the controller starts turns hands-free off: a
+load or a start that never finishes cannot hold MODE (#261). A
 switch with push-to-talk active is refused by the controller and reported in
 `handsFreeStatus`. The demo page registers no runtime, so the control is
 disabled there.
@@ -180,7 +179,7 @@ sees is `view()` of the phase, and nothing else.
 | phase (published as) | holds | left by |
 |---|---|---|
 | `off`, `error` | the status line | MODE: `loading` the first time (and after a load failed or was stopped), then `starting`, or `error` when refused (push-to-talk active, page hidden, no secure context, worklet or recorder MIME, no detector) |
-| `loading` (`starting`) | the load (`Load`) | the detectors (`starting`, or `error` when refused), a failed load (`error`), a page stop or a rescue `epoch` (`off`); MODE waits for it, and a hand-off `epoch` leaves it running |
+| `loading` (`starting`) | the load (`Load`) | the detectors (`starting`, or `error` when refused), a failed load (`error`), MODE, a page stop or a rescue `epoch` (`off`); a hand-off `epoch` leaves it running |
 | `starting` | the start (`Attempt`); what it makes stays its own until it hands the graph over | the graph (`armed`), a failed start or a `resume()` past 3 s (`error`) |
 | `paused_ptt` | nothing | push-to-talk ends: a full restart (`starting`), or `error` when refused |
 | `armed` | the graph | the wake word (`wake_grace`), a follow-up lease (`lease`) |

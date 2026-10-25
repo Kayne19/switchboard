@@ -286,8 +286,8 @@ export function isEnabled(phase: Phase): boolean {
 }
 
 /**
- * On and past the first load. A load in flight answers only to its own
- * result: a push-to-talk press, an epoch or a detector cannot reach it.
+ * On and past the first load. A push-to-talk press or a detector cannot
+ * reach a load in flight; MODE, a page stop and a rescue epoch end it.
  */
 function isOn(phase: Phase): boolean {
 	return isEnabled(phase) && phase.kind !== "loading";
@@ -412,8 +412,6 @@ export function step(
 	const dropped = { ...machine, followUp: null };
 	switch (event.kind) {
 		case "toggle":
-			// MODE waits for the first load to land (#261).
-			if (phase.kind === "loading") return null;
 			return moved(
 				machine,
 				machine,
