@@ -773,9 +773,12 @@ the page applies or declines a frame) carries two more fields:
   connection, held below the next rejection still waiting on the page
   (below), so it never passes a rejection the service has not heard. A page
   open across a restart reconnects to a process that counts again from 0, so
-  it reports none of the seqs it applied before the line went down; the
-  snapshot replay raises it again. Before the page applies a display on a
-  connection, its reports leave the field out.
+  it reports none of the seqs it applied before the line went down. The
+  snapshot replay raises it again when the stage has anything to replay, and
+  otherwise the next display does. Until the page applies a display on a
+  connection, its reports leave the field out, so a display applied just
+  before a drop to the same service, and not yet acknowledged, can go
+  unconfirmed.
 - `rejected` (optional): `{ seq, reason }` for a frame the page could not
   apply. The page keeps every one it has not sent, lowest `seq` first, and
   drops none unsent: its display call may still be waiting, and `applied_seq`
@@ -826,7 +829,7 @@ fields together:
 | a new leg (once per `SceneLeg`) | `begin_leg` | `LegAnnouncer::begin_scene` | `projection` cleared, `screen` stale, `confirmations` start the leg's generation, `scene_leg` = the leg; nothing when the stage already belongs to it |
 | a rescue | `rescue` | `release_rescued_work` (`page_controls.rs`), the release every page control's rescue and shutdown share | `projection` cleared, `screen` stale, `confirmations` start the rescue's generation, `scene_leg` = none |
 | a page connects; the active page retires | `mark_stale` | `register_connection`, `retire_connection` (`browser.rs`) | `screen` stale |
-| the active page reports, in the current generation | `report` | `apply_screen_state` (`browser.rs`) | `screen` replaced; the report folded into `confirmations` |
+| the active page reports, in the current generation | `report` | `apply_screen_state` (`browser.rs`) | `screen` replaced; the report folded into `confirmations`, less any `seq` the delivery has not reached |
 
 The `watermark` is the delivery's sequence, not the leg's: a new leg and a
 rescue leave it. A rescue moves the generation without a new leg, and the

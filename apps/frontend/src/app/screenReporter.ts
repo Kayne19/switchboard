@@ -45,6 +45,7 @@ interface ReporterState {
   queued: ScreenStateReport | null;
   /** The generation the last `epoch` announced; every report carries it. */
   generation: number;
+  /** The highest display seq the page has applied on this connection, or `NOTHING_APPLIED`. */
   appliedSeq: number;
   /**
    * The rejections no report has carried out yet, lowest seq first, one
@@ -208,8 +209,7 @@ export class ScreenReporter {
     const report = deriveScreenState(scene, state.generation);
     const [carried, waiting] = state.rejections;
     const applied = waiting ? Math.min(state.appliedSeq, waiting.seq - 1) : state.appliedSeq;
-    // Seq 0 is real, so a ceiling under it means "nothing applied" and the field is left out.
-    if (applied >= 0) report.applied_seq = applied;
+    if (applied !== NOTHING_APPLIED) report.applied_seq = applied;
     if (carried) report.rejected = carried;
     return report;
   }

@@ -238,15 +238,12 @@ async fn apply_screen_state(
             .unwrap_or_else(|| "the caller's screen could not render it".to_string());
         (rejection.seq, reason)
     });
-    let mut gate = state.0.display_gate.lock().await;
-    // Read under the gate, which every display is sequenced under. A seq at
-    // or past it was never sent by this process: it is an earlier process's,
-    // from a page left open across a restart.
-    let next = state.0.delivery.next_sequence();
-    let applied_seq = command.applied_seq.filter(|&seq| seq < next);
-    let rejected = rejected.filter(|&(seq, _)| seq < next);
-    gate.report(report, applied_seq, rejected);
-    drop(gate);
+    state.0.display_gate.lock().await.report(
+        report,
+        command.applied_seq,
+        rejected,
+        &state.0.delivery,
+    );
 
     send_message(state, epoch, ServerMessage::ScreenStateAck).await
 }

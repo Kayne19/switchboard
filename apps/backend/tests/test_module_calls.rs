@@ -1004,7 +1004,7 @@ async fn an_applied_seq_this_process_never_sent_confirms_nothing() {
 #[tokio::test]
 async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
     let state = state();
-    let (connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _s, _w) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let (_, last) = state
         .0
@@ -1023,7 +1023,23 @@ async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
     )
     .await
     .unwrap();
-    let (code, body) = agent_call_json(&state, "/display", diagram_show()).await;
+    let call = post_display_in_task(&state, diagram_show()).await;
+    let sequence = loop {
+        let frame = within("connection.receiver", connection.receiver.recv())
+            .await
+            .unwrap();
+        if let DeliveryFrame::Event {
+            sequence,
+            event: Event::Json(value),
+        } = frame
+        {
+            if value["type"] == "display" {
+                break sequence;
+            }
+        }
+    };
+    assert_eq!(sequence, unsent, "the display took the seq the page named");
+    let (code, body) = within("the display call", call).await.unwrap();
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body.get("rejected"), None, "{body}");
 }

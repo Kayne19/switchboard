@@ -388,8 +388,9 @@ with no rejection as rendered. An `epoch` keeps the rejections (a `seq` is
 the delivery's, and a same-generation epoch leaves their display calls
 waiting) and forgets the scene. A line down forgets the applied `seq`: a
 `seq` is the service process's delivery counter, so the next connection may
-reach a restarted service that counts again from 0, and its snapshot replay
-raises the applied `seq` again. The rejections stay through it, and the one
+reach a restarted service that counts again from 0. The snapshot replay
+raises the applied `seq` again when the stage has anything to replay, and
+otherwise the next display does. The rejections stay through it, and the one
 on the wire comes back, since the service may not have read it: the same
 service may still be waiting on them, and they only hold the applied `seq`
 lower. The phase-by-event
