@@ -111,7 +111,11 @@ export interface DaemonPort {
 	close(): void;
 }
 
-/** The daemon refused a command: it answered with a failure, or its hello says it cannot run it (`unsupported`). */
+/**
+ * A command that changed nothing on the daemon: the daemon answered with a
+ * failure, its hello says it cannot run it (`unsupported`), or the host
+ * agent had no connection to send it on.
+ */
 export class DaemonCommandError extends Error {
 	readonly command: string;
 	readonly unsupported: boolean;
@@ -124,9 +128,9 @@ export class DaemonCommandError extends Error {
 }
 
 /**
- * The daemon did not answer: with no connection the request was not sent;
- * when the connection closed or the request timed out first, the daemon may
- * have run it.
+ * The host agent cannot say what a command left the daemon in: it sent the
+ * command and got no answer, or the daemon applied the change and the
+ * request after it failed.
  */
 export class DaemonUnreachableError extends Error {
 	constructor(command: string, message: string) {
@@ -163,6 +167,8 @@ interface RawResponse {
 
 interface RawClient {
 	readonly hello: { protocol?: { version?: number }; appVersion?: string } | undefined;
+	/** The installer takes any prime-agent package; a client without this getter sends as before. */
+	readonly isConnected?: boolean;
 	connect(timeoutMs?: number): Promise<void>;
 	waitForHello(timeoutMs?: number): Promise<{ protocol?: { version?: number }; appVersion?: string }>;
 	onMessage(listener: (message: Json) => void): () => void;
@@ -298,14 +304,16 @@ export class PrimeDaemonPort implements DaemonPort {
 	async #request(command: Json, timeoutMs = COMMAND_TIMEOUT_MS, options?: Json): Promise<unknown> {
 		const client = this.#client;
 		const type = String(command.type);
-		if (!client) throw new DaemonUnreachableError(type, "not connected to the daemon");
+		// client.request refuses a destroyed socket with a plain Error, which the
+		// catch could not tell from a lost request, so the same test runs first.
+		if (!client || client.isConnected === false) throw new DaemonCommandError(type, "not connected to the daemon");
 		let response: RawResponse;
 		try {
 			response = await client.request(command, timeoutMs, { recoverable: false, ...options });
 		} catch (error) {
-			// DaemonClient checks each command against the daemon hello and
-			// throws DaemonCapabilityUnavailableError when it is missing. Every
-			// other rejection is the connection or the request timeout.
+			// The hello is in hand (connect), so DaemonCapabilityUnavailableError
+			// is the one rejection before the write; every other comes from the
+			// write or after it.
 			const message = error instanceof Error ? error.message : String(error);
 			if (error instanceof Error && error.name === "DaemonCapabilityUnavailableError") throw new DaemonCommandError(type, message, true);
 			throw new DaemonUnreachableError(type, message);
@@ -407,7 +415,7 @@ export class PrimeDaemonPort implements DaemonPort {
 		// The daemon only lists models per session; the package's model
 		// registry reads the same models.json and auth the daemon uses.
 		const mod = this.#module;
-		if (!mod) throw new DaemonUnreachableError("list_models", "not connected to the daemon");
+		if (!mod) throw new DaemonCommandError("list_models", "not connected to the daemon");
 		const registry = mod.ModelRegistry.create(mod.AuthStorage.create());
 		return registry.getAvailable().map((m) => ({
 			provider: String(m.provider ?? ""),

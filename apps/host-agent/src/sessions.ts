@@ -14,7 +14,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { DaemonCommandError, type DaemonEvent, type DaemonPort, type DaemonSession, type SessionConfig } from "./daemon_port.ts";
+import { DaemonCommandError, type DaemonEvent, type DaemonPort, type DaemonSession, DaemonUnreachableError, type SessionConfig } from "./daemon_port.ts";
 import { Prepares } from "./prepare.ts";
 
 export type Provenance = "created" | "taken_over";
@@ -112,6 +112,13 @@ export interface SessionManagerOptions {
 }
 
 const PROJECT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
+/** A request that follows a change the daemon applied: if it fails, what the change left is unknown. */
+function afterChange<T>(change: string, followUp: Promise<T>): Promise<T> {
+	return followUp.catch((error: unknown) => {
+		throw new DaemonUnreachableError(change, `applied, but ${error instanceof Error ? error.message : String(error)}`);
+	});
+}
 
 function requireString(args: Record<string, unknown>, key: string): string {
 	const value = args[key];
@@ -489,7 +496,7 @@ export class SessionManager {
 	}
 
 	async #adopt(session: DaemonSession, project: string, cwd: string, provenance: Provenance, attached?: DaemonSession): Promise<Record<string, unknown>> {
-		const snapshot = attached ?? (await this.#port.attach(session.handle));
+		const snapshot = attached ?? (await afterChange("create", this.#port.attach(session.handle)));
 		const t = this.#newRecord({
 			handle: session.handle,
 			session_id: session.sessionId || snapshot.sessionId,
@@ -639,19 +646,19 @@ export class SessionManager {
 	async setModel(handle: string, provider: string, model: string): Promise<Record<string, unknown>> {
 		this.#get(handle);
 		await this.#port.setModel(handle, provider, model);
-		return this.#reportState(handle);
+		return this.#reportState(handle, "set_model");
 	}
 
 	async setThinking(handle: string, level: string): Promise<Record<string, unknown>> {
 		this.#get(handle);
 		await this.#port.setThinking(handle, level);
-		return this.#reportState(handle);
+		return this.#reportState(handle, "set_thinking_level");
 	}
 
 	/** Read back model and effective (clamped) thinking level and report them. */
-	async #reportState(handle: string): Promise<Record<string, unknown>> {
+	async #reportState(handle: string, change: "set_model" | "set_thinking_level"): Promise<Record<string, unknown>> {
 		const t = this.#get(handle);
-		const state = await this.#port.getState(handle);
+		const state = await afterChange(change, this.#port.getState(handle));
 		t.last = { ...state, lastText: t.last?.lastText ?? null };
 		const report = { model: modelLabel(state), thinking: state.thinking };
 		this.#emit(handle, { kind: "state", ...report });
