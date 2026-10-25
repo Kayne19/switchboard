@@ -105,15 +105,34 @@ struct HostState {
     /// Counts the frames the current links delivered, so a reply and the
     /// events around it can be put in the order the host sent them.
     seq: u64,
-    /// Commands sent and not yet answered, by command id.
+    /// Commands sent on the current link and not yet answered, by command id.
     pending: HashMap<String, Pending>,
     /// Per session handle, where its events and module calls go.
     subscribers: HashMap<String, mpsc::UnboundedSender<SessionFrame>>,
 }
 
-/// A command waiting for its reply on the link at `epoch`.
+impl HostState {
+    /// Takes the host's current link away, when it drops or a newer link
+    /// fences it. Its unanswered commands fail (`link_lost`), and every
+    /// subscribed session ends with `host_link_closed`: the host agent has
+    /// taken them all off their calls (`docs/host-link.md`, `join_call`).
+    fn end_link(&mut self) -> Option<Link> {
+        let link = self.link.take()?;
+        self.pending.clear();
+        self.seq += 1;
+        let seq = self.seq;
+        for subscriber in self.subscribers.values() {
+            let _ = subscriber.send(SessionFrame::Event {
+                seq,
+                event: json!({"kind": "session_closed", "reason": "host_link_closed"}),
+            });
+        }
+        Some(link)
+    }
+}
+
+/// A command waiting for its reply on the host's current link.
 struct Pending {
-    epoch: u64,
     reply: oneshot::Sender<Result<CommandReply, CommandError>>,
 }
 
@@ -504,7 +523,7 @@ impl Hosts {
         link.outbound
             .send(text(frame))
             .map_err(|_| not_connected())?;
-        state.pending.insert(id.clone(), Pending { epoch, reply });
+        state.pending.insert(id.clone(), Pending { reply });
         tracing::debug!(%host, command = name, %id, "host command sent");
         Ok(SentCommand {
             hosts: self.clone(),
@@ -667,7 +686,7 @@ impl Hosts {
     }
 
     /// Makes `outbound` the host's current link: a larger epoch, the welcome
-    /// queued, any older link fenced and its unanswered commands failed.
+    /// queued, and any older link fenced and ended as a drop would end it.
     fn link_up(
         &self,
         host: &str,
@@ -688,17 +707,15 @@ impl Hosts {
             "protocol": HOST_LINK_PROTOCOL,
             "cursors": cursors,
         })));
-        let replaced = state.link.replace(Link {
+        if let Some(older) = state.end_link() {
+            tracing::info!(%host, epoch = older.epoch, newer = epoch, "host link fenced by a newer link");
+            let _ = older.outbound.send(close(CLOSE_FENCED, "fenced"));
+        }
+        state.link = Some(Link {
             epoch,
             outbound,
             synced: false,
         });
-        // A command sent on the fenced link is never answered on this one.
-        state.pending.clear();
-        if let Some(older) = replaced {
-            tracing::info!(%host, epoch = older.epoch, newer = epoch, "host link fenced by a newer link");
-            let _ = older.outbound.send(close(CLOSE_FENCED, "fenced"));
-        }
         tracing::info!(
             %host,
             epoch,
@@ -1006,23 +1023,9 @@ impl Hosts {
         let mut disconnected = false;
         if let Some(state) = hosts.get_mut(host) {
             if state.link.as_ref().map(|link| link.epoch) == Some(epoch) {
-                state.link = None;
+                state.end_link();
                 disconnected = true;
-                // A resident handle subscribed to this link must not remain
-                // reusable after the host has gone away. Its pump turns this
-                // into the normal session-closed callback, which evicts the
-                // background projection immediately. A later call may reopen
-                // the saved session after the host reconnects.
-                state.seq += 1;
-                let seq = state.seq;
-                for subscriber in state.subscribers.values() {
-                    let _ = subscriber.send(SessionFrame::Event {
-                        seq,
-                        event: json!({"kind": "session_closed", "reason": "host_link_closed"}),
-                    });
-                }
             }
-            state.pending.retain(|_, pending| pending.epoch != epoch);
         }
         // A fenced link closing is not a disconnect: its newer link is up.
         // Published under the hosts lock, in order with `link_up`.
