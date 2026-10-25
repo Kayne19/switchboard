@@ -192,6 +192,7 @@ Error codes:
 | `refused` | Not allowed (kill of a session the service did not create, `open_session` of a non-`sb-` session, `set_mode` off a call). |
 | `unsupported` | The daemon does not support the command (per-command compatibility); other commands keep working. |
 | `daemon_error` | The daemon ran the command and it failed; `message` has the daemon's text. |
+| `daemon_unreachable` | The daemon did not answer. With no daemon connection the host agent did not send the command; when the connection closed (or the request timed out) before the answer, the daemon may have run it. |
 | `failed` | Anything else. |
 
 A refusal of one command (`refused`, `unsupported`, `daemon_error`,
@@ -202,7 +203,7 @@ with the host's words on screen); a refused background prompt keeps the
 resident, published idle; a refused model change keeps the leg as it was,
 and a level refused after the model changed keeps the new model. The service stops
 using a session after any other failed command to it (`stale_epoch`,
-`not_found`, `failed`, a failure on its own side: `not_connected`,
+`not_found`, `daemon_unreachable`, `failed`, a failure on its own side: `not_connected`,
 `link_lost`, `unreadable_reply`, or no reply within its 30 s wait), but it
 still releases the session: it sends `kill` for one it created and `abort`
 then `detach` for one it took over. Only a `session_closed` event tells it the session is
