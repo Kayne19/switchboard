@@ -53,6 +53,13 @@ interface OpenTurn {
 	 */
 	id: string;
 	cause: TurnCause;
+	heldFailedCall: FailedCall | null;
+}
+
+/** An assistant message whose model call failed: what it wrote, and the model error. */
+interface FailedCall {
+	text: string;
+	error: string;
 }
 
 /** What a `prompt` or `steer` command answers: how the input was sent, and the turn it went into. */
@@ -68,7 +75,11 @@ type TurnEvent =
 	/** The wait_for_idle sent after input `mark` answered; `failure` is its error, if it failed. */
 	| { kind: "settled"; mark: number; failure: string | null }
 	/** The session is no longer tracked. */
-	| { kind: "untracked" };
+	| { kind: "untracked" }
+	| { kind: "message"; text: string; error: string | null }
+	/** pi runs the failed call again: `auto_retry_start`, or `compaction_end` with `willRetry`. */
+	| { kind: "retrying" }
+	| { kind: "gave_up"; finalError: string };
 
 interface Tracked {
 	handle: string;
@@ -666,7 +677,9 @@ export class SessionManager {
 	 * its turn without one: its `session_closed` stands for it. A
 	 * wait_for_idle answer carries the input mark it was sent after, and
 	 * settles the turn only if no input came after it and the session is
-	 * still this record.
+	 * still this record. It also sends each assistant message's `text` and
+	 * `error`, holding a failed call in the open turn until pi shows it will
+	 * not retry it.
 	 */
 	#turnStep(t: Tracked, event: TurnEvent): void {
 		switch (event.kind) {
@@ -676,24 +689,62 @@ export class SessionManager {
 				// its cause, not a missing id, keeps its self-wake side effects
 				// refused.
 				const id = `turn-${randomBytes(8).toString("hex")}`;
-				t.turn = { id, cause: event.cause };
+				t.turn = { id, cause: event.cause, heldFailedCall: null };
 				this.#emit(t.handle, { kind: "turn_start", cause: event.cause, turn_id: id });
 				return;
 			}
 			case "settled": {
 				if (this.#tracked.get(t.handle) !== t || t.inputs !== event.mark || !t.turn) return;
 				const { id } = t.turn;
+				const held = this.#swapHeldFailedCall(t, null);
+				if (held) this.#emitReply(t, held.text, held.error);
 				t.turn = null;
 				if (event.failure === null && t.last) t.last = { ...t.last, busy: false };
 				this.#emit(t.handle, { kind: "turn_end", turn_id: id, ...(event.failure === null ? {} : { error: event.failure }) });
 				return;
 			}
-			case "untracked":
+			case "untracked": {
+				// pi cannot retry a call of a session that is gone.
+				const held = this.#swapHeldFailedCall(t, null);
+				if (held) this.#emitReply(t, held.text, held.error);
 				t.turn = null;
+				return;
+			}
+			case "message": {
+				// pi announces a retry before the retried call's message, so a
+				// failed call still held now is one pi did not retry.
+				const hold = event.error !== null && t.turn ? { text: event.text, error: event.error } : null;
+				const held = this.#swapHeldFailedCall(t, hold);
+				if (held) this.#emitReply(t, held.text, held.error);
+				if (!hold) this.#emitReply(t, event.text, event.error);
+				return;
+			}
+			case "retrying":
+				this.#swapHeldFailedCall(t, null);
+				return;
+			case "gave_up":
+				this.#emitReply(t, this.#swapHeldFailedCall(t, null)?.text ?? "", event.finalError);
 				return;
 			default:
 				event satisfies never;
 		}
+	}
+
+	#emitReply(t: Tracked, text: string, error: string | null): void {
+		if (text) {
+			this.#emit(t.handle, { kind: "text", text, ...(t.turn?.id ? { turn_id: t.turn.id } : {}) });
+			if (t.last) t.last = { ...t.last, lastText: text };
+		}
+		if (error !== null) this.#emit(t.handle, { kind: "error", message: error });
+	}
+
+	/** The one writer of the open turn's held failed call, for `#turnStep`: holds `next`, returns the call it replaces. */
+	#swapHeldFailedCall(t: Tracked, next: FailedCall | null): FailedCall | null {
+		const turn = t.turn;
+		if (!turn) return null;
+		const held = turn.heldFailedCall;
+		turn.heldFailedCall = next;
+		return held;
 	}
 
 	/** Send wait_for_idle after the latest input; settle only if it is still the latest. */
@@ -751,20 +802,20 @@ export class SessionManager {
 			case "message_end": {
 				const message = (event.message ?? {}) as Record<string, unknown>;
 				if (message.role !== "assistant") return;
-				const text = textOf(message);
-				if (text) {
-					this.#emit(handle, { kind: "text", text, ...(t.turn?.id ? { turn_id: t.turn.id } : {}) });
-					if (t.last) t.last = { ...t.last, lastText: text };
-				}
-				if (message.stopReason === "error") this.#emit(handle, { kind: "error", message: String(message.errorMessage ?? "model error") });
+				const error = message.stopReason === "error" ? String(message.errorMessage ?? "model error") : null;
+				this.#turnStep(t, { kind: "message", text: textOf(message), error });
 				return;
 			}
+			case "auto_retry_start":
+				this.#turnStep(t, { kind: "retrying" });
+				return;
 			case "compaction_start":
 			case "compaction_end":
+				if (event.willRetry === true) this.#turnStep(t, { kind: "retrying" });
 				this.#emit(handle, { kind: "compaction", phase: event.type === "compaction_start" ? "start" : "end", reason: event.reason ?? null });
 				return;
 			case "auto_retry_end":
-				if (event.success === false) this.#emit(handle, { kind: "error", message: String(event.finalError ?? "retries exhausted") });
+				if (event.success === false) this.#turnStep(t, { kind: "gave_up", finalError: String(event.finalError ?? "retries exhausted") });
 				return;
 			default:
 				return;

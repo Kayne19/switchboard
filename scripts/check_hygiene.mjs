@@ -408,8 +408,9 @@ const machines = [
 	{ file: "apps/backend/src/project_session.rs", writer: /\*lifecycle\s*=(?!=)/, max: 1, once: [] },
 	// floor-front (#421): `serve` takes the phase `step` gives; `leave` is the one teardown.
 	{ file: "apps/backend/src/floor.rs", writer: /\bphase\s*=\s*next\b/, max: 1, once: [/\bself\.leave\(/] },
-	// host-session (#404): the turn record is written only in `#turnStep`, on its three arms.
-	{ file: "apps/host-agent/src/sessions.ts", writer: /\bt\.turn\s*=(?!=)/, max: 3, once: [] },
+	// host-session (#404): the turn record is written only in `#turnStep`, on its three arms;
+	// its held failed call only in `#swapHeldFailedCall`, which `#turnStep` calls.
+	{ file: "apps/host-agent/src/sessions.ts", writer: /\bt\.turn\s*=(?!=)/, max: 3, once: [/\.heldFailedCall\s*=(?!=)/] },
 	// daemon-resync (#418): `#step` is the one writer of the keeper's phase.
 	{ file: "apps/host-agent/src/daemon_keeper.ts", writer: /\bthis\.#phase\s*=(?!=)/, max: 1, once: [] },
 	// call-line (#437): `CallLifecycle::step` writes the line; `step_locked` sends every candidate notice.
