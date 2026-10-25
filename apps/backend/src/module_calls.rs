@@ -542,7 +542,8 @@ async fn display(
                 );
                 return Json(json!({
                     "delivered": true, "rendered": false,
-                    "reason": "the caller's screen moved to a new leg before this was confirmed"
+                    "reason": "new_leg",
+                    "detail": "the caller's screen moved to a new leg before this was confirmed, and that cleared the stage: this is not on screen"
                 }))
                 .into_response();
             }

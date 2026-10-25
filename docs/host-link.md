@@ -732,6 +732,12 @@ service decides those: it holds a background display (`accepted`, with
 A refusal reaches the module with its code as `reason` (`caller_away`); the
 service's explanation stays in `result.detail`.
 
+A delivered reply's own `reason` is null, so a delivered `display` carries
+its outcome code in `result.reason`: `new_leg` when a transfer or a rescue
+moved the call to a new generation before the caller's screen confirmed it.
+"The display call's result" in `docs/visual-channel.md` lists each answer
+and what the module says for it.
+
 `active` currently delivers like `foreground`. A background agent may ask
 what the caller sees, not change it: the screen belongs to whoever the caller
 is with, and its own displays wait for the promotion (#135). They wait as a
