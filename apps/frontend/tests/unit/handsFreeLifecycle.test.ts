@@ -30,6 +30,7 @@ type Phase =
   | "error"
   /** The start waits on the worklet module. */
   | "starting"
+  | "starting_at_grant"
   | "paused_ptt"
   | "armed"
   | "wake_grace"
@@ -76,6 +77,7 @@ type Event =
   | "late stop"
   | "start completes"
   | "start fails"
+  | "granted, page hidden"
   | "frame";
 
 interface Seen {
@@ -136,6 +138,7 @@ const LEASE_CLOSED_CAPTURING = "Follow-up window closed; finishing the current u
 const CALL_CHANGED = "Hands-free stopped because the call changed.";
 const HANDED_OFF = "The line changed; listening locally for “Damocles”.";
 const PTT_FIRST = "Finish push-to-talk and keep this page visible first.";
+const HIDDEN = "Hands-free stopped while the page is hidden.";
 const DETECTOR_FAILED = "Hands-free detector failed (Error).";
 const START_FAILED = "Hands-free could not start (Error).";
 const NO_RECORDER = "Hands-free recording is unavailable (Error).";
@@ -208,12 +211,19 @@ function harness() {
   let nextRecorder: "ok" | "create throws" | "start throws" = "ok";
   let module: { resolve: () => void; reject: (error: unknown) => void } | null = null;
   let holdModule = false;
+  let grant: (() => void) | null = null;
+  let holdGrant = false;
+  let foreground = true;
   const published: Array<[HandsFreeState, string]> = [];
   const port = { onmessage: null as ((event: MessageEvent) => void) | null, close: () => undefined };
   const instance = new HandsFreeController({
     getUserMedia: async () => {
       counts.asked += 1;
-      return { getTracks: () => [{ stop: () => void (counts.released += 1) }] } as unknown as MediaStream;
+      const stream = { getTracks: () => [{ stop: () => void (counts.released += 1) }] } as unknown as MediaStream;
+      if (!holdGrant) return stream;
+      return new Promise<MediaStream>((resolve) => {
+        grant = () => resolve(stream);
+      });
     },
     createAudioContext: () =>
       ({
@@ -250,7 +260,7 @@ function harness() {
       return id as unknown as ReturnType<typeof setTimeout>;
     },
     clearTimeout: (timer) => void timers.delete(timer as unknown as number),
-    isForeground: () => true,
+    isForeground: () => foreground,
     isSnapshotReady: () => snapshotReady,
     currentEpoch: () => 4,
     isPttActive: () => ptt,
@@ -271,6 +281,9 @@ function harness() {
     speechEnds: () => speechEnd(),
     holdModule: () => (holdModule = true),
     module: () => module!,
+    holdGrant: () => (holdGrant = true),
+    grant: () => grant!(),
+    hide: () => (foreground = false),
     holdPtt: (held: boolean) => (ptt = held),
     loseSnapshot: () => (snapshotReady = false),
     refuseClips: () => (acceptClips = false),
@@ -319,6 +332,11 @@ async function reach(phase: Phase): Promise<Harness> {
       break;
     case "starting":
       h.holdModule();
+      void h.instance.enable();
+      await settle();
+      break;
+    case "starting_at_grant":
+      h.holdGrant();
       void h.instance.enable();
       await settle();
       break;
@@ -432,6 +450,10 @@ async function apply(h: Harness, event: Event): Promise<void> {
     case "start fails":
       h.module().reject(new Error("worklet missing"));
       return settle();
+    case "granted, page hidden":
+      h.hide();
+      h.grant();
+      return settle();
     case "frame":
       return h.frame();
   }
@@ -444,6 +466,7 @@ function expectPhase(h: Harness, then: Phase): void {
     off: ["off", false, false, null],
     error: ["error", false, false, null],
     starting: ["starting", true, false, null],
+    starting_at_grant: ["starting", true, false, null],
     paused_ptt: ["paused_ptt", true, false, null],
     armed: ["armed", true, false, null],
     wake_grace: ["wake_grace", true, false, null],
@@ -500,6 +523,7 @@ const rows: Row[] = [
   { from: "starting", event: "follow-up", seen: {}, then: "starting" },
   { from: "starting", event: "wake", seen: {}, then: "starting" },
   { from: "starting", event: "speech start", seen: {}, then: "starting" },
+  { from: "starting_at_grant", event: "granted, page hidden", seen: { published: ["off"], said: HIDDEN, released: 1, closed: 1, ...QUIET }, then: "off" },
 
   { from: "paused_ptt", event: "ptt end", seen: { published: ["starting", "armed"], said: LISTENING, asked: 1, ...QUIET }, then: "armed" },
   { from: "paused_ptt", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...QUIET }, then: "paused_ptt" },
