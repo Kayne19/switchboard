@@ -83,7 +83,9 @@ type Trigger =
   | "load fails"
   | "MODE, load lands"
   | "MODE twice, first load fails, second lands"
+  | "MODE twice, first load lands"
   | "MODE, hidden at the grant, then its event"
+  | "MODE, hidden at the grant, shown before its event"
   | "page hidden, load lands"
   | "pagehide, load lands"
   | "dispose, load lands"
@@ -298,6 +300,10 @@ function harness() {
     },
     failFirst: async () => {
       held[0].fail();
+      await settle();
+    },
+    landFirst: async () => {
+      held[0].land();
       await settle();
     },
     holdGrant: () => (holdGrant = true),
@@ -526,6 +532,13 @@ async function apply(h: Harness, event: Trigger): Promise<void> {
       await h.failFirst();
       await h.land();
       break;
+    case "MODE twice, first load lands":
+      runtime.toggleHandsFree();
+      await settle();
+      runtime.toggleHandsFree();
+      await settle();
+      await h.landFirst();
+      break;
     case "MODE, hidden at the grant, then its event":
       h.holdGrant();
       runtime.toggleHandsFree();
@@ -533,6 +546,14 @@ async function apply(h: Harness, event: Trigger): Promise<void> {
       h.hideBeforeItsEvent();
       await h.grant();
       h.fireVisibilityChange();
+      break;
+    case "MODE, hidden at the grant, shown before its event":
+      h.holdGrant();
+      runtime.toggleHandsFree();
+      await settle();
+      h.hideBeforeItsEvent();
+      await h.grant();
+      h.setVisibility("visible");
       break;
     case "page hidden, load lands":
       h.setVisibility("hidden");
@@ -601,6 +622,7 @@ const rows: Row[] = [
   { from: "loading", event: "MODE, load lands", seen: { ...STOPPED, said: OFF, asked: 0 } },
   { from: "loading", event: "MODE twice", seen: { ...ON, said: LOADING, loads: 1, asked: 0 } },
   { from: "loading", event: "MODE twice, first load fails, second lands", seen: { ...ON, said: LISTENING, error: null, loads: 1, asked: 1 } },
+  { from: "loading", event: "MODE twice, first load lands", seen: { ...ON, said: LOADING, loads: 1, asked: 0 } },
   { from: "loading", event: "load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
   { from: "loading", event: "load fails", seen: { ...STOPPED, said: LOAD_FAILED, error: LOAD_FAILED, asked: 0 } },
   { from: "loading", event: "page hidden", seen: { ...STOPPED, said: HIDDEN } },
@@ -627,6 +649,7 @@ const rows: Row[] = [
   { from: "off", event: "MODE", seen: { ...ON, said: LISTENING, loads: 0, asked: 1 } },
   { from: "off", event: "page hidden", seen: { ...STOPPED, said: HIDDEN } },
   { from: "off", event: "MODE, hidden at the grant, then its event", seen: { ...STOPPED, said: HIDDEN, error: null, asked: 1 } },
+  { from: "off", event: "MODE, hidden at the grant, shown before its event", seen: { ...STOPPED, said: HIDDEN, error: null, asked: 1 } },
   { from: "off", event: "pagehide", seen: { ...STOPPED, said: LEFT } },
   { from: "off", event: "dispose", seen: { ...STOPPED, said: LEFT } },
   { from: "off", event: "route", seen: { ...STOPPED, said: ROUTE } },
