@@ -434,6 +434,7 @@ impl AppState {
         let (shutdown, _) = watch::channel(false);
         let projection = AgentProjection::new();
         let delivery = DeliveryState::new();
+        let audio = Mutex::new(AudioQueue::new(delivery.clone()));
         let speech_deadline = speaker.speech_deadline;
         let mut coordinator = switchboard.coordinator();
         let display_gate = Arc::new(Mutex::new(DisplayGateState::new()));
@@ -602,7 +603,7 @@ impl AppState {
                 operation_transition: Mutex::new(()),
                 active_operations: Mutex::new(HashMap::new()),
                 shutdown,
-                audio: Mutex::new(AudioQueue::new()),
+                audio,
                 speech_deadline,
             }
         }))

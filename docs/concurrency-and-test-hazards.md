@@ -754,19 +754,32 @@ requester, writes the spoken line, or shows the page a speech error.
 | admitting | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
 | admitting | the provider refuses | `Failed` | the provider's error | at the current generation | no |
 | draining | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
-| draining | the generation moves on | `Stopped(Superseded)` | not spoken | no | no |
+| draining | the call hands off before any of its audio reached the page | `Stopped(Superseded)` | not spoken | no | no |
 | draining | the body fails, or the task panics | `Failed` | the error | at the current generation | no |
-| draining | the body ends, a browser took it | `Spoken` | spoken | no | if `log_spoken` |
-| draining | the body ends, no browser took it | `NotDelivered` | not delivered | no | no |
+| draining | the body ends, and a browser took some of its slot | `Spoken` | spoken | no | if `log_spoken` |
+| draining | the body ends, and no browser took any of its slot | `NotDelivered` | not delivered | no | no |
+| draining | the body ends behind an open slot, and the call hands off before that slot closes | `Stopped(Superseded)` | not spoken | no | no |
 
-Only a rescue stops a request, and it retires the generation first, so a
-`Stopped` request never reaches the page (#247). Every end but `Spoken` and
-`NotDelivered` gives back what the request holds, its pending continuity text
-and its audio slot (`Utterance::abandon`). The drain does this the moment its
-own body ends, because the slots queued behind it emit only once it is
-closed: a later drain that finished first would find its audio held back and
-report it undelivered. The completion does it again for the ends the drain
-never sees (admission, an abort, a panic); both steps are no-ops once done.
-`every_end_of_a_speech_request_completes_it_once` in
+Only a rescue or a hand-off stops a request, and either moves the generation
+first, so a `Stopped` request never reaches the page as said (#247, #437).
+Every end but `Spoken` and `NotDelivered` gives back what the request holds,
+its pending continuity text and its audio slot (`Utterance::abandon`). The
+drain does this the moment its own body ends, because the slots queued
+behind it emit only once it is closed. The completion does it again for the
+ends the drain never sees (admission, an abort, a panic); both steps are
+no-ops once done. `every_end_of_a_speech_request_completes_it_once` in
 `apps/backend/tests/test_speech.rs` drives each row it can reach through the
 real worker.
+
+A request is answered from what the pages took of its own slot, whichever
+call sent it (#424). The audio queue (`AudioQueue` in `delivery.rs`) sends a
+slot's events only once every slot before it has closed, sends them under
+its own lock, and records on the slot whether a page took any of them. So
+the start of an utterance that waited behind another one counts as heard
+when the other one's close sends it, and the hand-off rule above lets that
+utterance finish. A drain whose body ends while its slot is still held
+waits for the slot to go out before it answers (`went_out` in `speech.rs`),
+and stops waiting, superseded, if the call hands off first: the page drops
+an old leg's audio that starts after a hand-off. That wait wakes on the
+line's `operation_changed` notification, made before it reads the
+generation, as `admit_turn` makes its own.

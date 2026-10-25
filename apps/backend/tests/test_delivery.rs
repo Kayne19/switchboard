@@ -47,83 +47,77 @@ async fn a_connection_a_full_queue_behind_is_dropped_and_told_so() {
     assert!(!delivery.connected());
 }
 
+/// What a page was sent of the audio queue, in order.
+fn audio_sent(page: &mut DeliveryConnection) -> Vec<String> {
+    std::iter::from_fn(|| page.receiver.try_recv().ok())
+        .map(|frame| match frame {
+            DeliveryFrame::Event { event, .. } => match event {
+                Event::AudioStart { sequence, .. } => format!("start {sequence}"),
+                Event::AudioChunk { audio } => format!("chunk {audio:?}"),
+                Event::AudioDone { sequence, .. } => format!("done {sequence}"),
+                Event::Json(value) => value["type"].as_str().unwrap_or_default().to_owned(),
+            },
+            DeliveryFrame::Message(_) => "message".to_owned(),
+        })
+        .collect()
+}
+
+/// A queue and a page connected to what it sends.
+fn queue_and_page() -> (AudioQueue, DeliveryConnection) {
+    let delivery = DeliveryState::new();
+    let page = delivery.register();
+    (AudioQueue::new(delivery), page)
+}
+
 #[test]
 fn audio_queue_emits_reserved_sequences_in_order_and_drops_on_clear() {
-    let mut queue = AudioQueue::new();
+    let (mut queue, mut page) = queue_and_page();
     let first = queue.reserve(3);
     let second = queue.reserve(3);
-    assert!(queue.start(second, 3).is_empty());
-    assert!(queue.append(second, 3, vec![2]).is_empty());
-    assert!(queue.finish(second, 3).is_empty());
-    assert!(matches!(
-        queue.start(first, 3).as_slice(),
-        [Event::AudioStart { sequence: 0, .. }]
-    ));
-    assert!(matches!(
-        queue.append(first, 3, vec![1]).as_slice(),
-        [Event::AudioChunk { audio }] if audio == &[1]
-    ));
-    let events = queue.finish(first, 3);
-    assert!(matches!(
-        events.as_slice(),
-        [
-            Event::AudioDone { sequence: 0, .. },
-            Event::AudioStart { sequence: 1, .. },
-            Event::AudioChunk { audio },
-            Event::AudioDone { sequence: 1, .. }
-        ] if audio == &[2]
-    ));
+    queue.start(second, 3);
+    queue.append(second, 3, vec![2]);
+    queue.finish(second, 3);
+    assert!(audio_sent(&mut page).is_empty());
+    queue.start(first, 3);
+    assert_eq!(audio_sent(&mut page), ["start 0"]);
+    queue.append(first, 3, vec![1]);
+    assert_eq!(audio_sent(&mut page), ["chunk [1]"]);
+    queue.finish(first, 3);
+    assert_eq!(
+        audio_sent(&mut page),
+        ["done 0", "start 1", "chunk [2]", "done 1"]
+    );
     let stale = queue.reserve(3);
     queue.clear();
-    assert!(queue.finish(stale, 3).is_empty());
+    queue.finish(stale, 3);
+    assert!(audio_sent(&mut page).is_empty());
 }
 
 #[test]
 fn audio_queue_barrier_waits_for_reserved_audio_before_it() {
-    let mut queue = AudioQueue::new();
+    let (mut queue, mut page) = queue_and_page();
     let audio = queue.reserve(1);
     let marker = queue.reserve(1);
-    assert!(queue
-        .barrier(marker, 1, json!({"type":"barrier"}))
-        .is_empty());
-    assert!(matches!(
-        queue.start(audio, 1).as_slice(),
-        [Event::AudioStart { sequence: 0, .. }]
-    ));
-    let events = queue.finish(audio, 1);
-    assert!(matches!(
-        events.as_slice(),
-        [
-            Event::AudioDone { sequence: 0, .. },
-            Event::Json(value)
-        ] if value["type"] == "barrier"
-    ));
+    queue.barrier(marker, 1, json!({"type":"barrier"}));
+    assert!(audio_sent(&mut page).is_empty());
+    queue.start(audio, 1);
+    assert_eq!(audio_sent(&mut page), ["start 0"]);
+    queue.finish(audio, 1);
+    assert_eq!(audio_sent(&mut page), ["done 0", "barrier"]);
 }
 
 #[test]
 fn audio_queue_cancellation_releases_following_audio() {
-    let mut queue = AudioQueue::new();
+    let (mut queue, mut page) = queue_and_page();
     let first = queue.reserve(1);
     let second = queue.reserve(1);
     // An utterance given up before any audio closes its slot the same way.
-    assert!(matches!(
-        queue.finish(first, 1).as_slice(),
-        [
-            Event::AudioStart { sequence: 0, .. },
-            Event::AudioDone { sequence: 0, .. }
-        ]
-    ));
-    assert!(matches!(
-        queue.start(second, 1).as_slice(),
-        [Event::AudioStart { sequence: 1, .. }]
-    ));
-    assert!(matches!(
-        queue.append(second, 1, vec![7]).as_slice(),
-        [Event::AudioChunk { audio }] if audio == &[7]
-    ));
-    let events = queue.finish(second, 1);
-    assert!(matches!(
-        events.as_slice(),
-        [Event::AudioDone { sequence: 1, .. }]
-    ));
+    queue.finish(first, 1);
+    assert_eq!(audio_sent(&mut page), ["start 0", "done 0"]);
+    queue.start(second, 1);
+    assert_eq!(audio_sent(&mut page), ["start 1"]);
+    queue.append(second, 1, vec![7]);
+    assert_eq!(audio_sent(&mut page), ["chunk [7]"]);
+    queue.finish(second, 1);
+    assert_eq!(audio_sent(&mut page), ["done 1"]);
 }
