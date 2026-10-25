@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { type DaemonEvent, DaemonCommandError, DaemonProtocolError, PrimeDaemonPort } from "../src/daemon_port.ts";
+import { HostLink } from "../src/link.ts";
+import { command, FakeService, type Message } from "./fake_service.ts";
 
 // A stand-in for the installed prime-agent package: dist/index.js exports a
 // DaemonClient that records what the adapter does. No real prime-agent runs.
@@ -108,5 +110,51 @@ test("adapter closes the client when the dial or the hello fails, so a retry lea
 		const port = new PrimeDaemonPort("/nonexistent/daemon.sock", pkg);
 		await assert.rejects(port.connect(), /timed out after 5000ms/);
 		assert.deepEqual(g.log.at(-1), ["close"], `${failure}: the client is closed`);
+	}
+});
+
+test("a daemon request that fails in transport is answered daemon_unreachable, not the daemon's refusal", async () => {
+	const pkg = fakePackage();
+	const g = globals(7, "0.9.5");
+	g.respond = (command) => {
+		if (command.type === "set_model") throw new Error("timed out after 60000ms");
+		if (command.type === "set_thinking_level") return { success: false, error: "thinking level not supported" };
+		return { success: true, data: {} };
+	};
+	const port = new PrimeDaemonPort("/nonexistent/daemon.sock", pkg);
+	await port.connect();
+	const service = await FakeService.start();
+	const link = new HostLink({
+		url: service.url,
+		hostId: "scriptorium",
+		token: "test-host-token-not-a-secret",
+		gitSha: "abc123",
+		versions: () => ({ prime_agent_client: "0.9.5", prime_agent_daemon: "0.9.6", daemon_protocol: 7 }),
+		command: async (name) => {
+			if (name === "set_model") return port.setModel("a1", "p", "m");
+			if (name === "set_thinking") return port.setThinking("a1", "low");
+			if (name === "abort") return port.abort("a1");
+			if (name === "list_models") return new PrimeDaemonPort("/nonexistent/daemon.sock", pkg).listModels();
+			throw new Error(`unexpected command ${name}`);
+		},
+		sessions: () => [],
+		describe: async (handle) => ({ session: handle }),
+		heartbeatMs: 20,
+		backoffInitialMs: 10,
+		backoffMaxMs: 40,
+	});
+	try {
+		link.start();
+		const l = await service.link(0);
+		await l.next((m) => m.type === "synced");
+		const code = async (id: string, name: string) => ((await command(l, 1, id, name)).error as Message).code as string;
+		assert.equal(await code("refusal", "set_thinking"), "daemon_error", "the daemon ran the command and refused it");
+		assert.equal(await code("timeout", "set_model"), "daemon_unreachable", "the daemon's answer never came back");
+		port.close();
+		assert.equal(await code("unreachable", "abort"), "daemon_unreachable", "the host agent is not connected to the daemon");
+		assert.equal(await code("never-connected", "list_models"), "daemon_unreachable", "the host agent never connected to the daemon");
+	} finally {
+		link.stop();
+		await service.close();
 	}
 });
