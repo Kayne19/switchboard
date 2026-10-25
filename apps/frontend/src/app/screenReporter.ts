@@ -178,17 +178,20 @@ export class ScreenReporter {
         // seqs are the delivery's, and a same-generation epoch keeps their
         // display calls waiting.
         return { ...state, line: IDLE, queued: null, scene: null, generation: event.generation };
-      case "lineDown":
-        return { ...state, line: UNREADY, appliedSeq: NOTHING_APPLIED };
+      case "lineDown": {
+        // The service may never have read the report on the wire, so the
+        // rejection it carried waits to go again.
+        const lost = line.kind === "awaiting" ? line.report.rejected : undefined;
+        const rejections = lost ? withRejection(state.rejections, lost) : state.rejections;
+        return { ...state, line: UNREADY, appliedSeq: NOTHING_APPLIED, rejections };
+      }
       case "applied":
         return { ...state, appliedSeq: Math.max(state.appliedSeq, event.seq) };
       case "rejected": {
         // Kept in seq order, so the next one waiting is the lowest and the
         // ceiling in `build` holds below every rejection still waiting, even
         // one declined after a newer seq.
-        const others = state.rejections.filter((each) => each.seq !== event.rejection.seq);
-        const rejections = [...others, event.rejection].sort((a, b) => a.seq - b.seq);
-        return { ...state, rejections };
+        return { ...state, rejections: withRejection(state.rejections, event.rejection) };
       }
       default:
         return unreachable(event);
@@ -238,6 +241,12 @@ export class ScreenReporter {
   private armDeadline(report: ScreenStateReport): ReturnType<typeof setTimeout> {
     return setTimeout(() => this.transition({ kind: "ackOverdue", report }), ACK_DEADLINE_MS);
   }
+}
+
+/** `rejections` with `rejection` in seq order, in place of one for the same seq. */
+function withRejection(rejections: Rejection[], rejection: Rejection): Rejection[] {
+  const others = rejections.filter((each) => each.seq !== rejection.seq);
+  return [...others, rejection].sort((a, b) => a.seq - b.seq);
 }
 
 function unreachable(value: never): never {

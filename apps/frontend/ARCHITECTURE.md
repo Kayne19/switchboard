@@ -367,7 +367,7 @@ at this generation.
 | `unready` | — | scene | `unready` | the report is queued |
 | `unready` | — | ack | `unready` | none: an ack answers a report sent after the epoch |
 | any | — | `epoch` | `idle` | the generation is the new one; the report on the wire and the queued one are given up |
-| any | — | line down | `unready` | the report on the wire is given up, and the applied `seq` is forgotten |
+| any | — | line down | `unready` | the report on the wire is given up and its rejection, if any, joins the list again; the applied `seq` is forgotten |
 | `idle` | — | scene | `awaiting` | the report goes; a socket that refuses it leaves it queued, in `idle` |
 | `idle` | — | ack | `idle`, or `awaiting` | the queued report, if any, goes |
 | `awaiting` | the report, its deadline | scene equal to the report on the wire | `awaiting` | the queued report is dropped |
@@ -389,7 +389,8 @@ the delivery's, and a same-generation epoch leaves their display calls
 waiting) and forgets the scene. A line down forgets the applied `seq`: a
 `seq` is the service process's delivery counter, so the next connection may
 reach a restarted service that counts again from 0, and its snapshot replay
-raises the applied `seq` again. The rejections stay through it: the same
+raises the applied `seq` again. The rejections stay through it, and the one
+on the wire comes back, since the service may not have read it: the same
 service may still be waiting on them, and they only hold the applied `seq`
 lower. The phase-by-event
 table in `tests/unit/screenReporter.test.tsx` pins each row through the

@@ -782,7 +782,9 @@ the page applies or declines a frame) carries two more fields:
   passes it only once a report has carried it. A report carries the lowest;
   it leaves the list only when the report that
   carries it is the one actually transmitted, so an intervening,
-  rejection-less report can't silently swallow it. While one is left, the
+  rejection-less report can't silently swallow it. If the line drops before
+  that report's ack, the service may never have read it, so the rejection
+  joins the list again and goes on the next connection. While one is left, the
   page reports again when the line is free, one rejection per report
   (#378). Each waits for the ack of the report before it, so several declined
   together reach the service one round trip apart.

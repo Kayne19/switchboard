@@ -107,6 +107,22 @@ function rejectedSince(mark: number): number[] {
     .flatMap((report) => (report.rejected ? [(report.rejected as { seq: number }).seq] : []));
 }
 
+// The declined seqs some report's applied_seq reached before any of
+// `reports` carried their rejection: the service would answer those
+// displays rendered.
+function passedBeforeCarried(reports: Report[], declined: number[]): number[] {
+  const carried = new Set<number>();
+  const passed = new Set<number>();
+  for (const report of reports) {
+    const rejected = report.rejected as { seq: number } | undefined;
+    if (rejected) carried.add(rejected.seq);
+    for (const seq of declined) {
+      if ((report.applied_seq as number) >= seq && !carried.has(seq)) passed.add(seq);
+    }
+  }
+  return [...passed];
+}
+
 /** Connected, the epoch announced, and every report acknowledged. */
 async function idle(generation = 1) {
   await open();
@@ -546,6 +562,22 @@ describe('screen reports: phase x event', () => {
         if ((report.applied_seq as number) >= 5) expect(out.has(5)).toBe(true);
       }
       expect(sent().at(-1)?.applied_seq).toBe(9);
+    });
+
+    it('idle | display rejected, then line down before the ack: the rejection goes again on the next connection', async () => {
+      // The service may never have read the report that carried it, and its
+      // display call may still wait when the same service answers again.
+      await idle();
+      await receive(show('a', 1));
+      await settle();
+      await receive(unknown(5));
+      expect(sent().at(-1)?.rejected).toEqual({ seq: 5, reason: expect.any(String) });
+      await lineDown();
+      await reconnect();
+      await receive({ type: 'epoch', generation: 1 }, status, show('a', 9));
+      await settle();
+      expect(passedBeforeCarried(socket().reports(), [5])).toEqual([]);
+      expect(socket().reports().at(-1)?.applied_seq).toBe(9);
     });
   });
 
