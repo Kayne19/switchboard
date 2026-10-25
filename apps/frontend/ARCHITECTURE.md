@@ -29,6 +29,7 @@ The reducer stores semantic objects by stable ID, insertion order, speech state,
 - the agent's objects, order and speech (`agentObjects`, `agentOrder`, `agentSpeech`), from the `display` channel;
 - the runtime's (`runtimeObjects`, `runtimeOrder`, `runtimeSpeech`): the conversation and other page-owned objects, whose IDs start with `RUNTIME_ID_PREFIX` (`__runtime/`), so an agent ID never lands there;
 - `objects`, `order` and `speech`, the two merged, which the renderer reads;
+- `lineError`, the line's standing error (`runtime_say` and `runtime_unsay` to `RUNTIME_LINE_ERROR_ID`), held apart from speech so that no line Damocles says replaces it;
 - `workspace` (the requested view, and the effective view: the one the page draws and reports, `computeEffectiveView`), `activity`, `toolRun`, `listening`, `focusId` and `revision`.
 
 Stable IDs are critical. Reusing an ID for `show` updates the object in place and allows React and Motion to preserve continuity.
@@ -62,9 +63,10 @@ A visual primary's composition is named for its type (`sceneKind`, from `VISUAL_
 Every composition is drawn by one `SceneShell` (`src/components/Scenes.tsx`).
 The shell owns what every page has: the frame and heading, the Damocles
 presence, the rail (metrics, live response, note, progress, tool activity),
-the footer caption, the CHANNEL / MODE stack in the bottom-left corner, and
-the transcript entry point. A composition only fills the main slot and names
-what its rail carries. A feature that crosses compositions is added to the
+the footer caption, the CHANNEL / MODE stack in the bottom-left corner with
+the line's error at its head, and the transcript entry point. A composition
+only fills the main slot and names what its rail carries. A feature that
+crosses compositions is added to the
 shell once; it is never wired into a composition by hand. The presence reads
 the voice level from the registered voice runtime, so no page can leave it
 out.
@@ -91,6 +93,15 @@ what the microphone is doing. With no runtime -- the demo page -- there is
 nothing to switch and the control is disabled. No composition labels that
 corner: a per-page `DISPLAY / ...` label stood there before, and the
 conversation page carried a static stack that always read PUSH-TO-TALK.
+
+A standing line error heads the corner stack, above CHANNEL and MODE, on
+every page but the system view, whose STATUS row says it (see "Transport
+boundary"). The shell measures how tall it stands (`useLineErrorRoom`) and
+sets that as `--line-error-room`; each layout keeps its foot that much
+higher, so the error covers nothing the page draws: a layout drawn as a
+grid on the scene (idle, conversation, theater, system) by the scene's own
+bottom padding, a content scene by its grid's foot. A long error scrolls in
+at most five lines, so the room stays bounded.
 
 The theater view (`theater`, #277) is one more layout of the shell, not a
 composition: the primary alone, in the focus box (`StagedObject` in
@@ -184,6 +195,7 @@ lifecycle; each reader owns only what it reads.
 | `ListViewport` | `src/primitives/ListViewport.tsx` | whether the list scrolls, across, and the pinned band's depth |
 | `Spot`, `WeatherPrimitive` | `src/primitives/WeatherPrimitive.tsx` | whether the spot line sets the chance of rain aside; the condition line's width in a small slot |
 | `useRailUnder` | `src/components/Scenes.tsx` | whether the rail stands under the main column |
+| `useLineErrorRoom` | `src/components/Scenes.tsx` | how tall the line's error stands at the head of the corner stack |
 | `useCalloutPlaced` | `src/components/Scenes.tsx` | whether the main slot's graph draws the scene's note as a callout (see below) |
 | `useCrowded`, `useRailFit` | `src/components/Rail.tsx` | whether the note leads a crowded column; under the column, the rail's fit and the note's floor |
 | `ChartNotes` | `src/components/ChartNotes.tsx` | the chart canvas the notes' layer follows |
@@ -394,10 +406,14 @@ Every failure the runtime cannot recover from is reported as status text with
 `statusError` set -- no microphone, a browser that cannot record, a recorder
 that stopped, a line that will not connect. `runtime.tsx` puts that text on
 screen through `runtime_say` to `RUNTIME_LINE_ERROR_ID`, as a server `error`
-is, once per text; the rail draws it as `LINE / ERROR`, in red, never as
-Damocles's explanation. Ordinary status -- the idle line, a turn under way --
-is never drawn: the presence itself shows what the line is doing. A status
-that kept the flag of an error before it was drawn as that error, so the turn
+is, once per text. The shell draws it once, on every page but the system
+view, as `LINE / ERROR` in red at the head of the corner stack (see "Scene
+shell"), never as Damocles's explanation. The reducer holds it apart from
+speech (`ControllerState.lineError`), so no line Damocles says or is heard
+saying replaces it, and the rail's note slot never carries it, so no note
+does either. Ordinary status -- the idle line, a turn under way -- is never
+drawn: the presence itself shows what the line is doing. A status that kept
+the flag of an error before it was drawn as that error, so the turn
 after a failure put "Connected. Tap Talk and speak." beside the visual
 (#213). An error with nowhere to go is a browser that fails silently, which
 is what a caller tapping Damocles on an iPad saw.
