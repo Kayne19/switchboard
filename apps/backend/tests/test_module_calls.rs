@@ -980,10 +980,6 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
     );
 }
 
-// A page left open across a service restart reports the highest seq it
-// applied from the old process, whose delivery counter ran far ahead of this
-// one's (it starts again at 0). No page can have applied a seq this process
-// has not sent, so such a report confirms nothing.
 #[tokio::test]
 async fn an_applied_seq_this_process_never_sent_confirms_nothing() {
     let state = state();
@@ -1003,11 +999,8 @@ async fn an_applied_seq_this_process_never_sent_confirms_nothing() {
     let (code, body) = agent_call_json(&state, "/display", diagram_show()).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body["rendered"], false, "{body}");
-    drop(connection);
 }
 
-// The same page can hold a rejection of an old process's seq, which this
-// process has not reached yet. It names no display of this process's.
 #[tokio::test]
 async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
     let state = state();
@@ -1017,6 +1010,7 @@ async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
         .0
         .delivery
         .publish_sequenced(Event::Json(json!({"type":"activity"})));
+    let unsent = last + 1;
     handle_text_frame(
         &state,
         connection.epoch,
@@ -1024,7 +1018,7 @@ async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
         &mut None,
         &json!({"type":"screen_state","view":"auto","has_visual":false,
                 "generation":generation,
-                "rejected":{"seq":last + 1,"reason":"the old process's display"}})
+                "rejected":{"seq":unsent,"reason":"the old process's display"}})
         .to_string(),
     )
     .await
@@ -1032,7 +1026,6 @@ async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
     let (code, body) = agent_call_json(&state, "/display", diagram_show()).await;
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body.get("rejected"), None, "{body}");
-    drop(connection);
 }
 
 #[tokio::test]

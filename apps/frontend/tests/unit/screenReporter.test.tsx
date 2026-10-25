@@ -254,8 +254,6 @@ describe('screen reports: phase x event', () => {
     });
 
     it('idle | nothing applied yet: the reports carry no applied_seq', async () => {
-      // Seq 0 is real: a report of it would confirm the first display the
-      // service sends.
       await idle();
       expect(sent().length).toBeGreaterThan(0);
       expect(sent().map((report) => report.applied_seq)).toEqual(sent().map(() => undefined));
@@ -373,9 +371,6 @@ describe('screen reports: phase x event', () => {
     });
 
     it('line down, then a new connection to a restarted service: no report names a seq the old one sent', async () => {
-      // A seq is the service process's delivery counter, and a restarted
-      // process counts again from 0: one the old process sent says nothing
-      // about what the new one has.
       await idle(4);
       await receive(show('a', 500));
       await settle();
@@ -536,9 +531,6 @@ describe('screen reports: phase x event', () => {
     });
 
     it('a rejection not yet sent survives a reconnect, and no report passes it before it is out', async () => {
-      // The same service may answer the reconnect while the display call
-      // for seq 5 still waits, and its snapshot replays the stage at a
-      // later seq.
       await awaiting();
       const mark = sent().length;
       await receive(unknown(5));

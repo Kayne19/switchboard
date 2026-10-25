@@ -548,19 +548,13 @@ impl DisplayGateState {
     }
 
     /// The active page's `report`, with the newest display sequence it has
-    /// applied and the one it could not render, if any. A sequence `delivery`
-    /// has not reached confirms and rejects nothing: this process never sent
-    /// it, so it is an earlier process's, from a page open across a restart.
+    /// applied and the one it could not render, if any.
     pub(crate) fn report(
         &mut self,
         report: ScreenReport,
         applied_seq: Option<u64>,
         rejected: Option<(u64, String)>,
-        delivery: &DeliveryState,
     ) {
-        let next = delivery.next_sequence();
-        let applied_seq = applied_seq.filter(|&seq| seq < next);
-        let rejected = rejected.filter(|&(seq, _)| seq < next);
         let generation = report.generation;
         self.screen = report;
         self.confirmations

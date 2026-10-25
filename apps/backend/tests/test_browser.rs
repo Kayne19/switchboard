@@ -1079,8 +1079,6 @@ fn snapshot_types(messages: &[ServerMessage]) -> Vec<String> {
         .collect()
 }
 
-/// A display sent to every page, as an agent's is: its `seq`, which a page
-/// that applied it reports.
 async fn a_display_sent(state: &AppState) -> u64 {
     let action = json!({"op":"show","id":"m1","type":"metric","role":"primary",
                         "data":{"label":"m1","value":"1"}});
