@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { type DaemonEvent, DaemonCommandError, DaemonProtocolError, PrimeDaemonPort } from "../src/daemon_port.ts";
 import { HostLink } from "../src/link.ts";
+import { SessionManager } from "../src/sessions.ts";
 import { command, FakeService, type Message } from "./fake_service.ts";
 
 // A stand-in for the installed prime-agent package: dist/index.js exports a
@@ -14,11 +15,13 @@ const g = globalThis.__sbFakePrime;
 export class DaemonClient {
   constructor(socketPath) { this.socketPath = socketPath; this.listeners = []; g.log.push(["new", socketPath]); g.client = this; }
   get hello() { return g.hello; }
+  get isConnected() { return !g.socketDestroyed; }
   async connect() { g.log.push(["connect"]); if (g.connectError) throw new Error(g.connectError); }
   async waitForHello() { if (g.helloError) throw new Error(g.helloError); return g.hello; }
   onMessage(l) { this.listeners.push(l); return () => {}; }
   onClose(l) { this.closeListener = l; return () => {}; }
   async request(command, timeoutMs, options) {
+    if (g.socketDestroyed) throw new Error("Cannot send daemon command " + command.type + " because the Prime Agent daemon is not connected.");
     g.log.push(["request", command, timeoutMs, options?.recoverable]);
     if (g.unsupported.includes(command.type)) { const e = new Error("capability unavailable: " + command.type); e.name = "DaemonCapabilityUnavailableError"; throw e; }
     return g.respond(command);
@@ -37,8 +40,9 @@ interface FakeGlobals {
 	unsupported: string[];
 	connectError?: string;
 	helloError?: string;
+	socketDestroyed?: boolean;
 	respond: (command: Record<string, unknown>) => { success: boolean; data?: unknown; error?: string };
-	client?: { listeners: ((m: unknown) => void)[] };
+	client?: { listeners: ((m: unknown) => void)[]; closeListener?: (error: Error) => void };
 }
 
 function fakePackage(): string {
@@ -113,16 +117,15 @@ test("adapter closes the client when the dial or the hello fails, so a retry lea
 	}
 });
 
-test("a daemon request that fails in transport is answered daemon_unreachable, not the daemon's refusal", async () => {
-	const pkg = fakePackage();
-	const g = globals(7, "0.9.5");
-	g.respond = (command) => {
-		if (command.type === "set_model") throw new Error("timed out after 60000ms");
-		if (command.type === "set_thinking_level") return { success: false, error: "thinking level not supported" };
-		return { success: true, data: {} };
-	};
-	const port = new PrimeDaemonPort("/nonexistent/daemon.sock", pkg);
+function sent(g: FakeGlobals, type: string): boolean {
+	return g.log.some((e) => e[0] === "request" && (e[1] as { type: string }).type === type);
+}
+
+async function withHostAgent(run: (errorCode: (name: string, args?: Message) => Promise<string | undefined>, port: PrimeDaemonPort) => Promise<void>): Promise<void> {
+	const port = new PrimeDaemonPort("/nonexistent/daemon.sock", fakePackage());
 	await port.connect();
+	const manager = new SessionManager({ port, stateFile: path.join(mkdtempSync(path.join(os.tmpdir(), "sb-host-")), "sessions.json"), emit: () => {} });
+	await manager.createSession("homelab", { cwd: "/w" });
 	const service = await FakeService.start();
 	const link = new HostLink({
 		url: service.url,
@@ -130,13 +133,7 @@ test("a daemon request that fails in transport is answered daemon_unreachable, n
 		token: "test-host-token-not-a-secret",
 		gitSha: "abc123",
 		versions: () => ({ prime_agent_client: "0.9.5", prime_agent_daemon: "0.9.6", daemon_protocol: 7 }),
-		command: async (name) => {
-			if (name === "set_model") return port.setModel("a1", "p", "m");
-			if (name === "set_thinking") return port.setThinking("a1", "low");
-			if (name === "abort") return port.abort("a1");
-			if (name === "list_models") return new PrimeDaemonPort("/nonexistent/daemon.sock", pkg).listModels();
-			throw new Error(`unexpected command ${name}`);
-		},
+		command: (name, args) => manager.handle(name, args),
 		sessions: () => [],
 		describe: async (handle) => ({ session: handle }),
 		heartbeatMs: 20,
@@ -147,14 +144,70 @@ test("a daemon request that fails in transport is answered daemon_unreachable, n
 		link.start();
 		const l = await service.link(0);
 		await l.next((m) => m.type === "synced");
-		const code = async (id: string, name: string) => ((await command(l, 1, id, name)).error as Message).code as string;
-		assert.equal(await code("refusal", "set_thinking"), "daemon_error", "the daemon ran the command and refused it");
-		assert.equal(await code("timeout", "set_model"), "daemon_unreachable", "the daemon's answer never came back");
-		port.close();
-		assert.equal(await code("unreachable", "abort"), "daemon_unreachable", "the host agent is not connected to the daemon");
-		assert.equal(await code("never-connected", "list_models"), "daemon_unreachable", "the host agent never connected to the daemon");
+		let id = 0;
+		await run(async (name, args = {}) => ((await command(l, 1, `c${id++}`, name, { session: "a1", ...args })).error as Message | undefined)?.code as string | undefined, port);
 	} finally {
 		link.stop();
 		await service.close();
+		port.close();
+	}
+}
+
+test("a command the host agent could not send is answered daemon_error, as a refusal is: nothing changed on the daemon", async () => {
+	const g = globals(7, "0.9.5");
+	const answer = g.respond;
+	g.respond = (command) => (command.type === "set_thinking_level" ? { success: false, error: "thinking level not supported" } : answer(command));
+	await withHostAgent(async (errorCode, port) => {
+		assert.equal(await errorCode("set_thinking", { level: "low" }), "daemon_error", "the daemon refused it");
+		g.socketDestroyed = true;
+		assert.equal(await errorCode("prompt", { message: "hi" }), "daemon_error", "the socket closed before its close event cleared the client");
+		port.close();
+		assert.equal(await errorCode("set_model", { provider: "p", model: "m" }), "daemon_error", "the host agent has no daemon connection");
+		assert.ok(!sent(g, "prompt") && !sent(g, "set_model"), "neither command reached the daemon");
+	});
+});
+
+test("a command sent to the daemon that gets no answer is answered daemon_unreachable: the daemon may have run it", async () => {
+	const g = globals(7, "0.9.5");
+	const answer = g.respond;
+	g.respond = (command) => {
+		if (command.type === "prompt") throw new Error("Connection to the Prime Agent daemon closed.");
+		if (command.type === "set_model") throw new Error("Timed out after 60000ms waiting for the Prime Agent daemon response.");
+		return answer(command);
+	};
+	await withHostAgent(async (errorCode) => {
+		assert.equal(await errorCode("prompt", { message: "hi" }), "daemon_unreachable", "the connection closed before the answer");
+		assert.equal(await errorCode("set_model", { provider: "p", model: "m" }), "daemon_unreachable", "the request timed out");
+		assert.ok(sent(g, "prompt") && sent(g, "set_model"), "both commands reached the daemon");
+	});
+});
+
+test("a command whose follow-up fails after the daemon applied its change is answered daemon_unreachable: its state is unknown", async () => {
+	const changes = [
+		["set_model", { provider: "p", model: "m" }, "set_model", "get_state"],
+		["set_thinking", { level: "low" }, "set_thinking_level", "get_state"],
+		["create_session", { project: "homelab", config: { cwd: "/w" } }, "create", "attach"],
+		["open_session", { session_id: "s2", cwd: "/w", project: "homelab" }, "create", "attach"],
+	] as const;
+	for (const [name, args, change, followUp] of changes) {
+		for (const failure of ["refused", "lost", "not sent"] as const) {
+			const g = globals(7, "0.9.5");
+			const answer = g.respond;
+			let armed = false;
+			g.respond = (command) => {
+				if (armed && command.type === change && failure === "not sent") g.client?.closeListener?.(new Error("daemon closed"));
+				if (armed && command.type === followUp && failure === "refused") return { success: false, error: "no such session" };
+				if (armed && command.type === followUp && failure === "lost") throw new Error("Connection to the Prime Agent daemon closed.");
+				if (command.sessionPath) return { success: true, data: { activeSessionId: "a2", sessionId: "s2", sessionName: "sb-homelab-old", cwd: "/w" } };
+				return answer(command);
+			};
+			await withHostAgent(async (errorCode) => {
+				g.log.length = 0;
+				armed = true;
+				assert.equal(await errorCode(name, args), "daemon_unreachable", `${name}, ${followUp} ${failure}`);
+				assert.ok(sent(g, change), `${name}: the change reached the daemon`);
+				assert.equal(sent(g, followUp), failure !== "not sent", `${name}, ${followUp} ${failure}: ${followUp} sent`);
+			});
+		}
 	}
 });
