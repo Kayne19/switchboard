@@ -1250,6 +1250,31 @@ impl TtsTransport for ImmediateTtsTransport {
     }
 }
 
+/// A body that streams one chunk and then is cut by the speech deadline, as
+/// `TtsChunkStream` cuts one whose provider is still sending when the
+/// request's deadline passes. The cut is yielded by the body itself so a
+/// test does not race a real clock.
+#[cfg(test)]
+struct CutByDeadlineTtsTransport;
+
+#[cfg(test)]
+impl TtsTransport for CutByDeadlineTtsTransport {
+    fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
+        Box::pin(async {
+            let stream = futures_util::stream::iter([
+                Ok::<Vec<u8>, AudioError>(vec![1, 2, 3]),
+                Err(AudioError::Deadline),
+            ]);
+            Ok(TtsResponse {
+                status: StatusCode::OK,
+                content_length: None,
+                request_id: Some("cut-request-id".into()),
+                stream: Box::pin(stream) as TtsByteStream,
+            })
+        })
+    }
+}
+
 #[cfg(test)]
 impl TtsTransport for OfflineTtsTransport {
     fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
@@ -1294,6 +1319,16 @@ impl Speaker {
             max_chars,
             speech_deadline,
             Arc::new(GatedTtsTransport { gate }),
+        )
+    }
+
+    /// A configured speaker whose every line plays its first chunk and is
+    /// then cut by the speech deadline.
+    pub(crate) fn test_cut_by_deadline(max_chars: usize, speech_deadline: Duration) -> Self {
+        Self::with_test_transport(
+            max_chars,
+            speech_deadline,
+            Arc::new(CutByDeadlineTtsTransport),
         )
     }
 

@@ -512,6 +512,74 @@ async fn speak_that_fails_to_synthesize_is_answered_with_the_workers_reason() {
     assert_eq!(body["reason"], body["detail"]);
 }
 
+/// #233: the service's own speech deadline (`TtsChunkStream`) can cut a
+/// line after its start reached the page. The caller heard the start, so the
+/// agent is told its line was delivered and cut short, not that nothing was
+/// played (it would say the line again), and the caller's page shows no
+/// error.
+#[tokio::test]
+async fn a_speak_the_deadline_cuts_after_its_audio_played_is_answered_cut_short() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = crate::registry::Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = AppState::new(
+        crate::pbx::Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        crate::history::TranscriptLog::new(10),
+        crate::audio::Speaker::test_cut_by_deadline(100, Duration::from_millis(25_000)),
+        crate::audio::SttAdapter::from_command(None),
+        crate::audio::SttStreamAdapter::from_command(None),
+    );
+    let (mut page, _snapshot, _watermark) = state.register_connection().await;
+    start_speech_worker_for_test(&state);
+    let reply = module_call(
+        &state,
+        AgentCall {
+            call: "speak".into(),
+            token: "operator".into(),
+            turn_id: None,
+            cause: None,
+            args: json!({"text":"A long line the deadline cuts."}),
+        },
+    )
+    .await;
+    let sent: Vec<String> = std::iter::from_fn(|| page.receiver.try_recv().ok())
+        .filter_map(|frame| match frame {
+            DeliveryFrame::Event { event, .. } => Some(match event {
+                Event::AudioStart { .. } => "audio_start".to_owned(),
+                Event::AudioChunk { .. } => "chunk".to_owned(),
+                Event::AudioDone { .. } => "audio_done".to_owned(),
+                Event::Json(value) => value["type"].as_str().unwrap_or_default().to_owned(),
+            }),
+            DeliveryFrame::Message(_) => None,
+        })
+        .filter(|kind| {
+            ["audio_start", "chunk", "audio_done", "error", "spoken"].contains(&kind.as_str())
+        })
+        .collect();
+    assert_eq!(
+        reply,
+        json!({
+            "status": "delivered",
+            "reason": "cut_short",
+            "result": {
+                "delivered": true,
+                "reason": "cut_short",
+                "detail": "cut off at the speech deadline; the caller heard the start",
+            },
+        }),
+        "the caller heard the start of the line, but the agent was told it was not played"
+    );
+    assert_eq!(
+        sent,
+        ["audio_start", "chunk", "audio_done", "spoken"],
+        "the caller heard the start of the line, the line is in the transcript, and the page shows no error"
+    );
+}
+
 #[tokio::test]
 async fn display_protocol_validation_and_composition() {
     let state = state();
