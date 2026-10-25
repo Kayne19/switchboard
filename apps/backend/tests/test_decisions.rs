@@ -693,25 +693,32 @@ async fn a_caller_prompt_the_host_refuses_keeps_the_leg() {
     board.shutdown().await;
 }
 
-/// A caller's prompt that fails on the link left the session unusable: the
-/// leg ends, and the caller is back on the operator.
+/// A caller's prompt that fails, not one the host refuses, left the session
+/// unusable: the leg ends, and the caller is back on the operator.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_caller_prompt_that_fails_on_the_link_ends_the_leg() {
-    let (mut board, log, armed, _notices) = board_refusing_the_next_prompt("stale_epoch").await;
-    board.transfer_to(&transcript("start alpha"), "alpha").await;
-    let alpha = board.agent.clone().expect("alpha is on the line");
-    armed.store(true, std::sync::atomic::Ordering::Release);
+async fn a_caller_prompt_that_fails_ends_the_leg() {
+    for code in ["stale_epoch", "daemon_unreachable"] {
+        let (mut board, log, armed, _notices) = board_refusing_the_next_prompt(code).await;
+        board.transfer_to(&transcript("start alpha"), "alpha").await;
+        let alpha = board.agent.clone().expect("alpha is on the line");
+        armed.store(true, std::sync::atomic::Ordering::Release);
 
-    let reply = board.handle_agent_ctx(&transcript("continue work")).await;
+        let reply = board.handle_agent_ctx(&transcript("continue work")).await;
 
-    assert_eq!(reply.route, OPERATOR, "{reply:?}");
-    assert!(!alpha.alive());
-    assert_eq!(
-        crate::pbx::until_named(&log, "kill").await,
-        [serde_json::json!({"session": "s1"})]
-    );
-    board.shutdown().await;
+        assert_eq!(reply.route, OPERATOR, "{code}: {reply:?}");
+        assert_eq!(
+            reply.text,
+            format!("alpha stopped responding, so I closed it.\n\n{code} for the test")
+        );
+        assert!(!alpha.alive(), "{code}: the session is still in use");
+        assert_eq!(
+            crate::pbx::until_named(&log, "kill").await,
+            [serde_json::json!({"session": "s1"})],
+            "{code}"
+        );
+        board.shutdown().await;
+    }
 }
 
 /// A background prompt the host refuses fails alone (#423): the resident

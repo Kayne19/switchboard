@@ -204,12 +204,9 @@ async fn a_level_refused_after_the_model_changed_keeps_the_new_model() {
     board.shutdown().await;
 }
 
-/// A command that fails, not one the host refuses, ends the leg: one that
-/// fails on the link (`stale_epoch`), and one the host could not take to
-/// its daemon or got no answer for (`daemon_unreachable`), which may have
-/// run (#503). The service still ends the session it created, so it does
-/// not run on with the caller's conversation and block a desk takeover
-/// (#291).
+/// A command that fails, not one the host refuses, ends the leg: the
+/// service still ends the session it created, so it does not run on with
+/// the caller's conversation and block a desk takeover (#291).
 #[tokio::test]
 async fn a_model_change_that_fails_still_ends_the_session_on_its_host() {
     for code in ["stale_epoch", "daemon_unreachable"] {
