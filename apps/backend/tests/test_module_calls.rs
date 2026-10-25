@@ -1067,6 +1067,39 @@ async fn display_reports_a_rejection_that_a_later_report_followed() {
 }
 
 #[tokio::test]
+async fn display_reports_new_leg_when_a_transfer_overtakes_the_confirmation() {
+    let state = state();
+    let (mut connection, _, _) = state.register_connection().await;
+    let waiting = {
+        let state = state.clone();
+        tokio::spawn(async move {
+            module_call(
+                &state,
+                AgentCall {
+                    call: "display".into(),
+                    token: String::new(),
+                    turn_id: None,
+                    cause: None,
+                    args: diagram_show(),
+                },
+            )
+            .await
+        })
+    };
+    within("the display frame", connection.receiver.recv())
+        .await
+        .unwrap();
+    begin_alpha_candidate(&state, "alpha-leg");
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
+    let reply = within("the display call", waiting).await.unwrap();
+    assert_eq!(reply["status"], "delivered", "{reply}");
+    assert_eq!(reply["reason"], Value::Null, "{reply}");
+    assert_eq!(reply["result"]["rendered"], false, "{reply}");
+    assert_eq!(reply["result"]["reason"], "new_leg", "{reply}");
+    assert!(reply["result"]["detail"].is_string(), "{reply}");
+}
+
+#[tokio::test]
 async fn module_calls_are_answered_by_the_callback_logic_with_a_reply_status() {
     let state = state();
     // Nothing is connected to hear it.
