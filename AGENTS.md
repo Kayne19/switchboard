@@ -68,7 +68,7 @@ commit.
   `.only` test, no user-agent checks, bounded test awaits, no page under
   the notch, one runtime ID prefix, stage-relative sizes, one writer per lifecycle
   machine, no new phase fields on a lifecycle owner, one composition a
-  render, live paths, routes and settings in the docs); a new rule of that
+  render, one log capture, live paths, routes and settings in the docs); a new rule of that
   kind gets a check there. Both Playwright configs also set `forbidOnly` on CI, so a focused
   spec fails its browser leg.
 - CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
@@ -143,6 +143,14 @@ commit.
   await hangs `cargo test` with no output (`docs/concurrency-and-test-hazards.md`,
   "A test await with no deadline"). `scripts/check_hygiene.mjs` refuses a
   bare one in `apps/backend/tests`.
+- A backend test that asserts on a log line captures it with
+  `debug::capture_logs` (`apps/backend/src/debug.rs`), never with a
+  subscriber scoped to its thread: tracing caches a callsite's interest for
+  the whole process, and a callsite another test's thread reached first is
+  cached as never, so the scoped capture loses the line
+  (`docs/concurrency-and-test-hazards.md`, "A log capture scoped to one
+  thread"). `scripts/check_hygiene.mjs` refuses `set_default`,
+  `with_default` and `.with_subscriber(` in `apps/backend`.
 - Keep the backend module layout: one concern per file in `apps/backend/src/`,
   no new module layers until something concrete needs one.
 - The backend's modules are private (`mod`, not `pub mod`, in `main.rs`), and
