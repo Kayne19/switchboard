@@ -772,9 +772,10 @@ the page applies or declines a frame) carries two more fields:
   held below the next rejection still waiting on the page (below), so it
   never passes a rejection the service has not heard.
 - `rejected` (optional): `{ seq, reason }` for a frame the page could not
-  apply. The page keeps every one it has not sent, lowest `seq` first and at most
-  as many as the service keeps (`MAX_KEPT_REJECTIONS`, 16), and a report
-  carries the lowest; it leaves the list only when the report that
+  apply. The page keeps every one it has not sent, lowest `seq` first, and
+  drops none unsent: its display call may still be waiting, and `applied_seq`
+  passes it only once a report has carried it. A report carries the lowest;
+  it leaves the list only when the report that
   carries it is the one actually transmitted, so an intervening,
   rejection-less report can't silently swallow it. While one is left, the
   page reports again when the line is free, one rejection per report

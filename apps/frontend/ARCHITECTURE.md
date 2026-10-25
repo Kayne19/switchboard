@@ -358,9 +358,8 @@ The reports themselves belong to `ScreenReporter` (`src/app/screenReporter.ts`);
 `screen_state` is on the wire until its `screen_state_ack`, and the newest
 scene waits behind it. Its state is one value written only by `transition`:
 the phase (`line`), the queued report, the generation of the last `epoch`,
-the highest applied display `seq`, the rejections not yet sent (lowest `seq` first, one per `seq`, at most
-`MAX_KEPT_REJECTIONS`, the service's own bound), and the scene the page last rendered at this
-generation.
+the highest applied display `seq`, the rejections not yet sent (lowest `seq` first, one per `seq`), and
+the scene the page last rendered at this generation.
 
 | phase | holds | event | next | effect |
 |---|---|---|---|---|
@@ -373,7 +372,7 @@ generation.
 | `awaiting` | the report, its deadline | scene equal to the report on the wire | `awaiting` | the queued report is dropped |
 | `awaiting` | the report, its deadline | another scene | `awaiting` | it replaces the queued report |
 | `awaiting` | the report, its deadline | ack, or `ACK_DEADLINE_MS` (2 s) without one | `idle`, or `awaiting` | the queued report goes; with none queued and a rejection waiting, the scene is reported again to carry it |
-| any | — | display applied / declined | same | the applied `seq` rises / the rejection joins the list in `seq` order (past the bound the lowest goes), and the next report carries the lowest |
+| any | — | display applied / declined | same | the applied `seq` rises / the rejection joins the list in `seq` order, and the next report carries the lowest |
 
 The service does not acknowledge a report it ignores (a tab that is not the
 active one, another generation, a view it does not know), so the deadline is
