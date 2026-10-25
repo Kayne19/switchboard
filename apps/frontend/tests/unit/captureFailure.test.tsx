@@ -39,6 +39,10 @@ class FakeSocket {
   }
 }
 
+// The page lays out by what it measures: the rail beside a visual, the room
+// the line's error takes.
+stubResizeObserver();
+
 let host: HTMLDivElement;
 let root: Root;
 let socket: FakeSocket;
@@ -111,21 +115,25 @@ afterEach(() => {
   window.history.replaceState(null, '', '/');
 });
 
+/** The line's error as the scene on the stage draws it, tag and text; null while none is drawn. */
+const drawnError = () => [...host.querySelectorAll('[data-scene]')].at(-1)?.querySelector('.channel-stack__error') ?? null;
+const lineError = () => drawnError()?.textContent ?? null;
+
 describe('a capture failure the caller can read', () => {
   it('says the page needs https when the browser offers no microphone', async () => {
     expect(navigator.mediaDevices, 'this page is not a secure origin').toBe(undefined);
     await tapDamocles();
-    expect(latest.runtimeSpeech?.text).toMatch(/https/);
+    expect(lineError(), 'on the idle page, where the caller tapped').toMatch(/^LINE \/ ERROR.*https/);
     expect(latest.listening, 'and nothing is recording').toBe(false);
   });
 
   it('says it once, however many times the state is published', async () => {
     await tapDamocles();
-    const said = latest.runtimeSpeech?.text;
-    const at = latest.runtimeSpeech?.at ?? null;
+    const drawn = drawnError();
+    expect(drawn, 'the failure is drawn').not.toBe(null);
     await tapDamocles();
-    expect(latest.runtimeSpeech?.text).toBe(said);
-    expect(latest.runtimeSpeech?.at ?? null).toBe(at);
+    expect(drawnError(), 'the same error, not drawn again').toBe(drawn);
+    expect(lineError()).toMatch(/^LINE \/ ERROR.*https/);
   });
 });
 
@@ -137,8 +145,6 @@ describe('a capture failure the caller can read', () => {
 // (#213). On an iPad the error is often blocked audio, so this was the
 // card a caller saw there and not on the desktop.
 describe('only an error reaches the screen, and only while it stands', () => {
-  // The visual's rail lays itself out by what it measures.
-  beforeEach(() => stubResizeObserver());
   /** The words of every card in the rail beside the visual, tag and text. */
   const cards = () => [...host.querySelectorAll('.annotation-card')].map((card) => card.textContent ?? '');
 
@@ -150,20 +156,14 @@ describe('only an error reaches the screen, and only while it stands', () => {
       });
     });
     await receive({ type: 'error', message: 'The model refused.' });
-    expect(latest.runtimeSpeech?.text, 'the failure is said').toMatch(/The model refused/);
-    expect(cards(), 'as an error of the line, not an explanation').toEqual([expect.stringMatching(/^LINE \/ ERROR.*The model refused/)]);
+    expect(lineError(), 'as an error of the line').toMatch(/^LINE \/ ERROR.*The model refused/);
+    expect(cards(), 'not as an explanation in the rail').toEqual([]);
 
     await receive({ type: 'thinking', route: 'operator', waiting: 0 });
-    expect(latest.runtimeSpeech, 'a turn under way is not an error: the error is cleared').toBe(null);
+    expect(lineError(), 'a turn under way is not an error: the error is cleared').toBe(null);
 
     await receive({ type: 'reply', text: 'Here is what is new.', route: 'operator', voiced: false });
-    expect(latest.runtimeSpeech, 'nor is the idle line').toBe(null);
-    // The card leaves as every rail card does, through its exit.
-    for (let waited = 0; cards().length > 0 && waited < 3000; waited += 100) {
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      });
-    }
+    expect(lineError(), 'nor is the idle line').toBe(null);
     expect(cards()).toEqual([]);
     expect(host.textContent).not.toContain(IDLE_TEXT);
     expect(host.textContent).not.toMatch(/is listening|is working/);
@@ -180,12 +180,12 @@ describe('only an error reaches the screen, and only while it stands', () => {
       });
     });
     await tapDamocles();
-    expect(latest.runtimeSpeech?.text, 'the failure is said').toMatch(/https/);
+    expect(lineError(), 'the failure is drawn').toMatch(/https/);
 
     await receive({ type: 'thinking', route: 'operator', waiting: 0 });
     await receive({ type: 'reply', text: 'Here is what is new.', route: 'operator', voiced: false });
-    expect(latest.runtimeSpeech?.text, 'the microphone has not said it is over').toMatch(/https/);
-    expect(cards()).toEqual([expect.stringMatching(/^LINE \/ ERROR.*https/)]);
+    expect(lineError(), 'the microphone has not said it is over').toMatch(/^LINE \/ ERROR.*https/);
+    expect(cards()).toEqual([]);
     expect(host.textContent).not.toContain(IDLE_TEXT);
     expect(host.textContent).not.toMatch(/is listening|is working/);
   });

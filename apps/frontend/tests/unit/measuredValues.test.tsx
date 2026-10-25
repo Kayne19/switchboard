@@ -23,6 +23,7 @@ import { WeatherPrimitive } from '../../src/primitives/WeatherPrimitive';
 import { ControllerProvider, useController } from '../../src/controller/context';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import type { ControllerAction } from '../../src/controller/types';
+import { RUNTIME_LINE_ERROR_ID } from '../../src/controller/types';
 import { mount, unmountAll } from './sceneHarness';
 
 // ---- the layout jsdom does not do ------------------------------------------
@@ -228,6 +229,12 @@ const sceneLayout = (portrait: boolean): Layout => ({
   },
 });
 
+// A line error at the head of the corner stack, `height` tall with its gap.
+const lineError: ControllerAction = { op: 'runtime_say', target: RUNTIME_LINE_ERROR_ID, text: 'Microphone unavailable (NotAllowedError).' };
+const errorLayout = (height: number): Layout => ({
+  metric: (element, key) => (key === 'offsetHeight' && has(element, 'channel-stack__error') ? height : 0),
+});
+
 // The page's scene renderer with `actions` run through its controller.
 function Runner({ actions }: { actions: readonly ControllerAction[] }) {
   const { run } = useController();
@@ -315,6 +322,12 @@ const readers: Record<string, Reader> = {
     drawn: (page) => [...page.querySelectorAll<HTMLElement>('.content-grid')].at(-1)!.style.getPropertyValue('--rail-floor'),
     layouts: { a: sceneLayout(false), b: sceneLayout(true) },
     expected: { a: '', b: '182px' },
+  },
+  'the scene (the room the line\'s error takes over the corner stack)': {
+    node: () => <Scene actions={[lineError]} />,
+    drawn: (page) => [...page.querySelectorAll<HTMLElement>('[data-scene]')].at(-1)!.style.getPropertyValue('--line-error-room'),
+    layouts: { a: errorLayout(40), b: errorLayout(58) },
+    expected: { a: '40px', b: '58px' },
   },
   'RailDetails beside the column (whether the note leads a crowded column)': {
     node: () => rail(false),

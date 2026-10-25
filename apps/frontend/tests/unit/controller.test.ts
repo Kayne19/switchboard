@@ -223,12 +223,17 @@ describe('controller reducer & ownership', () => {
     expect(sceneKindOf(state)).toBe('architecture');
   });
 
-  it('withdraws runtime speech only while it is still what was said to the target', () => {
+  it('holds the line\'s error apart from speech until it is withdrawn', () => {
     const failed = reduceActions(createInitialState(), [{ op: 'runtime_say', target: RUNTIME_LINE_ERROR_ID, text: 'No microphone.' }]);
-    expect(controllerReducer(failed, { op: 'runtime_unsay', target: RUNTIME_LINE_ERROR_ID }).speech).toBeNull();
-    // A line Damocles spoke since is not the error, and stays.
+    expect(failed.lineError).toBe('No microphone.');
+    expect(failed.speech, 'it is not speech').toBeNull();
+    // A line Damocles speaks after it does not take it down.
     const spoken = controllerReducer(failed, { op: 'runtime_say', target: RUNTIME_CONVERSATION_ID, text: 'Here it is.' });
-    expect(controllerReducer(spoken, { op: 'runtime_unsay', target: RUNTIME_LINE_ERROR_ID })).toBe(spoken);
+    expect(spoken.lineError).toBe('No microphone.');
+    const withdrawn = controllerReducer(spoken, { op: 'runtime_unsay', target: RUNTIME_LINE_ERROR_ID });
+    expect(withdrawn.lineError).toBeNull();
+    expect(withdrawn.speech?.text, 'what was said stays').toBe('Here it is.');
+    expect(controllerReducer(withdrawn, { op: 'runtime_unsay', target: RUNTIME_LINE_ERROR_ID }), 'nothing to withdraw').toBe(withdrawn);
   });
 
   it('keeps tool activity apart from speech', () => {
