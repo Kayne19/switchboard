@@ -1,5 +1,6 @@
-//! Host-reported turns: the turn boundaries a project session's pump reports
-//! (`session_turn.rs` decides which), read once as a `HostTurn` and answered
+//! Host-reported turns: the turn boundaries a project session's turn
+//! reports (`session_turn.rs` decides which, from the host's events and
+//! from the reply to a prompt), read once as a `HostTurn` and answered
 //! through the coordinator, and the one self-woken run the application
 //! admitted as an operation of its own (`HostTurns`).
 use crate::app_state::{emit_message, AppState};
@@ -55,6 +56,15 @@ impl HostTurns {
             .map(|run| run.operation)
     }
 
+    /// Whether the run held, whichever session's, is host turn `turn_id`.
+    async fn holds_turn(&self, turn_id: &str) -> bool {
+        self.self_woken
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|run| run.operation.turn_id.as_deref() == Some(turn_id))
+    }
+
     /// Whether session `instance_id` holds an admitted self-woken run.
     #[cfg(test)]
     pub(crate) async fn holds_self_woken_for_test(&self, instance_id: u64) -> bool {
@@ -85,10 +95,12 @@ struct SelfWokenRun {
 }
 
 /// A turn boundary a project session reported, as the application acts on
-/// it. `HostTurn::of` reads the report's cause and end once; the pump's
+/// it. `HostTurn::of` reads the report's cause and end once; the session's
 /// turn (`session_turn.rs`) decides which boundaries are reported.
 enum HostTurn {
-    /// The host opened a turn. Only the leg on the line may.
+    /// A turn is open: the host opened it, or a prompt's reply named it. A
+    /// caller's turn may be the leg on the line's or the staged candidate's;
+    /// a run is admitted only from the leg on the line.
     Opened(TurnStart),
     /// The host settled a caller's (`input`) turn. The operation bound to
     /// its id closes now, not when the prompt returns, so a run the host
@@ -168,8 +180,19 @@ async fn act_on_turn(state: &AppState, turn: ProjectTurn) -> bool {
             settle_caller_turn(state, &turn, &turn_id);
             false
         }
+        // A run the application never held can still be the caller's turn:
+        // a prompt sent into it as a `follow_up` bound the caller's
+        // operation to it, and the host's end settles that operation as it
+        // settles an `input` turn's, so a run the host starts right behind
+        // it is admitted (#107, #109). A run held for another session
+        // instance of the leg is neither: a late end of an older run on the
+        // same session ends nothing.
         HostTurn::RunEnded { turn_id, text } => {
-            end_self_woken_run(state, &turn, &turn_id, text).await;
+            if !end_self_woken_run(state, &turn, &turn_id, text).await
+                && !state.0.host_turns.holds_turn(&turn_id).await
+            {
+                settle_caller_turn(state, &turn, &turn_id);
+            }
             false
         }
         HostTurn::Unnamed { cause } => {
@@ -184,19 +207,12 @@ async fn act_on_turn(state: &AppState, turn: ProjectTurn) -> bool {
     }
 }
 
-/// A turn the host opened on `turn`'s session, if that session is the leg
-/// on the line. True when it is a self-woken run admitted as an operation.
+/// A turn open on `turn`'s session. A caller's turn binds the operation of
+/// the leg on the line, or the intro turn of the candidate being brought up;
+/// the coordinator refuses any other leg's. A run is admitted only from the
+/// leg on the line. True when it is a self-woken run admitted as an
+/// operation.
 async fn open_host_turn(state: &AppState, turn: &ProjectTurn, start: TurnStart) -> bool {
-    let current = state.0.coordinator.current_identity();
-    if current.token != turn.token {
-        // The leg's call token stays out of the log: the debug page copies
-        // log lines to an unauthenticated listener.
-        tracing::info!(
-            instance = turn.instance_id,
-            "ignoring turn start from a leg that is no longer on the call"
-        );
-        return false;
-    }
     match start {
         TurnStart::Caller { turn_id } => {
             if let Err(error) = state.0.coordinator.bind_turn(&turn.token, &turn_id) {
@@ -213,6 +229,16 @@ async fn open_host_turn(state: &AppState, turn: &ProjectTurn, start: TurnStart) 
             false
         }
         TurnStart::SelfWoken { turn_id } => {
+            let current = state.0.coordinator.current_identity();
+            if current.token != turn.token {
+                // The leg's call token stays out of the log: the debug page
+                // copies log lines to an unauthenticated listener.
+                tracing::info!(
+                    instance = turn.instance_id,
+                    "ignoring turn start from a leg that is no longer on the call"
+                );
+                return false;
+            }
             admit_self_woken_run(state, turn.instance_id, &current, turn_id).await
         }
     }
@@ -284,9 +310,17 @@ async fn admit_self_woken_run(
 /// (`end_run_of_closed_session`), which ends it under the PBX lock once the
 /// dead leg is off the line. A caller turn waiting behind the run then runs
 /// on the leg that replaced it, never on the dead one (#270).
-async fn end_self_woken_run(state: &AppState, turn: &ProjectTurn, turn_id: &str, text: String) {
+///
+/// True when the end was a held run's, or is left to the retirement; false
+/// when no run of that id was held.
+async fn end_self_woken_run(
+    state: &AppState,
+    turn: &ProjectTurn,
+    turn_id: &str,
+    text: String,
+) -> bool {
     if turn.cut_short && state.0.coordinator.current_identity().token == turn.token {
-        return;
+        return true;
     }
     let Some(operation) = state
         .0
@@ -294,9 +328,10 @@ async fn end_self_woken_run(state: &AppState, turn: &ProjectTurn, turn_id: &str,
         .release_self_woken(turn.instance_id, WhichRun::Turn(turn_id))
         .await
     else {
-        return;
+        return false;
     };
     close_self_woken_run(state, turn.instance_id, operation, text).await;
+    true
 }
 
 /// Ends the self-woken run session `instance_id` held when it closed. The

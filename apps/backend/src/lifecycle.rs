@@ -91,6 +91,11 @@ pub struct CandidateLeg {
     pub thinking: String,
     pub startup_thinking: String,
     pub catalog: Option<Arc<ModelCatalog>>,
+    /// The host turn the bring-up's prompt went into, once the host named
+    /// it: the intro operation's `turn_id` when adoption opens it. Written
+    /// only by the line, on `bind_turn` with the candidate's token; staging
+    /// clears whatever a caller put here.
+    pub intro_turn: Option<String>,
 }
 
 impl CandidateLeg {
@@ -111,6 +116,7 @@ impl CandidateLeg {
             thinking: thinking.into(),
             startup_thinking: String::new(),
             catalog: None,
+            intro_turn: None,
         }
     }
 

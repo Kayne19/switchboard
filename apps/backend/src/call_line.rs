@@ -416,19 +416,40 @@ impl Line {
                     _ => Err(LifecycleError::WrongPhase),
                 }
             }
+            // A turn binds once, to the open operation of the leg holding
+            // `token`. A staged candidate has no operation yet: its bring-up
+            // prompt's turn is kept on the candidate, and adoption opens the
+            // intro operation bound to it. A `follow_up` into a busy
+            // session's run is one such turn, and no start of its own ever
+            // binds it.
             Event::BindTurn { token, turn_id } => {
-                let Some(turn) = self.turn().filter(|_| leg.identity.token == token) else {
-                    return Err(LifecycleError::StaleLeg);
+                let mut next = self.clone();
+                let slot = match &mut next {
+                    Self::Starting { candidate, .. } if candidate.identity.token == token => {
+                        &mut candidate.intro_turn
+                    }
+                    Self::Open {
+                        leg,
+                        turn: Some(turn),
+                    }
+                    | Self::Starting {
+                        leg,
+                        turn: Some(turn),
+                        ..
+                    }
+                    | Self::Adopted {
+                        leg,
+                        turn: Some(turn),
+                        ..
+                    } if leg.identity.token == token => &mut turn.turn_id,
+                    _ => return Err(LifecycleError::StaleLeg),
                 };
-                match turn.turn_id.as_deref() {
+                match slot.as_deref() {
                     Some(bound) if bound != turn_id => Err(LifecycleError::StaleLeg),
                     Some(_) => unchanged(),
                     None => {
-                        let bound = OperationIdentity {
-                            turn_id: Some(turn_id.to_owned()),
-                            ..turn.clone()
-                        };
-                        Ok((self.with_turn(Some(bound)), None))
+                        *slot = Some(turn_id.to_owned());
+                        Ok((next, None))
                     }
                 }
             }
@@ -507,6 +528,7 @@ impl Line {
                 // Staged one generation past the line: its first turn is
                 // delivered at the generation its adoption puts on the line.
                 candidate.identity.generation = leg.identity.generation + 1;
+                candidate.intro_turn = None;
                 let notice = candidate_notice(&candidate.route, leg.identity.generation, None);
                 let next = Self::Starting {
                     leg: leg.clone(),
@@ -546,7 +568,7 @@ impl Line {
                     let turn = OperationIdentity {
                         id: intro,
                         leg: adopted.identity.clone(),
-                        turn_id: None,
+                        turn_id: candidate.intro_turn.clone(),
                     };
                     let notice = candidate_notice(
                         &candidate.route,

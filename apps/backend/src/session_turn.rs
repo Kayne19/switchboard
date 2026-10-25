@@ -227,6 +227,9 @@ pub(crate) enum TurnEvent {
     /// The prompt with this collector let go of it: it returned, or it was
     /// cancelled.
     PromptEnded(Collector),
+    /// The host's reply to the prompt named the turn it went into: a new
+    /// one, or one already open (`follow_up`).
+    PromptReplied { turn_id: String },
     /// A session event from its host, in the order the host sent them.
     Event { seq: u64, event: Value },
     /// A snapshot of the session from its host: it replaces what the
@@ -325,6 +328,21 @@ impl TurnState {
                     other => other,
                 };
                 (next, Vec::new())
+            }
+            // The turn is the caller's, whoever opened it: reported as that
+            // caller turn's start, so the application binds the prompt's
+            // operation to it. A run joined as a `follow_up` sends no start
+            // of its own; a turn opened for the prompt does, and a second
+            // bind of one id changes nothing.
+            TurnEvent::PromptReplied { turn_id } => {
+                let effects = match phase.collector() {
+                    Some(_) => vec![TurnEffect::Report(TurnBoundary::opened(
+                        Some(turn_id),
+                        "input".into(),
+                    ))],
+                    None => Vec::new(),
+                };
+                (phase, effects)
             }
             TurnEvent::Admitted {
                 admitted: true,
