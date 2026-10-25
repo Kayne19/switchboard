@@ -1046,52 +1046,104 @@ async fn a_project_session_ends_by_its_table() {
 /// agent keeps tracking the session through a link drop, so once the host
 /// links again its frames, a replay say, still name it; a module call
 /// carrying the token the closed handle had must be refused by the host
-/// link, not answered by that handle.
+/// link, not answered by that handle. A newer link that fences the old one
+/// takes the session down the same way (`docs/host-link.md`, `join_call`).
 #[tokio::test]
 async fn a_session_whose_host_link_closed_reads_no_more_frames() {
-    let hosts = debug_hosts();
-    let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
-    let _log = fake.serve(hosts.connect_fake("scriptorium"));
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = Arc::clone(&calls);
-    let on_module: ModuleCallback = Arc::new(move |_| {
-        counted.fetch_add(1, Ordering::AcqRel);
-        Box::pin(async { json!({"status": "delivered"}) })
-            as Pin<Box<dyn Future<Output = Value> + Send>>
-    });
-    let launch = debug_launch(&crate::debug::DebugBus::new(), Some(on_module));
-    let (session, _) = ProjectSession::create(&hosts, launch)
-        .await
-        .expect("the session opens");
-    session
-        .join_call("call-token", "", 1000)
-        .await
-        .expect("the session joins the call");
+    for (fenced, closing) in [
+        (false, "the dropped link's session to close"),
+        (true, "the fenced link's session to close"),
+    ] {
+        let hosts = debug_hosts();
+        let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+        let _log = fake.serve(hosts.connect_fake("scriptorium"));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        let on_module: ModuleCallback = Arc::new(move |_| {
+            counted.fetch_add(1, Ordering::AcqRel);
+            Box::pin(async { json!({"status": "delivered"}) })
+                as Pin<Box<dyn Future<Output = Value> + Send>>
+        });
+        let launch = debug_launch(&crate::debug::DebugBus::new(), Some(on_module));
+        let (session, _) = ProjectSession::create(&hosts, launch)
+            .await
+            .expect("the session opens");
+        session
+            .join_call("call-token", "", 1000)
+            .await
+            .expect("the session joins the call");
 
-    hosts.disconnect_fake("scriptorium");
-    within("the session to close", async {
-        while session.alive() {
-            tokio::time::sleep(Duration::from_millis(1)).await;
+        let newer = if fenced {
+            Some(hosts.connect_fake("scriptorium"))
+        } else {
+            hosts.disconnect_fake("scriptorium");
+            None
+        };
+        within(closing, async {
+            while session.alive() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        let mut link = newer.unwrap_or_else(|| hosts.connect_fake("scriptorium"));
+        link.send(json!({
+            "type": "module_call", "id": "m1", "session": "s1", "token": "call-token",
+            "call": "speak", "args": {"text": "still here"},
+        }));
+        let reply = within("the module reply", link.recv())
+            .await
+            .expect("the link is up");
+
+        assert_eq!(reply["type"], "module_reply", "{closing}: {reply}");
+        assert_eq!(reply["status"], "refused", "{closing}: {reply}");
+        assert_eq!(reply["reason"], "not_on_call", "{closing}: {reply}");
+        assert_eq!(
+            calls.load(Ordering::Acquire),
+            0,
+            "{closing}: the closed handle answered"
+        );
+    }
+}
+
+/// A prompt can go out after its session's link closed but before the
+/// session has read the `host_link_closed` that ends it. The host agent
+/// still tracks the session, so it answers on its newer link, after that
+/// close. The close still ends the prompt; the prompt does not wait out its
+/// turn deadline for a turn whose frames no longer reach it.
+#[tokio::test]
+async fn a_prompt_sent_before_its_session_hears_the_link_close_ends_with_the_session() {
+    for (fenced, how) in [(false, "dropped and relinked"), (true, "fenced")] {
+        let hosts = debug_hosts();
+        let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+        let _log = fake.serve(hosts.connect_fake("scriptorium"));
+        let launch = debug_launch(&crate::debug::DebugBus::new(), None);
+        let (session, _) = ProjectSession::create(&hosts, launch)
+            .await
+            .expect("the session opens");
+        session
+            .join_call("call-token", "", 1000)
+            .await
+            .expect("the session joins the call");
+
+        if !fenced {
+            hosts.disconnect_fake("scriptorium");
         }
-    })
-    .await;
-    let mut link = hosts.connect_fake("scriptorium");
-    link.send(json!({
-        "type": "module_call", "id": "m1", "session": "s1", "token": "call-token",
-        "call": "speak", "args": {"text": "still here"},
-    }));
-    let reply = within("the module reply", link.recv())
-        .await
-        .expect("the link is up");
+        let newer = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+        let _newer_log = newer.serve(hosts.connect_fake("scriptorium"));
+        assert!(
+            session.alive(),
+            "{how}: the session heard the close before the prompt went out"
+        );
+        let turn = within("the prompt", session.prompt("hello"))
+            .await
+            .expect("the prompt went out");
 
-    assert_eq!(reply["type"], "module_reply", "{reply}");
-    assert_eq!(reply["status"], "refused", "{reply}");
-    assert_eq!(reply["reason"], "not_on_call", "{reply}");
-    assert_eq!(
-        calls.load(Ordering::Acquire),
-        0,
-        "the closed handle answered"
-    );
+        assert!(
+            turn.failed,
+            "{how}: the prompt did not end with its session"
+        );
+        assert_eq!(turn.error, "the project session ended", "{how}");
+    }
 }
 
 /// Where a project session's turn is when a row of the turn table's event
