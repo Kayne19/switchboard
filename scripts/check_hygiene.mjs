@@ -600,9 +600,21 @@ for (const row of owners) findings.push(...ownerFindings(row.file, lines(path.jo
 	}
 }
 
+// 23. A backend test captures logs with debug::capture_logs, never with a
+//     subscriber scoped to its thread. The scope is one thread, but tracing
+//     caches each callsite's interest for the whole process, from the thread
+//     that reaches it first: another test's thread, which has no subscriber,
+//     caches it as never, and the capturing test loses its line (#368;
+//     docs/concurrency-and-test-hazards.md).
+for (const start of ["apps/backend/src", "apps/backend/tests"]) {
+	for (const file of files(path.join(root, start), new Set([".rs"]))) {
+		scan(file, /\b(?:set|with)_default\b|\.with_subscriber\(/, "a subscriber scoped to one thread (capture logs with debug::capture_logs)");
+	}
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render, one hook for a measured value");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render, one hook for a measured value, one log capture");

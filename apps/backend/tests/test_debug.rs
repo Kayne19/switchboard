@@ -832,12 +832,9 @@ mod wire {
 
 #[test]
 fn the_log_layer_respects_the_filter_and_redacts_secret_fields() {
-    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
     let bus = DebugBus::new();
-    let subscriber = tracing_subscriber::registry()
-        .with(EnvFilter::new("switchboard=info"))
-        .with(DebugLogLayer::new(bus.clone()));
-    tracing::subscriber::with_default(subscriber, || {
+    {
+        let _capture = capture_logs(&bus);
         tracing::info!(
             token = "abc",
             call_token = %"def",
@@ -852,7 +849,7 @@ fn the_log_layer_respects_the_filter_and_redacts_secret_fields() {
         );
         tracing::debug!("below the filter");
         tracing::info!(target: "elsewhere", "outside the filter");
-    });
+    }
     let snapshot = bus.snapshot();
     assert_eq!(snapshot.logs.len(), 1, "{:?}", snapshot.logs);
     let log = &snapshot.logs[0];
@@ -1213,21 +1210,14 @@ fn log_from(thread: &str) {
     tracing::info!(thread, "a line two threads log");
 }
 
-// A test that captures logs sees the lines its own thread logs, also from a
-// callsite another thread reached first. Tests run on many threads in one
-// process, and another test's thread, which captures nothing, often reaches
-// it first (#368).
 #[test]
 fn a_capture_keeps_its_line_from_a_callsite_another_thread_reached_first() {
-    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
     let bus = DebugBus::new();
-    let subscriber = tracing_subscriber::registry()
-        .with(EnvFilter::new("switchboard=info"))
-        .with(DebugLogLayer::new(bus.clone()));
-    tracing::subscriber::with_default(subscriber, || {
+    {
+        let _capture = capture_logs(&bus);
         std::thread::spawn(|| log_from("neighbour")).join().unwrap();
         log_from("capturing");
-    });
+    }
     let threads: Vec<_> = bus
         .snapshot()
         .logs
@@ -1239,7 +1229,6 @@ fn a_capture_keeps_its_line_from_a_callsite_another_thread_reached_first() {
 
 #[test]
 fn an_off_bus_records_nothing_until_it_is_enabled() {
-    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
     let bus = DebugBus::off();
     let (mut receiver, _) = bus.attach();
     assert_eq!(bus.publish(host_link(1)), 0);
@@ -1247,10 +1236,10 @@ fn an_off_bus_records_nothing_until_it_is_enabled() {
         bus.publish_log("INFO".into(), "t".into(), "m".into(), json!({})),
         0
     );
-    let subscriber = tracing_subscriber::registry()
-        .with(EnvFilter::new("switchboard=info"))
-        .with(DebugLogLayer::new(bus.clone()));
-    tracing::subscriber::with_default(subscriber, || tracing::info!("not copied"));
+    {
+        let _capture = capture_logs(&bus);
+        tracing::info!("not copied");
+    }
     let snapshot = bus.snapshot();
     assert_eq!(
         (
