@@ -504,6 +504,14 @@ enum SpeechEvent {
     /// none of its own has reached the page yet: it is not said, as nothing
     /// new from the old leg is after a hand-off (#437).
     HandedOffBeforeHeard,
+    /// The same, for an utterance whose start went out when the audio ahead
+    /// of it closed: the page has some of it, so it finishes (#424, #526).
+    HandedOffAfterItsStartWentOut,
+    /// The body drains to its end behind another utterance's open audio,
+    /// and the call adopts a new leg before that audio closes. None of it
+    /// reached the page before the hand-off, so it is not said (#437): the
+    /// page drops the old leg's audio that starts after a hand-off.
+    HandedOffWhileHeld,
     /// The provider's body fails partway.
     BodyFails,
     /// The body drains to its end with a browser connected.
@@ -548,6 +556,8 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
         SpeechEvent::RescueDuringDrain
         | SpeechEvent::HandedOffDuringDrain
         | SpeechEvent::HandedOffBeforeHeard
+        | SpeechEvent::HandedOffAfterItsStartWentOut
+        | SpeechEvent::HandedOffWhileHeld
         | SpeechEvent::BodyFails => Speaker::test_gated(100, deadline, gate.clone()),
     };
     if matches!(event, SpeechEvent::BodyFails) {
@@ -577,7 +587,12 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
         log_spoken,
     };
     // Another utterance's audio holds the page ahead of this one's.
-    let ahead = if matches!(event, SpeechEvent::HandedOffBeforeHeard) {
+    let ahead = if matches!(
+        event,
+        SpeechEvent::HandedOffBeforeHeard
+            | SpeechEvent::HandedOffAfterItsStartWentOut
+            | SpeechEvent::HandedOffWhileHeld
+    ) {
         Some(state.0.audio.lock().await.reserve(generation))
     } else {
         None
@@ -589,16 +604,19 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
     )
     .await
     .unwrap_or_else(|failure| panic!("the request gets a place: {failure}"));
-    if matches!(event, SpeechEvent::RetiredBeforeAdmission) {
-        state.0.coordinator.begin_rescue("test rescue");
-    }
-    if matches!(event, SpeechEvent::HandedOffBeforeAdmission) {
+    let hand_off = || {
         begin_alpha_candidate(&state, "alpha-leg");
         state
             .0
             .coordinator
             .adopt_candidate("alpha-leg")
             .expect("the candidate is adopted");
+    };
+    if matches!(event, SpeechEvent::RetiredBeforeAdmission) {
+        state.0.coordinator.begin_rescue("test rescue");
+    }
+    if matches!(event, SpeechEvent::HandedOffBeforeAdmission) {
+        hand_off();
     }
     // `send_speech` borrows the place it is given, so the request is sent
     // from this task while the event is driven beside it.
@@ -607,6 +625,8 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
             SpeechEvent::RescueDuringDrain
             | SpeechEvent::HandedOffDuringDrain
             | SpeechEvent::HandedOffBeforeHeard
+            | SpeechEvent::HandedOffAfterItsStartWentOut
+            | SpeechEvent::HandedOffWhileHeld
             | SpeechEvent::BodyFails => {
                 timeout(Duration::from_secs(1), gate.wait_started())
                     .await
@@ -614,18 +634,25 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
                 match event {
                     SpeechEvent::RescueDuringDrain => {
                         cancel_active_operations(&state).await;
+                        gate.release();
                     }
                     SpeechEvent::HandedOffDuringDrain | SpeechEvent::HandedOffBeforeHeard => {
-                        begin_alpha_candidate(&state, "alpha-leg");
-                        state
-                            .0
-                            .coordinator
-                            .adopt_candidate("alpha-leg")
-                            .expect("the candidate is adopted");
+                        hand_off();
+                        gate.release();
                     }
-                    _ => {}
+                    SpeechEvent::HandedOffAfterItsStartWentOut => {
+                        let ahead = ahead.expect("an utterance holds the page");
+                        finish_audio(&state, ahead, generation).await;
+                        hand_off();
+                        gate.release();
+                    }
+                    SpeechEvent::HandedOffWhileHeld => {
+                        gate.release();
+                        body_read_to_its_end(&state, "One line.").await;
+                        hand_off();
+                    }
+                    _ => gate.release(),
                 }
-                gate.release();
             }
             _ => {}
         }
@@ -719,6 +746,22 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "draining",
             event: SpeechEvent::HandedOffBeforeHeard,
+            log_spoken: true,
+            answer: Err(superseded),
+            page_error: false,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::HandedOffAfterItsStartWentOut,
+            log_spoken: true,
+            answer: Ok(()),
+            page_error: false,
+            spoken_line: true,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::HandedOffWhileHeld,
             log_spoken: true,
             answer: Err(superseded),
             page_error: false,
@@ -1109,4 +1152,73 @@ fn audio_starts(frames: &[Value]) -> Vec<u64> {
         .filter(|frame| frame["type"] == "audio_start")
         .map(|frame| frame["sequence"].as_u64().unwrap())
         .collect()
+}
+
+/// Waits until the speech worker has read `text`'s body to its end: only
+/// then does it keep the body's request id for the next line.
+async fn body_read_to_its_end(state: &AppState, text: &str) {
+    within("the body is read to its end", async {
+        while state.0.continuity_snapshot().last_text.as_deref() != Some(text) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+}
+
+/// #424: drains overlap when two requesters speak at once (a floor release
+/// beside an agent's `speak`). The later one's body can end while the
+/// earlier utterance's slot is still open: its audio is held behind that
+/// slot and plays once it closes, so its requester must be told it was
+/// spoken, not that no browser took it.
+#[tokio::test]
+async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
+    let state = speaking_state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    // An earlier utterance, still streaming, holds the page.
+    let ahead = state.0.audio.lock().await.reserve(generation);
+    let reserved = reserve_speech(
+        &state,
+        SpeakUnder::Generation(generation),
+        WhenQueueFull::Wait,
+    )
+    .await
+    .unwrap_or_else(|failure| panic!("the request gets a place: {failure}"));
+    let admission = SpeechAdmission {
+        text: "The later line.".into(),
+        route: OPERATOR.into(),
+        generation,
+        deadline: std::time::Instant::now() + Duration::from_secs(5),
+        scope: ContinuationScope::FreshTurn,
+        group: state.0.new_speech_group(),
+        log_spoken: false,
+    };
+    // The earlier utterance ends after the later line's body has, and the
+    // later line's audio goes out behind it.
+    let earlier_ends = async {
+        body_read_to_its_end(&state, "The later line.").await;
+        finish_audio(&state, ahead, generation).await;
+    };
+    let (answer, ()) = within(
+        "the later line's answer",
+        futures_util::future::join(send_speech(&state, admission, reserved), earlier_ends),
+    )
+    .await;
+    let sent = audio_sent(&mut connection);
+    assert_eq!(
+        sent,
+        [
+            format!("start {generation}"),
+            format!("done {generation}"),
+            format!("start {generation}"),
+            "chunk".to_owned(),
+            format!("done {generation}"),
+        ],
+        "the later line's audio reached the page"
+    );
+    assert_eq!(
+        answer.map_err(|failure| failure.to_string()),
+        Ok(()),
+        "the later line played, but its requester was told it was not delivered"
+    );
 }

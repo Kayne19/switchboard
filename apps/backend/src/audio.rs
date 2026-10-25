@@ -1190,6 +1190,8 @@ impl TestTtsGate {
         self.fail_first.store(true, Ordering::Release);
     }
 
+    /// Returns once a drain is reading a gated body, so the drain has
+    /// already opened its audio slot.
     pub(crate) async fn wait_started(&self) {
         self.started.notified().await;
     }
@@ -1210,25 +1212,20 @@ impl TtsTransport for GatedTtsTransport {
         let gate = self.gate.clone();
         Box::pin(async move {
             let fail = gate.fail_first.swap(false, Ordering::AcqRel);
-            let (sender, receiver) = mpsc::channel(1);
-            tokio::spawn(async move {
+            let body = futures_util::stream::once(async move {
                 gate.started.notify_one();
                 gate.release.notified().await;
-                let item = if fail {
+                if fail {
                     Err(AudioError::Tts("gated test failure".into()))
                 } else {
-                    Ok(vec![1, 2, 3])
-                };
-                let _ = sender.send(item).await;
+                    Ok(vec![1u8, 2, 3])
+                }
             });
             Ok(TtsResponse {
                 status: StatusCode::OK,
                 content_length: Some(3),
                 request_id: Some("gated-request-id".into()),
-                stream: Box::pin(ChunkReceiverStream {
-                    receiver,
-                    task: None,
-                }) as TtsByteStream,
+                stream: Box::pin(body) as TtsByteStream,
             })
         })
     }
