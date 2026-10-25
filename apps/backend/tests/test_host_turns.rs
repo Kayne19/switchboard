@@ -338,7 +338,10 @@ async fn a_run_that_replaces_a_held_one_takes_its_operation_before_a_waiting_cal
 // (`autonomous` ended, `auto-1`, "Done."), `SilentRunEnd` (the same with no
 // text), `OtherRunEnd` (`auto-9`), `ReconnectRunEnd` (`unknown` ended,
 // `auto-1`, "Done."), `CutShortRunEnd` (`autonomous` ended, `auto-1`, its
-// session closed under it).
+// session closed under it), `StaleCallerStart` (`input`, `turn-c`, another
+// token), `BoundRunEnd` (`autonomous` ended, `turn-c`: the end of a run a
+// caller's prompt was sent into as a `follow_up`, so the caller's
+// operation is bound to it).
 
 #[derive(Clone, Copy, Debug)]
 enum HostPhase {
@@ -360,11 +363,13 @@ enum HostReport {
     ReconnectStart,
     OtherCauseStart,
     StaleStart,
+    StaleCallerStart,
     RunEnd,
     SilentRunEnd,
     OtherRunEnd,
     ReconnectRunEnd,
     CutShortRunEnd,
+    BoundRunEnd,
 }
 
 /// What the application did with one report.
@@ -431,11 +436,13 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (Idle, ReconnectStart, none.clone()),
         (Idle, OtherCauseStart, none.clone()),
         (Idle, StaleStart, none.clone()),
+        (Idle, StaleCallerStart, none.clone()),
         (Idle, RunEnd, none.clone()),
         (Idle, SilentRunEnd, none.clone()),
         (Idle, OtherRunEnd, none.clone()),
         (Idle, ReconnectRunEnd, none.clone()),
         (Idle, CutShortRunEnd, none.clone()),
+        (Idle, BoundRunEnd, none.clone()),
         (Caller, CallerStart, bound.clone()),
         (Caller, CallerEnd, caller.clone()),
         (Caller, SelfWokenStart, caller.clone()),
@@ -443,11 +450,13 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (Caller, ReconnectStart, caller.clone()),
         (Caller, OtherCauseStart, caller.clone()),
         (Caller, StaleStart, caller.clone()),
+        (Caller, StaleCallerStart, caller.clone()),
         (Caller, RunEnd, caller.clone()),
         (Caller, SilentRunEnd, caller.clone()),
         (Caller, OtherRunEnd, caller.clone()),
         (Caller, ReconnectRunEnd, caller.clone()),
         (Caller, CutShortRunEnd, caller.clone()),
+        (Caller, BoundRunEnd, caller.clone()),
         (CallerBound, CallerStart, bound.clone()),
         (CallerBound, CallerEnd, none.clone()),
         (CallerBound, SelfWokenStart, bound.clone()),
@@ -455,11 +464,13 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (CallerBound, ReconnectStart, bound.clone()),
         (CallerBound, OtherCauseStart, bound.clone()),
         (CallerBound, StaleStart, bound.clone()),
+        (CallerBound, StaleCallerStart, bound.clone()),
         (CallerBound, RunEnd, bound.clone()),
         (CallerBound, SilentRunEnd, bound.clone()),
         (CallerBound, OtherRunEnd, bound.clone()),
         (CallerBound, ReconnectRunEnd, bound.clone()),
         (CallerBound, CutShortRunEnd, bound.clone()),
+        (CallerBound, BoundRunEnd, none.clone()),
         (SelfWoken, CallerStart, held.clone()),
         (SelfWoken, CallerEnd, held.clone()),
         (SelfWoken, SelfWokenStart, held.clone()),
@@ -467,6 +478,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (SelfWoken, ReconnectStart, held.clone()),
         (SelfWoken, OtherCauseStart, held.clone()),
         (SelfWoken, StaleStart, held.clone()),
+        (SelfWoken, StaleCallerStart, held.clone()),
         (
             SelfWoken,
             RunEnd,
@@ -486,6 +498,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         // Its session closed while its leg is on the line: the run waits for
         // the leg's retirement, which ends it under the PBX lock (#270).
         (SelfWoken, CutShortRunEnd, held.clone()),
+        (SelfWoken, BoundRunEnd, held.clone()),
         (SelfWokenElsewhere, CallerStart, held.clone()),
         (SelfWokenElsewhere, CallerEnd, held.clone()),
         (SelfWokenElsewhere, SelfWokenStart, held.clone()),
@@ -493,11 +506,13 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (SelfWokenElsewhere, ReconnectStart, held.clone()),
         (SelfWokenElsewhere, OtherCauseStart, held.clone()),
         (SelfWokenElsewhere, StaleStart, held.clone()),
+        (SelfWokenElsewhere, StaleCallerStart, held.clone()),
         (SelfWokenElsewhere, RunEnd, held.clone()),
         (SelfWokenElsewhere, SilentRunEnd, held.clone()),
         (SelfWokenElsewhere, OtherRunEnd, held.clone()),
         (SelfWokenElsewhere, ReconnectRunEnd, held.clone()),
         (SelfWokenElsewhere, CutShortRunEnd, held.clone()),
+        (SelfWokenElsewhere, BoundRunEnd, held.clone()),
         (SelfWokenRescued, CallerStart, none.clone()),
         (SelfWokenRescued, CallerEnd, none.clone()),
         (SelfWokenRescued, SelfWokenStart, none.clone()),
@@ -505,11 +520,13 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (SelfWokenRescued, ReconnectStart, none.clone()),
         (SelfWokenRescued, OtherCauseStart, none.clone()),
         (SelfWokenRescued, StaleStart, none.clone()),
+        (SelfWokenRescued, StaleCallerStart, none.clone()),
         (SelfWokenRescued, RunEnd, none.clone()),
         (SelfWokenRescued, SilentRunEnd, none.clone()),
         (SelfWokenRescued, OtherRunEnd, none.clone()),
         (SelfWokenRescued, ReconnectRunEnd, none.clone()),
         (SelfWokenRescued, CutShortRunEnd, none.clone()),
+        (SelfWokenRescued, BoundRunEnd, none.clone()),
         (SelfWokenReturned, CallerStart, held.clone()),
         (SelfWokenReturned, CallerEnd, held.clone()),
         (SelfWokenReturned, SelfWokenStart, held.clone()),
@@ -517,6 +534,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (SelfWokenReturned, ReconnectStart, held.clone()),
         (SelfWokenReturned, OtherCauseStart, held.clone()),
         (SelfWokenReturned, StaleStart, held.clone()),
+        (SelfWokenReturned, StaleCallerStart, held.clone()),
         // The run outlived the leg it spoke for: its end still closes its
         // operation, and its words are written on the route now on the line.
         (
@@ -535,6 +553,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
             host_outcome(false, "none", &["end operator auto-1"], None),
         ),
         (SelfWokenReturned, OtherRunEnd, held.clone()),
+        (SelfWokenReturned, BoundRunEnd, held.clone()),
         (
             SelfWokenReturned,
             ReconnectRunEnd,
@@ -622,6 +641,9 @@ async fn host_report_row(phase: HostPhase, report: HostReport) -> HostOutcome {
             false,
             "",
         ),
+        StaleCallerStart => {
+            host_report("old-token", instance_id, "input", Some("turn-c"), false, "")
+        }
         RunEnd => host_report(
             &token,
             instance_id,
@@ -631,6 +653,7 @@ async fn host_report_row(phase: HostPhase, report: HostReport) -> HostOutcome {
             "Done.",
         ),
         SilentRunEnd => host_report(&token, instance_id, "autonomous", Some("auto-1"), true, " "),
+        BoundRunEnd => host_report(&token, instance_id, "autonomous", Some("turn-c"), true, ""),
         OtherRunEnd => host_report(
             &token,
             instance_id,

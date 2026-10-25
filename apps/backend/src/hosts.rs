@@ -1355,12 +1355,15 @@ impl FakeHostAgent {
                 Ok(result) => frame["result"] = result,
                 Err((code, message)) => frame["error"] = json!({"code": code, "message": message}),
             }
+            // A follow_up went into the turn already open: a real host opens
+            // none for it.
+            let follow_up = frame["result"]["sent_as"] == "follow_up";
             link.send(frame);
             if !ok {
                 continue;
             }
             match name.as_str() {
-                "prompt" => {
+                "prompt" if !follow_up => {
                     turns += 1;
                     let turn_id = format!("turn-{turns}");
                     let start = json!({"kind": "turn_start", "cause": "input", "turn_id": turn_id});

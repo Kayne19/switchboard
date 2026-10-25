@@ -1173,12 +1173,15 @@ enum TurnHappens {
     SessionCloses,
     /// A caller's prompt goes out.
     PromptStarts,
+    /// A caller's prompt goes out, and the host sends it into the held run
+    /// `auto-1` as a `follow_up`: its reply names the run.
+    PromptIntoRun,
     /// The caller's prompt is cancelled.
     PromptCancelled,
 }
 
 impl TurnHappens {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 15] = [
         Self::StartsSelfWoken,
         Self::StartsSelfWokenAdmitted,
         Self::StartsInput,
@@ -1192,6 +1195,7 @@ impl TurnHappens {
         Self::SnapshotOpen,
         Self::SessionCloses,
         Self::PromptStarts,
+        Self::PromptIntoRun,
         Self::PromptCancelled,
     ];
 
@@ -1199,6 +1203,7 @@ impl TurnHappens {
     fn possible_at(self, at: TurnAt) -> bool {
         match self {
             Self::PromptStarts => !at.collecting(),
+            Self::PromptIntoRun => matches!(at, TurnAt::SelfWoken),
             Self::PromptCancelled => at.collecting(),
             _ => true,
         }
@@ -1457,6 +1462,10 @@ impl TurnRig {
                 .await;
             }
             TurnHappens::PromptStarts => self.prompt("next").await,
+            TurnHappens::PromptIntoRun => {
+                self.prompt_into("next", json!({"sent_as": "follow_up", "turn_id": "auto-1"}))
+                    .await
+            }
             TurnHappens::PromptCancelled => {
                 let prompting = self.prompting.take().expect("a prompt is running");
                 prompting.abort();
@@ -1548,7 +1557,7 @@ Idle               | CallerEnds              | end input t-in                   
 Idle               | SnapshotIdle            | -                                                             | -    | -          | -                                     | -
 Idle               | SnapshotOpen            | start autonomous snap-1                                       | busy | autonomous | -                                     | -
 Idle               | SessionCloses           | -                                                             | -    | gone       | -                                     | -
-Idle               | PromptStarts            | -                                                             | busy | -          | running «»                            | -
+Idle               | PromptStarts            | start input t-in                                              | busy | -          | running «»                            | -
 
 # A caller's turn: its frames go to its collector, and only the `turn_end` of the turn its prompt's
 # reply named settles it. Another turn's end is still reported as an input turn's end.
@@ -1581,7 +1590,8 @@ SelfWoken          | CallerEnds              | -                                
 SelfWoken          | SnapshotIdle            | end autonomous auto-1 «run words»                             | -    | -          | -                                     | auto-1: run words
 SelfWoken          | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | -                                     | auto-1: run words
 SelfWoken          | SessionCloses           | end autonomous auto-1                                         | -    | gone       | -                                     | auto-1: run words
-SelfWoken          | PromptStarts            | -                                                             | busy | autonomous | running «»                            | -
+SelfWoken          | PromptStarts            | start input t-in                                              | busy | autonomous | running «»                            | -
+SelfWoken          | PromptIntoRun           | start input auto-1                                            | busy | autonomous | running «»                            | -
 
 # Both: the run swallows the caller's frames too, and a second start replaces it the same way.
 CallerAndSelfWoken | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
@@ -1628,7 +1638,7 @@ Replaced           | CallerEnds              | -                                
 Replaced           | SnapshotIdle            | end autonomous auto-2 «second words»                          | -    | -          | -                                     | auto-2: second words
 Replaced           | SnapshotOpen            | end autonomous auto-2 «second words»; start autonomous snap-1 | busy | autonomous | -                                     | auto-2: second words
 Replaced           | SessionCloses           | end autonomous auto-2                                         | -    | gone       | -                                     | auto-2: second words
-Replaced           | PromptStarts            | -                                                             | busy | autonomous | running «»                            | -
+Replaced           | PromptStarts            | start input t-in                                              | busy | autonomous | running «»                            | -
 
 # A prompt sent into the held run as a `follow_up`: the run swallows its frames, but the run's end reaches
 # the prompt too, which waits for it (#512).

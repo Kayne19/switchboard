@@ -890,6 +890,41 @@ fn a_caller_operation_bound_to_a_host_turn_still_finishes() {
     assert!(coordinator.begin_prompt(&leg).is_ok());
 }
 
+/// A bring-up's prompt can go into a turn the host already has open: a busy
+/// session's run, sent as a `follow_up`. The host names that turn in its
+/// reply before the candidate is adopted, when no operation exists for the
+/// candidate yet. The bind waits on the candidate, and adoption opens the
+/// intro operation bound to it, so the run's calls, stamped with that turn
+/// and its cause, are admitted once the leg is on the line (#239).
+#[test]
+fn a_candidates_intro_turn_binds_the_intro_operation() {
+    let call = coordinator();
+    call.begin_prompt(&call.current_identity()).unwrap();
+    call.begin_candidate(alpha_candidate()).unwrap();
+    assert_eq!(call.bind_turn("cand", "run-1"), Ok(()));
+    assert_eq!(
+        call.bind_turn("cand", "run-1"),
+        Ok(()),
+        "the same turn named again binds nothing new"
+    );
+    assert_eq!(
+        call.bind_turn("cand", "run-2"),
+        Err(LifecycleError::StaleLeg),
+        "a candidate has one intro turn"
+    );
+    call.adopt_candidate("cand").unwrap();
+    assert_eq!(
+        call.accept_side_effect("cand", Some("run-1"), Some("autonomous")),
+        Ok(())
+    );
+    assert_eq!(
+        call.accept_side_effect("cand", Some("run-2"), Some("autonomous")),
+        Err(LifecycleError::StaleLeg)
+    );
+    assert!(call.finish_intro());
+    assert_eq!(phase(&call), "active");
+}
+
 /// A transfer's candidate is adopted on its first sign of life, but its
 /// startup ends only when its intro does. A rescue in between cancels the
 /// work that would commit or roll it back, so the startup ends with the
@@ -1275,7 +1310,7 @@ fn candidate_token(phase: &TablePhase) -> String {
         .map_or_else(|| "nobody".into(), |identity| identity.token)
 }
 
-const TABLE_EVENTS: [(&str, TableEvent); 21] = [
+const TABLE_EVENTS: [(&str, TableEvent); 22] = [
     ("begin_prompt", |phase| {
         let call = &phase.call;
         shown(call.begin_prompt(&call.current_identity()), |turn| {
@@ -1293,6 +1328,12 @@ const TABLE_EVENTS: [(&str, TableEvent); 21] = [
         let call = &phase.call;
         shown(
             call.bind_turn(&call.current_identity().token, "turn-x"),
+            |()| "bound".into(),
+        )
+    }),
+    ("bind_turn from the candidate", |phase| {
+        shown(
+            phase.call.bind_turn(&candidate_token(phase), "turn-x"),
             |()| "bound".into(),
         )
     }),
@@ -1556,6 +1597,7 @@ const CALL_LINE_TABLE: &str = "
 operator | begin_prompt => new turn | turn running operator operator@0 new turn thinking: []
 operator | begin_autonomous => WrongPhase | operator operator operator@0 - thinking: []
 operator | bind_turn => StaleLeg | operator operator operator@0 - thinking: []
+operator | bind_turn from the candidate => StaleLeg | operator operator operator@0 - thinking: []
 operator | settle_turn => false | operator operator operator@0 - thinking: []
 operator | finish_operation => false | operator operator operator@0 - thinking: []
 operator | attach_steer => NoActiveOperation | operator operator operator@0 - thinking: []
@@ -1577,6 +1619,7 @@ operator | activity from the candidate => Discard | operator operator operator@0
 operator turn | begin_prompt => OperationActive | turn running operator operator@0 turn thinking: []
 operator turn | begin_autonomous => WrongPhase | turn running operator operator@0 turn thinking: []
 operator turn | bind_turn => bound | turn running operator operator@0 turn thinking: []
+operator turn | bind_turn from the candidate => StaleLeg | turn running operator operator@0 turn thinking: []
 operator turn | settle_turn => false | turn running operator operator@0 turn thinking: []
 operator turn | finish_operation => true | operator operator operator@0 - thinking: []
 operator turn | attach_steer => turn | turn running operator operator@0 turn thinking: []
@@ -1598,6 +1641,7 @@ operator turn | activity from the candidate => Discard | turn running operator o
 project | begin_prompt => new turn | turn running alpha cand@1 new turn adopted:alpha thinking:medium []
 project | begin_autonomous => new turn | turn running alpha cand@1 new turn adopted:alpha thinking:medium []
 project | bind_turn => StaleLeg | active alpha cand@1 - adopted:alpha thinking:medium []
+project | bind_turn from the candidate => StaleLeg | active alpha cand@1 - adopted:alpha thinking:medium []
 project | settle_turn => false | active alpha cand@1 - adopted:alpha thinking:medium []
 project | finish_operation => false | active alpha cand@1 - adopted:alpha thinking:medium []
 project | attach_steer => NoActiveOperation | active alpha cand@1 - adopted:alpha thinking:medium []
@@ -1619,6 +1663,7 @@ project | activity from the candidate => Discard | active alpha cand@1 - adopted
 project turn | begin_prompt => OperationActive | turn running alpha cand@1 turn adopted:alpha thinking:medium []
 project turn | begin_autonomous => WrongPhase | turn running alpha cand@1 turn adopted:alpha thinking:medium []
 project turn | bind_turn => bound | turn running alpha cand@1 turn adopted:alpha thinking:medium []
+project turn | bind_turn from the candidate => StaleLeg | turn running alpha cand@1 turn adopted:alpha thinking:medium []
 project turn | settle_turn => false | turn running alpha cand@1 turn adopted:alpha thinking:medium []
 project turn | finish_operation => true | active alpha cand@1 - adopted:alpha thinking:medium []
 project turn | attach_steer => turn | turn running alpha cand@1 turn adopted:alpha thinking:medium []
@@ -1640,6 +1685,7 @@ project turn | activity from the candidate => Discard | turn running alpha cand@
 self-woken turn | begin_prompt => OperationActive | turn running alpha cand@1 turn adopted:alpha thinking:medium []
 self-woken turn | begin_autonomous => WrongPhase | turn running alpha cand@1 turn adopted:alpha thinking:medium []
 self-woken turn | bind_turn => StaleLeg | turn running alpha cand@1 turn adopted:alpha thinking:medium []
+self-woken turn | bind_turn from the candidate => StaleLeg | turn running alpha cand@1 turn adopted:alpha thinking:medium []
 self-woken turn | settle_turn => true | active alpha cand@1 - adopted:alpha thinking:medium []
 self-woken turn | finish_operation => true | active alpha cand@1 - adopted:alpha thinking:medium []
 self-woken turn | attach_steer => turn | turn running alpha cand@1 turn adopted:alpha thinking:medium []
@@ -1661,6 +1707,7 @@ self-woken turn | activity from the candidate => Discard | turn running alpha ca
 starting | begin_prompt => CandidateActive | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | begin_autonomous => CandidateActive | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | bind_turn => StaleLeg | starting alpha cand@1 - startup adopted:alpha thinking:medium []
+starting | bind_turn from the candidate => bound | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | settle_turn => false | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | finish_operation => false | starting alpha cand@1 - startup adopted:alpha thinking:medium []
 starting | attach_steer => WrongPhase | starting alpha cand@1 - startup adopted:alpha thinking:medium []
@@ -1682,6 +1729,7 @@ starting | activity from the candidate => Promote | starting alpha cand@1 - star
 starting in a turn | begin_prompt => OperationActive | starting operator operator@0 turn startup thinking: []
 starting in a turn | begin_autonomous => CandidateActive | starting operator operator@0 turn startup thinking: []
 starting in a turn | bind_turn => bound | starting operator operator@0 turn startup thinking: []
+starting in a turn | bind_turn from the candidate => bound | starting operator operator@0 turn startup thinking: []
 starting in a turn | settle_turn => false | starting operator operator@0 turn startup thinking: []
 starting in a turn | finish_operation => true | starting operator operator@0 - startup thinking: []
 starting in a turn | attach_steer => WrongPhase | starting operator operator@0 turn startup thinking: []
@@ -1703,6 +1751,7 @@ starting in a turn | activity from the candidate => Promote | starting operator 
 adopted | begin_prompt => OperationActive | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | begin_autonomous => WrongPhase | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | bind_turn => bound | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
+adopted | bind_turn from the candidate => StaleLeg | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | settle_turn => false | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | finish_operation => true | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted | attach_steer => turn | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
@@ -1724,6 +1773,7 @@ adopted | activity from the candidate => Discard | turn running alpha cand@1 tur
 adopted at rest | begin_prompt => new turn | turn running alpha cand@1 new turn startup adopted:alpha thinking:medium []
 adopted at rest | begin_autonomous => new turn | turn running alpha cand@1 new turn startup adopted:alpha thinking:medium []
 adopted at rest | bind_turn => StaleLeg | active alpha cand@1 - startup adopted:alpha thinking:medium []
+adopted at rest | bind_turn from the candidate => StaleLeg | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | settle_turn => false | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | finish_operation => false | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | attach_steer => NoActiveOperation | active alpha cand@1 - startup adopted:alpha thinking:medium []
@@ -1745,6 +1795,7 @@ adopted at rest | activity from the candidate => Discard | active alpha cand@1 -
 quiescing | begin_prompt => WrongPhase | quiescing alpha cand-rescue-2@2 - thinking:medium []
 quiescing | begin_autonomous => WrongPhase | quiescing alpha cand-rescue-2@2 - thinking:medium []
 quiescing | bind_turn => StaleLeg | quiescing alpha cand-rescue-2@2 - thinking:medium []
+quiescing | bind_turn from the candidate => StaleLeg | quiescing alpha cand-rescue-2@2 - thinking:medium []
 quiescing | settle_turn => false | quiescing alpha cand-rescue-2@2 - thinking:medium []
 quiescing | finish_operation => false | quiescing alpha cand-rescue-2@2 - thinking:medium []
 quiescing | attach_steer => WrongPhase | quiescing alpha cand-rescue-2@2 - thinking:medium []
@@ -1766,6 +1817,7 @@ quiescing | activity from the candidate => Discard | quiescing alpha cand-rescue
 shutdown | begin_prompt => Shutdown | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | begin_autonomous => WrongPhase | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | bind_turn => StaleLeg | shutdown alpha cand-shutdown-2@2 - thinking:medium []
+shutdown | bind_turn from the candidate => StaleLeg | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | settle_turn => false | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | finish_operation => false | shutdown alpha cand-shutdown-2@2 - thinking:medium []
 shutdown | attach_steer => WrongPhase | shutdown alpha cand-shutdown-2@2 - thinking:medium []
@@ -1787,6 +1839,7 @@ shutdown | activity from the candidate => Discard | shutdown alpha cand-shutdown
 shutdown starting | begin_prompt => Shutdown | shutdown alpha cand-shutdown-3@3 - thinking:medium []
 shutdown starting | begin_autonomous => WrongPhase | shutdown alpha cand-shutdown-3@3 - thinking:medium []
 shutdown starting | bind_turn => StaleLeg | shutdown alpha cand-shutdown-3@3 - thinking:medium []
+shutdown starting | bind_turn from the candidate => StaleLeg | shutdown alpha cand-shutdown-3@3 - thinking:medium []
 shutdown starting | settle_turn => false | shutdown alpha cand-shutdown-3@3 - thinking:medium []
 shutdown starting | finish_operation => false | shutdown alpha cand-shutdown-3@3 - thinking:medium []
 shutdown starting | attach_steer => WrongPhase | shutdown alpha cand-shutdown-3@3 - thinking:medium []
