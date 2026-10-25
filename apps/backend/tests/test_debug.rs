@@ -1209,6 +1209,34 @@ fn only_the_part_of_a_string_that_can_be_kept_is_scrubbed() {
     assert!(!text.contains("sss"), "{}", &text[text.len() - 40..]);
 }
 
+fn log_from(thread: &str) {
+    tracing::info!(thread, "a line two threads log");
+}
+
+// A test that captures logs sees the lines its own thread logs, also from a
+// callsite another thread reached first. Tests run on many threads in one
+// process, and another test's thread, which captures nothing, often reaches
+// it first (#368).
+#[test]
+fn a_capture_keeps_its_line_from_a_callsite_another_thread_reached_first() {
+    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+    let bus = DebugBus::new();
+    let subscriber = tracing_subscriber::registry()
+        .with(EnvFilter::new("switchboard=info"))
+        .with(DebugLogLayer::new(bus.clone()));
+    tracing::subscriber::with_default(subscriber, || {
+        std::thread::spawn(|| log_from("neighbour")).join().unwrap();
+        log_from("capturing");
+    });
+    let threads: Vec<_> = bus
+        .snapshot()
+        .logs
+        .iter()
+        .map(|log| log.fields["thread"].clone())
+        .collect();
+    assert_eq!(threads, vec![json!("capturing")]);
+}
+
 #[test]
 fn an_off_bus_records_nothing_until_it_is_enabled() {
     use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
