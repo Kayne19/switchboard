@@ -175,6 +175,12 @@ impl DeliveryState {
         (delivered, sequence)
     }
 
+    /// The sequence the next published event takes. No page has been sent
+    /// it or any after it.
+    pub(crate) fn next_sequence(&self) -> u64 {
+        self.next_sequence.load(Ordering::Relaxed)
+    }
+
     pub(crate) fn publish(&self, event: Event) -> bool {
         self.publish_sequenced(event).0
     }

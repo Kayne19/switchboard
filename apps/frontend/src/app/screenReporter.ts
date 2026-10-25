@@ -22,6 +22,9 @@ import { deriveScreenState } from "./sceneModel";
  */
 const ACK_DEADLINE_MS = 2_000;
 
+/** `appliedSeq` before the page has applied a display on this connection: below seq 0, which is real. */
+const NOTHING_APPLIED = -1;
+
 /** A display the page declined: its seq and the page's reason. */
 export interface Rejection {
   seq: number;
@@ -43,7 +46,10 @@ interface ReporterState {
   queued: ScreenStateReport | null;
   /** The generation the last `epoch` announced; every report carries it. */
   generation: number;
-  /** The highest display seq the page has applied; it never goes back. */
+  /**
+   * The highest display seq the page has applied on this connection, or
+   * `NOTHING_APPLIED`; it never goes back within one.
+   */
   appliedSeq: number;
   /**
    * The rejections no report has carried out yet, lowest seq first, one
@@ -91,7 +97,7 @@ export class ScreenReporter {
     line: UNREADY,
     queued: null,
     generation: 0,
-    appliedSeq: 0,
+    appliedSeq: NOTHING_APPLIED,
     rejections: [],
     scene: null,
   };
@@ -180,7 +186,12 @@ export class ScreenReporter {
         // display calls waiting.
         return { ...state, line: IDLE, queued: null, scene: null, generation: event.generation };
       case "lineDown":
-        return line.kind === "unready" ? state : { ...state, line: UNREADY };
+        // The next connection may reach a restarted service, which counts
+        // seqs again from 0, so what this one applied is not reported on
+        // it; the snapshot replay raises it again. Rejections stay: they
+        // only hold the applied seq lower, the same service may still be
+        // waiting on them, and a restarted one ignores one past its count.
+        return { ...state, line: UNREADY, appliedSeq: NOTHING_APPLIED };
       case "applied":
         return { ...state, appliedSeq: Math.max(state.appliedSeq, event.seq) };
       case "rejected": {
@@ -206,7 +217,7 @@ export class ScreenReporter {
     const report = deriveScreenState(scene, state.generation);
     const [carried, waiting] = state.rejections;
     const applied = waiting ? Math.min(state.appliedSeq, waiting.seq - 1) : state.appliedSeq;
-    // Seq 0 is real, so a ceiling under it means "nothing applied" and the field is left out.
+    // Seq 0 is real, so below it means "nothing applied" and the field is left out.
     if (applied >= 0) report.applied_seq = applied;
     if (carried) report.rejected = carried;
     return report;

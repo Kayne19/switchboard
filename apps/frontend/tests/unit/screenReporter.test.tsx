@@ -252,6 +252,14 @@ describe('screen reports: phase x event', () => {
       await receive(show('b', 3));
       expect(sent().at(-1)?.applied_seq).toBe(9);
     });
+
+    it('idle | nothing applied yet: the reports carry no applied_seq', async () => {
+      // Seq 0 is real: a report of it would confirm the first display the
+      // service sends.
+      await idle();
+      expect(sent().length).toBeGreaterThan(0);
+      expect(sent().map((report) => report.applied_seq)).toEqual(sent().map(() => undefined));
+    });
   });
 
   describe('awaiting', () => {
@@ -362,6 +370,24 @@ describe('screen reports: phase x event', () => {
       expect(socket()).not.toBe(FakeSocket.all[0]);
       expect(socket().reports().length).toBeGreaterThan(0);
       expect(sent().slice(mark).every((report) => report.generation === 1)).toBe(true);
+    });
+
+    it('line down, then a new connection to a restarted service: no report names a seq the old one sent', async () => {
+      // A seq is the service process's delivery counter, and a restarted
+      // process counts again from 0: one the old process sent says nothing
+      // about what the new one has.
+      await idle(4);
+      await receive(show('a', 500));
+      await settle();
+      expect(sent().at(-1)?.applied_seq).toBe(500);
+      await lineDown();
+      await reconnect();
+      await receive({ type: 'epoch', generation: 0 }, status, { type: 'history', entries: [] });
+      await settle();
+      expect(socket().reports().length).toBeGreaterThan(0);
+      expect(socket().reports().map((report) => report.applied_seq)).toEqual(
+        socket().reports().map(() => undefined),
+      );
     });
   });
 
@@ -507,6 +533,27 @@ describe('screen reports: phase x event', () => {
       expect(sent().slice(mark).map((report) => report.rejected)).toEqual([
         { seq: 5, reason: expect.any(String) },
       ]);
+    });
+
+    it('a rejection not yet sent survives a reconnect, and no report passes it before it is out', async () => {
+      // The same service may answer the reconnect while the display call
+      // for seq 5 still waits, and its snapshot replays the stage at a
+      // later seq.
+      await awaiting();
+      const mark = sent().length;
+      await receive(unknown(5));
+      await lineDown();
+      await reconnect();
+      await receive({ type: 'epoch', generation: 1 }, status, show('a', 9));
+      await settle();
+      expect(rejectedSince(mark)).toEqual([5]);
+      const out = new Set<number>();
+      for (const report of sent().slice(mark)) {
+        const rejected = report.rejected as { seq: number } | undefined;
+        if (rejected) out.add(rejected.seq);
+        if ((report.applied_seq as number) >= 5) expect(out.has(5)).toBe(true);
+      }
+      expect(sent().at(-1)?.applied_seq).toBe(9);
     });
   });
 

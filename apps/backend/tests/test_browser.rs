@@ -412,13 +412,14 @@ async fn the_tab_left_open_is_active_again_when_the_newest_closes() {
     while desktop.receiver.try_recv().is_ok() {}
 
     let generation = state.0.coordinator.generation();
+    let seq = a_display_sent(&state).await;
     handle_text_frame(
         &state,
         desktop.epoch,
         &mut None,
         &mut None,
         &json!({"type":"screen_state", "view":"visual", "has_visual":true,
-                "generation":generation, "applied_seq":7})
+                "generation":generation, "applied_seq":seq})
         .to_string(),
     )
     .await
@@ -426,7 +427,7 @@ async fn the_tab_left_open_is_active_again_when_the_newest_closes() {
 
     assert_eq!(
         confirmed_watermark(&state).await,
-        Some(7),
+        Some(seq),
         "the open tab's confirmation was ignored"
     );
     let mut acknowledged = false;
@@ -779,6 +780,7 @@ async fn a_screen_state_report_without_a_generation_is_ignored() {
     let state = state();
     let (mut connection, _snapshot, _watermark) = state.register_connection().await;
     state.0.coordinator.begin_rescue("test rescue");
+    let seq = a_display_sent(&state).await;
     let screen_before = state.0.display_gate.lock().await.screen().clone();
 
     handle_text_frame(
@@ -787,7 +789,7 @@ async fn a_screen_state_report_without_a_generation_is_ignored() {
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"visual","has_visual":true,
-               "title":"Old leg chart","applied_seq":7})
+               "title":"Old leg chart","applied_seq":seq})
         .to_string(),
     )
     .await
@@ -812,13 +814,13 @@ async fn a_screen_state_report_without_a_generation_is_ignored() {
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"visual","has_visual":true,
-               "title":"Old leg chart","applied_seq":7,"generation":generation})
+               "title":"Old leg chart","applied_seq":seq,"generation":generation})
         .to_string(),
     )
     .await
     .unwrap();
     assert!(types_of(&queued_frames(&mut connection)).contains(&"screen_state_ack"));
-    assert_eq!(confirmed_watermark(&state).await, Some(7));
+    assert_eq!(confirmed_watermark(&state).await, Some(seq));
 }
 
 #[tokio::test]
@@ -1075,6 +1077,20 @@ fn snapshot_types(messages: &[ServerMessage]) -> Vec<String> {
         .iter()
         .map(|message| message.to_value()["type"].as_str().unwrap().to_owned())
         .collect()
+}
+
+/// A display sent to every page, as an agent's is: its `seq`, which a page
+/// that applied it reports.
+async fn a_display_sent(state: &AppState) -> u64 {
+    let action = json!({"op":"show","id":"m1","type":"metric","role":"primary",
+                        "data":{"label":"m1","value":"1"}});
+    state
+        .0
+        .display_gate
+        .lock()
+        .await
+        .publish(&action, &state.0.delivery)
+        .1
 }
 
 /// The newest display `seq` the page has confirmed in this generation.

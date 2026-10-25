@@ -760,17 +760,22 @@ the channel closes that gap with an explicit confirm/reject round trip.
 
 **On the wire.** Every `display` frame the backend sends — live or replayed
 on reconnect — is `{"type":"display","seq":<n>,"action":<normalized>}`.
-`seq` is drawn from the same monotonic counter that sequences every
-delivered event, stamped on just before the frame leaves
-(`stamp_display_seq`). A reconnect snapshot stamps every replayed action
-with the gate's watermark as of connect time, since the snapshot as a whole
-represents the projection at that point in the stream.
+`seq` is drawn from the counter that sequences every delivered event,
+stamped on just before the frame leaves (`stamp_display_seq`). The counter
+belongs to the service process: it rises for as long as the process runs and
+starts again at 0 when the service restarts. A reconnect snapshot stamps
+every replayed action with the gate's watermark as of connect time, since the
+snapshot as a whole represents the projection at that point in the stream.
 
 **The browser's report.** The existing `screen_state` message (sent whenever
 the page applies or declines a frame) carries two more fields:
-- `applied_seq`: the highest `seq` the page has actually rendered so far,
-  held below the next rejection still waiting on the page (below), so it
-  never passes a rejection the service has not heard.
+- `applied_seq`: the highest `seq` the page has actually rendered on this
+  connection, held below the next rejection still waiting on the page
+  (below), so it never passes a rejection the service has not heard. A page
+  open across a restart reconnects to a process that counts again from 0, so
+  it reports none of the seqs it applied before the line went down; the
+  snapshot replay raises it again. Before the page applies a display on a
+  connection, its reports leave the field out.
 - `rejected` (optional): `{ seq, reason }` for a frame the page could not
   apply. The page keeps every one it has not sent, lowest `seq` first, and
   drops none unsent: its display call may still be waiting, and `applied_seq`
@@ -834,7 +839,13 @@ draws again on the new leg.
 
 Every `screen_state` report folds its `applied_seq` into the confirmations as
 a running per-generation maximum, and adds its `rejected`, if it carries
-one, to `rejections`. Only the active connection's report counts, and only
+one, to `rejections`. A `seq` at or past the delivery's next sequence is
+left out of both: this process has not sent it, so it is an earlier
+process's, from a page that stayed open across a restart. A `seq` below it
+is taken as this process's. The page cannot tell a restarted service from
+the one it left, so a rejection it kept through a restart that the new
+count has passed names one of the new process's displays, whose call then
+answers rejected. Only the active connection's report counts, and only
 for the current generation; any other is ignored and not acknowledged
 (`apply_screen_state` in `apps/backend/src/browser.rs`). A report whose
 `view` is not one the page has is answered with an error. Two tabs are two
