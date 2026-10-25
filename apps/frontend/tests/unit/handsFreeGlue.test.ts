@@ -81,6 +81,7 @@ type Trigger =
   | "MODE, ptt end"
   | "load lands"
   | "load fails"
+  | "MODE, load lands"
   | "page hidden, load lands"
   | "pagehide, load lands"
   | "dispose, load lands"
@@ -494,6 +495,10 @@ async function apply(h: Harness, event: Trigger): Promise<void> {
     case "load fails":
       await h.fail();
       break;
+    case "MODE, load lands":
+      runtime.toggleHandsFree();
+      await h.land();
+      break;
     case "page hidden, load lands":
       h.setVisibility("hidden");
       await h.land();
@@ -557,8 +562,10 @@ const rows: Row[] = [
   { from: "unloaded", event: "ptt press", seen: { ...STOPPED, said: STANDBY } },
   { from: "unloaded", event: "reply closed", seen: { ...STOPPED, said: STANDBY }, lease: false },
 
-  // Loading: MODE waits for it; a page stop or a rescue epoch ends it, and the next MODE loads again.
-  { from: "loading", event: "MODE", seen: { ...ON, said: LOADING, loads: 0, asked: 0 } },
+  // Loading: MODE, a page stop or a rescue epoch ends it, and the next MODE loads again (#261).
+  { from: "loading", event: "MODE", seen: { ...STOPPED, said: OFF, loads: 0, asked: 0 } },
+  { from: "loading", event: "MODE, load lands", seen: { ...STOPPED, said: OFF, asked: 0 } },
+  { from: "loading", event: "MODE twice", seen: { ...ON, said: LOADING, loads: 1, asked: 0 } },
   { from: "loading", event: "load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
   { from: "loading", event: "load fails", seen: { ...STOPPED, said: LOAD_FAILED, error: LOAD_FAILED, asked: 0 } },
   { from: "loading", event: "page hidden", seen: { ...STOPPED, said: HIDDEN } },
