@@ -50,6 +50,9 @@ after "On screen.".
 - `speak(text)`: say `text` out loud. Your written output goes to a screen
   they may not be watching, so anything they must hear goes through `speak`.
   Use plain spoken words. Code, paths, lists and tables go on the screen.
+  A line that runs past the speech deadline is cut off there: its result is
+  `delivered` with reason `cut_short`, and the caller heard only the start.
+  Do not repeat the whole line. If the rest matters, say it in a shorter one.
 - `request_to_speak(message, reason)`: while the caller is on other work,
   queue what they should hear. `reason` is `finished`, `needs_decision` or
   `problem`. `message` is the real content, said the way you would say it: the

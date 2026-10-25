@@ -562,6 +562,7 @@ The service answers:
 ```json
 { "type": "module_reply", "id": "m5", "status": "delivered", "reason": null }
 { "type": "module_reply", "id": "m6", "status": "delivered", "reason": null, "result": { "visible": ["..."] } }
+{ "type": "module_reply", "id": "m7", "status": "delivered", "reason": "cut_short", "result": { "delivered": true, "reason": "cut_short", "detail": "cut off at the speech deadline; the caller heard the start" } }
 ```
 
 `status` is `delivered`, `accepted`, `refused` or `failed`. A call made
@@ -573,8 +574,11 @@ refused. If no reply arrives in time, or the link is down, the module gets
 `failed`. In time is 30 s, or for `speak` the speech deadline and 5 s more
 (`SPEAK_REPLY_MARGIN_MS` in `skill_socket.ts`). The service starts its own
 speech deadline only when it admits the call, after the frame has crossed the
-link, and answers `delivered` once the whole line has played; the margin lets
-that answer, not the host agent's clock, decide. A call that cannot
+link, and answers `delivered` once the line's audio has gone out to the page,
+behind any line queued ahead of it; the margin lets that answer, not the host
+agent's clock, decide. A delivered reply's `reason` is `null`, except for a
+`speak` the speech deadline cut after its start went out: `cut_short`, as
+`m7` shows, since the caller heard only the start. A call that cannot
 go out because the link's socket is already closing gets `failed` at once.
 
 Each wait on a `speak` has one owner, and each is longer than the one it

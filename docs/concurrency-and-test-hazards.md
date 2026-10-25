@@ -756,20 +756,25 @@ requester, writes the spoken line, or shows the page a speech error.
 | draining | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
 | draining | the call hands off before any of its audio reached the page | `Stopped(Superseded)` | not spoken | no | no |
 | draining | the body fails, or the task panics | `Failed` | the error | at the current generation | no |
-| draining | the body ends, and a browser took some of its slot | `Spoken` | spoken | no | if `log_spoken` |
+| draining | the speech deadline cuts the body after a browser took some of its audio | `Spoken` (`Played::CutShort`) | spoken, cut short | no | if `log_spoken` |
+| draining | the body ends, and a browser took some of its slot | `Spoken` (`Played::Whole`) | spoken | no | if `log_spoken` |
 | draining | the body ends, and no browser took any of its slot | `NotDelivered` | not delivered | no | no |
 | draining | the body ends behind an open slot, and the call hands off before that slot closes | `Stopped(Superseded)` | not spoken | no | no |
 
 Only a rescue or a hand-off stops a request, and either moves the generation
 first, so a `Stopped` request never reaches the page as said (#247, #437).
 Every end but `Spoken` and `NotDelivered` gives back what the request holds,
-its pending continuity text and its audio slot (`Utterance::abandon`). The
-drain does this the moment its own body ends, because the slots queued
-behind it emit only once it is closed. The completion does it again for the
-ends the drain never sees (admission, an abort, a panic); both steps are
-no-ops once done. `every_end_of_a_speech_request_completes_it_once` in
+its pending continuity text and its audio slot (`Utterance::abandon`). So
+does a body the deadline cut: its request id is not kept, because the
+provider stitches only to a body read to its end. The drain does this the
+moment its own body ends, because the slots queued behind it emit only once
+it is closed. The completion does it again for the ends the drain never sees
+(admission, an abort, a panic); both steps are no-ops once done.
+`every_end_of_a_speech_request_completes_it_once` in
 `apps/backend/tests/test_speech.rs` drives each row it can reach through the
-real worker.
+real worker. A reply's utterances share one deadline, so a reply whose
+utterance is cut short says nothing after it, and its speech counts as not
+spoken for the turn's `final_response_audio_closed`, as before.
 
 A request is answered from what the pages took of its own slot, whichever
 call sent it (#424). The audio queue (`AudioQueue` in `delivery.rs`) sends a

@@ -177,7 +177,7 @@ pub(crate) struct SpeechRequest {
     /// Mid-turn and floor speech are written to the spoken transcript. Settled
     /// replies already have their own Reply event and must not be duplicated.
     log_spoken: bool,
-    result: oneshot::Sender<Result<(), String>>,
+    result: oneshot::Sender<Result<Played, String>>,
     /// The `/speak` request it answers; the synthesis logs under it although
     /// the speech worker runs it.
     span: tracing::Span,
@@ -479,12 +479,21 @@ impl std::fmt::Display for Stopped {
     }
 }
 
+/// What the caller heard of a line that was spoken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Played {
+    Whole,
+    /// The speech deadline cut it after its start reached the page.
+    CutShort,
+}
+
 /// How a speech request ended. Every exit of the worker yields exactly one,
 /// and `PendingSpeech::complete` is the only place one is acted on.
 #[derive(Debug)]
 enum SpeechOutcome {
-    /// The whole body drained and a browser took its audio.
-    Spoken { bytes: usize },
+    /// A browser took its audio: the whole body, or the start of one the
+    /// speech deadline cut.
+    Spoken { bytes: usize, played: Played },
     /// The whole body drained, but no browser took its audio.
     NotDelivered { bytes: usize },
     /// A rescue stopped it.
@@ -512,7 +521,7 @@ struct PendingSpeech {
     /// `SpeechRequest`'s route, `log_spoken` and `result`.
     route: String,
     log_spoken: bool,
-    result: oneshot::Sender<Result<(), String>>,
+    result: oneshot::Sender<Result<Played, String>>,
     started: std::time::Instant,
 }
 
@@ -520,7 +529,8 @@ impl PendingSpeech {
     /// Ends the request: an unspoken one gives back what it holds before its
     /// requester is answered, a spoken one is logged, and only a provider
     /// failure at the current generation reaches the page. Speech a rescue
-    /// stopped went as meant, so the caller is not shown it as an error.
+    /// stopped went as meant, so the caller is not shown it as an error; nor
+    /// is a line the deadline cut, whose start the caller heard.
     async fn complete(self, state: &AppState, outcome: SpeechOutcome) {
         let Self {
             utterance,
@@ -531,8 +541,8 @@ impl PendingSpeech {
         } = self;
         let chars = utterance.text.chars().count();
         match outcome {
-            SpeechOutcome::Spoken { bytes } => {
-                tracing::info!(chars, bytes, elapsed = ?started.elapsed(), "synthesized a speech line");
+            SpeechOutcome::Spoken { bytes, played } => {
+                tracing::info!(chars, bytes, ?played, elapsed = ?started.elapsed(), "synthesized a speech line");
                 if log_spoken {
                     if let Some(entry) = state.0.transcript_log.lock().await.add_voiced(
                         AGENT,
@@ -550,7 +560,7 @@ impl PendingSpeech {
                         );
                     }
                 }
-                let _ = result.send(Ok(()));
+                let _ = result.send(Ok(played));
             }
             SpeechOutcome::NotDelivered { bytes } => {
                 tracing::info!(chars, bytes, elapsed = ?started.elapsed(), "synthesized a speech line");
@@ -639,6 +649,20 @@ async fn drain_speech_stream(
         }
         let chunk = match chunk {
             Ok(chunk) => chunk,
+            // The caller has heard the start of the line, unless none of it
+            // reached a page. A cut body's request id is not committed: the
+            // provider stitches only to a body read to its end.
+            Err(crate::audio::AudioError::Deadline) if bytes > 0 => {
+                utterance.abandon(&state).await;
+                return match went_out(&state, generation, heard).await {
+                    Some(true) => SpeechOutcome::Spoken {
+                        bytes,
+                        played: Played::CutShort,
+                    },
+                    Some(false) => SpeechOutcome::Failed(crate::audio::AudioError::Deadline),
+                    None => SpeechOutcome::Stopped(Stopped::Superseded),
+                };
+            }
             Err(error) => {
                 utterance.abandon(&state).await;
                 return SpeechOutcome::Failed(error);
@@ -661,7 +685,10 @@ async fn drain_speech_stream(
         utterance.text,
     );
     match went_out(&state, generation, heard).await {
-        Some(true) => SpeechOutcome::Spoken { bytes },
+        Some(true) => SpeechOutcome::Spoken {
+            bytes,
+            played: Played::Whole,
+        },
         Some(false) => SpeechOutcome::NotDelivered { bytes },
         None => SpeechOutcome::Stopped(Stopped::Superseded),
     }
@@ -1184,7 +1211,7 @@ pub(crate) async fn send_speech(
     state: &AppState,
     admission: SpeechAdmission,
     reserved: ReservedSpeech<'_>,
-) -> Result<(), SpeechFailure> {
+) -> Result<Played, SpeechFailure> {
     let SpeechAdmission {
         text,
         route,
@@ -1223,7 +1250,7 @@ async fn queue_speech(
     state: &AppState,
     admission: SpeechAdmission,
     reserved: Option<ReservedSpeech<'_>>,
-) -> Result<(), String> {
+) -> Result<Played, String> {
     let reserved = match reserved {
         Some(reserved) => reserved,
         None => reserve_speech(
@@ -1262,7 +1289,7 @@ async fn synthesize_reply_if_current(
         } else {
             ContinuationScope::ContinueCurrentTurn
         };
-        if let Err(error) = queue_speech(
+        match queue_speech(
             state,
             SpeechAdmission {
                 text: spoken.clone(),
@@ -1277,13 +1304,26 @@ async fn synthesize_reply_if_current(
         )
         .await
         {
-            if generation == state.0.coordinator.generation() {
-                tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
-            } else {
-                tracing::info!(%error, "a rescue stopped this reply's speech");
+            Ok(Played::Whole) => {}
+            // The reply's utterances share one deadline, so none after this
+            // one can be said either.
+            Ok(Played::CutShort) => {
+                tracing::info!(
+                    chars = spoken.chars().count(),
+                    "the speech deadline cut this reply short"
+                );
+                success = false;
+                break;
             }
-            success = false;
-            break;
+            Err(error) => {
+                if generation == state.0.coordinator.generation() {
+                    tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
+                } else {
+                    tracing::info!(%error, "a rescue stopped this reply's speech");
+                }
+                success = false;
+                break;
+            }
         }
     }
     if let Some(first) = first {

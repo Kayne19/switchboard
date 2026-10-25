@@ -222,7 +222,7 @@ async fn release_floor(
     let floor_id = Some(request.floor_debug_id());
     let result = send_speech(state, admission, reserved).await;
     match &result {
-        Ok(()) => trace_speech(state, request.project.clone(), &text, None, floor_id),
+        Ok(_) => trace_speech(state, request.project.clone(), &text, None, floor_id),
         Err(failure) => trace_speech(
             state,
             request.project.clone(),
@@ -232,11 +232,13 @@ async fn release_floor(
         ),
     }
     match result {
-        // Spoken. The floor ends the agent's waiting mark when it lets the
-        // request go (`Waiting::Left`); a resident that went while it was
-        // spoken is reported gone.
-        Ok(()) if state.0.coordinator.is_background(&request.token) => ReleaseOutcome::Played,
-        Ok(()) => ReleaseOutcome::Drop,
+        // Spoken, whole or cut short at the speech deadline: either way the
+        // caller heard it, so it is not said again. The floor ends the
+        // agent's waiting mark when it lets the request go
+        // (`Waiting::Left`); a resident that went while it was spoken is
+        // reported gone.
+        Ok(_) if state.0.coordinator.is_background(&request.token) => ReleaseOutcome::Played,
+        Ok(_) => ReleaseOutcome::Drop,
         // The worker closed the slot of a request it did not speak.
         Err(SpeechFailure::NotSpoken(_)) => {
             if state.0.delivery.connected() {

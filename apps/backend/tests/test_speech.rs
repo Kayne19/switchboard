@@ -465,9 +465,13 @@ async fn the_new_legs_speech_waits_for_what_the_old_leg_is_already_saying() {
     )
     .await;
 
-    let answer = |sent: Result<(), SpeechFailure>| sent.map_err(|failure| failure.to_string());
-    assert_eq!(answer(said), Ok(()), "the old leg's utterance was cut off");
-    assert_eq!(answer(intro), Ok(()));
+    let answer = |sent: Result<Played, SpeechFailure>| sent.map_err(|failure| failure.to_string());
+    assert_eq!(
+        answer(said),
+        Ok(Played::Whole),
+        "the old leg's utterance was cut off"
+    );
+    assert_eq!(answer(intro), Ok(Played::Whole));
     assert_eq!(
         audio_sent(&mut connection),
         [
@@ -514,6 +518,8 @@ enum SpeechEvent {
     HandedOffWhileHeld,
     /// The provider's body fails partway.
     BodyFails,
+    /// The speech deadline cuts the body after its first audio went out.
+    CutByDeadline,
     /// The body drains to its end with a browser connected.
     BodyDrained,
     /// The body drains to its end with no browser connected.
@@ -524,7 +530,7 @@ enum SpeechEvent {
 #[derive(Debug, PartialEq, Eq)]
 struct SpeechCompletion {
     /// What the requester (`speak`, a reply, a floor release) was answered.
-    answer: Result<(), String>,
+    answer: Result<Played, String>,
     /// The caller's page was sent an `error`.
     page_error: bool,
     /// The line was written to the spoken transcript and sent as `spoken`.
@@ -549,6 +555,7 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
     let deadline = Duration::from_millis(25_000);
     let speaker = match event {
         SpeechEvent::ProviderRefuses => Speaker::offline(100, deadline),
+        SpeechEvent::CutByDeadline => Speaker::test_cut_by_deadline(100, deadline),
         SpeechEvent::RetiredBeforeAdmission
         | SpeechEvent::HandedOffBeforeAdmission
         | SpeechEvent::BodyDrained
@@ -697,7 +704,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         phase: &'static str,
         event: SpeechEvent,
         log_spoken: bool,
-        answer: Result<(), &'static str>,
+        answer: Result<Played, &'static str>,
         page_error: bool,
         spoken_line: bool,
     }
@@ -739,7 +746,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
             phase: "draining",
             event: SpeechEvent::HandedOffDuringDrain,
             log_spoken: true,
-            answer: Ok(()),
+            answer: Ok(Played::Whole),
             page_error: false,
             spoken_line: true,
         },
@@ -755,7 +762,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
             phase: "draining",
             event: SpeechEvent::HandedOffAfterItsStartWentOut,
             log_spoken: true,
-            answer: Ok(()),
+            answer: Ok(Played::Whole),
             page_error: false,
             spoken_line: true,
         },
@@ -769,6 +776,14 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         },
         Row {
             phase: "draining",
+            event: SpeechEvent::CutByDeadline,
+            log_spoken: true,
+            answer: Ok(Played::CutShort),
+            page_error: false,
+            spoken_line: true,
+        },
+        Row {
+            phase: "draining",
             event: SpeechEvent::BodyFails,
             log_spoken: true,
             answer: Err("gated test failure"),
@@ -779,7 +794,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
             phase: "draining",
             event: SpeechEvent::BodyDrained,
             log_spoken: true,
-            answer: Ok(()),
+            answer: Ok(Played::Whole),
             page_error: false,
             spoken_line: true,
         },
@@ -787,7 +802,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
             phase: "draining",
             event: SpeechEvent::BodyDrained,
             log_spoken: false,
-            answer: Ok(()),
+            answer: Ok(Played::Whole),
             page_error: false,
             spoken_line: false,
         },
@@ -1218,7 +1233,7 @@ async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
     );
     assert_eq!(
         answer.map_err(|failure| failure.to_string()),
-        Ok(()),
+        Ok(Played::Whole),
         "the later line played, but its requester was told it was not delivered"
     );
 }
