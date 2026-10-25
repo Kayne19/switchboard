@@ -111,7 +111,7 @@ export interface DaemonPort {
 	close(): void;
 }
 
-/** A daemon command failed. `unsupported` is set when this daemon cannot run it. */
+/** The daemon refused a command: it answered with a failure, or its hello says it cannot run it (`unsupported`). */
 export class DaemonCommandError extends Error {
 	readonly command: string;
 	readonly unsupported: boolean;
@@ -120,6 +120,18 @@ export class DaemonCommandError extends Error {
 		this.name = "DaemonCommandError";
 		this.command = command;
 		this.unsupported = unsupported;
+	}
+}
+
+/**
+ * The daemon did not answer: with no connection the request was not sent;
+ * when the connection closed or the request timed out first, the daemon may
+ * have run it.
+ */
+export class DaemonUnreachableError extends Error {
+	constructor(command: string, message: string) {
+		super(`${command}: ${message}`);
+		this.name = "DaemonUnreachableError";
 	}
 }
 
@@ -286,15 +298,17 @@ export class PrimeDaemonPort implements DaemonPort {
 	async #request(command: Json, timeoutMs = COMMAND_TIMEOUT_MS, options?: Json): Promise<unknown> {
 		const client = this.#client;
 		const type = String(command.type);
-		if (!client) throw new DaemonCommandError(type, "not connected to the daemon");
+		if (!client) throw new DaemonUnreachableError(type, "not connected to the daemon");
 		let response: RawResponse;
 		try {
 			response = await client.request(command, timeoutMs, { recoverable: false, ...options });
 		} catch (error) {
 			// DaemonClient checks each command against the daemon hello and
-			// throws DaemonCapabilityUnavailableError when it is missing.
-			const unsupported = error instanceof Error && error.name === "DaemonCapabilityUnavailableError";
-			throw new DaemonCommandError(type, error instanceof Error ? error.message : String(error), unsupported);
+			// throws DaemonCapabilityUnavailableError when it is missing. Every
+			// other rejection is the connection or the request timeout.
+			const message = error instanceof Error ? error.message : String(error);
+			if (error instanceof Error && error.name === "DaemonCapabilityUnavailableError") throw new DaemonCommandError(type, message, true);
+			throw new DaemonUnreachableError(type, message);
 		}
 		if (!response.success) {
 			const unsupported = this.#module?.isUnknownDaemonCommandError?.(new Error(response.error ?? ""), type) ?? false;
@@ -393,7 +407,7 @@ export class PrimeDaemonPort implements DaemonPort {
 		// The daemon only lists models per session; the package's model
 		// registry reads the same models.json and auth the daemon uses.
 		const mod = this.#module;
-		if (!mod) throw new DaemonCommandError("list_models", "not connected to the daemon");
+		if (!mod) throw new DaemonUnreachableError("list_models", "not connected to the daemon");
 		const registry = mod.ModelRegistry.create(mod.AuthStorage.create());
 		return registry.getAvailable().map((m) => ({
 			provider: String(m.provider ?? ""),

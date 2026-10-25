@@ -364,7 +364,7 @@ export class SessionManager {
 
 	// -- commands ----------------------------------------------------------
 
-	/** Dispatch one host-link command. Throws CommandError or DaemonCommandError. */
+	/** Dispatch one host-link command. */
 	async handle(name: string, args: Record<string, unknown>): Promise<unknown> {
 		switch (name) {
 			case "create_session":
