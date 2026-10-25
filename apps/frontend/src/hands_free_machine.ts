@@ -285,11 +285,7 @@ export function isEnabled(phase: Phase): boolean {
 	return phase.kind !== "off" && phase.kind !== "error";
 }
 
-/**
- * On and past the first load. A push-to-talk press or a detector cannot
- * reach a load in flight; MODE, a page stop and a rescue epoch end it.
- */
-function isOn(phase: Phase): boolean {
+function isOnPastLoad(phase: Phase): boolean {
 	return isEnabled(phase) && phase.kind !== "loading";
 }
 
@@ -443,7 +439,7 @@ export function step(
 			);
 		case "pttActive":
 			if (event.active)
-				return isOn(phase)
+				return isOnPastLoad(phase)
 					? moved(machine, machine, go({ kind: "paused_ptt" }, QUIET))
 					: null;
 			return phase.kind === "paused_ptt" && detectors
@@ -575,7 +571,7 @@ function next(
 				? fail("could not start", event.error)
 				: null;
 		case "detectorFailed":
-			return isOn(phase)
+			return isOnPastLoad(phase)
 				? fail(`${event.what} failed`, event.error)
 				: null;
 		case "wake": {

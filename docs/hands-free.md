@@ -146,6 +146,10 @@ interrupted (#183). A context that is still not running at the deadline fails
 the start with an `error` that the page shows. A start keeps the context,
 microphone and nodes it makes to itself until its last wait is over. A start
 that a newer one overtook releases only those, never the newer start's graph.
+A start that finds the page hidden once the microphone is granted releases
+it and turns hands-free off as the page's own hidden stop does. WebKit
+dispatches `visibilitychange` in a later task than the one that hides the
+page, so the start can see the page hidden before that stop comes (#446).
 
 A page hidden or left, a disconnect, a hangup, a route change and a rescue
 `epoch` turn hands-free off, the first load of the detectors included; a
@@ -178,9 +182,9 @@ sees is `view()` of the phase, and nothing else.
 
 | phase (published as) | holds | left by |
 |---|---|---|
-| `off`, `error` | the status line | MODE: `loading` the first time (and after a load failed or was stopped), then `starting`, or `error` when refused (push-to-talk active, page hidden, no secure context, worklet or recorder MIME, no detector) |
+| `off`, `error` | the status line | MODE: `loading` the first time (and after a load failed or was ended), then `starting`, or `error` when refused (push-to-talk active, page hidden, no secure context, worklet or recorder MIME, no detector) |
 | `loading` (`starting`) | the load (`Load`) | the detectors (`starting`, or `error` when refused), a failed load (`error`), MODE, a page stop or a rescue `epoch` (`off`); a hand-off `epoch` leaves it running |
-| `starting` | the start (`Attempt`); what it makes stays its own until it hands the graph over | the graph (`armed`), a failed start or a `resume()` past 3 s (`error`) |
+| `starting` | the start (`Attempt`); what it makes stays its own until it hands the graph over | the graph (`armed`), a failed start or a `resume()` past 3 s (`error`), a page hidden at the microphone grant (`off`, as the page's hidden stop) |
 | `paused_ptt` | nothing | push-to-talk ends: a full restart (`starting`), or `error` when refused |
 | `armed` | the graph | the wake word (`wake_grace`), a follow-up lease (`lease`) |
 | `wake_grace` | the graph, the 2 s timer | speech (`capturing`), the timer (`armed`), a follow-up lease (`lease`) |
@@ -189,11 +193,12 @@ sees is `view()` of the phase, and nothing else.
 | `awaiting_response` | the graph, the id the clip went out under | a turn with no reply (`armed`), a follow-up lease (`lease`) |
 | `lease` | the graph, the lease deadline, its expiry and 250 ms tick | speech (`lease_capturing`), expiry (`armed`) |
 
-Every phase but `off`, `error` and `loading` also leaves for `off` (MODE, a
-hidden or left page, a disconnect, a hangup, a route change, a rescue
-`epoch`), for `paused_ptt` (a push-to-talk press) and for `error` (a detector
-or recorder failure). A hand-off `epoch` moves every phase that holds the graph to
-`armed` on the same graph, saying "The line changed"; `starting` and
+Every phase but `off` and `error` also leaves for `off` (MODE, a hidden or
+left page, a disconnect, a hangup, a route change, a rescue `epoch`). Every
+phase but `off`, `error` and `loading` also leaves for `paused_ptt` (a
+push-to-talk press) and for `error` (a detector or recorder failure). A
+hand-off `epoch` moves every phase that holds the graph to `armed` on the
+same graph, saying "The line changed"; `loading`, `starting` and
 `paused_ptt` hold no graph and stay as they are. A
 recorder that cannot be made, started or stopped, or that reports an error,
 ends in `error` with its own message, as a detector failure does, and

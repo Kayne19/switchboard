@@ -78,6 +78,7 @@ type Event =
   | "start completes"
   | "start fails"
   | "granted, page hidden"
+  | "ptt press, granted"
   | "frame";
 
 interface Seen {
@@ -454,6 +455,11 @@ async function apply(h: Harness, event: Event): Promise<void> {
       h.hide();
       h.grant();
       return settle();
+    case "ptt press, granted":
+      h.holdPtt(true);
+      h.instance.pauseForPtt();
+      h.grant();
+      return settle();
     case "frame":
       return h.frame();
   }
@@ -524,6 +530,7 @@ const rows: Row[] = [
   { from: "starting", event: "wake", seen: {}, then: "starting" },
   { from: "starting", event: "speech start", seen: {}, then: "starting" },
   { from: "starting_at_grant", event: "granted, page hidden", seen: { published: ["off"], said: HIDDEN, released: 1, closed: 1, ...QUIET }, then: "off" },
+  { from: "starting_at_grant", event: "ptt press, granted", seen: { published: ["paused_ptt"], said: PAUSED, released: 1, closed: 1, ...QUIET }, then: "paused_ptt" },
 
   { from: "paused_ptt", event: "ptt end", seen: { published: ["starting", "armed"], said: LISTENING, asked: 1, ...QUIET }, then: "armed" },
   { from: "paused_ptt", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...QUIET }, then: "paused_ptt" },

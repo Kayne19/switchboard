@@ -501,6 +501,11 @@ export class HandsFreeController {
 			parts.stream = stream;
 			if (!this.isCurrent(attempt) || !this.isForeground()) {
 				releaseGraph(parts);
+				// WebKit dispatches `visibilitychange` in a later task, so a
+				// start can see the page hidden before the page's own stop
+				// (#446). It ends hands-free as that stop does.
+				if (this.isCurrent(attempt))
+					this.transition({ kind: "stop", reason: "hidden" });
 				return attempt.finish(false);
 			}
 			await this.resumeAudio(context);
