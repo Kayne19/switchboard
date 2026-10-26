@@ -404,9 +404,9 @@ adapter.
 
 Every failure the runtime cannot recover from is reported as status text with
 `statusError` set -- no microphone, a browser that cannot record, a recorder
-that stopped, a line that will not connect. `runtime.tsx` puts that text on
-screen through `runtime_say` to `RUNTIME_LINE_ERROR_ID`, as a server `error`
-is, once per text. The shell draws it once, on every page but the system
+that stopped, a line that will not connect, a server `error`. `runtime.tsx`
+puts that text on screen through `runtime_say` to `RUNTIME_LINE_ERROR_ID`,
+once per text. The shell draws it once, on every page but the system
 view, as `LINE / ERROR` in red at the head of the corner stack (see "Scene
 shell"), never as Damocles's explanation. The reducer holds it apart from
 speech (`ControllerState.lineError`), so no line Damocles says or is heard

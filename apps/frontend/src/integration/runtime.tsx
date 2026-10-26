@@ -263,19 +263,15 @@ export function RuntimeIntegration() {
           screenReporter.acknowledged();
           break;
         }
-        case "error": {
-          const body = message.message || "The line reported an error.";
-          dispatch({ op: "runtime_say", target: RUNTIME_LINE_ERROR_ID, text: body });
-          break;
-        }
         case "agents_state":
           // Agent state is consumed by the station surfaces. The call runtime
           // only transports it; it must never turn background status into
           // caller speech.
           break;
+        case "error":
         case "routing_unavailable":
-          // CallRuntime shows this as a page status error. Do not put it on
-          // the conversation surface or send it through speech synthesis.
+          // CallRuntime shows these as page status errors. Do not put them on
+          // the conversation surface or send them through speech synthesis.
           break;
       }
     };
