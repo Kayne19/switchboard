@@ -64,8 +64,12 @@ async function receive(message: object) {
 // One utterance of audio, start to finish.
 async function receiveUtterance(sequence: number) {
   await receive({ type: 'audio_start', generation: 1, sequence, mime: 'audio/mpeg', format: 'mp3' });
+  // This realm's ArrayBuffer: the link takes a binary frame by `instanceof`,
+  // and under jsdom a TextEncoder's buffer is another realm's, which it drops.
+  const audio = new ArrayBuffer(3);
+  new Uint8Array(audio).set(new TextEncoder().encode('mp3'));
   await act(async () => {
-    socket.onmessage?.({ data: new TextEncoder().encode('mp3').buffer } as MessageEvent);
+    socket.onmessage?.({ data: audio } as MessageEvent);
   });
   await receive({ type: 'audio_done', generation: 1, sequence, done: true });
 }
