@@ -638,7 +638,7 @@ async fn drain_speech_stream(
             Ok(chunk) => chunk,
             Err(crate::audio::AudioError::Deadline) if bytes > 0 => {
                 utterance.abandon(&state).await;
-                return match went_out(&state, generation, receipt, deadline).await {
+                return match went_out(&state, generation, sequence, receipt, deadline).await {
                     WentOut::Heard => SpeechOutcome::Spoken {
                         bytes,
                         played: Played::CutShort,
@@ -670,7 +670,7 @@ async fn drain_speech_stream(
         request_id,
         utterance.text,
     );
-    match went_out(&state, generation, receipt, deadline).await {
+    match went_out(&state, generation, sequence, receipt, deadline).await {
         WentOut::Heard => SpeechOutcome::Spoken {
             bytes,
             played: Played::Whole,
@@ -694,10 +694,12 @@ fn left_unheard(state: &AppState, generation: u64, receipt: &SlotReceipt) -> boo
 
 /// Waits for a closed slot to leave the queue behind the slots ahead of it,
 /// at most until the request's deadline: a slot left open ahead of it would
-/// otherwise hold every requester behind it.
+/// otherwise hold every requester behind it. A slot still held then is
+/// withdrawn, so the answer that it did not play stays true.
 async fn went_out(
     state: &AppState,
     generation: u64,
+    sequence: u64,
     mut receipt: SlotReceipt,
     deadline: std::time::Instant,
 ) -> WentOut {
@@ -712,12 +714,21 @@ async fn went_out(
         if left_unheard(state, generation, &receipt) {
             return WentOut::HandedOffUnheard;
         }
-        if receipt.gone() || expired.is_elapsed() {
+        if receipt.gone() {
             return if receipt.taken() {
                 WentOut::Heard
             } else {
                 WentOut::Unheard
             };
+        }
+        if expired.is_elapsed() {
+            // Under the queue's lock, so the slot cannot go out in between.
+            let mut audio = state.0.audio.lock().await;
+            if !receipt.gone() {
+                audio.withdraw(sequence);
+                return WentOut::Unheard;
+            }
+            continue;
         }
         tokio::select! {
             () = receipt.changed() => {}
