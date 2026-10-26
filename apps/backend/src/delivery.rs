@@ -192,22 +192,14 @@ impl DeliveryState {
     }
 }
 
-/// One utterance's place in the audio order: what it has queued that has not
-/// gone out yet, and whether a page has taken any of it.
 pub(crate) struct AudioSlot {
     generation: u64,
     events: Vec<Event>,
     started: bool,
     done: bool,
-    /// True once a page took one of the slot's events, whichever call sent
-    /// them. It is dropped with the slot, which tells a subscriber the slot
-    /// has left the queue.
     heard: watch::Sender<bool>,
 }
 
-/// The audio order. A slot's events go out only once every slot before it
-/// has closed, and they go out under the queue's own lock, so the pages get
-/// them in reservation order and each slot learns whether a page took it.
 pub(crate) struct AudioQueue {
     delivery: DeliveryState,
     next: u64,
@@ -239,18 +231,11 @@ impl AudioQueue {
         );
         sequence
     }
-    /// Whether a page has taken any of `sequence`'s events yet. The receiver
-    /// closes once the slot has left the queue, so it then holds the final
-    /// answer; a slot already gone was never heard.
-    pub(crate) fn heard(&self, sequence: u64) -> watch::Receiver<bool> {
-        self.slots
-            .get(&sequence)
-            .map_or_else(|| watch::channel(false).1, |slot| slot.heard.subscribe())
-    }
-    pub(crate) fn start(&mut self, sequence: u64, generation: u64) {
+    pub(crate) fn start(&mut self, sequence: u64, generation: u64) -> watch::Receiver<bool> {
         let Some(slot) = self.slots.get_mut(&sequence) else {
-            return;
+            return watch::channel(false).1;
         };
+        let heard = slot.heard.subscribe();
         if slot.generation == generation && !slot.started {
             slot.started = true;
             slot.events.push(Event::AudioStart {
@@ -261,6 +246,7 @@ impl AudioQueue {
             });
         }
         self.send_ready();
+        heard
     }
     pub(crate) fn append(&mut self, sequence: u64, generation: u64, audio: Vec<u8>) {
         let Some(slot) = self.slots.get_mut(&sequence) else {

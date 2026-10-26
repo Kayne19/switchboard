@@ -47,7 +47,6 @@ async fn a_connection_a_full_queue_behind_is_dropped_and_told_so() {
     assert!(!delivery.connected());
 }
 
-/// What a page was sent of the audio queue, in order.
 fn audio_sent(page: &mut DeliveryConnection) -> Vec<String> {
     std::iter::from_fn(|| page.receiver.try_recv().ok())
         .map(|frame| match frame {
@@ -62,7 +61,6 @@ fn audio_sent(page: &mut DeliveryConnection) -> Vec<String> {
         .collect()
 }
 
-/// A queue and a page connected to what it sends.
 fn queue_and_page() -> (AudioQueue, DeliveryConnection) {
     let delivery = DeliveryState::new();
     let page = delivery.register();

@@ -512,11 +512,7 @@ async fn speak_that_fails_to_synthesize_is_answered_with_the_workers_reason() {
     assert_eq!(body["reason"], body["detail"]);
 }
 
-/// #233: the service's own speech deadline (`TtsChunkStream`) can cut a
-/// line after its start reached the page. The caller heard the start, so the
-/// agent is told its line was delivered and cut short, not that nothing was
-/// played (it would say the line again), and the caller's page shows no
-/// error.
+/// #233
 #[tokio::test]
 async fn a_speak_the_deadline_cuts_after_its_audio_played_is_answered_cut_short() {
     let config = crate::Config::for_tests(&[]);

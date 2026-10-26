@@ -375,12 +375,8 @@ async fn reserve_audio(state: &AppState, generation: u64) -> Option<u64> {
     Some(audio.reserve(generation))
 }
 
-/// Opens an utterance's audio, and answers whether a page has taken any of
-/// it (`AudioQueue::heard`).
 async fn start_audio(state: &AppState, sequence: u64, generation: u64) -> watch::Receiver<bool> {
-    let mut audio = state.0.audio.lock().await;
-    audio.start(sequence, generation);
-    audio.heard(sequence)
+    state.0.audio.lock().await.start(sequence, generation)
 }
 
 async fn append_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) {
@@ -479,11 +475,9 @@ impl std::fmt::Display for Stopped {
     }
 }
 
-/// What the caller heard of a line that was spoken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Played {
     Whole,
-    /// The speech deadline cut it after its start reached the page.
     CutShort,
 }
 
@@ -529,8 +523,7 @@ impl PendingSpeech {
     /// Ends the request: an unspoken one gives back what it holds before its
     /// requester is answered, a spoken one is logged, and only a provider
     /// failure at the current generation reaches the page. Speech a rescue
-    /// stopped went as meant, so the caller is not shown it as an error; nor
-    /// is a line the deadline cut, whose start the caller heard.
+    /// stopped went as meant, so the caller is not shown it as an error.
     async fn complete(self, state: &AppState, outcome: SpeechOutcome) {
         let Self {
             utterance,
@@ -624,8 +617,7 @@ async fn admit_speech(
 /// Streams an admitted utterance's body into its audio slot. A body drained
 /// to its end closes the slot and commits continuity. Any other end gives the
 /// slot back before it returns: the slots behind it emit only once it is
-/// closed. A slot can sit behind another utterance's open one, so a drained
-/// body is answered only once its slot has gone out (`went_out`).
+/// closed.
 async fn drain_speech_stream(
     state: AppState,
     mut stream: crate::audio::TtsChunkStream,
@@ -649,18 +641,15 @@ async fn drain_speech_stream(
         }
         let chunk = match chunk {
             Ok(chunk) => chunk,
-            // The caller has heard the start of the line, unless none of it
-            // reached a page. A cut body's request id is not committed: the
-            // provider stitches only to a body read to its end.
             Err(crate::audio::AudioError::Deadline) if bytes > 0 => {
                 utterance.abandon(&state).await;
                 return match went_out(&state, generation, heard).await {
-                    Some(true) => SpeechOutcome::Spoken {
+                    WentOut::Heard => SpeechOutcome::Spoken {
                         bytes,
                         played: Played::CutShort,
                     },
-                    Some(false) => SpeechOutcome::Failed(crate::audio::AudioError::Deadline),
-                    None => SpeechOutcome::Stopped(Stopped::Superseded),
+                    WentOut::Unheard => SpeechOutcome::Failed(crate::audio::AudioError::Deadline),
+                    WentOut::HandedOffUnheard => SpeechOutcome::Stopped(Stopped::Superseded),
                 };
             }
             Err(error) => {
@@ -685,25 +674,22 @@ async fn drain_speech_stream(
         utterance.text,
     );
     match went_out(&state, generation, heard).await {
-        Some(true) => SpeechOutcome::Spoken {
+        WentOut::Heard => SpeechOutcome::Spoken {
             bytes,
             played: Played::Whole,
         },
-        Some(false) => SpeechOutcome::NotDelivered { bytes },
-        None => SpeechOutcome::Stopped(Stopped::Superseded),
+        WentOut::Unheard => SpeechOutcome::NotDelivered { bytes },
+        WentOut::HandedOffUnheard => SpeechOutcome::Stopped(Stopped::Superseded),
     }
 }
 
-/// Waits for a closed slot to leave the audio queue behind the slots ahead
-/// of it, and answers whether a page took any of it. None when the call
-/// hands off first while none of it has reached the page: it is not said
-/// (#437), and the page drops an old leg's audio that starts after a
-/// hand-off.
-async fn went_out(
-    state: &AppState,
-    generation: u64,
-    mut heard: watch::Receiver<bool>,
-) -> Option<bool> {
+enum WentOut {
+    Heard,
+    Unheard,
+    HandedOffUnheard,
+}
+
+async fn went_out(state: &AppState, generation: u64, mut heard: watch::Receiver<bool>) -> WentOut {
     let line_moved = state.0.coordinator.operation_changed();
     loop {
         // Made before the generation is read: a hand-off wakes it with
@@ -711,12 +697,12 @@ async fn went_out(
         let handed_off = line_moved.notified();
         tokio::pin!(handed_off);
         if generation != state.0.coordinator.generation() && !*heard.borrow() {
-            return None;
+            return WentOut::HandedOffUnheard;
         }
         tokio::select! {
             changed = heard.changed() => {
                 if changed.is_err() {
-                    return Some(*heard.borrow());
+                    return if *heard.borrow() { WentOut::Heard } else { WentOut::Unheard };
                 }
             }
             () = &mut handed_off => {}
@@ -1305,8 +1291,6 @@ async fn synthesize_reply_if_current(
         .await
         {
             Ok(Played::Whole) => {}
-            // The reply's utterances share one deadline, so none after this
-            // one can be said either.
             Ok(Played::CutShort) => {
                 tracing::info!(
                     chars = spoken.chars().count(),

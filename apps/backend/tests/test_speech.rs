@@ -285,7 +285,7 @@ async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
         let admission = admission(ContinuationScope::FreshTurn);
         async move { queue_speech(&state, admission, None).await }
     });
-    timeout(Duration::from_secs(1), gate.wait_started())
+    timeout(Duration::from_secs(1), gate.wait_until_read())
         .await
         .expect("first gated drain started");
     let second = tokio::spawn({
@@ -293,7 +293,7 @@ async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
         let admission = admission(ContinuationScope::ContinueCurrentTurn);
         async move { queue_speech(&state, admission, None).await }
     });
-    timeout(Duration::from_secs(1), gate.wait_started())
+    timeout(Duration::from_secs(1), gate.wait_until_read())
         .await
         .expect("second gated drain started");
 
@@ -349,7 +349,7 @@ async fn speech_a_rescue_stops_is_not_shown_to_the_caller_as_an_error() {
         let admission = admission("The first sentence.", ContinuationScope::FreshTurn);
         async move { queue_speech(&state, admission, None).await }
     });
-    timeout(Duration::from_secs(1), gate.wait_started())
+    timeout(Duration::from_secs(1), gate.wait_until_read())
         .await
         .expect("the speech started");
 
@@ -440,7 +440,7 @@ async fn the_new_legs_speech_waits_for_what_the_old_leg_is_already_saying() {
         send_speech(&state, admission("Putting you through.", old), reserved).await
     };
     let handed_off = async {
-        within("the old leg's speech starts", gate.wait_started()).await;
+        within("the old leg's speech starts", gate.wait_until_read()).await;
         begin_alpha_candidate(&state, "alpha-leg");
         state
             .0
@@ -454,7 +454,7 @@ async fn the_new_legs_speech_waits_for_what_the_old_leg_is_already_saying() {
         gate.release();
         let intro = send_speech(&state, admission("Alpha here.", new), reserved);
         let released = async {
-            within("the new leg's speech starts", gate.wait_started()).await;
+            within("the new leg's speech starts", gate.wait_until_read()).await;
             gate.release();
         };
         (futures_util::future::join(intro, released).await.0, new)
@@ -508,17 +508,10 @@ enum SpeechEvent {
     /// none of its own has reached the page yet: it is not said, as nothing
     /// new from the old leg is after a hand-off (#437).
     HandedOffBeforeHeard,
-    /// The same, for an utterance whose start went out when the audio ahead
-    /// of it closed: the page has some of it, so it finishes (#424, #526).
     HandedOffAfterItsStartWentOut,
-    /// The body drains to its end behind another utterance's open audio,
-    /// and the call adopts a new leg before that audio closes. None of it
-    /// reached the page before the hand-off, so it is not said (#437): the
-    /// page drops the old leg's audio that starts after a hand-off.
     HandedOffWhileHeld,
     /// The provider's body fails partway.
     BodyFails,
-    /// The speech deadline cuts the body after its first audio went out.
     CutByDeadline,
     /// The body drains to its end with a browser connected.
     BodyDrained,
@@ -635,7 +628,7 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
             | SpeechEvent::HandedOffAfterItsStartWentOut
             | SpeechEvent::HandedOffWhileHeld
             | SpeechEvent::BodyFails => {
-                timeout(Duration::from_secs(1), gate.wait_started())
+                timeout(Duration::from_secs(1), gate.wait_until_read())
                     .await
                     .expect("the drain started");
                 match event {
@@ -1169,8 +1162,6 @@ fn audio_starts(frames: &[Value]) -> Vec<u64> {
         .collect()
 }
 
-/// Waits until the speech worker has read `text`'s body to its end: only
-/// then does it keep the body's request id for the next line.
 async fn body_read_to_its_end(state: &AppState, text: &str) {
     within("the body is read to its end", async {
         while state.0.continuity_snapshot().last_text.as_deref() != Some(text) {
@@ -1180,17 +1171,11 @@ async fn body_read_to_its_end(state: &AppState, text: &str) {
     .await;
 }
 
-/// #424: drains overlap when two requesters speak at once (a floor release
-/// beside an agent's `speak`). The later one's body can end while the
-/// earlier utterance's slot is still open: its audio is held behind that
-/// slot and plays once it closes, so its requester must be told it was
-/// spoken, not that no browser took it.
 #[tokio::test]
 async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
     let state = speaking_state();
     let (mut connection, _snapshot, _watermark) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
-    // An earlier utterance, still streaming, holds the page.
     let ahead = state.0.audio.lock().await.reserve(generation);
     let reserved = reserve_speech(
         &state,
@@ -1208,8 +1193,6 @@ async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
         group: state.0.new_speech_group(),
         log_spoken: false,
     };
-    // The earlier utterance ends after the later line's body has, and the
-    // later line's audio goes out behind it.
     let earlier_ends = async {
         body_read_to_its_end(&state, "The later line.").await;
         finish_audio(&state, ahead, generation).await;

@@ -10,8 +10,8 @@ use crate::floor::{
 };
 use crate::protocol::AgentRequest;
 use crate::speech::{
-    reserve_speech, send_speech, trace_speech, ContinuationScope, SpeakUnder, SpeechAdmission,
-    SpeechFailure, WhenQueueFull,
+    reserve_speech, send_speech, trace_speech, ContinuationScope, Played, SpeakUnder,
+    SpeechAdmission, SpeechFailure, WhenQueueFull,
 };
 use crate::turns::{call_summary_without_desk_sessions, jev_response_event};
 use std::sync::{Arc, Weak};
@@ -232,13 +232,15 @@ async fn release_floor(
         ),
     }
     match result {
-        // Spoken, whole or cut short at the speech deadline: either way the
-        // caller heard it, so it is not said again. The floor ends the
-        // agent's waiting mark when it lets the request go
-        // (`Waiting::Left`); a resident that went while it was spoken is
-        // reported gone.
-        Ok(_) if state.0.coordinator.is_background(&request.token) => ReleaseOutcome::Played,
-        Ok(_) => ReleaseOutcome::Drop,
+        // Spoken. The floor ends the agent's waiting mark when it lets the
+        // request go (`Waiting::Left`); a resident that went while it was
+        // spoken is reported gone.
+        Ok(Played::Whole | Played::CutShort)
+            if state.0.coordinator.is_background(&request.token) =>
+        {
+            ReleaseOutcome::Played
+        }
+        Ok(Played::Whole | Played::CutShort) => ReleaseOutcome::Drop,
         // The worker closed the slot of a request it did not speak.
         Err(SpeechFailure::NotSpoken(_)) => {
             if state.0.delivery.connected() {

@@ -1099,7 +1099,7 @@ async fn process_turns_settles_foreground_idle_once() {
         .enqueue_for_test((id.into(), "continue alpha".into(), generation))
         .await
         .unwrap();
-    timeout(Duration::from_secs(1), gate.wait_started())
+    timeout(Duration::from_secs(1), gate.wait_until_read())
         .await
         .expect("speech worker reached the gated drain");
     gate.release();

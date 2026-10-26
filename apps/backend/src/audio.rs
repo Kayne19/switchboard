@@ -1171,7 +1171,7 @@ struct OfflineTtsTransport;
 #[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct TestTtsGate {
-    started: Arc<Notify>,
+    reading: Arc<Notify>,
     release: Arc<Notify>,
     fail_first: Arc<AtomicBool>,
 }
@@ -1180,7 +1180,7 @@ pub(crate) struct TestTtsGate {
 impl TestTtsGate {
     pub(crate) fn new() -> Self {
         Self {
-            started: Arc::new(Notify::new()),
+            reading: Arc::new(Notify::new()),
             release: Arc::new(Notify::new()),
             fail_first: Arc::new(AtomicBool::new(false)),
         }
@@ -1190,10 +1190,8 @@ impl TestTtsGate {
         self.fail_first.store(true, Ordering::Release);
     }
 
-    /// Returns once a drain is reading a gated body, so the drain has
-    /// already opened its audio slot.
-    pub(crate) async fn wait_started(&self) {
-        self.started.notified().await;
+    pub(crate) async fn wait_until_read(&self) {
+        self.reading.notified().await;
     }
 
     pub(crate) fn release(&self) {
@@ -1213,7 +1211,7 @@ impl TtsTransport for GatedTtsTransport {
         Box::pin(async move {
             let fail = gate.fail_first.swap(false, Ordering::AcqRel);
             let body = futures_util::stream::once(async move {
-                gate.started.notify_one();
+                gate.reading.notify_one();
                 gate.release.notified().await;
                 if fail {
                     Err(AudioError::Tts("gated test failure".into()))
@@ -1250,10 +1248,6 @@ impl TtsTransport for ImmediateTtsTransport {
     }
 }
 
-/// A body that streams one chunk and then is cut by the speech deadline, as
-/// `TtsChunkStream` cuts one whose provider is still sending when the
-/// request's deadline passes. The cut is yielded by the body itself so a
-/// test does not race a real clock.
 #[cfg(test)]
 struct CutByDeadlineTtsTransport;
 
@@ -1322,8 +1316,6 @@ impl Speaker {
         )
     }
 
-    /// A configured speaker whose every line plays its first chunk and is
-    /// then cut by the speech deadline.
     pub(crate) fn test_cut_by_deadline(max_chars: usize, speech_deadline: Duration) -> Self {
         Self::with_test_transport(
             max_chars,
