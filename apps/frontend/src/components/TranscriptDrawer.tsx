@@ -21,9 +21,9 @@ interface TranscriptDrawerProps {
 }
 
 // The conversation history, opened over whichever scene is showing: from the
-// conversation scene's transcript toggle or from an explanation card beside
-// content. It belongs to the stage rather than to one scene so that opening it
-// never swaps the scene underneath. It covers the scene, and is a modal
+// transcript toggle or from an explanation card beside content. It belongs
+// to the stage rather than to one scene so that opening it never swaps the
+// scene underneath. It covers the scene, and is a modal
 // dialog that acts as one (`useModalFocus`, #268): the scene is inert behind
 // it (SceneRenderer), focus moves in as it opens -- to the field, so a
 // caller who will not speak can type at once, or to RETURN while the line

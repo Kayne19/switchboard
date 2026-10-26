@@ -122,9 +122,12 @@ Note the iPadOS version in the pull request.
 12. Theater: ask the agent to give a chart the whole screen. The chart fills
     the stage with its note, and EXIT, MODE and Damocles are clear of the
     toolbars and the home indicator, in landscape and portrait. Tap Damocles
-    and speak: the turn goes as on any page. Tap EXIT: the page goes back to
-    the chart's own page.
+    and speak: the turn goes as on any page. Tap TRANSCRIPT HIDDEN under the
+    box: the history opens over the view, and RETURN puts you back in it.
+    Tap EXIT: the page goes back to the chart's own page.
 13. System: ask the agent for the system view. Each picker opens Safari's
     own picker; pick a thinking level and the line says so when the leg
-    confirms it. HANG UP puts you back with the operator. Rotate: the panel
-    stays clear of MODE and Damocles, and on a phone on its side it scrolls.
+    confirms it. HANG UP puts you back with the operator. Tap TRANSCRIPT
+    HIDDEN under the panel: the history opens over the view, and RETURN puts
+    you back in it. Rotate: the panel stays clear of MODE and Damocles, and
+    on a phone on its side it scrolls.

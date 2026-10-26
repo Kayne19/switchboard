@@ -349,7 +349,6 @@ export function SceneShell(props: SceneProps) {
           <ConversationCorners />
           <div className="conversation-presence-band">{presence}</div>
           <ConversationAnswer composition={composition} />
-          <TranscriptToggle onOpen={() => setTranscriptOpen(true)} />
           <ToolActivity activity={state.activity} placement="conversation" />
         </>
       ) : staged ? (
@@ -376,14 +375,10 @@ export function SceneShell(props: SceneProps) {
           <div className="theater__presence">{presence}</div>
         </>
       ) : (
-        <>
-          {presence}
-          {/* The idle stage keeps the transcript toggle in its conversation-page
-              place, hidden until the pointer reaches the bottom band, so the
-              typed line is reachable before anyone has spoken. */}
-          {isPresent ? <TranscriptToggle reveal="hover" onOpen={() => setTranscriptOpen(true)} /> : null}
-        </>
+        presence
       )}
+      {/* A content page reaches the history through its rail instead. */}
+      {layout !== 'content' && isPresent ? <TranscriptToggle reveal={layout === 'conversation' ? 'resting' : 'hover'} onOpen={() => setTranscriptOpen(true)} /> : null}
     </motion.section>
   );
 }

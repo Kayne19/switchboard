@@ -510,6 +510,9 @@ button {
 .scene--idle .damocles-presence {
   transform: translateY(-1.2cqh);
 }
+.scene--idle .transcript-reveal {
+  height: max(14cqh, 88px);
+}
 
 /* Conversation */
 .scene--conversation {
@@ -629,8 +632,8 @@ button {
    so the stack takes that page's edge and footer line instead. */
 .channel-stack {
   position: absolute;
-  /* Above the idle page's bottom band (`transcript-reveal`), a hover region
-     that would otherwise take every click meant for MODE. The conversation
+  /* Above the bottom band (`transcript-reveal`), a hover region that would
+     otherwise take every click meant for MODE. The conversation
      page's toggle stands above the stack in turn: on a 390px-wide phone the
      two boxes overlap by 25px, and that toggle keeps all of its clicks
      (issues.spec.ts, "leaves the transcript toggle clickable"); MODE keeps
@@ -668,9 +671,9 @@ button {
   cursor: default;
 }
 .transcript-toggle {
-  /* Over the corner stack where they overlap (see `channel-stack`). On the
-     idle page this is scoped inside the bottom band's own layer, so there
-     the stack stays on top of both. */
+  /* Over the corner stack where they overlap (see `channel-stack`). Inside
+     the bottom band it is scoped to the band's own layer, so there the
+     stack stays on top of both. */
   z-index: 4;
   position: absolute;
   left: 50%;
@@ -700,17 +703,11 @@ button {
   color: var(--orange);
   letter-spacing: 0.21em;
 }
-/* On the idle stage the same toggle sits in the same place, inside a band
-   along the bottom edge, and stays out of sight until the pointer enters the
-   band. Hidden, it keeps its box and its tab stop, so keyboard focus shows it
-   as well. The band stops well short of the Damocles presence and sits
-   beneath it, so the glyph keeps every click. */
 .transcript-reveal {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: max(14cqh, 88px);
   z-index: 2;
 }
 .transcript-reveal .transcript-toggle {
@@ -5370,12 +5367,19 @@ button {
    stage, as focus is: never from the viewport (#271). */
 .scene--theater,
 .scene--system {
+  --scene-foot: calc(7.3cqh + 44px);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: minmax(0, 1fr);
   column-gap: clamp(12px, 2.4cqw, 40px);
   align-items: center;
-  padding: max(6cqh, 34px) 4cqw calc(7.3cqh + 44px);
+  padding-top: max(6cqh, 34px);
+  padding-inline: 4cqw;
+  padding-bottom: var(--scene-foot);
+}
+.scene--theater .transcript-reveal,
+.scene--system .transcript-reveal {
+  height: var(--scene-foot);
 }
 /* Held to the room between the header and the corner stack at every
    aspect, over the focus box's own sizes (a noted chart in portrait is
