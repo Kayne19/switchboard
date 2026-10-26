@@ -935,6 +935,35 @@ async fn a_log_that_keeps_nothing_still_sends_every_spoken_line() {
 }
 
 #[tokio::test]
+async fn a_clipped_speak_shows_the_caller_its_whole_text() {
+    let state = speaking_state();
+    let (mut connection, _, _) = state.register_connection().await;
+    let line = "The migration finished and every table moved across cleanly. \
+                The one thing you need to decide is whether to drop the old schema tonight.";
+    assert!(state
+        .0
+        .speaker
+        .clip_for_speech(line)
+        .ends_with("there's more on screen."));
+
+    let (code, _) = agent_call_json(&state, "/speak", json!({"text": line})).await;
+    assert_eq!(code, StatusCode::OK);
+    let frames = wire_frames_until(&mut connection, "spoken").await;
+    let spoken = frames.last().expect("a spoken frame");
+    assert_eq!(spoken["entry"]["text"], line, "{frames:#?}");
+    let kept: Vec<String> = state
+        .0
+        .transcript_log
+        .lock()
+        .await
+        .entries()
+        .into_iter()
+        .map(|entry| entry.text)
+        .collect();
+    assert_eq!(kept, [line]);
+}
+
+#[tokio::test]
 async fn a_reply_with_nothing_to_say_aloud_names_no_utterance() {
     let state = speaking_state();
     let (mut connection, _, _) = state.register_connection().await;
