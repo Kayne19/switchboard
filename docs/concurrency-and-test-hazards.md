@@ -492,7 +492,12 @@ turns whose end it took since that prompt went out (`session_turn.rs`,
 `Prompt::ended`), and a reply naming one of them reports nothing. Without
 that, the `follow_up` case bound the still-open,
 unbound operation to a turn that was over, and the ended run spoke with the
-caller's authority until the prompt returned. A reply naming a turn that
+caller's authority until the prompt returned. The check runs when the
+reply is stepped, not when its bind takes `operation_transition`, so one
+order is still open (#542): the reply is stepped before the run's end, the
+pump steps and reports that end before the reply's report takes the lock,
+and the bind then lands on the ended turn, which keeps the caller's
+operation until the prompt returns. A reply naming a turn that
 ended before the prompt went out is not caught: the reply names the turn
 the prompt went into, so no protocol-2 host sends one. The report cannot
 stamp a stale turn on a newer caller operation either, because the turn
