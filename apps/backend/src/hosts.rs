@@ -1267,7 +1267,7 @@ impl FakeHostAgent {
                 .lock()
                 .unwrap()
                 .commands
-                .push(json!({"name": name, "args": args}));
+                .push(json!({"id": id.clone(), "name": name, "args": args}));
             let session = args["session"].as_str().unwrap_or_default().to_owned();
             let mut event = |link: &FakeLink, session: &str, event: Value| {
                 cursor += 1;

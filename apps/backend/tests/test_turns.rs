@@ -15,7 +15,7 @@ use crate::jev::fake_jev_client;
 use crate::module_calls::{diagram_show, module_call, request_to_speak};
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::{Switchboard, OPERATOR};
-use crate::pi_client::{LegSession, PiSession};
+use crate::pi_client::{LegSession, PiSession, PiSessionError, Turn};
 use crate::project_session::{AgentCall, ProjectTurn};
 use crate::registry::Registry;
 use crate::router::Decision;
@@ -1731,70 +1731,16 @@ fn caller_turn_settles_into_a_self_woken_one(state: &AppState, turn_id: &str) {
 #[tokio::test]
 async fn a_caller_prompt_sent_into_a_self_woken_run_can_answer() {
     let root = scratch_root("prompt-into-run-answers");
-    let mut fake = FakeHostAgent::new(Box::new(|_, message| {
-        if message.contains("which branch") {
-            Vec::new()
-        } else {
-            vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
-        }
-    }));
-    fake.on_command = Some(Box::new(|name, args| {
-        (name == "prompt"
-            && args["message"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("which branch"))
-        .then(|| Some(Ok(json!({"sent_as": "follow_up", "turn_id": "auto-1"}))))
-    }));
-    let (state, host) = state_with_agents_and_jev(&root, fake);
-    let (token, instance_id) = foreground_alpha_turn(&state).await;
-    let session = match state.0.active_session.lock().await.clone() {
-        Some(LegSession::Project(session)) => session,
-        _ => panic!("alpha is on the line"),
-    };
-
-    // The caller's turn is admitted, and before its prompt goes out the
-    // session wakes itself: the caller's operation holds the line, so the
-    // run is not admitted as an operation of its own.
-    let caller = state
-        .0
-        .coordinator
-        .begin_prompt(&state.0.coordinator.current_identity())
-        .expect("the caller's turn is admitted");
-    alpha_host_event(
-        &state,
-        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-1"}),
-    );
-    within("the session holds the run", async {
-        while !session.busy() {
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
-    .await;
-    assert!(
-        !state
-            .0
-            .host_turns
-            .holds_self_woken_for_test(instance_id)
-            .await
-    );
-
-    let prompting = session.clone();
-    let prompt = tokio::spawn(async move {
-        prompting
-            .prompt_as("which branch are you on?", "caller", None)
-            .await
-    });
-    within("the prompt reaches the host", async {
-        while host.named("prompt").iter().all(|args| {
-            !args["message"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("which branch")
-        }) {
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
+    let PromptIntoWokenRun {
+        state,
+        token,
+        caller,
+        prompt,
+        ..
+    } = prompt_into_woken_run(
+        &root,
+        Some(json!({"sent_as": "follow_up", "turn_id": "auto-1"})),
+    )
     .await;
     bind_may_land(&state, &token, "auto-1", "autonomous").await;
 
@@ -1830,6 +1776,155 @@ async fn a_caller_prompt_sent_into_a_self_woken_run_can_answer() {
     );
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
+}
+
+/// The host's reply to the prompt is read on the prompt's task, so the pump
+/// can take the run's end first. That end settles nothing (the operation is
+/// not bound yet), and the late reply names a turn that is over: it must
+/// bind nothing, or the ended run would speak with the caller's authority
+/// until the prompt returned. The run's words are still the caller's answer.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reply_read_after_its_run_ended_binds_nothing() {
+    let root = scratch_root("reply-after-run-end");
+    let PromptIntoWokenRun {
+        state,
+        token,
+        caller,
+        prompt,
+        command,
+    } = prompt_into_woken_run(&root, None).await;
+    let epoch = state.0.hosts.link_epoch("scriptorium").unwrap();
+    alpha_host_event(
+        &state,
+        json!({"kind":"text","text":"still working","turn_id":"auto-1"}),
+    );
+    state.0.hosts.send_fake(
+        "scriptorium",
+        json!({"type":"reply","id":command["id"],"epoch":epoch,"ok":true,
+               "result":{"sent_as":"follow_up","turn_id":"auto-1"}}),
+    );
+    alpha_host_event(
+        &state,
+        json!({"kind":"text","text":"On main.","turn_id":"auto-1"}),
+    );
+    alpha_host_event(&state, json!({"kind":"turn_end","turn_id":"auto-1"}));
+    let answered = within("the prompt returns", prompt)
+        .await
+        .expect("the prompt task")
+        .expect("the prompt");
+    assert_eq!(answered.text, "On main.", "the run is the caller's answer");
+    let shown = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: token.clone(),
+            turn_id: Some("auto-1".into()),
+            cause: Some("autonomous".into()),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(
+        shown["status"], "refused",
+        "a turn that has ended has no authority: {shown}"
+    );
+    assert!(
+        state.0.coordinator.finish_operation(&caller),
+        "the word of the run sent ahead of the reply woke the pump first, so it read \
+         the run's end before the prompt's task read the reply: that end settled \
+         nothing, and the operation is still open; closed here, the reply was read \
+         first and this test checked nothing the ordinary case does not"
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A caller's prompt sent into a run the session woke itself with, as far
+/// as the host's reply: the caller's operation is admitted, the session
+/// wakes itself (`auto-1`) and the run is refused an operation of its own,
+/// then the prompt goes out and reaches the host.
+#[cfg(unix)]
+struct PromptIntoWokenRun {
+    state: AppState,
+    token: String,
+    caller: OperationIdentity,
+    prompt: tokio::task::JoinHandle<Result<Turn, PiSessionError>>,
+    /// The `prompt` command as the host saw it.
+    command: Value,
+}
+
+/// `reply` is what the host answers the prompt with; `None` leaves the
+/// reply to the test.
+#[cfg(unix)]
+async fn prompt_into_woken_run(root: &std::path::Path, reply: Option<Value>) -> PromptIntoWokenRun {
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }));
+    fake.on_command = Some(Box::new(move |name, args| {
+        (name == "prompt"
+            && args["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("which branch"))
+        .then(|| reply.clone().map(Ok))
+    }));
+    let (state, host) = state_with_agents_and_jev(root, fake);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    let session = match state.0.active_session.lock().await.clone() {
+        Some(LegSession::Project(session)) => session,
+        _ => panic!("alpha is on the line"),
+    };
+    let caller = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("the caller's turn is admitted");
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-1"}),
+    );
+    within("the session holds the run", async {
+        while !session.busy() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    assert!(
+        !state
+            .0
+            .host_turns
+            .holds_self_woken_for_test(instance_id)
+            .await,
+        "the caller's operation holds the line, so the run gets none of its own"
+    );
+    let prompt = tokio::spawn(async move {
+        session
+            .prompt_as("which branch are you on?", "caller", None)
+            .await
+    });
+    let command = within("the prompt reaches the host", async {
+        loop {
+            if let Some(command) = host.commands().into_iter().find(|command| {
+                command["name"] == "prompt"
+                    && command["args"]["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("which branch")
+            }) {
+                return command;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    PromptIntoWokenRun {
+        state,
+        token,
+        caller,
+        prompt,
+        command,
+    }
 }
 
 /// A bring-up whose session is busy when the caller's words reach it.

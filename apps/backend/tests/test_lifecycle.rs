@@ -921,6 +921,11 @@ fn a_candidates_intro_turn_binds_the_intro_operation() {
         call.accept_side_effect("cand", Some("run-2"), Some("autonomous")),
         Err(LifecycleError::StaleLeg)
     );
+    assert_eq!(
+        call.accept_side_effect("cand", None, None),
+        Err(LifecycleError::StaleLeg),
+        "inside a bound intro, a call naming no turn is refused"
+    );
     assert!(call.finish_intro());
     assert_eq!(phase(&call), "active");
 }
