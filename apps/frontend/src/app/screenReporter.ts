@@ -34,8 +34,8 @@ interface ReporterState {
   /** The highest display seq the page has applied on this connection, or `NOTHING_APPLIED`. */
   appliedSeq: number;
   /**
-   * The rejections no report has carried out yet, lowest seq first, one
-   * per seq. A report carries the first; only the report actually sent
+   * The rejections waiting for a report to carry them, lowest seq first,
+   * one per seq. A report carries the first; only the report actually sent
    * with it takes it off the list, so a report built earlier and sent
    * later clears nothing it did not carry.
    */
@@ -186,7 +186,7 @@ export class ScreenReporter {
   }
 
   /**
-   * The report of `scene`, carrying the oldest rejection not yet sent and
+   * The report of `scene`, carrying the first rejection on the list and
    * the applied seq. The applied seq stays below the next rejection still
    * waiting: the service takes a display at or under it with no rejection
    * as rendered.

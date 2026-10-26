@@ -358,9 +358,9 @@ The reports themselves belong to `ScreenReporter` (`src/app/screenReporter.ts`);
 `screen_state` is on the wire until its `screen_state_ack`, and the newest
 scene waits behind it. Its state is one value written only by `transition`:
 the phase (`line`), the queued report, the generation of the last `epoch`,
-the highest display `seq` applied on this connection, the rejections not yet
-sent (lowest `seq` first, one per `seq`), and the scene the page last rendered
-at this generation.
+the highest display `seq` applied on this connection, the rejections waiting
+to be sent (lowest `seq` first, one per `seq`), and the scene the page last
+rendered at this generation.
 
 | phase | holds | event | next | effect |
 |---|---|---|---|---|
