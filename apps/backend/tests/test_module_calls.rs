@@ -980,23 +980,49 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
     );
 }
 
+/// The seq of the next display frame `receiver` is sent.
+async fn next_display_seq(receiver: &mut tokio::sync::mpsc::Receiver<DeliveryFrame>) -> u64 {
+    loop {
+        let frame = within("connection.receiver", receiver.recv())
+            .await
+            .unwrap();
+        if let DeliveryFrame::Event {
+            sequence,
+            event: Event::Json(value),
+        } = frame
+        {
+            if value["type"] == "display" {
+                return sequence;
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn an_applied_seq_this_process_never_sent_confirms_nothing() {
     let state = state();
-    let (connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _s, _w) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
+    let (_, last) = state
+        .0
+        .delivery
+        .publish_sequenced(Event::Json(json!({"type":"activity"})));
+    let unsent = last + 1;
     handle_text_frame(
         &state,
         connection.epoch,
         &mut None,
         &mut None,
         &json!({"type":"screen_state","view":"auto","has_visual":false,
-                "generation":generation,"applied_seq":50_000})
+                "generation":generation,"applied_seq":unsent})
         .to_string(),
     )
     .await
     .unwrap();
-    let (code, body) = agent_call_json(&state, "/display", diagram_show()).await;
+    let call = post_display_in_task(&state, diagram_show()).await;
+    let sequence = next_display_seq(&mut connection.receiver).await;
+    assert_eq!(sequence, unsent, "the display took the seq the page named");
+    let (code, body) = within("the display call", call).await.unwrap();
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body["rendered"], false, "{body}");
 }
@@ -1024,20 +1050,7 @@ async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
     .await
     .unwrap();
     let call = post_display_in_task(&state, diagram_show()).await;
-    let sequence = loop {
-        let frame = within("connection.receiver", connection.receiver.recv())
-            .await
-            .unwrap();
-        if let DeliveryFrame::Event {
-            sequence,
-            event: Event::Json(value),
-        } = frame
-        {
-            if value["type"] == "display" {
-                break sequence;
-            }
-        }
-    };
+    let sequence = next_display_seq(&mut connection.receiver).await;
     assert_eq!(sequence, unsent, "the display took the seq the page named");
     let (code, body) = within("the display call", call).await.unwrap();
     assert_eq!(code, StatusCode::OK);
