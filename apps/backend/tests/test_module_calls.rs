@@ -4,7 +4,7 @@ use crate::app_state::AppState;
 use crate::app_state::{
     assert_lifecycle_consistent, begin_alpha_candidate, hold_turn_lock, state, update_agent_state,
 };
-use crate::browser::{handle_text_frame, queued_frames};
+use crate::browser::{frames_until, handle_text_frame, queued_frames, types_of};
 use crate::delivery::{DeliveryFrame, Event};
 use crate::pbx::{AgentNotice, AgentStateNotice, OPERATOR};
 use crate::project_session::AgentCall;
@@ -980,25 +980,8 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
     );
 }
 
-async fn next_display_seq(receiver: &mut tokio::sync::mpsc::Receiver<DeliveryFrame>) -> u64 {
-    loop {
-        let frame = within("connection.receiver", receiver.recv())
-            .await
-            .unwrap();
-        if let DeliveryFrame::Event {
-            sequence,
-            event: Event::Json(value),
-        } = frame
-        {
-            if value["type"] == "display" {
-                return sequence;
-            }
-        }
-    }
-}
-
 #[tokio::test]
-async fn an_applied_seq_this_process_never_sent_confirms_nothing() {
+async fn an_applied_seq_this_process_has_not_sent_confirms_nothing() {
     let state = state();
     let (mut connection, _s, _w) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
@@ -1019,8 +1002,16 @@ async fn an_applied_seq_this_process_never_sent_confirms_nothing() {
     .await
     .unwrap();
     let call = post_display_in_task(&state, diagram_show()).await;
-    let sequence = next_display_seq(&mut connection.receiver).await;
-    assert_eq!(sequence, unsent, "the display took the seq the page named");
+    let frames = frames_until(&mut connection, "display").await;
+    assert!(
+        types_of(&frames).contains(&"screen_state_ack"),
+        "the report was taken"
+    );
+    assert_eq!(
+        frames.last().unwrap()["seq"],
+        unsent,
+        "the display took the seq the page named"
+    );
     let (code, body) = within("the display call", call).await.unwrap();
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body["rendered"], false, "{body}");
@@ -1049,8 +1040,16 @@ async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
     .await
     .unwrap();
     let call = post_display_in_task(&state, diagram_show()).await;
-    let sequence = next_display_seq(&mut connection.receiver).await;
-    assert_eq!(sequence, unsent, "the display took the seq the page named");
+    let frames = frames_until(&mut connection, "display").await;
+    assert!(
+        types_of(&frames).contains(&"screen_state_ack"),
+        "the report was taken"
+    );
+    assert_eq!(
+        frames.last().unwrap()["seq"],
+        unsent,
+        "the display took the seq the page named"
+    );
     let (code, body) = within("the display call", call).await.unwrap();
     assert_eq!(code, StatusCode::OK);
     assert_eq!(body.get("rejected"), None, "{body}");
@@ -1103,9 +1102,9 @@ async fn display_reports_rejection_from_the_browser() {
     );
 }
 
-/// The page sends a rejection once. A later report without one, here the
-/// confirmation of the next action, must not hide it from the call still
-/// waiting on the rejected `seq` (#255).
+/// A later report without a rejection, here the confirmation of the next
+/// action, must not hide an earlier one from the call still waiting on the
+/// rejected `seq` (#255).
 #[tokio::test]
 async fn display_reports_a_rejection_that_a_later_report_followed() {
     let state = state();
