@@ -424,12 +424,12 @@ Every status names its source and says whether it is an error
 standing error, and `say` is its one writer. An error stands until its own
 source says something that is not one, or withdraws it; the page is given the
 newest error still standing, and with none the newest status, as text, so the
-card leaves (`runtime_unsay`). When the newest error is taken down, an older
-one still standing is drawn again. One slot that any status cleared let
-playback's idle line, at the end of the agent's audio, take down a server
-error or a lost connection (#354). The runtime binds each part's sink to its
-source where it builds the part, so playback, push-to-talk and the link never
-name one:
+error leaves the corner stack (`runtime_unsay`). When the newest error is
+taken down, an older one still standing is drawn again. One slot that any
+status cleared let playback's idle line, at the end of the agent's audio,
+take down a server error or a lost connection (#354). The runtime binds each
+part's sink to its source where it builds the part, so playback,
+push-to-talk and the link never name one:
 
 | source | who says it | its errors | what takes them down |
 |---|---|---|---|
