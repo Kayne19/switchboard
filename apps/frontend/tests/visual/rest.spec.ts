@@ -12,16 +12,15 @@ const scenes = ['today', 'tasks', 'inbox', 'calendar-agenda', 'weather', 'timer'
 for (const geometry of GEOMETRIES) {
   test(`no object keeps its entrance blur at rest / ${geometry.name}`, async ({ page }) => {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
-    const kept: string[] = [];
     for (const scene of scenes) {
       await openScene(page, scene);
-      // Past every entrance (0.42 s at most).
-      await page.waitForTimeout(900);
-      kept.push(...(await page.evaluate((name) => [...document.querySelectorAll('.stage *')]
-        .filter((element) => /blur\(/.test(getComputedStyle(element).filter))
-        .map((element) => `${name} ${String(element.getAttribute('class') ?? element.tagName).split(' ').slice(0, 2).join('.')} ${getComputedStyle(element).filter}`), scene)));
+      await expect.poll(() => page.evaluate((name) => {
+        if (!document.querySelector('.stage .content-main')) return [`${name}: no object on the stage yet`];
+        return [...document.querySelectorAll('.stage *')]
+          .filter((element) => /blur\(/.test(getComputedStyle(element).filter))
+          .map((element) => `${name} ${String(element.getAttribute('class') ?? element.tagName).split(' ').slice(0, 2).join('.')} ${getComputedStyle(element).filter}`);
+      }, scene)).toEqual([]);
     }
-    expect(kept).toEqual([]);
   });
 }
 
