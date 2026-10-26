@@ -196,8 +196,9 @@ Error codes:
 | `failed` | Anything else. |
 
 A refusal of one command (`refused`, `unsupported`, `daemon_error`,
-`bad_request`, `unknown_command`) changed nothing, so it fails that command
-alone: the session stays usable, and other commands keep working (#423).
+`bad_request`, `unknown_command`) changed nothing, except an `open_session`
+refused by its name check after the daemon had already reopened the session.
+A refusal fails that command alone: the session stays usable, and other commands keep working (#423).
 `daemon_error` includes a command the host agent could not send to its
 daemon. A refused caller prompt keeps the caller on the leg (they hear that
 it could not take that, with the host's words on screen); a refused
@@ -479,7 +480,9 @@ is its table and `ProjectInner::end` its only writer.
 A refused command is one the host answered `refused`, `unsupported`,
 `daemon_error`, `bad_request` or `unknown_command`
 (`CommandError::is_refusal`), including one the host agent could not send
-to its daemon; only that command failed, and nothing changed. A failed
+to its daemon; only that command failed, and nothing changed (except an
+`open_session` refused by its name check after the daemon reopened the
+session). A failed
 command is any other error code above, or no reply within the 30 s wait. A
 session that is no longer open refuses every command itself, so neither
 reaches the host. `session_closed` includes the service's own `host_link_closed`.
