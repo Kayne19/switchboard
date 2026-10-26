@@ -128,7 +128,9 @@ Note the iPadOS version in the pull request.
     own picker; pick a thinking level and the line says so when the leg
     confirms it. HANG UP puts you back with the operator. Rotate: the panel
     stays clear of MODE and Damocles, and on a phone on its side it scrolls.
-14. Reload: once the bump has deployed, reload the page on the iPad and on
-    any other device that had it open. The page never reloads itself, so a
-    page left open keeps running the build it loaded against the new
-    service.
+
+## After a pin bump
+
+Once the bump has deployed, reload the page on the iPad and on any other
+device that had it open. The page never reloads itself, so a page left open
+keeps running the build it loaded against the new service.
