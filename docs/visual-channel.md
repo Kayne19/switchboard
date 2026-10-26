@@ -825,8 +825,8 @@ rescue leave it. A rescue moves the generation without a new leg, and the
 page drops the old leg's objects on its `epoch`; the gate is reset with
 that `epoch`, under its lock, so the stage, `view` and a page that
 reconnects before the next leg is announced all agree with the page. A
-display still waiting on the rescued leg is answered at once ("moved to a
-new leg"). The stage belongs to no leg until the next announcement, which
+display still waiting on the rescued leg is answered at once, with
+`new_leg`. The stage belongs to no leg until the next announcement, which
 resets it as any other would. A redial that keeps the session clears it
 too: the page drops the objects on the rescue's `epoch`, and the agent
 draws again on the new leg.
@@ -880,14 +880,16 @@ call's `result` and turns into the line it prints:
 - `{"delivered": true, "rendered": true}` — the browser confirmed this `seq`.
 - `{"delivered": true, "rendered": false, "rejected": true, "reason": "..."}`
   — the browser nacked this exact `seq`. The skill prints the page's reason
-  and tells the agent to adjust the payload; for the other `rendered: false`
-  answers below it prints the `reason` too.
+  and tells the agent to adjust the payload.
 - `{"delivered": true, "rendered": false, "reason": "no confirmation from
-  the browser"}` — the deadline passed with nothing seen.
-- `{"delivered": true, "rendered": false, "reason": "the caller's screen
-  moved to a new leg before this was confirmed"}` — the call transferred
-  while the wait was in flight, so any confirmation still coming is for a
-  generation the agent is no longer on.
+  the browser"}` — the deadline passed with nothing seen. The skill prints
+  the `reason` and says the display may not be visible yet.
+- `{"delivered": true, "rendered": false, "reason": "new_leg", "detail":
+  "..."}` — the call moved to a new leg, or was rescued, while the wait was
+  in flight. That cleared the stage, so the display is not on screen, and
+  any confirmation still coming is for a generation the agent is no longer
+  on. The skill branches on the code: it says the display is not shown and
+  tells the agent to draw it again if it still matters (#493).
 - `{"delivered": false, "reason": "no browser connected"}` — nothing to wait
   on; the action is still recorded in the projection and greets the next
   connection. The module reply makes it `accepted` with no `held`, and the

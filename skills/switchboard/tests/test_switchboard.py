@@ -377,11 +377,20 @@ class CallsTest(ModuleTestCase):
         self.assertIn("Adjust the payload", rejected)
         self.assertNotIn("has not confirmed", rejected)
 
-        # Every other unrendered answer names its reason too.
         mode["result"] = {"delivered": True, "rendered": False, "reason": "no confirmation from the browser"}
         _, unconfirmed = self.run_call(switchboard.display, op="clear")
         self.assertIn("has not confirmed it", unconfirmed)
         self.assertIn("no confirmation from the browser", unconfirmed)
+
+    def test_display_overtaken_by_a_new_leg_is_not_shown(self):
+        result = {"delivered": True, "rendered": False, "reason": "new_leg", "detail": "the caller's screen moved to a new leg"}
+        self.host(reply=lambda request: {"status": "delivered", "reason": None, "result": result})
+        _, line = self.run_call(switchboard.display, op="clear")
+        self.assertEqual(
+            line,
+            "switchboard.display: Not shown: the caller's screen moved to a new leg of the call before it confirmed "
+            "this, and that cleared the screen. Draw it again if it still matters; do not say it's on screen.",
+        )
 
     def test_request_and_caller_away_lines_point_to_the_next_step(self):
         mode = {"reply": {"status": "accepted", "reason": None}}

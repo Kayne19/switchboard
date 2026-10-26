@@ -41,9 +41,10 @@ as numpy arrays, are sent as lists.
 
 A display's line says where it went: "On screen." only when the caller's
 screen confirmed it. Otherwise it says it was held for when the caller
-brings you forward, sent but not yet confirmed, or kept with no screen
-connected (it appears when their page reconnects). Say it is on screen only
-after "On screen.".
+brings you forward, sent but not yet confirmed, kept with no screen
+connected (it appears when their page reconnects), or not shown because
+the call moved on and cleared the screen (draw it again if it still
+matters). Say it is on screen only after "On screen.".
 
 ## Functions
 
