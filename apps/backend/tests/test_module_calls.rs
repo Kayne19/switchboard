@@ -1111,19 +1111,25 @@ async fn display_reports_a_rejection_that_a_later_report_followed() {
     let (mut connection, _s, _w) = state.register_connection().await;
     let epoch = connection.epoch;
     let handle = post_display_in_task(&state, diagram_show()).await;
-    let DeliveryFrame::Event { sequence, .. } =
-        within("connection.receiver", connection.receiver.recv())
-            .await
-            .unwrap()
-    else {
-        panic!("expected a display event")
-    };
+    let sequence = frames_until(&mut connection, "display")
+        .await
+        .last()
+        .unwrap()["seq"]
+        .clone();
+    let mut next = diagram_show();
+    next["action"]["id"] = json!("d2");
+    let next_handle = post_display_in_task(&state, next).await;
+    let next_sequence = frames_until(&mut connection, "display")
+        .await
+        .last()
+        .unwrap()["seq"]
+        .clone();
     let generation = state.0.coordinator.generation();
     for report in [
         json!({"type":"screen_state","view":"auto","has_visual":false,"generation":generation,
                "rejected":{"seq":sequence,"reason":"unknown field in chart data: zeta"}}),
         json!({"type":"screen_state","view":"auto","has_visual":true,"generation":generation,
-               "visual_kind":"metric","applied_seq":sequence + 1}),
+               "visual_kind":"diagram","applied_seq":next_sequence}),
     ] {
         handle_text_frame(&state, epoch, &mut None, &mut None, &report.to_string())
             .await
@@ -1139,6 +1145,8 @@ async fn display_reports_a_rejection_that_a_later_report_followed() {
         body["reason"], "unknown field in chart data: zeta",
         "{body}"
     );
+    let (_code, body) = within("the next display call", next_handle).await.unwrap();
+    assert_eq!(body["rendered"], true, "{body}");
 }
 
 #[tokio::test]
