@@ -315,6 +315,51 @@ async fn a_run_that_replaces_a_held_one_takes_its_operation_before_a_waiting_cal
     let _ = std::fs::remove_dir_all(root);
 }
 
+/// A rescue closed the operation of the run alpha woke itself with
+/// (`auto-1`) and kept the session, which joins under the rescue's token
+/// and is still running the run: the caller's next prompt went into it as a
+/// `follow_up`, so the caller's operation is bound to it. The run's end
+/// settles that operation as any caller turn's end does, so a run the host
+/// starts right behind it is admitted (#109).
+#[cfg(unix)]
+#[tokio::test]
+async fn the_end_of_a_rescued_run_settles_the_caller_turn_bound_to_it() {
+    let root = scratch_root("rescued-run-bound");
+    let state = state_with_agents(&root);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    let coordinator = &state.0.coordinator;
+    assert!(
+        handle_project_turn(&state, autonomous_turn(token, instance_id, Some("auto-1"))).await,
+        "auto-1 admitted"
+    );
+    let rescued = coordinator.begin_rescue("test rescue");
+    coordinator.settle(rescued);
+    let token = coordinator.current_identity().token;
+    let caller = coordinator
+        .begin_prompt(&coordinator.current_identity())
+        .expect("the caller's turn is admitted");
+    coordinator
+        .bind_turn(&token, "auto-1")
+        .expect("the prompt's reply named the run");
+
+    handle_project_turn(
+        &state,
+        ProjectTurn {
+            ended: true,
+            ..autonomous_turn(token.clone(), instance_id, Some("auto-1"))
+        },
+    )
+    .await;
+
+    assert!(
+        handle_project_turn(&state, autonomous_turn(token, instance_id, Some("auto-2"))).await,
+        "the run's end settled the caller's turn, so the run right behind it is admitted"
+    );
+    assert!(!coordinator.finish_operation(&caller));
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
 // A host-reported turn, report by phase (#393, the application's side).
 //
 // The pump reports a project session's turn boundaries to the application
