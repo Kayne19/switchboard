@@ -230,7 +230,7 @@ the speech worker.
 | a start that replaces a held run (`ProjectTurn::replaces`) | takes the held run's end first, then the start, under one gate, so the operation passes to the new run |
 | any report that names no turn | refuses it: every turn has an id |
 | `turn_end`, `input` | closes the open operation bound to that id (`settle_turn`) |
-| the end of a self-woken run (any other cause) | for the held run (same session instance and turn id): closes its operation, traces its end, and writes its text, if any, to the transcript; for a run not held, settles the caller's operation if one is bound to that turn (a prompt sent into the run as a `follow_up`), as an `input` end does; a run held for another session instance ends nothing |
+| the end of a self-woken run (any other cause) | for the held run (same session instance and turn id): closes its operation, traces its end, and writes its text, if any, to the transcript; for a run not held, or a held run whose operation a rescue already closed, settles the caller's operation if one is bound to that turn (a prompt sent into the run as a `follow_up`), as an `input` end does; a run held for another session instance ends nothing |
 | the end of a self-woken run its session's close cut short | while that leg is on the line, nothing: the leg's retirement ends the run, under the PBX lock, after the leg is off the line (`end_run_of_closed_session`), and a caller operation bound to the run (a `follow_up`) closes when its prompt returns on the session's close; otherwise as any end |
 
 The table test `a_host_reported_turn_moves_by_its_table`

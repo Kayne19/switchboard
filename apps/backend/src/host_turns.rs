@@ -286,14 +286,14 @@ async fn admit_self_woken_run(
 
 /// The end of the self-woken run `turn_id` on session `instance_id`: its
 /// operation closes, it is traced to its end, and its written words reach
-/// the caller's transcript. The end of a run whose operation a rescue
-/// already closed ends nothing.
+/// the caller's transcript.
 ///
-/// A run the application never held can still be the caller's turn: a
-/// prompt sent into it as a `follow_up` bound the caller's operation to it,
-/// and the host's end settles that operation as it settles an `input`
-/// turn's, so a run the host starts right behind it is admitted (#107,
-/// #109). A run held for another session instance of the leg is neither.
+/// A run the application never held, or one whose operation a rescue
+/// already closed, can still be the caller's turn: a prompt sent into it as
+/// a `follow_up` bound the caller's operation to it, and the host's end
+/// settles that operation as it settles an `input` turn's, so a run the
+/// host starts right behind it is admitted (#107, #109). A run held for
+/// another session instance of the leg is neither.
 ///
 /// A run cut short by its session's close, while that session's leg is
 /// still on the line, is left to the leg's retirement
@@ -313,7 +313,9 @@ async fn end_self_woken_run(state: &AppState, turn: &ProjectTurn, turn_id: &str,
         .await
     {
         Release::Released(operation) => {
-            close_self_woken_run(state, turn.instance_id, operation, text).await
+            if !close_self_woken_run(state, turn.instance_id, operation, text).await {
+                settle_caller_turn(state, turn, turn_id);
+            }
         }
         Release::HeldElsewhere => {}
         Release::NotHeld => settle_caller_turn(state, turn, turn_id),
@@ -337,19 +339,20 @@ pub(crate) async fn end_run_of_closed_session(state: &AppState, instance_id: u64
 }
 
 /// Closes a released self-woken run's operation, traces its end, and writes
-/// its words, if any, to the caller's transcript.
+/// its words, if any, to the caller's transcript. False when a rescue had
+/// already closed it.
 async fn close_self_woken_run(
     state: &AppState,
     instance_id: u64,
     operation: OperationIdentity,
     text: String,
-) {
+) -> bool {
     if !state.0.coordinator.finish_operation(&operation) {
         tracing::info!(
             instance = instance_id,
             "ignoring autonomous turn end from a stale leg"
         );
-        return;
+        return false;
     }
     if let Some(turn_id) = operation.turn_id.clone() {
         state.0.debug.publish(DebugEvent::TurnEnd {
@@ -360,7 +363,7 @@ async fn close_self_woken_run(
         });
     }
     if text.trim().is_empty() {
-        return;
+        return true;
     }
     let route = state.0.coordinator.route();
     state.0.transcript_log.lock().await.add_with_id_and_voiced(
@@ -379,6 +382,7 @@ async fn close_self_woken_run(
             sequence: None,
         },
     );
+    true
 }
 
 /// A self-woken start from session `instance_id` on the leg holding
