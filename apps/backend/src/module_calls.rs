@@ -786,10 +786,8 @@ async fn agent_call(state: &AppState, call: &AgentCall) -> Response {
 /// accepted; a call answered `delivered: false`, or refused as invalid (4xx),
 /// is refused; anything else failed. The reason is the body's `reason` when
 /// it has one, so a code such as `caller_away` reaches the module bare (the
-/// module and SKILL.md branch on it), and its `detail` otherwise. A
-/// delivered reply has none, except a `speak` the speech deadline cut short
-/// (`cut_short`): a display's reason for an unconfirmed render stays in its
-/// result. The body, detail included, goes back as the `result`.
+/// module and SKILL.md branch on it), and its `detail` otherwise. The body,
+/// detail included, goes back as the `result`.
 async fn module_reply(call: &str, response: Response) -> Value {
     let status = response.status();
     let body = axum::body::to_bytes(response.into_body(), MAX_WEBSOCKET_MESSAGE_BYTES)
@@ -803,7 +801,7 @@ async fn module_reply(call: &str, response: Response) -> Value {
         .or_else(|| body.get("detail").and_then(Value::as_str))
         .map(str::to_owned);
     let (outcome, reason) = if status.is_success() && body["delivered"] == true {
-        ("delivered", stated.filter(|_| call == "speak"))
+        ("delivered", stated)
     } else if status.is_success() && body["accepted"] == true {
         ("accepted", None)
     } else if status.is_success() && call == "display" {

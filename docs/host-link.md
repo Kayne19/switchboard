@@ -576,9 +576,10 @@ refused. If no reply arrives in time, or the link is down, the module gets
 speech deadline only when it admits the call, after the frame has crossed the
 link, and answers `delivered` once the line's audio has gone out to the page,
 behind any line queued ahead of it; the margin lets that answer, not the host
-agent's clock, decide. A delivered reply's `reason` is `null`, except for a
-`speak` the speech deadline cut after its start went out: `cut_short`, as
-`m7` shows, since the caller heard only the start. A call that cannot
+agent's clock, decide. A delivered reply's `reason` is its result's
+`reason`, `null` when the result has none: `cut_short` for a `speak` the
+speech deadline cut after its start went out (`m7`; the caller heard only the
+start), or why the caller's screen has not confirmed a `display`. A call that cannot
 go out because the link's socket is already closing gets `failed` at once.
 
 Each wait on a `speak` has one owner, and each is longer than the one it
