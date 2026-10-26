@@ -393,14 +393,11 @@ reach a restarted service that counts again from 0. The snapshot replay
 raises the applied `seq` again when the stage has anything to replay, and
 otherwise the next display does. The rejections stay through it, and the one
 on the wire comes back, since the service may not have read it: the same
-service may still be waiting on them. Until a report carries them, they hold
-the applied `seq` lower. The page cannot tell a restarted service from the one
-it left. A restarted service drops a kept rejection whose `seq` it has not
-reached, but it takes one whose `seq` its new count has passed as a rejection
-of its own display at that `seq`, and that display's call answers rejected
-(`docs/visual-channel.md`, "Confirmed rendering"). The phase-by-event
-table in `tests/unit/screenReporter.test.tsx` pins each row through the
-adapter.
+service may still be waiting on them. After a restart, the new service takes
+a kept rejection whose `seq` its count has passed as a rejection of its own
+display at that `seq` (`docs/visual-channel.md`, "Confirmed rendering"). The
+phase-by-event table in `tests/unit/screenReporter.test.tsx` pins each row
+through the adapter.
 
 Every failure the runtime cannot recover from is reported as status text with
 `statusError` set -- no microphone, a browser that cannot record, a recorder

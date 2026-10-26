@@ -857,18 +857,18 @@ for the current generation; any other is ignored and not acknowledged
 connections, and the newest one is active. When the active tab closes, the
 newest tab still open takes over (`DeliveryState::retire`), and the screen
 the agent's `view` reads is stale until that tab sends its next report. The
-page sends each rejection in one report, and again on the next connection
-whenever the line drops before that report's ack. A `watch` keeps only its
-latest value, so a rejection is never cleared by a later report without one:
-it stays in the map, and a waiter checks the map for its own `seq` before it
-checks the watermark. The map keeps the newest `MAX_KEPT_REJECTIONS` (16) by
-`seq`; a display call waits at most `DISPLAY_CONFIRM_DEADLINE_MS`, so only
-the newest few can still have a waiter. A new leg resets the confirmations
-with the stage itself (`begin_leg`): `generation` moves to the new value,
-`watermark` goes back to `None`, `rejections` clears, and the projection's
-`objects` / `order` / `focus_id` / `speech` are cleared. A confirmation left
-over from the leg that just transferred away can never satisfy a wait
-started by the leg that replaced it.
+page sends each rejection in at most one report per connection (`rejected`,
+above), and a `watch` keeps only its latest value, so a rejection is never
+cleared by a later report without one: it stays in
+the map, and a waiter checks the map for its own `seq` before it checks the
+watermark. The map keeps the newest `MAX_KEPT_REJECTIONS` (16) by `seq`; a
+display call waits at most `DISPLAY_CONFIRM_DEADLINE_MS`, so only the newest
+few can still have a waiter. A new leg resets the confirmations with the
+stage itself (`begin_leg`): `generation` moves to the new value, `watermark`
+goes back to `None`, `rejections` clears, and the projection's `objects` /
+`order` / `focus_id` / `speech` are cleared. A confirmation left over from
+the leg that just transferred away can never satisfy a wait started by the
+leg that replaced it.
 
 The screen report is a typed struct, built once from the page's command
 (`ScreenReport::from_page`: the title cut to 200 characters, a content type
