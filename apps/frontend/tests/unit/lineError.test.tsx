@@ -48,7 +48,7 @@ describe('a line error is drawn wherever the caller can tap Damocles', () => {
   it.each([
     ['a content scene', [table, conversation], []],
     ['a content scene whose rail carries a note', [table, conversation, note], []],
-    ['a content scene Damocles has said something about', [table, conversation, said], []],
+    ['a content scene Damocles says something about after it', [table, conversation], [said]],
     ['the theater view', [table, conversation, { op: 'set_view', view: 'theater' } as ControllerAction], []],
     ['the conversation page', [conversation], []],
     ['the conversation page, once Damocles is heard again', [conversation], [heard]],
