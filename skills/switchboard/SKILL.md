@@ -50,13 +50,18 @@ after "On screen.".
 - `speak(text)`: say `text` out loud. Your written output goes to a screen
   they may not be watching, so anything they must hear goes through `speak`.
   Use plain spoken words. Code, paths, lists and tables go on the screen.
+  One line is voiced up to 700 characters (`SWITCHBOARD_MAX_SPOKEN_CHARS`).
+  A longer line is cut there, at a sentence end when one is near, and the
+  caller hears "there's more on screen". Their screen shows the whole line,
+  but they may not look, so keep what they must hear inside the cap.
 - `request_to_speak(message, reason)`: while the caller is on other work,
   queue what they should hear. `reason` is `finished`, `needs_decision` or
   `problem`. `message` is the real content, said the way you would say it: the
   result, the question with its options, or what went wrong and what you need.
   Not a teaser. The service fits it into the conversation and plays it at a
-  good moment. A newer request replaces one of yours that is still waiting,
-  so send the whole update each time.
+  good moment. The line it makes of your message is voiced under the same
+  700-character cap as `speak`, so leave room. A newer request replaces one
+  of yours that is still waiting, so send the whole update each time.
 - `display(action)` or `display(**action)`: one display action per call. See
   "Display".
 - `view(target=None)`: with no target, report what is on the caller's screen.
