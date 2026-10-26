@@ -1401,7 +1401,7 @@ impl FakeHostAgent {
                                             .lock()
                                             .unwrap()
                                             .commands
-                                            .push(json!({"name": wanted, "args": frame["args"]}));
+                                            .push(json!({"id": frame["id"], "name": wanted, "args": frame["args"]}));
                                         link.send(json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": {"sent_as": wanted, "turn_id": turn_id}}));
                                         break;
                                     }
