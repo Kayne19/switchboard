@@ -68,7 +68,6 @@ export interface IdentityStep {
    * other message.
    */
   readonly expected: boolean;
-  /** An `epoch` that names a generation other than the one the page held. False for anything else. */
   readonly epochMoved: boolean;
 }
 

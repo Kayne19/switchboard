@@ -9,8 +9,7 @@ import { FRAME_GEOMETRIES } from './helpers';
 // see it (tests/unit/lineError.test.tsx covers what is drawn): it stands
 // on the stage, clear of everything else the page draws, a long one
 // scrolling in its own box, and MODE keeps its tap. The system view shows
-// it as its STATUS row instead. An error about a leg leaves with that leg,
-// on the real page in both engines.
+// it as its STATUS row instead.
 
 // A status line the runtime says (PlaybackStatus.overLimit), long enough to
 // wrap on a phone's stage; and a server error past the error's height cap,

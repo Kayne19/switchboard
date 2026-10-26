@@ -268,11 +268,6 @@ export function RuntimeIntegration() {
           // only transports it; it must never turn background status into
           // caller speech.
           break;
-        case "error":
-        case "routing_unavailable":
-          // CallRuntime shows these as page status errors. Do not put them on
-          // the conversation surface or send them through speech synthesis.
-          break;
       }
     };
 
@@ -304,15 +299,6 @@ export function RuntimeIntegration() {
     handleStateRef.current = (runtimeState: RuntimeState) => {
       if (!runtimeState.connected) screenReporter.lineDown();
       setRuntime(runtimeState);
-      // The runtime reports a failure it cannot recover from -- no
-      // microphone, a browser that cannot record, a recorder that stopped --
-      // as status text with the error flag set. The page rendered neither
-      // field, so on a browser where capture fails the caller tapped Damocles
-      // and nothing at all happened, on screen or anywhere else. An error
-      // goes on screen the way a server `error` does, as a failure of the
-      // line; ordinary status text -- the idle line, a turn under way --
-      // never does. It leaves the screen when the runtime says the failure
-      // is over: a status reported without the flag.
       if (runtimeState.statusError) {
         if (runtimeState.status !== shownStatusRef.current) {
           shownStatusRef.current = runtimeState.status;
