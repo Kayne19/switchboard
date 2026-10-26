@@ -885,15 +885,12 @@ async fn hosts_fail_a_command_whose_reply_they_cannot_read_at_once() {
 // the link goes on.
 #[tokio::test]
 async fn hosts_log_an_unreadable_frame_they_cannot_answer_and_go_on() {
-    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
     let hosts = Hosts::new(tokens(), slow());
     let mut link = hosts.connect_fake("scriptorium");
     let (_subscription, mut frames) = hosts.subscribe("scriptorium", "a1");
     let bus = crate::debug::DebugBus::new();
-    let subscriber = tracing_subscriber::registry()
-        .with(EnvFilter::new("switchboard=info"))
-        .with(crate::debug::DebugLogLayer::new(bus.clone()));
-    tracing::subscriber::with_default(subscriber, || {
+    {
+        let _capture = crate::debug::capture_logs(&bus);
         hosts.on_frame(
             "scriptorium",
             link.epoch,
@@ -906,7 +903,7 @@ async fn hosts_log_an_unreadable_frame_they_cannot_answer_and_go_on() {
             link.epoch,
             r#"{"type":"module_call","session":"a1","call":"speak","args":{"text":"\ud83d"}}"#,
         );
-    });
+    }
     let logs: Vec<_> = bus
         .snapshot()
         .logs

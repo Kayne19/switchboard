@@ -1381,6 +1381,71 @@ where
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static CAPTURE: std::cell::RefCell<Option<DebugLogLayer>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Copies the `switchboard=info` lines this thread logs to `bus` until the
+/// guard drops: how a test asserts on a log line. A subscriber scoped to one
+/// thread loses lines (docs/concurrency-and-test-hazards.md, "A log capture
+/// scoped to one thread").
+#[cfg(test)]
+pub(crate) fn capture_logs(bus: &DebugBus) -> LogCapture {
+    static INSTALL: std::sync::Once = std::sync::Once::new();
+    INSTALL.call_once(|| {
+        use tracing_subscriber::prelude::*;
+        tracing::subscriber::set_global_default(
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::EnvFilter::new("switchboard=info"))
+                .with(CaptureRouter),
+        )
+        .expect("capture_logs installs the test binary's only subscriber");
+        // The install enables `info` before it publishes the subscriber. A
+        // callsite another thread registered in between found no subscriber
+        // and was cached as never.
+        tracing::callsite::rebuild_interest_cache();
+    });
+    CAPTURE.with(|capture| {
+        let mut capture = capture.borrow_mut();
+        assert!(capture.is_none(), "this thread already captures its logs");
+        *capture = Some(DebugLogLayer::new(bus.clone()));
+    });
+    LogCapture {
+        _not_send: std::marker::PhantomData,
+    }
+}
+
+#[cfg(test)]
+#[must_use = "the capture ends when the guard drops"]
+pub(crate) struct LogCapture {
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+#[cfg(test)]
+impl Drop for LogCapture {
+    fn drop(&mut self) {
+        CAPTURE.with(|capture| capture.borrow_mut().take());
+    }
+}
+
+#[cfg(test)]
+struct CaptureRouter;
+
+#[cfg(test)]
+impl<S> Layer<S> for CaptureRouter
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
+        let _ = CAPTURE.try_with(|capture| {
+            if let Some(layer) = capture.borrow().as_ref() {
+                layer.on_event(event, ctx);
+            }
+        });
+    }
+}
+
 /// What replaces a credential on the debug page. The page is
 /// unauthenticated; the journal keeps whatever the log line carried.
 const REDACTED: &str = "[redacted]";

@@ -531,6 +531,75 @@ make it private: another test can send the same kind of message. If no
 per-test seam exists, add one that production also uses, as the debug bus is,
 rather than a `#[cfg(test)]` global.
 
+## A log capture scoped to one thread
+
+A few backend tests assert on a log line, because the journal is the only
+place that says it: the mime a caller's browser recorded, or why a host frame
+was dropped. They used to capture the line with a subscriber scoped to the
+test's thread (`tracing::subscriber::set_default` or `with_default`, with an
+`EnvFilter` and a `DebugLogLayer` on the test's own bus).
+`an_arriving_clip_is_logged_with_the_mime_the_browser_recorded` failed now and
+then under load with `left: []`: the `clip arrived` line never reached the
+capture (#368, #427, #211).
+
+The scope is one thread, but tracing keeps what it learns about a callsite for
+the whole process. Each `info!` is a callsite. The first time any thread
+reaches it, tracing asks whether a subscriber wants its events and stores the
+answer, the callsite's interest, in the callsite. While one subscriber is live
+in the process, tracing-core asks only the default of the thread that reached
+the callsite. A test that captures nothing, on another thread, has no default.
+So when it reaches `clip arrived` first, while the capturing test's subscriber
+is the only one live, the callsite is cached as never until the next
+subscriber is created, and the capturing test's own line is skipped. The test
+passes alone and fails beside a test that uploads a clip at the wrong moment:
+the interest cache is a process-global that every test shares, the hazard
+above in another form.
+
+Measured on master: a test that lets another thread reach the callsite first
+fails 10 runs in 10 when run alone. Under load, each round ran four full test
+binaries at once, two built from master and two built with the fix, so both
+saw the same load. The 1-minute load average at the start of a round was 30
+to 82, except for two rounds at 13 and 26. Master's binary failed 10 of 260
+runs, each one in this test. None of the 260 fix runs failed this test. Only
+60 of them ran the code that landed, at 51107365. The other 200 ran two
+earlier builds of the same capture, one from before review and a pilot build
+that also held two more repro tests. Two of the 260 fix runs failed in
+another test, once each, and neither test is touched by this change.
+
+`debug::capture_logs(&bus)` (`apps/backend/src/debug.rs`) is the fix. Its
+first call installs the test binary's only subscriber, as the global default:
+an `EnvFilter` of `switchboard=info` and a layer that hands each line to the
+capture of the thread that logged it. Each call puts a `DebugLogLayer` on the
+test's bus in its thread's slot, and the guard it returns empties the slot
+when dropped. With a global subscriber, every thread's default is that
+subscriber, so no callsite is cached as never for want of one.
+
+The subscriber is a `#[cfg(test)]` global, which the rule above says to avoid.
+It is one here because tracing's dispatch is process-global already:
+production installs one global subscriber too. The test still observes
+through what it owns. It reads
+its own bus, the line reaches it through production's `DebugLogLayer`, and the
+slot is keyed by thread, so no test reads another's lines.
+
+The install has one window of its own. It enables `info` before it publishes
+the subscriber, and a callsite another thread registers in between finds no
+subscriber and is cached as never. `capture_logs` has tracing work out every
+interest again right after the install. That repairs such a callsite, unless
+the other thread looked for the subscriber before the install published it
+and stores its answer after the repair. That window is a few instructions
+wide, and it has not been seen.
+
+The capture is per thread, as the scoped subscriber was. A `#[tokio::test]`
+runs its tasks on the test's thread, so their lines are captured. A line
+logged on another thread is not: a `#[tokio::test(flavor = "multi_thread")]`
+worker, a `spawn_blocking` closure, a thread the test starts. A test of code
+that logs there runs it on the default current-thread runtime, or reads the
+fact from something it owns, such as an event on its bus.
+
+The rule: a backend test captures logs with `capture_logs`, never with a
+subscriber of its own. `scripts/check_hygiene.mjs` refuses `set_default`,
+`with_default` and `.with_subscriber(` in `apps/backend`.
+
 ## A time budget measured on the wall clock
 
 Some unit tests hold work to a time budget: a layout that went quadratic, a

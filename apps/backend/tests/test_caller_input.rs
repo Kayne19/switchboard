@@ -530,14 +530,10 @@ async fn an_arriving_clip_is_logged_with_the_mime_the_browser_recorded() {
     // recorded. Every iPad browser is WebKit and records `audio/mp4`, which
     // the sidecar may or may not decode; without the format next to the
     // clip, a failed transcription names no suspect.
-    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
     let state = state_with_stt(Some("printf 'words'".into()));
     let mut connection = state.0.delivery.register();
     let bus = crate::debug::DebugBus::new();
-    let subscriber = tracing_subscriber::registry()
-        .with(EnvFilter::new("switchboard=info"))
-        .with(crate::debug::DebugLogLayer::new(bus.clone()));
-    let guard = tracing::subscriber::set_default(subscriber);
+    let guard = crate::debug::capture_logs(&bus);
     let mut header = None;
     handle_text_frame(
         &state,
