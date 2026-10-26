@@ -176,8 +176,9 @@ export interface AudioPlaybackOptions {
    * Called with an utterance's `sequence` when its turn to play comes, or
    * when it is dropped and will never play. The caption follows this, so a
    * line is shown when its audio starts rather than when it arrives (#112).
-   * It may be called more than once for one utterance (a replay after a
-   * blocked autoplay, a streaming fallback).
+   * One that ends with no audio is dropped when it ends, even while earlier
+   * utterances still wait to play. It may be called more than once for one
+   * utterance (a replay after a blocked autoplay, a streaming fallback).
    */
   onUtterance?: (sequence: number) => void;
 }
@@ -386,11 +387,13 @@ export class AudioPlayback {
   /**
    * `utterance` has no more bytes, on its `audio_done` or at a cap: a
    * stream is finished with what went in, and a whole utterance is queued.
+   * One with no bytes at all is dropped (`dropEmpty`).
    */
   private endUtterance(utterance: Utterance, done: boolean): void {
     utterance.done = done;
     this.arriving = null;
-    if (utterance.stream) utterance.stream.finish(done);
+    if (utterance.bytes === 0) this.dropEmpty(utterance);
+    else if (utterance.stream) utterance.stream.finish(done);
     else {
       this.queueReplay(utterance);
       const holder = this.holder;
@@ -399,6 +402,21 @@ export class AudioPlayback {
       this.startNext();
     }
     this.notifyPlaybackChange();
+  }
+
+  /**
+   * `utterance` ended with no bytes, so it is never ended or replayed
+   * empty: Chromium answers an empty source with an element error, and
+   * WebKit leaves an ended empty stream with neither `ended` nor an error.
+   */
+  private dropEmpty(utterance: Utterance): void {
+    if (heldUtterance(this.holder) === utterance) {
+      this.enter({ kind: "idle" });
+      this.afterClip();
+      return;
+    }
+    this.streamQueue = this.streamQueue.filter((queued) => queued !== utterance);
+    this.options.onUtterance?.(utterance.sequence);
   }
 
   /** Which cap `bytes` more of `utterance` would pass, if any. */
@@ -900,8 +918,8 @@ export class AudioPlayback {
     const utterances = new Set<Utterance>(this.streamQueue);
     if (this.arriving) utterances.add(this.arriving);
     const holder = this.holder;
-    if (holder.kind === "stream") utterances.add(holder.clip.utterance);
-    if (holder.kind === "cutOff") utterances.add(holder.utterance);
+    const held = heldUtterance(holder);
+    if (held) utterances.add(held);
     let bytes = 0;
     for (const utterance of utterances) bytes += utterance.bytes;
     for (const replay of this.audioQueue) bytes += replay.size;
@@ -1001,6 +1019,13 @@ function occupant(holder: Holder): object | null {
     default:
       return unreachable(holder);
   }
+}
+
+/** The utterance a stream or a cut-off stream holds the element for. */
+function heldUtterance(holder: Holder): Utterance | null {
+  if (holder.kind === "stream") return holder.clip.utterance;
+  if (holder.kind === "cutOff") return holder.utterance;
+  return null;
 }
 
 function watchOf(holder: Holder): ProgressWatch | null {

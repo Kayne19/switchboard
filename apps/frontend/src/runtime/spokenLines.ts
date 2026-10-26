@@ -9,8 +9,11 @@
 // line being heard, and lines queued behind it wait their turn.
 //
 // Playback reaches an utterance when its turn to play comes, or when it is
-// dropped and will never play (`AudioPlayback`'s `onUtterance`). A line with
-// no utterance is heard as soon as the lines before it are.
+// dropped and will never play (`AudioPlayback`'s `onUtterance`). Reaching one
+// reaches every utterance before it: one dropped while earlier utterances
+// still wait to play (it ended with no audio) frees their lines before their
+// audio starts. A line with no utterance is heard as soon as the lines before
+// it are.
 
 /**
  * How long a waiting line waits while playback is not playing. A caption is

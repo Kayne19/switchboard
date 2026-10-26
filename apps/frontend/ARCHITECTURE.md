@@ -476,11 +476,24 @@ was silent (#431). `MAX_AUDIO_UTTERANCE` (32 MiB) bounds one utterance.
 An utterance whose next chunk would pass either cap ends there, through the
 same path as its `audio_done` (`endUtterance`): a stream is finished with
 what went in and keeps the element, and a whole utterance is queued with
-what arrived. Its later chunks and its own `audio_done` find nothing
-arriving. The status line says the reply is too long to play in full, or
-that too much audio is waiting, and that its full text is in the transcript
-(`PlaybackStatus.overLimit`). A cap is not a streaming failure: streaming
-stays as it was.
+what arrived; one with nothing arrived is dropped, as below. Its later
+chunks and its own `audio_done` find nothing arriving. The status line says
+the reply is too long to play in full, or that too much audio is waiting,
+and that its full text is in the transcript (`PlaybackStatus.overLimit`). A
+cap is not a streaming failure: streaming stays as it was.
+
+An utterance can end with no audio at all: its `audio_start` and
+`audio_done` come with nothing between them, or its first chunk would pass a
+cap. It has nothing to play, and `endUtterance` drops it (`dropEmpty`) rather
+than end an empty stream or replay an empty blob. Chromium answers either
+with an element error, and an empty stream's error would turn streaming off
+for the call; WebKit leaves an ended empty stream on the element with neither
+`ended` nor an error, so nothing after it would play until the next leg.
+One that holds the element leaves it, as a clip that ended does, and what
+waits follows. One that waits leaves its queue and is reached at once, as an
+utterance that will never play. `SpokenLines` releases every line up to the
+highest utterance reached, so a line still waiting for an earlier utterance
+that has not started is shown with it.
 
 A clip that produced no sound is noticed whatever `play()` does with its
 promise. `NO_PROGRESS_MS` is armed when the attempt is made, not when
