@@ -586,8 +586,20 @@ later test. Before that, `afterEach` disposes every playback the test made
 through `playbackForTest` (`AudioPlayback.dispose` cancels every timer a
 playback holds) and fails the test if a timer is still armed.
 
-The rule: a unit test that arms timers runs on the fake clock, and ends what
-it started (a playback, a runtime) before its stubs go.
+`callRuntime.test.ts` had the same shape on its failure path: each test
+disposes its runtime after its expects, so a failing expect skipped the
+dispose and left the playback's watch armed, and the same `ReferenceError`
+followed. Its `beforeEach` now puts every test on the fake clock too.
+
+The rule: a unit test whose code under test arms timers runs on the fake
+clock, and ends what it started (a playback, a runtime) before its stubs go.
+`audioPlayback.test.ts` and `callRuntime.test.ts` follow it. In the other
+node unit files no passing test leaves a real timer armed after its teardown.
+`pushToTalk.test.ts` runs on the real clock and stays there: `PushToTalk`
+arms no timer (its level meter runs on `requestAnimationFrame`, which the
+tests stub with one that schedules nothing), and the file's only timer is its
+own `settle`, a `setTimeout(0)` every caller awaits, so a failing expect
+cannot leave one armed.
 
 ## A test await with no deadline
 
