@@ -67,6 +67,29 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   });
 }
 
+// #391 asked whether the column a short plan is framed in gains its last
+// 10 px half a second after the scene changes. Read on every frame from the
+// first one the plan is drawn in, it keeps one height.
+test('the column a short plan is framed in keeps one height from its first frame / 390x844', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openScene(page, 'architecture');
+  const heights = await page.evaluate((plan) => new Promise<number[]>((resolve) => {
+    const seen: number[] = [];
+    const start = performance.now();
+    const look = () => {
+      if (document.querySelector('.composed-primary-object--progress')) {
+        seen.push(document.querySelector('.content-grid > .content-main')!.getBoundingClientRect().height);
+      }
+      if (performance.now() - start < 1200) requestAnimationFrame(look);
+      else resolve(seen);
+    };
+    window.SwitchboardController!.run([{ op: 'clear' }, { op: 'show', id: 'plan', type: 'progress', role: 'primary', data: { label: 'SHIP', steps: plan } }]);
+    requestAnimationFrame(look);
+  }), steps(4, 2));
+  expect(heights.length).toBeGreaterThan(0);
+  expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(0.5);
+});
+
 const railSteps = Array.from({ length: 7 }, (_, i) => ({ label: `STEP ${i + 1}`, state: i < 4 ? 'done' : i === 4 ? 'active' : 'todo' }));
 
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
