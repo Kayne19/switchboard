@@ -350,7 +350,7 @@ async fn close_self_woken_run(
     if !state.0.coordinator.finish_operation(&operation) {
         tracing::info!(
             instance = instance_id,
-            "ignoring autonomous turn end from a stale leg"
+            "the self-woken run's operation was already closed"
         );
         return false;
     }
