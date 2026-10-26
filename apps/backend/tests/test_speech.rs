@@ -1286,9 +1286,6 @@ async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
     );
 }
 
-/// A line held behind another one's open audio past its own deadline is
-/// answered as not delivered, so it must not play once that audio closes:
-/// the page gets its start and done, and none of its audio.
 #[tokio::test]
 async fn a_line_still_held_at_its_deadline_never_plays() {
     let state = speaking_state();
@@ -1335,8 +1332,6 @@ async fn a_line_still_held_at_its_deadline_never_plays() {
     );
 }
 
-/// The same for a body the deadline cuts while it is held: the requester is
-/// told the deadline expired, and none of the body plays.
 #[tokio::test]
 async fn a_line_the_deadline_cuts_while_held_never_plays() {
     let config = crate::Config::for_tests(&[]);

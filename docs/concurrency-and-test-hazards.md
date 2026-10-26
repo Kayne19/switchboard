@@ -790,8 +790,8 @@ is not said. A drain whose body ends while its slot is still held waits for
 the slot to go out before it answers (`went_out` in `speech.rs`), and stops
 waiting, superseded, if the call hands off first. It waits at most until
 the request's deadline, so a slot left open ahead of it cannot hold the
-requesters behind it. A slot still held then is withdrawn
-(`AudioQueue::withdraw`): its audio is dropped, and only its start and done
+requesters behind it. A slot still held then is silenced
+(`AudioQueue::silence`): its audio is dropped, and only its start and done
 go out in their turn, because the page holds a line that names an utterance
 until that utterance starts. The request is answered as not delivered, and
 a body the deadline cut while held as the failure it was before, and in

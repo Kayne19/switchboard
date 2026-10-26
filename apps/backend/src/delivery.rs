@@ -313,14 +313,13 @@ impl AudioQueue {
         slot.done = true;
         self.send_ready(line);
     }
-    /// Drops the audio a slot still holds, so none of it plays. Its start and
-    /// done still go out in their turn: the page holds a line that names an
-    /// utterance until that utterance starts.
-    pub(crate) fn withdraw(&mut self, sequence: u64) {
-        if let Some(slot) = self.slots.get_mut(&sequence) {
-            slot.events
-                .retain(|event| !matches!(event, Event::AudioChunk { .. }));
-        }
+    pub(crate) fn silence(&mut self, sequence: u64) -> bool {
+        let Some(slot) = self.slots.get_mut(&sequence) else {
+            return false;
+        };
+        slot.events
+            .retain(|event| !matches!(event, Event::AudioChunk { .. }));
+        true
     }
     fn send_ready(&mut self, line: u64) {
         while let Some(slot) = self.slots.get_mut(&self.emit) {

@@ -694,8 +694,7 @@ fn left_unheard(state: &AppState, generation: u64, receipt: &SlotReceipt) -> boo
 
 /// Waits for a closed slot to leave the queue behind the slots ahead of it,
 /// at most until the request's deadline: a slot left open ahead of it would
-/// otherwise hold every requester behind it. A slot still held then is
-/// withdrawn, so the answer that it did not play stays true.
+/// otherwise hold every requester behind it.
 async fn went_out(
     state: &AppState,
     generation: u64,
@@ -722,10 +721,7 @@ async fn went_out(
             };
         }
         if expired.is_elapsed() {
-            // Under the queue's lock, so the slot cannot go out in between.
-            let mut audio = state.0.audio.lock().await;
-            if !receipt.gone() {
-                audio.withdraw(sequence);
+            if state.0.audio.lock().await.silence(sequence) {
                 return WentOut::Unheard;
             }
             continue;
