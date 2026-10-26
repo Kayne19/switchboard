@@ -1285,3 +1285,116 @@ async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
         "the later line played, but its requester was told it was not delivered"
     );
 }
+
+/// A line held behind another one's open audio past its own deadline is
+/// answered as not delivered, so it must not play once that audio closes:
+/// the page gets its start and done, and none of its audio.
+#[tokio::test]
+async fn a_line_still_held_at_its_deadline_never_plays() {
+    let state = speaking_state();
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    let ahead = state.0.audio.lock().await.reserve(generation);
+    let reserved = reserve_speech(
+        &state,
+        SpeakUnder::Generation(generation),
+        WhenQueueFull::Wait,
+    )
+    .await
+    .unwrap_or_else(|failure| panic!("the request gets a place: {failure}"));
+    let later = reserved.sequence;
+    let admission = SpeechAdmission {
+        text: "The later line.".into(),
+        route: OPERATOR.into(),
+        generation,
+        deadline: std::time::Instant::now() + Duration::from_millis(400),
+        scope: ContinuationScope::FreshTurn,
+        group: state.0.new_speech_group(),
+        log_spoken: true,
+    };
+    let answer = within(
+        "the later line's answer",
+        send_speech(&state, admission, reserved),
+    )
+    .await
+    .map_err(|failure| failure.to_string());
+    finish_audio(&state, ahead, generation).await;
+    assert_eq!(
+        answer,
+        Err("no browser connected or the writer rejected audio".to_owned())
+    );
+    assert_eq!(
+        audio_sent(&mut connection),
+        [
+            format!("start {ahead} (leg {generation})"),
+            format!("done {ahead} (leg {generation})"),
+            format!("start {later} (leg {generation})"),
+            format!("done {later} (leg {generation})"),
+        ],
+        "the line its requester was told did not play went on to play"
+    );
+}
+
+/// The same for a body the deadline cuts while it is held: the requester is
+/// told the deadline expired, and none of the body plays.
+#[tokio::test]
+async fn a_line_the_deadline_cuts_while_held_never_plays() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_cut_by_deadline(100, Duration::from_millis(25_000)),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    start_speech_worker_for_test(&state);
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    let ahead = state.0.audio.lock().await.reserve(generation);
+    let reserved = reserve_speech(
+        &state,
+        SpeakUnder::Generation(generation),
+        WhenQueueFull::Wait,
+    )
+    .await
+    .unwrap_or_else(|failure| panic!("the request gets a place: {failure}"));
+    let later = reserved.sequence;
+    let admission = SpeechAdmission {
+        text: "The later line.".into(),
+        route: OPERATOR.into(),
+        generation,
+        deadline: std::time::Instant::now() + Duration::from_millis(400),
+        scope: ContinuationScope::FreshTurn,
+        group: state.0.new_speech_group(),
+        log_spoken: true,
+    };
+    let answer = within(
+        "the later line's answer",
+        send_speech(&state, admission, reserved),
+    )
+    .await
+    .map_err(|failure| failure.to_string());
+    let shown = crate::browser::queued_frames(&mut connection);
+    finish_audio(&state, ahead, generation).await;
+    assert_eq!(answer, Err("speech deadline expired".to_owned()));
+    assert!(
+        shown.iter().any(|frame| frame["type"] == "error"),
+        "{shown:?}"
+    );
+    assert_eq!(
+        audio_sent(&mut connection),
+        [
+            format!("start {ahead} (leg {generation})"),
+            format!("done {ahead} (leg {generation})"),
+            format!("start {later} (leg {generation})"),
+            format!("done {later} (leg {generation})"),
+        ],
+        "the line its requester was told did not play went on to play"
+    );
+}
