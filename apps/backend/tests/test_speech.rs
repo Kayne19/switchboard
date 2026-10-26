@@ -386,14 +386,21 @@ async fn speech_a_rescue_stops_is_not_shown_to_the_caller_as_an_error() {
 }
 
 /// What the page was sent of each utterance's audio, in order: `start`,
-/// `chunk` and `done`, each with its generation.
+/// `chunk` and `done`, each start and done with its sequence and generation.
 fn audio_sent(connection: &mut DeliveryConnection) -> Vec<String> {
     std::iter::from_fn(|| connection.receiver.try_recv().ok())
         .filter_map(|frame| match frame {
             DeliveryFrame::Event { event, .. } => match event {
-                Event::AudioStart { generation, .. } => Some(format!("start {generation}")),
+                Event::AudioStart {
+                    generation,
+                    sequence,
+                    ..
+                } => Some(format!("start {sequence} (leg {generation})")),
                 Event::AudioChunk { .. } => Some("chunk".to_owned()),
-                Event::AudioDone { generation, .. } => Some(format!("done {generation}")),
+                Event::AudioDone {
+                    generation,
+                    sequence,
+                } => Some(format!("done {sequence} (leg {generation})")),
                 Event::Json(_) => None,
             },
             DeliveryFrame::Message(_) => None,
@@ -475,12 +482,12 @@ async fn the_new_legs_speech_waits_for_what_the_old_leg_is_already_saying() {
     assert_eq!(
         audio_sent(&mut connection),
         [
-            format!("start {old}"),
+            format!("start 0 (leg {old})"),
             "chunk".to_owned(),
-            format!("done {old}"),
-            format!("start {new}"),
+            format!("done 0 (leg {old})"),
+            format!("start 1 (leg {new})"),
             "chunk".to_owned(),
-            format!("done {new}"),
+            format!("done 1 (leg {new})"),
         ]
     );
 }
@@ -1241,6 +1248,7 @@ async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
     )
     .await
     .unwrap_or_else(|failure| panic!("the request gets a place: {failure}"));
+    let later = reserved.sequence;
     let admission = SpeechAdmission {
         text: "The later line.".into(),
         route: OPERATOR.into(),
@@ -1263,13 +1271,13 @@ async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
     assert_eq!(
         sent,
         [
-            format!("start {generation}"),
-            format!("done {generation}"),
-            format!("start {generation}"),
+            format!("start {ahead} (leg {generation})"),
+            format!("done {ahead} (leg {generation})"),
+            format!("start {later} (leg {generation})"),
             "chunk".to_owned(),
-            format!("done {generation}"),
+            format!("done {later} (leg {generation})"),
         ],
-        "the later line's audio reached the page"
+        "the later line's audio reached the page behind the earlier one"
     );
     assert_eq!(
         answer.map_err(|failure| failure.to_string()),

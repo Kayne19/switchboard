@@ -1091,6 +1091,57 @@ async fn display_reports_rejection_from_the_browser() {
     );
 }
 
+/// A delivered module reply carries its result's reason, so the agent learns
+/// why the page could not render a display (`docs/host-link.md`, "Module
+/// calls").
+#[tokio::test]
+async fn a_display_the_page_rejects_is_delivered_with_the_pages_reason() {
+    let state = state();
+    let (mut connection, _s, _w) = state.register_connection().await;
+    let epoch = connection.epoch;
+    let reply = tokio::spawn({
+        let state = state.clone();
+        async move {
+            module_call(
+                &state,
+                AgentCall {
+                    call: "display".into(),
+                    token: String::new(),
+                    turn_id: None,
+                    cause: None,
+                    args: diagram_show(),
+                },
+            )
+            .await
+        }
+    });
+    let DeliveryFrame::Event { sequence, .. } =
+        within("connection.receiver", connection.receiver.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected a display event")
+    };
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"auto","has_visual":false,
+               "rejected":{"seq":sequence,"reason":"unsupported node shape"},
+               "generation":state.0.coordinator.generation()})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    let reply = within("the display's module reply", reply).await.unwrap();
+    assert_eq!(
+        (reply["status"].clone(), reply["reason"].clone()),
+        (json!("delivered"), json!("unsupported node shape")),
+        "{reply}"
+    );
+}
+
 /// The page sends a rejection once. A later report without one, here the
 /// confirmation of the next action, must not hide it from the call still
 /// waiting on the rejected `seq` (#255).
