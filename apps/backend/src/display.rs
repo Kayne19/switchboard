@@ -603,10 +603,6 @@ pub(crate) struct ConfirmState {
     // generation yet" -- distinct from confirming sequence 0, which is a
     // real, reachable sequence number.
     pub(crate) watermark: Option<u64>,
-    // Every rejection the page has sent in this generation, newest
-    // `MAX_KEPT_REJECTIONS` by `seq`. No later report on the same connection
-    // carries it again, so one without it must not clear it before its waiter
-    // looks.
     rejections: BTreeMap<u64, String>,
 }
 

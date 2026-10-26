@@ -980,7 +980,6 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
     );
 }
 
-/// The seq of the next display frame `receiver` is sent.
 async fn next_display_seq(receiver: &mut tokio::sync::mpsc::Receiver<DeliveryFrame>) -> u64 {
     loop {
         let frame = within("connection.receiver", receiver.recv())
