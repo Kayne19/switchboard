@@ -13,7 +13,7 @@ import type { ControllerAction, ControllerState } from '../../src/controller/typ
 import { RuntimeIntegration } from '../../src/integration/runtime';
 import { IDLE_TEXT } from '../../src/runtime/callRuntime';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
-import { helloAck, statusMessage } from '../fixtures/serverMessages';
+import { helloAck, statusMessage, transcriptEntry } from '../fixtures/serverMessages';
 import { stubResizeObserver } from './sceneHarness';
 
 class FakeSocket {
@@ -48,11 +48,13 @@ let root: Root;
 let socket: FakeSocket;
 let latest: ControllerState;
 let dispatch: (action: ControllerAction) => void;
+let voice: ReturnType<typeof useController>['voiceRuntime'];
 
 function StateRecorder() {
   const controller = useController();
   latest = controller.state;
   dispatch = controller.dispatch;
+  voice = controller.voiceRuntime;
   return null;
 }
 
@@ -188,5 +190,57 @@ describe('only an error reaches the screen, and only while it stands', () => {
     expect(cards()).toEqual([]);
     expect(host.textContent).not.toContain(IDLE_TEXT);
     expect(host.textContent).not.toMatch(/is listening|is working/);
+  });
+});
+
+describe('an error leaves with the leg it was about', () => {
+  async function settle() {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve();
+  }
+
+  async function refusedPick() {
+    await receive(statusMessage({ route: 'alpha', label: 'alpha', projects: ['alpha'], model: 'small' }));
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    await act(async () => {
+      voice!.line.selectModel('big');
+      await settle();
+    });
+  }
+
+  const serverError = () => receive({ type: 'error', message: 'The project agent crashed.' });
+
+  async function backWithTheOperator() {
+    await receive({ type: 'epoch', generation: 1 });
+    await receive(statusMessage({ route: 'operator', label: 'operator', projects: ['alpha'] }));
+  }
+
+  async function rescued() {
+    await receive({ type: 'candidate_cleared', route: 'alpha', generation: 2, reason: 'rescued' });
+    await receive({ type: 'epoch', generation: 2 });
+    await receive(statusMessage({ route: 'operator', label: 'operator', projects: ['alpha'] }));
+  }
+
+  it.each([
+    ['a refused pick, once the caller is back with the operator', refusedPick, backWithTheOperator],
+    ['a server error, once the leg is rescued', serverError, rescued],
+  ])('%s', async (_name, fail, end) => {
+    await fail();
+    expect(lineError(), 'drawn while the leg lasts').not.toBe(null);
+    await end();
+    expect(lineError(), 'gone with the leg').toBe(null);
+  });
+
+  it('keeps a refused microphone through a hangup', async () => {
+    await tapDamocles();
+    await receive({ type: 'epoch', generation: 2 });
+    await receive({ type: 'epoch', generation: 2 });
+    await receive(statusMessage({ route: 'operator', label: 'operator', projects: ['alpha'] }));
+    await receive({
+      type: 'spoken',
+      entry: transcriptEntry({ role: 'agent', text: 'Call ended. You are back with the operator.', id: 'hangup-1', voiced: true }),
+    });
+    expect(lineError(), 'the device is still refused').toMatch(/^LINE \/ ERROR.*https/);
   });
 });

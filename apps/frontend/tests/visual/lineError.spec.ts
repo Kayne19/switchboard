@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
-import { transcriptEntry } from '../fixtures/serverMessages';
+import { statusMessage, transcriptEntry } from '../fixtures/serverMessages';
 import { fixtures } from '../../src/fixtures/scenes';
 import { FRAME_GEOMETRIES } from './helpers';
 
@@ -9,7 +9,8 @@ import { FRAME_GEOMETRIES } from './helpers';
 // see it (tests/unit/lineError.test.tsx covers what is drawn): it stands
 // on the stage, clear of everything else the page draws, a long one
 // scrolling in its own box, and MODE keeps its tap. The system view shows
-// it as its STATUS row instead.
+// it as its STATUS row instead. An error about a leg leaves with that leg,
+// on the real page in both engines.
 
 // A status line the runtime says (PlaybackStatus.overLimit), long enough to
 // wrap on a phone's stage; and a server error past the error's height cap,
@@ -136,3 +137,68 @@ for (const size of SIZES) for (const error of ERRORS) {
     }
   });
 }
+
+const TURN_FAILED = 'The call worker failed on that turn: the operator stopped answering.';
+
+function hangUpFromAProjectLeg(server: DisplayFixtureServer) {
+  server.setGeneration(server.generation + 1);
+  server.broadcast({ type: 'epoch', generation: server.generation });
+  server.broadcast(statusMessage({ route: 'operator', label: 'Operator' }));
+  server.broadcast({
+    type: 'spoken',
+    entry: transcriptEntry({ role: 'agent', text: 'Call ended. You are back with the operator.', id: 'hangup-1', voiced: true }),
+  });
+}
+
+function backWithTheOperator(server: DisplayFixtureServer) {
+  server.broadcast({ type: 'epoch', generation: server.generation });
+  server.broadcast(statusMessage({ route: 'operator', label: 'Operator' }));
+  server.broadcast({
+    type: 'spoken',
+    entry: transcriptEntry({ role: 'agent', text: 'You are back with the operator.', id: 'return-1', voiced: true }),
+  });
+}
+
+test('a turn error leaves with the call it failed on', async ({ page }) => {
+  const server = new DisplayFixtureServer({ initialGeneration: 2 });
+  try {
+    const { wsUrl } = await server.start();
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => server.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    server.broadcast(statusMessage({ route: 'switchboard', label: 'switchboard' }));
+    server.broadcast({ type: 'display', action: table });
+    await expect(page.locator('[data-scene="table"]')).toHaveCount(1);
+    server.broadcast({ type: 'error', message: TURN_FAILED });
+    await expect(page.getByText(TURN_FAILED), 'up while the call lasts').toBeVisible();
+
+    hangUpFromAProjectLeg(server);
+    await expect(page.locator('[data-scene="conversation"]'), 'the hangup line opens the conversation').toHaveCount(1);
+    await expect(page.locator('.channel-stack__error'), 'gone with the call').toHaveCount(0);
+
+    server.broadcast({ type: 'display', action: { ...table, id: 'next' } });
+    await expect(page.locator('[data-scene="table"]')).toHaveCount(1);
+    await expect(page.locator('.channel-stack__error'), "not on the next call's first visual").toHaveCount(0);
+  } finally {
+    await server.stop();
+  }
+});
+
+test("a project leg's turn error leaves when the caller is back with the operator", async ({ page }) => {
+  const server = new DisplayFixtureServer({ initialGeneration: 2 });
+  try {
+    const { wsUrl } = await server.start();
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}`);
+    await expect.poll(() => server.frames.some((frame) => frame.type === 'hello')).toBe(true);
+    server.broadcast(statusMessage({ route: 'switchboard', label: 'switchboard' }));
+    server.broadcast({ type: 'display', action: table });
+    await expect(page.locator('[data-scene="table"]')).toHaveCount(1);
+    server.broadcast({ type: 'error', message: TURN_FAILED });
+    await expect(page.getByText(TURN_FAILED), 'up while the leg lasts').toBeVisible();
+
+    backWithTheOperator(server);
+    await expect(page.locator('[data-scene="conversation"]'), "the operator's conversation").toHaveCount(1);
+    await expect(page.locator('.channel-stack__error'), 'gone with the leg').toHaveCount(0);
+  } finally {
+    await server.stop();
+  }
+});
