@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { FRAME_GEOMETRIES, frameCrossings, openScene, runActions } from './helpers';
+import { CURRENT_SCENE, FRAME_GEOMETRIES, frameCrossings, openScene, runActions } from './helpers';
 
 // Every primitive in the frame it is drawn in, at every geometry the visual
 // suites use: as the primary, in focus, and beside another primary in the
@@ -57,7 +57,7 @@ const aside = {
 async function open(page: Page, item: Case): Promise<string> {
   await openScene(page, item.scene ?? 'idle');
   if (item.show) await runActions(page, [{ op: 'clear' }, { op: 'show', id: 'shown', type: item.show.type, role: 'primary', data: item.show.data }]);
-  await expect(page.locator(`.scene [data-testid="${item.testId}"]`).first()).toBeVisible();
+  await expect(page.locator(`${CURRENT_SCENE} [data-testid="${item.testId}"]`).first()).toBeVisible();
   // Let it be measured and laid out on it.
   await page.waitForTimeout(500);
   return page.evaluate((type) => Object.values(window.SwitchboardController!.state().agentObjects).find((object) => object.type === type)!.id, item.type);
@@ -71,7 +71,7 @@ for (const geometry of FRAME_GEOMETRIES) {
       test(`${item.name}: nothing it draws crosses its frame, as the primary, in focus, or beside another primary`, async ({ page }) => {
         const selector = `[data-testid="${item.testId}"]`;
         const id = await open(page, item);
-        const hits = await page.evaluate(frameCrossings, `.scene ${selector}`);
+        const hits = await page.evaluate(frameCrossings, `${CURRENT_SCENE} ${selector}`);
         await runActions(page, [{ op: 'focus', id }]);
         await expect(page.locator(`.focus-layer ${selector}`)).toBeVisible();
         // Past the focus layer's layout transition (0.46 s), and the measure after it.
@@ -84,9 +84,9 @@ for (const geometry of FRAME_GEOMETRIES) {
           return sent.nodes && !sent.mode ? { ...sent, mode: 'graph' } : sent;
         }, id);
         await runActions(page, [{ op: 'clear' }, { op: 'show', id, type: item.type, role: 'secondary', data }, item.type === 'code' ? aside.code : aside.other]);
-        await expect(page.locator(`.composed-aux-object ${selector}`)).toBeVisible();
+        await expect(page.locator(`${CURRENT_SCENE} .composed-aux-object ${selector}`)).toBeVisible();
         await page.waitForTimeout(500);
-        hits.push(...(await page.evaluate(frameCrossings, `.composed-aux-object ${selector}`)));
+        hits.push(...(await page.evaluate(frameCrossings, `${CURRENT_SCENE} .composed-aux-object ${selector}`)));
         expect(hits).toEqual([]);
       });
     }
@@ -112,16 +112,16 @@ for (const geometry of FRAME_GEOMETRIES) {
         const item = cases.find((each) => each.name === name)!;
         const selector = `[data-testid="${item.testId}"]`;
         const id = await open(page, item);
-        expect(await clearance(`.scene ${selector}`), `${name} as the primary`).toEqual({ top: true, bottom: true });
+        expect(await clearance(`${CURRENT_SCENE} ${selector}`), `${name} as the primary`).toEqual({ top: true, bottom: true });
         await runActions(page, [{ op: 'focus', id }]);
         await expect(page.locator(`.focus-layer ${selector}`)).toBeVisible();
         await page.waitForTimeout(700);
         expect(await clearance(`.focus-layer ${selector}`), `${name} in focus`).toEqual({ top: true, bottom: true });
         const data = await page.evaluate((key) => window.SwitchboardController!.state().agentObjects[key].data, id);
         await runActions(page, [{ op: 'clear' }, { op: 'show', id, type: item.type, role: 'secondary', data }, item.type === 'code' ? aside.code : aside.other]);
-        await expect(page.locator(`.composed-aux-object ${selector}`)).toBeVisible();
+        await expect(page.locator(`${CURRENT_SCENE} .composed-aux-object ${selector}`)).toBeVisible();
         await page.waitForTimeout(500);
-        expect(await clearance(`.composed-aux-object ${selector}`), `${name} beside another primary`).toEqual({ top: true, bottom: true });
+        expect(await clearance(`${CURRENT_SCENE} .composed-aux-object ${selector}`), `${name} beside another primary`).toEqual({ top: true, bottom: true });
       }
     });
 
@@ -139,7 +139,7 @@ for (const geometry of FRAME_GEOMETRIES) {
         await page.waitForTimeout(300);
         return page.evaluate(frameCrossings, `${where} [data-testid="code"]`);
       };
-      const hits = await scrolledHits('.scene');
+      const hits = await scrolledHits(CURRENT_SCENE);
       await runActions(page, [{ op: 'focus', id }]);
       await expect(page.locator('.focus-layer [data-testid="code"]')).toBeVisible();
       await page.waitForTimeout(700);
@@ -159,10 +159,10 @@ for (const geometry of FRAME_GEOMETRIES) {
     for (const title of ['P'.repeat(128), 'WORD '.repeat(25).trim()]) {
       await runActions(page, [{ op: 'clear' }, { op: 'show', id: 'grid', type: 'table', role: 'primary', data: { title, subtitle: title, columns: [{ label: 'A' }], rows: [['x']] } }]);
       await page.waitForTimeout(300);
-      const boxes = await page.evaluate(() => {
-        const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-        const title = document.querySelector<HTMLElement>('.scene-heading__title')!;
-        return { title: box('.scene-heading__title'), sub: box('.scene-heading__sub'), stage: box('.stage'), grid: box('.content-grid'), clipped: title.scrollWidth > title.clientWidth };
+      const boxes = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+        const box = (selector: string) => scene.querySelector(selector)!.getBoundingClientRect();
+        const title = scene.querySelector<HTMLElement>('.scene-heading__title')!;
+        return { title: box('.scene-heading__title'), sub: box('.scene-heading__sub'), stage: document.querySelector('.stage')!.getBoundingClientRect(), grid: box('.content-grid'), clipped: title.scrollWidth > title.clientWidth };
       });
       expect(boxes.title.right, title).toBeLessThanOrEqual(boxes.stage.right);
       expect(boxes.sub.right, title).toBeLessThanOrEqual(boxes.stage.right);

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { ControllerAction } from '../../src/controller/types';
-import { FRAME_GEOMETRIES, openScene, runActions } from './helpers';
+import { CURRENT_SCENE, FRAME_GEOMETRIES, openScene, runActions } from './helpers';
 
 // Every note on stage is shown (pr/issues.md, "The rail shows one note"):
 // the rail carries them all after the one about the primary, each whole,
@@ -21,15 +21,15 @@ for (const size of FRAME_GEOMETRIES) {
     await runActions(page, [table, ...notes]);
     await expect(page.locator('.content-rail .annotation-card')).toHaveCount(notes.length);
     await page.waitForTimeout(700);
-    const seen = await page.evaluate(() => {
-      const column = document.querySelector<HTMLElement>('.content-rail__details')!;
+    const seen = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+      const column = scene.querySelector<HTMLElement>('.content-rail__details')!;
       const cards = [...column.querySelectorAll<HTMLElement>('.rail-note .annotation-card')];
       return {
         tags: cards.map((card) => card.querySelector('.annotation-card__tag')?.textContent),
         // Each card reads whole: its text does not scroll inside it.
         cut: cards.filter((card) => card.scrollHeight > card.clientHeight + 1).length,
         // Nothing is drawn over an edge the column continues past (#177).
-        rims: document.querySelectorAll('.content-rail [class*="scroll-rim"]').length,
+        rims: scene.querySelectorAll('.content-rail [class*="scroll-rim"]').length,
       };
     });
     expect(seen.tags).toEqual(['ABOUT-GRID', 'GENERAL', 'LATER', 'LAST']);
@@ -66,7 +66,8 @@ test('a second note about a diagram whose first is a callout carries no badge', 
 // A note the drawing carries as a callout is never mounted in the rail: the
 // rail once drew it until the diagram's passive effect said it placed the
 // callout, and the card then ran its exit, unseen, for some 300 ms (#390).
-// Each frame is sampled where it is drawn, from before the actions on.
+// Each frame is sampled where it is drawn, from before the actions on, in
+// every scene on the stage, the leaving one too.
 test('a note the drawing carries is in no rail card in any frame', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openScene(page, 'idle');
