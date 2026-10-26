@@ -193,19 +193,23 @@ Error codes:
 | `not_found` | The session is not tracked by this host agent. |
 | `refused` | Not allowed (kill of a session the service did not create, `open_session` of a non-`sb-` session, `set_mode` off a call). |
 | `unsupported` | The daemon does not support the command (per-command compatibility); other commands keep working. |
-| `daemon_error` | The daemon ran the command and it failed; `message` has the daemon's text. |
+| `daemon_error` | Nothing changed on the daemon: it ran the command and it failed (`message` has the daemon's text), or the host agent had no daemon connection and did not send it. |
+| `daemon_unreachable` | The host agent cannot say what the command left the daemon in: it sent the command and got no answer (the connection closed, or the request timed out), so the daemon may have run it; or the daemon applied the change and the request after it failed (the read-back of a `set_model` or `set_thinking`, or the attach of a `create_session` or `open_session`). |
 | `failed` | Anything else. |
 
 A refusal of one command (`refused`, `unsupported`, `daemon_error`,
-`bad_request`, `unknown_command`) fails that command alone: the session
-stays usable, and other commands keep working (#423). A refused caller
-prompt keeps the caller on the leg (they hear that it could not take that,
-with the host's words on screen); a refused background prompt keeps the
-resident, published idle; a refused model change keeps the leg as it was,
-and a level refused after the model changed keeps the new model. The service stops
-using a session after any other failed command to it (`stale_epoch`,
-`not_found`, `failed`, a failure on its own side: `not_connected`,
-`link_lost`, `unreadable_reply`, or no reply within its 30 s wait), but it
+`bad_request`, `unknown_command`) changed nothing, except an `open_session`
+refused by its name check after the daemon had already reopened the session.
+A refusal fails that command alone: the session stays usable, and other commands keep working (#423).
+`daemon_error` includes a command the host agent could not send to its
+daemon. A refused caller prompt keeps the caller on the leg (they hear that
+it could not take that, with the host's words on screen); a refused
+background prompt keeps the resident, published idle; a refused model change
+keeps the leg as it was, and a level refused after the model changed keeps
+the new model. The service stops using a session after any other failed
+command to it (`stale_epoch`, `not_found`, `daemon_unreachable`, `failed`, a
+failure on its own side: `not_connected`, `link_lost`, `unreadable_reply`,
+or no reply within its 30 s wait), but it
 still releases the session: it sends `kill` for one it created and `abort`
 then `detach` for one it took over. Only a `session_closed` event tells it the session is
 already gone; then it sends no `kill`, and still sends `abort` then
@@ -483,10 +487,13 @@ is its table and `ProjectInner::end` its only writer.
 
 A refused command is one the host answered `refused`, `unsupported`,
 `daemon_error`, `bad_request` or `unknown_command`
-(`CommandError::is_refusal`); only that command failed. A failed command
-is any other error code above, or no reply within the 30 s wait. A session
-that is no longer open refuses every command itself, so neither reaches
-the host. `session_closed` includes the service's own `host_link_closed`.
+(`CommandError::is_refusal`), including one the host agent could not send
+to its daemon; only that command failed, and nothing changed (except an
+`open_session` refused by its name check after the daemon reopened the
+session). A failed
+command is any other error code above, or no reply within the 30 s wait. A
+session that is no longer open refuses every command itself, so neither
+reaches the host. `session_closed` includes the service's own `host_link_closed`.
 "The application is told" is the session-closed callback, which evicts a
 background resident at once; the owner's close is not reported back to
 it. Entering released sends the release: `kill` for a session the service

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { DaemonCommandError } from "../src/daemon_port.ts";
+import { DaemonCommandError, DaemonUnreachableError } from "../src/daemon_port.ts";
 import { HostLink } from "../src/link.ts";
 import { clipDetail, type LinkEvent, type SentInput, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
 import { SkillSocket } from "../src/skill_socket.ts";
@@ -676,7 +676,7 @@ test("resync: a session the daemon still lists but will not attach stays tracked
 	const attach = daemon.attach.bind(daemon);
 	let refuse = true;
 	daemon.attach = async (handle: string) => {
-		if (handle === a && refuse) throw new DaemonCommandError("attach", "timed out after 60000ms");
+		if (handle === a && refuse) throw new DaemonUnreachableError("attach", "timed out after 60000ms");
 		return attach(handle);
 	};
 	const first = await manager.resync();
@@ -714,7 +714,7 @@ test("resync: a session detached while its reattach is in flight stays detached"
 			if (handle === a) {
 				attaching();
 				await gate;
-				if (outcome === "fails") throw new DaemonCommandError("attach", "timed out after 60000ms");
+				if (outcome === "fails") throw new DaemonUnreachableError("attach", "timed out after 60000ms");
 			}
 			return attach(handle);
 		};
