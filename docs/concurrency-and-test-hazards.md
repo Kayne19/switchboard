@@ -600,6 +600,31 @@ The rule: a backend test captures logs with `capture_logs`, never with a
 subscriber of its own. `scripts/check_hygiene.mjs` refuses `set_default`,
 `with_default` and `.with_subscriber(` in `apps/backend`.
 
+## A test that runs the machine's pi
+
+The operator and the routing utility are local processes started from
+`SWITCHBOARD_PI_BINARY`, whose default is `pi`, looked up on the PATH.
+`Config::for_tests` used to take that default too, so a test that reached
+the operator without naming a fake ran whatever `pi` the PATH held: the real
+one on a development box, none on CI. Such a test passed on the box and
+failed on CI, or, if it never looked at the operator's answer, passed on
+both while it prompted the real pi on the box.
+`a_caller_turn_never_goes_to_another_projects_session` was the second kind:
+the turn it drives returns the caller to the operator.
+
+`Config::for_tests` now sets the operator's runtime to a path that does not
+exist (`NO_PI` in `apps/backend/src/main.rs`) unless the test names one. The
+start fails where it fails on CI, at the spawn, on a missing file, and the
+path names `fake_operator`. A turn that reaches the operator sees it
+unavailable on both machines alike. The service's own default is still `pi`.
+
+The rule: a test that reaches the operator or the routing utility names its
+runtime, such as `fake_operator`, `fake_routing_process`, or a script of its
+own written through `write_executable_script`.
+`a_test_that_reaches_the_operator_without_its_fake_runs_no_pi_on_the_path` in
+`apps/backend/tests/test_operator.rs` puts a `pi` on the PATH the operator is
+given, names no runtime, and checks that the operator does not start.
+
 ## A time budget measured on the wall clock
 
 Some unit tests hold work to a time budget: a layout that went quadratic, a

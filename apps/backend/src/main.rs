@@ -200,15 +200,23 @@ impl Config {
 }
 
 #[cfg(test)]
+const NO_PI: &str = "/nonexistent/pi-tests-use-fake_operator";
+
+#[cfg(test)]
 impl Config {
     /// A configuration parsed from `values` alone, the way the service parses
-    /// its env file: tests name only the settings they depend on.
+    /// its env file: tests name only the settings they depend on. The one
+    /// difference is the operator's runtime, `NO_PI` unless a test names one.
     pub(crate) fn for_tests(values: &[(&str, &str)]) -> Self {
         let values = values
             .iter()
             .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
             .collect();
-        Self::from_values(&values, PathBuf::from("/nonexistent/switchboard.env"))
+        let mut config = Self::from_values(&values, PathBuf::from("/nonexistent/switchboard.env"));
+        if setting(&values, "SWITCHBOARD_PI_BINARY").is_none() {
+            config.pi_binary = NO_PI.to_owned();
+        }
+        config
     }
 }
 
