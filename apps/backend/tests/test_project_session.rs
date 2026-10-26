@@ -1177,7 +1177,9 @@ enum TurnHappens {
     /// `auto-1` as a `follow_up`: its reply names the run.
     PromptIntoRun,
     /// A caller's prompt goes out, the held run `auto-1` ends before the
-    /// host's reply is read, and the reply names the run (`follow_up`).
+    /// host's reply is read, and the reply names the run (`follow_up`). The
+    /// prompt skips that end, sent before its reply, so an idle snapshot
+    /// ends it before the row is read: `returned «»` is that snapshot.
     PromptIntoEndedRun,
     /// The caller's prompt is cancelled.
     PromptCancelled,
@@ -1395,11 +1397,19 @@ impl TurnRig {
     /// task reads the reply.
     async fn prompt_into_after(&mut self, message: &'static str, event: Value, reply: Value) {
         let session = self.session.clone();
-        self.prompting = Some(tokio::spawn(async move { session.prompt(message).await }));
+        let prompting = tokio::spawn(async move { session.prompt(message).await });
         let command = Self::command(&mut self.link, "prompt").await;
         self.event(event);
         self.settle().await;
         Self::reply(&self.link, &command, reply);
+        self.snapshot(json!({"session": "s1", "busy": false, "turn_open": false}));
+        within("the prompt's task steps the reply and returns", async {
+            while !prompting.is_finished() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        self.prompting = Some(prompting);
     }
 
     async fn reach(&mut self, at: TurnAt) {
@@ -1624,7 +1634,7 @@ SelfWoken          | SnapshotOpen            | end autonomous auto-1 «run words
 SelfWoken          | SessionCloses           | end autonomous auto-1                                         | -    | gone       | -                                     | auto-1: run words
 SelfWoken          | PromptStarts            | start input t-in                                              | busy | autonomous | running «»                            | -
 SelfWoken          | PromptIntoRun           | start input auto-1                                            | busy | autonomous | running «»                            | -
-SelfWoken          | PromptIntoEndedRun      | end autonomous auto-1 «run words»                             | -    | -          | running «»                            | auto-1: run words
+SelfWoken          | PromptIntoEndedRun      | end autonomous auto-1 «run words»                             | -    | -          | returned «»                           | auto-1: run words
 
 # Both: the run swallows the caller's frames too, and a second start replaces it the same way.
 CallerAndSelfWoken | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words

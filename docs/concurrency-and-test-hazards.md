@@ -506,17 +506,21 @@ at a time; a second caller of `begin_prompt` would have to keep that true.
 `a_caller_prompt_sent_into_a_self_woken_run_can_answer` in
 `apps/backend/tests/test_turns.rs` drives the caller's case, and checks
 that the run's end settled the operation.
-`a_reply_read_after_its_run_ended_binds_nothing` there puts the pump ahead
-of the prompt's task (a word of the run sent ahead of the reply wakes it
-first; `#[tokio::test]` runs on the current-thread scheduler, which polls
-tasks in the order they were woken) and checks that the ended run has no
-authority. It also asserts the order it arranged (the end settled nothing,
-so the operation is still open when the prompt returns), so a scheduler
-that read the reply first would fail it rather than let it pass without
-checking anything. The session-turn table's `PromptIntoEndedRun` row
-(`apps/backend/tests/test_project_session.rs`) pins the unreported start
-without depending on scheduling: the rig sends the run's end before the
-host's reply, waits for the pump to read it, then replies.
+`a_reply_read_after_its_run_ended_binds_nothing` there has the service
+step the run's end before the reply, and checks that the ended run has no
+authority. Like the clip tests in "A clip on the wire when the leg is
+adopted", which order their steps with a gated sidecar or a held session
+guard, it decides that order with something it owns, not with the
+scheduler: it sends the end, then a module call, and replies only once the
+pump has answered that call. The pump reads the session's frames in order,
+so by then it has taken the end. A host sends a `follow_up`'s reply ahead
+of the run's end; here the end goes first. The prompt skips the frames sent
+before its reply, so an idle snapshot ends it instead, and its return shows
+that its task has stepped the reply.
+The session-turn table's `PromptIntoEndedRun` row
+(`apps/backend/tests/test_project_session.rs`) pins the unreported start the
+same way: the rig sends the run's end before the host's reply, waits for
+the pump to read it, replies, and ends the prompt with an idle snapshot.
 `a_busy_desk_takeover_prompt_can_answer` and
 `a_busy_resumed_session_prompt_can_answer` drive the two bring-ups and
 accept whichever order the reply and the adoption land in; the fake replies

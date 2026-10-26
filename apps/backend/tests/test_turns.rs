@@ -1782,7 +1782,11 @@ async fn a_caller_prompt_sent_into_a_self_woken_run_can_answer() {
 /// can take the run's end first. That end settles nothing (the operation is
 /// not bound yet), and the late reply names a turn that is over: it must
 /// bind nothing, or the ended run would speak with the caller's authority
-/// until the prompt returned. The run's words are still the caller's answer.
+/// until the prompt returned.
+///
+/// Pins the service stepping a run's end before the reply. A host replies
+/// to a `follow_up` first, so this test sends the end ahead of it; the
+/// prompt skips frames sent before its reply, so an idle snapshot ends it.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_reply_read_after_its_run_ended_binds_nothing() {
@@ -1793,27 +1797,42 @@ async fn a_reply_read_after_its_run_ended_binds_nothing() {
         caller,
         prompt,
         command,
+        host,
     } = prompt_into_woken_run(&root, None).await;
     let epoch = state.0.hosts.link_epoch("scriptorium").unwrap();
-    alpha_host_event(
-        &state,
-        json!({"kind":"text","text":"still working","turn_id":"auto-1"}),
+    alpha_host_event(&state, json!({"kind":"turn_end","turn_id":"auto-1"}));
+    state.0.hosts.send_fake(
+        "scriptorium",
+        json!({"type":"module_call","id":"probe-1","session":"s1","token":token,"call":"view","args":{}}),
     );
+    within("the pump has read the run's end", async {
+        while !host
+            .module_replies()
+            .iter()
+            .any(|reply| reply["id"] == "probe-1")
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
     state.0.hosts.send_fake(
         "scriptorium",
         json!({"type":"reply","id":command["id"],"epoch":epoch,"ok":true,
                "result":{"sent_as":"follow_up","turn_id":"auto-1"}}),
     );
-    alpha_host_event(
-        &state,
-        json!({"kind":"text","text":"On main.","turn_id":"auto-1"}),
+    state.0.hosts.send_fake(
+        "scriptorium",
+        json!({"type":"snapshot","session":"s1","cursor":"external",
+               "info":{"turn_open":false,"busy":false,"last_text":"On main."}}),
     );
-    alpha_host_event(&state, json!({"kind":"turn_end","turn_id":"auto-1"}));
     let answered = within("the prompt returns", prompt)
         .await
         .expect("the prompt task")
         .expect("the prompt");
-    assert_eq!(answered.text, "On main.", "the run is the caller's answer");
+    assert_eq!(
+        answered.text, "On main.",
+        "the idle snapshot's last words are the caller's answer"
+    );
     let shown = module_call(
         &state,
         AgentCall {
@@ -1831,10 +1850,7 @@ async fn a_reply_read_after_its_run_ended_binds_nothing() {
     );
     assert!(
         state.0.coordinator.finish_operation(&caller),
-        "the word of the run sent ahead of the reply woke the pump first, so it read \
-         the run's end before the prompt's task read the reply: that end settled \
-         nothing, and the operation is still open; closed here, the reply was read \
-         first and this test checked nothing the ordinary case does not"
+        "the run's end settled nothing, so the operation is still open"
     );
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
@@ -1852,6 +1868,7 @@ struct PromptIntoWokenRun {
     prompt: tokio::task::JoinHandle<Result<Turn, PiSessionError>>,
     /// The `prompt` command as the host saw it.
     command: Value,
+    host: crate::hosts::FakeLog,
 }
 
 /// `reply` is what the host answers the prompt with; `None` leaves the
@@ -1924,6 +1941,7 @@ async fn prompt_into_woken_run(root: &std::path::Path, reply: Option<Value>) -> 
         caller,
         prompt,
         command,
+        host,
     }
 }
 
