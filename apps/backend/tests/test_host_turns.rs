@@ -386,7 +386,8 @@ async fn the_end_of_a_rescued_run_settles_the_caller_turn_bound_to_it() {
 // session closed under it), `StaleCallerStart` (`input`, `turn-c`, another
 // token), `BoundRunEnd` (`autonomous` ended, `turn-c`: the end of a run a
 // caller's prompt was sent into as a `follow_up`, so the caller's
-// operation is bound to it), `ReplacingStart` (`autonomous`, `auto-2`,
+// operation is bound to it), `BoundCutShortRunEnd` (the same, its session
+// closed under it), `ReplacingStart` (`autonomous`, `auto-2`,
 // replacing `turn-c`: the host opened a second run without ending
 // `turn-c`, so the session reports `turn-c`'s end with the start).
 
@@ -417,6 +418,7 @@ enum HostReport {
     ReconnectRunEnd,
     CutShortRunEnd,
     BoundRunEnd,
+    BoundCutShortRunEnd,
     ReplacingStart,
 }
 
@@ -491,6 +493,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (Idle, ReconnectRunEnd, none.clone()),
         (Idle, CutShortRunEnd, none.clone()),
         (Idle, BoundRunEnd, none.clone()),
+        (Idle, BoundCutShortRunEnd, none.clone()),
         (
             Idle,
             ReplacingStart,
@@ -510,6 +513,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (Caller, ReconnectRunEnd, caller.clone()),
         (Caller, CutShortRunEnd, caller.clone()),
         (Caller, BoundRunEnd, caller.clone()),
+        (Caller, BoundCutShortRunEnd, caller.clone()),
         (Caller, ReplacingStart, caller.clone()),
         (CallerBound, CallerStart, bound.clone()),
         (CallerBound, CallerEnd, none.clone()),
@@ -525,6 +529,10 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (CallerBound, ReconnectRunEnd, bound.clone()),
         (CallerBound, CutShortRunEnd, bound.clone()),
         (CallerBound, BoundRunEnd, none.clone()),
+        // The leg is still on the line: its retirement, not this end, ends
+        // what the closed session left, and the caller's operation closes
+        // when its prompt returns on the close.
+        (CallerBound, BoundCutShortRunEnd, bound.clone()),
         (
             CallerBound,
             ReplacingStart,
@@ -558,6 +566,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         // the leg's retirement, which ends it under the PBX lock (#270).
         (SelfWoken, CutShortRunEnd, held.clone()),
         (SelfWoken, BoundRunEnd, held.clone()),
+        (SelfWoken, BoundCutShortRunEnd, held.clone()),
         (SelfWoken, ReplacingStart, held.clone()),
         (SelfWokenElsewhere, CallerStart, held.clone()),
         (SelfWokenElsewhere, CallerEnd, held.clone()),
@@ -573,6 +582,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (SelfWokenElsewhere, ReconnectRunEnd, held.clone()),
         (SelfWokenElsewhere, CutShortRunEnd, held.clone()),
         (SelfWokenElsewhere, BoundRunEnd, held.clone()),
+        (SelfWokenElsewhere, BoundCutShortRunEnd, held.clone()),
         (SelfWokenElsewhere, ReplacingStart, held.clone()),
         (SelfWokenRescued, CallerStart, none.clone()),
         (SelfWokenRescued, CallerEnd, none.clone()),
@@ -588,6 +598,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         (SelfWokenRescued, ReconnectRunEnd, none.clone()),
         (SelfWokenRescued, CutShortRunEnd, none.clone()),
         (SelfWokenRescued, BoundRunEnd, none.clone()),
+        (SelfWokenRescued, BoundCutShortRunEnd, none.clone()),
         (SelfWokenRescued, ReplacingStart, none.clone()),
         (SelfWokenReturned, CallerStart, held.clone()),
         (SelfWokenReturned, CallerEnd, held.clone()),
@@ -616,6 +627,7 @@ async fn a_host_reported_turn_moves_by_its_table() {
         ),
         (SelfWokenReturned, OtherRunEnd, held.clone()),
         (SelfWokenReturned, BoundRunEnd, held.clone()),
+        (SelfWokenReturned, BoundCutShortRunEnd, held.clone()),
         (
             SelfWokenReturned,
             ReconnectRunEnd,
@@ -717,6 +729,10 @@ async fn host_report_row(phase: HostPhase, report: HostReport) -> HostOutcome {
         ),
         SilentRunEnd => host_report(&token, instance_id, "autonomous", Some("auto-1"), true, " "),
         BoundRunEnd => host_report(&token, instance_id, "autonomous", Some("turn-c"), true, ""),
+        BoundCutShortRunEnd => ProjectTurn {
+            cut_short: true,
+            ..host_report(&token, instance_id, "autonomous", Some("turn-c"), true, "")
+        },
         OtherRunEnd => host_report(
             &token,
             instance_id,
