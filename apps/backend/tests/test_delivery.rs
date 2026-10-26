@@ -72,22 +72,22 @@ fn audio_queue_emits_reserved_sequences_in_order_and_drops_on_clear() {
     let (mut queue, mut page) = queue_and_page();
     let first = queue.reserve(3);
     let second = queue.reserve(3);
-    queue.start(second, 3);
-    queue.append(second, 3, vec![2]);
-    queue.finish(second, 3);
+    queue.start(second, 3, 3);
+    queue.append(second, 3, vec![2], 3);
+    queue.finish(second, 3, 3);
     assert!(audio_sent(&mut page).is_empty());
-    queue.start(first, 3);
+    queue.start(first, 3, 3);
     assert_eq!(audio_sent(&mut page), ["start 0"]);
-    queue.append(first, 3, vec![1]);
+    queue.append(first, 3, vec![1], 3);
     assert_eq!(audio_sent(&mut page), ["chunk [1]"]);
-    queue.finish(first, 3);
+    queue.finish(first, 3, 3);
     assert_eq!(
         audio_sent(&mut page),
         ["done 0", "start 1", "chunk [2]", "done 1"]
     );
     let stale = queue.reserve(3);
     queue.clear();
-    queue.finish(stale, 3);
+    queue.finish(stale, 3, 3);
     assert!(audio_sent(&mut page).is_empty());
 }
 
@@ -96,11 +96,11 @@ fn audio_queue_barrier_waits_for_reserved_audio_before_it() {
     let (mut queue, mut page) = queue_and_page();
     let audio = queue.reserve(1);
     let marker = queue.reserve(1);
-    queue.barrier(marker, 1, json!({"type":"barrier"}));
+    queue.barrier(marker, 1, json!({"type":"barrier"}), 1);
     assert!(audio_sent(&mut page).is_empty());
-    queue.start(audio, 1);
+    queue.start(audio, 1, 1);
     assert_eq!(audio_sent(&mut page), ["start 0"]);
-    queue.finish(audio, 1);
+    queue.finish(audio, 1, 1);
     assert_eq!(audio_sent(&mut page), ["done 0", "barrier"]);
 }
 
@@ -110,12 +110,12 @@ fn audio_queue_cancellation_releases_following_audio() {
     let first = queue.reserve(1);
     let second = queue.reserve(1);
     // An utterance given up before any audio closes its slot the same way.
-    queue.finish(first, 1);
+    queue.finish(first, 1, 1);
     assert_eq!(audio_sent(&mut page), ["start 0", "done 0"]);
-    queue.start(second, 1);
+    queue.start(second, 1, 1);
     assert_eq!(audio_sent(&mut page), ["start 1"]);
-    queue.append(second, 1, vec![7]);
+    queue.append(second, 1, vec![7], 1);
     assert_eq!(audio_sent(&mut page), ["chunk [7]"]);
-    queue.finish(second, 1);
+    queue.finish(second, 1, 1);
     assert_eq!(audio_sent(&mut page), ["done 1"]);
 }

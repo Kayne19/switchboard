@@ -778,13 +778,19 @@ spoken for the turn's `final_response_audio_closed`, as before.
 
 A request is answered from what the pages took of its own slot, whichever
 call sent it (#424). The audio queue (`AudioQueue` in `delivery.rs`) sends a
-slot's events only once every slot before it has closed, sends them under
-its own lock, and records on the slot whether a page took any of them. So
-the start of an utterance that waited behind another one counts as heard
-when the other one's close sends it, and the hand-off rule above lets that
-utterance finish. A drain whose body ends while its slot is still held
-waits for the slot to go out before it answers (`went_out` in `speech.rs`),
-and stops waiting, superseded, if the call hands off first: the page drops
-an old leg's audio that starts after a hand-off. That wait wakes on the
-line's `operation_changed` notification, made before it reads the
-generation, as `admit_turn` makes its own.
+slot's events only once every slot before it has closed, sends them while
+its caller holds the queue's lock, and records on the slot whether a page
+took any of them while the line was still at the slot's generation
+(`SlotReceipt`). The page drops an old leg's audio that starts after a
+hand-off, so what goes out after the line has moved on does not count. The
+start of an utterance that waited behind another one therefore counts as
+heard when the other one's close sends it before a hand-off, and the
+hand-off rule above lets that utterance finish; sent after the hand-off, it
+is not said. A drain whose body ends while its slot is still held waits for
+the slot to go out before it answers (`went_out` in `speech.rs`), and stops
+waiting, superseded, if the call hands off first. It waits at most until
+the request's deadline, then answers from what has gone out, so a slot left
+open ahead of it cannot hold the requesters behind it. A body the deadline
+cuts while its slot is still held is therefore a failure, as before. The
+wait wakes on the line's `operation_changed` notification, made before it
+reads the generation, as `admit_turn` makes its own.

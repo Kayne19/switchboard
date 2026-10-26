@@ -8,11 +8,12 @@ use crate::app_state::{
 };
 use crate::audio::TtsContinuity;
 use crate::debug::DebugEvent;
+use crate::delivery::SlotReceipt;
 use crate::history::AGENT;
 use crate::protocol::ServerMessage;
 use futures_util::StreamExt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::Instrument;
 
 /// The call-scoped continuity context for the next ElevenLabs request.
@@ -375,23 +376,11 @@ async fn reserve_audio(state: &AppState, generation: u64) -> Option<u64> {
     Some(audio.reserve(generation))
 }
 
-async fn start_audio(state: &AppState, sequence: u64, generation: u64) -> watch::Receiver<bool> {
-    state.0.audio.lock().await.start(sequence, generation)
-}
-
-async fn append_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) {
-    state
-        .0
-        .audio
-        .lock()
-        .await
-        .append(sequence, generation, bytes);
-}
-
 /// Closes an utterance's audio slot, which lets the slots behind it go out.
 /// One a rescue cleared is gone, and closing it sends nothing.
 pub(crate) async fn finish_audio(state: &AppState, sequence: u64, generation: u64) {
-    state.0.audio.lock().await.finish(sequence, generation);
+    let mut audio = state.0.audio.lock().await;
+    audio.finish(sequence, generation, state.0.coordinator.generation());
 }
 
 fn continuity_for_request(
@@ -461,8 +450,9 @@ impl Utterance {
 enum Stopped {
     /// The rescue aborted its admission or its drain.
     Cancelled,
-    /// Its generation was left before it was admitted, or while it drained
-    /// before any of its audio reached the page (#437).
+    /// Its generation was left before it was admitted, or before any of its
+    /// audio reached the page under that generation: while it drained, or
+    /// while its slot waited behind another (#437).
     Superseded,
 }
 
@@ -490,7 +480,7 @@ enum SpeechOutcome {
     Spoken { bytes: usize, played: Played },
     /// The whole body drained, but no browser took its audio.
     NotDelivered { bytes: usize },
-    /// A rescue stopped it.
+    /// A rescue or a hand-off stopped it.
     Stopped(Stopped),
     /// The provider or the speech task failed.
     Failed(crate::audio::AudioError),
@@ -614,18 +604,23 @@ async fn admit_speech(
     admitted
 }
 
-/// Streams an admitted utterance's body into its audio slot. A body drained
-/// to its end closes the slot and commits continuity. Any other end gives the
-/// slot back before it returns: the slots behind it emit only once it is
-/// closed.
+/// Streams an admitted utterance's body into its audio slot, and answers
+/// from what the pages took of that slot once it has left the queue
+/// (`went_out`). A body drained to its end closes the slot and commits
+/// continuity. Any other end gives the slot back first: the slots behind it
+/// emit only once it is closed.
 async fn drain_speech_stream(
     state: AppState,
     mut stream: crate::audio::TtsChunkStream,
     utterance: Utterance,
+    deadline: std::time::Instant,
 ) -> SpeechOutcome {
     let (generation, sequence) = (utterance.generation, utterance.sequence);
     let request_id = stream.metadata().request_id.clone();
-    let heard = start_audio(&state, sequence, generation).await;
+    let receipt = {
+        let mut audio = state.0.audio.lock().await;
+        audio.start(sequence, generation, state.0.coordinator.generation())
+    };
     let mut bytes = 0usize;
     while let Some(chunk) = stream.next().await {
         // The call has moved on without a rescue: a hand-off (a transfer's
@@ -635,7 +630,7 @@ async fn drain_speech_stream(
         // nothing new from the old leg starts after the hand-off (#437). A
         // rescue or a shutdown aborts the drain instead. The stream's own
         // deadline (`TtsChunkStream`) bounds how long the new leg waits.
-        if generation != state.0.coordinator.generation() && !*heard.borrow() {
+        if left_unheard(&state, generation, &receipt) {
             utterance.abandon(&state).await;
             return SpeechOutcome::Stopped(Stopped::Superseded);
         }
@@ -643,7 +638,7 @@ async fn drain_speech_stream(
             Ok(chunk) => chunk,
             Err(crate::audio::AudioError::Deadline) if bytes > 0 => {
                 utterance.abandon(&state).await;
-                return match went_out(&state, generation, heard).await {
+                return match went_out(&state, generation, receipt, deadline).await {
                     WentOut::Heard => SpeechOutcome::Spoken {
                         bytes,
                         played: Played::CutShort,
@@ -659,7 +654,9 @@ async fn drain_speech_stream(
         };
         bytes = bytes.saturating_add(chunk.len());
         for part in chunk.chunks(32 * 1024) {
-            append_audio(&state, sequence, generation, part.to_vec()).await;
+            let mut audio = state.0.audio.lock().await;
+            let line = state.0.coordinator.generation();
+            audio.append(sequence, generation, part.to_vec(), line);
         }
     }
     finish_audio(&state, sequence, generation).await;
@@ -673,7 +670,7 @@ async fn drain_speech_stream(
         request_id,
         utterance.text,
     );
-    match went_out(&state, generation, heard).await {
+    match went_out(&state, generation, receipt, deadline).await {
         WentOut::Heard => SpeechOutcome::Spoken {
             bytes,
             played: Played::Whole,
@@ -689,23 +686,43 @@ enum WentOut {
     HandedOffUnheard,
 }
 
-async fn went_out(state: &AppState, generation: u64, mut heard: watch::Receiver<bool>) -> WentOut {
+/// The call has handed off, and none of this utterance reached a page under
+/// its own leg, so it is not said (#437).
+fn left_unheard(state: &AppState, generation: u64, receipt: &SlotReceipt) -> bool {
+    generation != state.0.coordinator.generation() && !receipt.taken()
+}
+
+/// Waits for a closed slot to leave the queue behind the slots ahead of it,
+/// at most until the request's deadline: a slot left open ahead of it would
+/// otherwise hold every requester behind it.
+async fn went_out(
+    state: &AppState,
+    generation: u64,
+    mut receipt: SlotReceipt,
+    deadline: std::time::Instant,
+) -> WentOut {
     let line_moved = state.0.coordinator.operation_changed();
+    let expired = tokio::time::sleep_until(deadline.into());
+    tokio::pin!(expired);
     loop {
         // Made before the generation is read: a hand-off wakes it with
         // `notify_waiters`, which wakes only the waiters made before it.
         let handed_off = line_moved.notified();
         tokio::pin!(handed_off);
-        if generation != state.0.coordinator.generation() && !*heard.borrow() {
+        if left_unheard(state, generation, &receipt) {
             return WentOut::HandedOffUnheard;
         }
+        if receipt.gone() || expired.is_elapsed() {
+            return if receipt.taken() {
+                WentOut::Heard
+            } else {
+                WentOut::Unheard
+            };
+        }
         tokio::select! {
-            changed = heard.changed() => {
-                if changed.is_err() {
-                    return if *heard.borrow() { WentOut::Heard } else { WentOut::Unheard };
-                }
-            }
+            () = receipt.changed() => {}
             () = &mut handed_off => {}
+            () = &mut expired => {}
         }
     }
 }
@@ -798,7 +815,7 @@ async fn process_speech(state: AppState) {
             sequence,
             pending.utterance.text.clone(),
         );
-        let drain = drain_speech_stream(state.clone(), stream, pending.utterance.clone());
+        let drain = drain_speech_stream(state.clone(), stream, pending.utterance.clone(), deadline);
         let Some((task, task_id)) =
             spawn_registered_operation(&state, generation, drain.instrument(span)).await
         else {
@@ -989,12 +1006,14 @@ pub(crate) async fn deliver_turn_if_current(
         success,
     }
     .to_value();
-    state
-        .0
-        .audio
-        .lock()
-        .await
-        .barrier(sequence, generation, barrier);
+    let mut audio = state.0.audio.lock().await;
+    audio.barrier(
+        sequence,
+        generation,
+        barrier,
+        state.0.coordinator.generation(),
+    );
+    drop(audio);
     success
 }
 

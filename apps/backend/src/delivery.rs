@@ -197,9 +197,31 @@ pub(crate) struct AudioSlot {
     events: Vec<Event>,
     started: bool,
     done: bool,
-    heard: watch::Sender<bool>,
+    taken: watch::Sender<bool>,
 }
 
+/// What the pages took of one audio slot. The page plays a slot's audio only
+/// while the slot's generation is its own, so only what went out while the
+/// line was still at that generation counts. The slot drops its end when it
+/// leaves the queue, sent or cleared, and what has been taken is then final.
+pub(crate) struct SlotReceipt(watch::Receiver<bool>);
+
+impl SlotReceipt {
+    pub(crate) fn taken(&self) -> bool {
+        *self.0.borrow()
+    }
+    pub(crate) fn gone(&self) -> bool {
+        self.0.has_changed().is_err()
+    }
+    /// Returns once `taken` or `gone` may have changed.
+    pub(crate) async fn changed(&mut self) {
+        let _ = self.0.changed().await;
+    }
+}
+
+/// Each method takes `line`, the generation the call is at now: a slot's
+/// events go out once every slot before it has closed, and count as taken
+/// only if they go out while `line` is still the slot's generation.
 pub(crate) struct AudioQueue {
     delivery: DeliveryState,
     next: u64,
@@ -226,16 +248,16 @@ impl AudioQueue {
                 events: Vec::new(),
                 started: false,
                 done: false,
-                heard: watch::channel(false).0,
+                taken: watch::channel(false).0,
             },
         );
         sequence
     }
-    pub(crate) fn start(&mut self, sequence: u64, generation: u64) -> watch::Receiver<bool> {
+    pub(crate) fn start(&mut self, sequence: u64, generation: u64, line: u64) -> SlotReceipt {
         let Some(slot) = self.slots.get_mut(&sequence) else {
-            return watch::channel(false).1;
+            return SlotReceipt(watch::channel(false).1);
         };
-        let heard = slot.heard.subscribe();
+        let receipt = SlotReceipt(slot.taken.subscribe());
         if slot.generation == generation && !slot.started {
             slot.started = true;
             slot.events.push(Event::AudioStart {
@@ -245,19 +267,19 @@ impl AudioQueue {
                 format: "mp3".into(),
             });
         }
-        self.send_ready();
-        heard
+        self.send_ready(line);
+        receipt
     }
-    pub(crate) fn append(&mut self, sequence: u64, generation: u64, audio: Vec<u8>) {
+    pub(crate) fn append(&mut self, sequence: u64, generation: u64, audio: Vec<u8>, line: u64) {
         let Some(slot) = self.slots.get_mut(&sequence) else {
             return;
         };
         if slot.generation == generation && !audio.is_empty() {
             slot.events.push(Event::AudioChunk { audio });
         }
-        self.send_ready();
+        self.send_ready(line);
     }
-    pub(crate) fn barrier(&mut self, sequence: u64, generation: u64, value: Value) {
+    pub(crate) fn barrier(&mut self, sequence: u64, generation: u64, value: Value, line: u64) {
         let Some(slot) = self.slots.get_mut(&sequence) else {
             return;
         };
@@ -265,9 +287,9 @@ impl AudioQueue {
             slot.events.push(Event::Json(value));
             slot.done = true;
         }
-        self.send_ready();
+        self.send_ready(line);
     }
-    pub(crate) fn finish(&mut self, sequence: u64, generation: u64) {
+    pub(crate) fn finish(&mut self, sequence: u64, generation: u64, line: u64) {
         let Some(slot) = self.slots.get_mut(&sequence) else {
             return;
         };
@@ -289,17 +311,17 @@ impl AudioQueue {
             }
         }
         slot.done = true;
-        self.send_ready();
+        self.send_ready(line);
     }
-    fn send_ready(&mut self) {
+    fn send_ready(&mut self, line: u64) {
         while let Some(slot) = self.slots.get_mut(&self.emit) {
             let mut taken = false;
             for event in slot.events.drain(..) {
                 taken |= self.delivery.publish(event);
             }
-            if taken {
-                slot.heard
-                    .send_if_modified(|heard| !std::mem::replace(heard, true));
+            if taken && slot.generation == line {
+                slot.taken
+                    .send_if_modified(|taken| !std::mem::replace(taken, true));
             }
             if !slot.done {
                 break;

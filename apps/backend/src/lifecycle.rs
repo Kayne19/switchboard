@@ -383,7 +383,8 @@ impl Coordinator {
     }
 
     /// Notifications for API workers waiting behind a live operation or
-    /// candidate. The coordinator itself remains synchronous.
+    /// candidate, and for speech waiting to learn of a hand-off. The
+    /// coordinator itself remains synchronous.
     pub fn operation_changed(&self) -> Arc<Notify> {
         Arc::clone(&self.operation_changed)
     }
