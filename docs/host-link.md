@@ -129,7 +129,9 @@ On success the service answers `welcome`:
 ```
 
 - `epoch` is the link epoch. The service gives each accepted link of a host a
-  larger epoch; a newer link fences older ones.
+  larger epoch; a newer link fences older ones. The service ends a fenced
+  link as it ends one that drops: its unanswered commands fail and its
+  sessions end (`host_link_closed`, under "Session events").
 - `cursors` holds, per session, the last event cursor the service received
   from this host. A session the service never heard of is absent.
 
@@ -296,8 +298,14 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   a call".
 - **`join_call`** puts a tracked session on a call: the skill module's hello
   then returns the token, persona and speech deadline given here. `mode`
-  defaults to `foreground`. `detach` and `kill` take it off. The service
-  sends a new token for every call.
+  defaults to `foreground`. `detach` and `kill` take it off, and so does
+  the end of the link. Whenever its link to the service closes, for any
+  reason, the host agent takes every session off its call
+  (`SessionManager.clearCalls` in `apps/host-agent/src/sessions.ts`). A
+  fenced link is one it closed already, before it dialled again, or one the
+  fence closes. So the service ends the sessions of a link that drops or is
+  fenced (`host_link_closed`), and a call does not outlive the link it was
+  joined on. The service sends a new token for every call.
 - **`set_mode`** changes the mode of a session on a call: `foreground`,
   `background` or `active`. See "Delivery" below.
 - **`set_model`** and **`set_thinking`** read the state back and return the
@@ -353,7 +361,7 @@ The host agent sends every session event with its cursor:
 | `error` | `message` | A model error, or retries exhausted. |
 | `compaction` | `phase`: `start` \| `end`, `reason` | The daemon compacted the context. The service resends the voice brief on the next routed line after `end`. |
 | `state` | `model`, `thinking` | Model and effective thinking level after `set_model` or `set_thinking`. |
-| `session_closed` | `reason`: `killed` \| `detached` \| `gone` \| `host_link_closed` | The host agent stopped tracking the session (`gone`: the daemon no longer has it — it was missing at a resync, or the daemon announced its close, as it does when another client kills it). `host_link_closed` never crosses the wire: the service synthesizes it for every subscribed session when the host's link drops, so a subscriber sees the session end the same way whether the host let go of it or went away. |
+| `session_closed` | `reason`: `killed` \| `detached` \| `gone` \| `host_link_closed` | The host agent stopped tracking the session (`gone`: the daemon no longer has it — it was missing at a resync, or the daemon announced its close, as it does when another client kills it). `host_link_closed` never crosses the wire: the service synthesizes it for every subscribed session when the host's link drops or a newer link of the host fences it (see `join_call`), so a subscriber sees the session end the same way whether the host let go of it or went away. |
 
 A turn is not ended by `agent_end`: the daemon repeats it within one turn.
 Only `turn_end` means settled.

@@ -1026,7 +1026,10 @@ impl ProjectSession {
     /// Collects the turn's text and signals until the `turn_end` of the
     /// prompt's turn, `turn_id`. Frames the host sent before the prompt's
     /// reply (`from`) belong to an earlier turn, such as the tail of one
-    /// that was aborted, and are skipped; so is another turn's end.
+    /// that was aborted, and are skipped; so is another turn's end. The
+    /// session's end is no turn's frame: a `session_closed` from before the
+    /// reply still ends the prompt, since the turn's frames no longer reach
+    /// it.
     async fn collect(
         &self,
         frames: &mut tokio::sync::mpsc::UnboundedReceiver<TurnFrame>,
@@ -1071,7 +1074,7 @@ impl ProjectSession {
                 }
                 TurnFrame::Event { seq, event } => (seq, event),
             };
-            if seq < from {
+            if seq < from && event["kind"] != "session_closed" {
                 continue;
             }
             match event["kind"].as_str() {
