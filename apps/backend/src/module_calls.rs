@@ -243,7 +243,7 @@ async fn speak(state: AppState, req: Speak) -> Response {
             ContinuationScope::FreshTurn
         },
         group: group.unwrap_or_else(|| state.0.new_speech_group()),
-        log_spoken: true,
+        transcript: Some(req.text.clone()),
     };
     match send_speech(&state, admission, reserved).await {
         Ok(()) => {
