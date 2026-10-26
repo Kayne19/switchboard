@@ -197,7 +197,7 @@ async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
             deadline: std::time::Instant::now() + Duration::from_secs(1),
             scope: ContinuationScope::FreshTurn,
             group,
-            log_spoken: false,
+            transcript: None,
         },
         None,
     )
@@ -216,7 +216,7 @@ async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
             deadline: std::time::Instant::now() + Duration::from_secs(1),
             scope: ContinuationScope::ContinueCurrentTurn,
             group,
-            log_spoken: false,
+            transcript: None,
         },
         None,
     )
@@ -237,7 +237,7 @@ async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
             deadline: std::time::Instant::now() + Duration::from_secs(1),
             scope: ContinuationScope::ContinueCurrentTurn,
             group: unrelated,
-            log_spoken: false,
+            transcript: None,
         },
         None,
     )
@@ -278,7 +278,7 @@ async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
         deadline: std::time::Instant::now() + Duration::from_secs(1),
         scope,
         group,
-        log_spoken: false,
+        transcript: None,
     };
     let first = tokio::spawn({
         let state = state.clone();
@@ -342,7 +342,7 @@ async fn speech_a_rescue_stops_is_not_shown_to_the_caller_as_an_error() {
         deadline: std::time::Instant::now() + Duration::from_secs(1),
         scope,
         group,
-        log_spoken: false,
+        transcript: None,
     };
     let speaking = tokio::spawn({
         let state = state.clone();
@@ -430,7 +430,7 @@ async fn the_new_legs_speech_waits_for_what_the_old_leg_is_already_saying() {
         deadline: std::time::Instant::now() + Duration::from_secs(5),
         scope: ContinuationScope::FreshTurn,
         group: state.0.new_speech_group(),
-        log_spoken: false,
+        transcript: None,
     };
     let old = state.0.coordinator.generation();
     let saying = async {
@@ -529,7 +529,7 @@ struct SpeechCompletion {
 
 /// Runs one speech request through the real worker to `event` and reports
 /// what its completion did.
-async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCompletion {
+async fn complete_one_request(event: SpeechEvent, with_transcript: bool) -> SpeechCompletion {
     let config = crate::Config::for_tests(&[]);
     let registry = Registry::new(vec![]);
     let prewarm = crate::prewarm::Prewarm::settled(
@@ -574,7 +574,7 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
         deadline: std::time::Instant::now() + Duration::from_secs(1),
         scope: ContinuationScope::FreshTurn,
         group: state.0.new_speech_group(),
-        log_spoken,
+        transcript: with_transcript.then(|| "One line.".into()),
     };
     // Another utterance's audio holds the page ahead of this one's.
     let ahead = if matches!(event, SpeechEvent::HandedOffBeforeHeard) {
@@ -669,7 +669,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
     struct Row {
         phase: &'static str,
         event: SpeechEvent,
-        log_spoken: bool,
+        with_transcript: bool,
         answer: Result<(), &'static str>,
         page_error: bool,
         spoken_line: bool,
@@ -679,7 +679,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "queued",
             event: SpeechEvent::RetiredBeforeAdmission,
-            log_spoken: true,
+            with_transcript: true,
             answer: Err(superseded),
             page_error: false,
             spoken_line: false,
@@ -687,7 +687,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "queued",
             event: SpeechEvent::HandedOffBeforeAdmission,
-            log_spoken: true,
+            with_transcript: true,
             answer: Err(superseded),
             page_error: false,
             spoken_line: false,
@@ -695,7 +695,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "admitting",
             event: SpeechEvent::ProviderRefuses,
-            log_spoken: true,
+            with_transcript: true,
             answer: Err("tests do not reach ElevenLabs"),
             page_error: true,
             spoken_line: false,
@@ -703,7 +703,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "draining",
             event: SpeechEvent::RescueDuringDrain,
-            log_spoken: true,
+            with_transcript: true,
             answer: Err("speech was cancelled"),
             page_error: false,
             spoken_line: false,
@@ -711,7 +711,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "draining",
             event: SpeechEvent::HandedOffDuringDrain,
-            log_spoken: true,
+            with_transcript: true,
             answer: Ok(()),
             page_error: false,
             spoken_line: true,
@@ -719,7 +719,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "draining",
             event: SpeechEvent::HandedOffBeforeHeard,
-            log_spoken: true,
+            with_transcript: true,
             answer: Err(superseded),
             page_error: false,
             spoken_line: false,
@@ -727,7 +727,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "draining",
             event: SpeechEvent::BodyFails,
-            log_spoken: true,
+            with_transcript: true,
             answer: Err("gated test failure"),
             page_error: true,
             spoken_line: false,
@@ -735,7 +735,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "draining",
             event: SpeechEvent::BodyDrained,
-            log_spoken: true,
+            with_transcript: true,
             answer: Ok(()),
             page_error: false,
             spoken_line: true,
@@ -743,7 +743,7 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "draining",
             event: SpeechEvent::BodyDrained,
-            log_spoken: false,
+            with_transcript: false,
             answer: Ok(()),
             page_error: false,
             spoken_line: false,
@@ -751,14 +751,14 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         Row {
             phase: "draining",
             event: SpeechEvent::BodyDrainedNoBrowser,
-            log_spoken: true,
+            with_transcript: true,
             answer: Err("no browser connected or the writer rejected audio"),
             page_error: false,
             spoken_line: false,
         },
     ];
     for row in rows {
-        let observed = complete_one_request(row.event, row.log_spoken).await;
+        let observed = complete_one_request(row.event, row.with_transcript).await;
         assert_eq!(
             observed,
             SpeechCompletion {
@@ -768,10 +768,10 @@ async fn every_end_of_a_speech_request_completes_it_once() {
                 slot_left_open: false,
                 pending_text_left: false,
             },
-            "{} x {:?} (log_spoken: {})",
+            "{} x {:?} (with_transcript: {})",
             row.phase,
             row.event,
-            row.log_spoken,
+            row.with_transcript,
         );
     }
 }

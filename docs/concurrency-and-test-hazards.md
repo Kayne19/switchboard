@@ -756,7 +756,7 @@ requester, writes the spoken line, or shows the page a speech error.
 | draining | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
 | draining | the generation moves on | `Stopped(Superseded)` | not spoken | no | no |
 | draining | the body fails, or the task panics | `Failed` | the error | at the current generation | no |
-| draining | the body ends, a browser took it | `Spoken` | spoken | no | if `log_spoken` |
+| draining | the body ends, a browser took it | `Spoken` | spoken | no | if it carries a `transcript` line (a `speak` or a floor line) |
 | draining | the body ends, no browser took it | `NotDelivered` | not delivered | no | no |
 
 Only a rescue stops a request, and it retires the generation first, so a
