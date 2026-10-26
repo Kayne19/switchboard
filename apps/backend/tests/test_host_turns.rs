@@ -355,7 +355,15 @@ async fn the_end_of_a_rescued_run_settles_the_caller_turn_bound_to_it() {
         handle_project_turn(&state, autonomous_turn(token, instance_id, Some("auto-2"))).await,
         "the run's end settled the caller's turn, so the run right behind it is admitted"
     );
-    assert!(!coordinator.finish_operation(&caller));
+    coordinator.finish_operation(&caller);
+    let open = coordinator
+        .attach_steer(&coordinator.current_identity())
+        .expect("the run behind holds the line");
+    assert_eq!(
+        open.turn_id.as_deref(),
+        Some("auto-2"),
+        "the prompt's late finish leaves the run behind it open"
+    );
     state.0.switchboard.lock().await.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
 }
