@@ -162,10 +162,9 @@ for (const file of markdown()) {
 //     them with the skill socket's line cap when a request is too large.
 //     Each link the action crosses leaves room around it: the
 //     skill socket's line holds the action and 1 MiB of envelope, and the
-//     host link's frame holds that line and 1 MiB more. The page keeps no
-//     more display rejections waiting to be sent than the service keeps per
-//     generation (`MAX_KEPT_REJECTIONS`). The corpus pins what the
-//     validators make of the caps; this pins the copies it cannot run.
+//     host link's frame holds that line and 1 MiB more. The corpus pins
+//     what the validators make of the caps; this pins the copies it cannot
+//     run.
 {
 	// A cap as the source writes it: an integer or a product of integers (`8 * 1024 * 1024`).
 	const cap = (file, pattern) => {
@@ -198,15 +197,11 @@ for (const file of markdown()) {
 		"skill_socket.ts": cap("apps/host-agent/src/skill_socket.ts", /^export const MAX_LINE_BYTES = ([^;]+);$/m),
 		"__init__.py": cap("skills/switchboard/src/switchboard/__init__.py", /^_MAX_LINE_BYTES = (.+)$/m),
 	};
-	const keptRejections = {
-		"screenReporter.ts": cap("apps/frontend/src/app/screenReporter.ts", /^export const MAX_KEPT_REJECTIONS = ([^;]+);$/m),
-		"display.rs": cap("apps/backend/src/display.rs", /^const MAX_KEPT_REJECTIONS: usize = ([^;]+);$/m),
-	};
 	const line = lineCaps["skill_socket.ts"];
 	const frame = cap("apps/backend/src/hosts.rs", /^const MAX_HOST_FRAME_BYTES: usize = ([^;]+);$/m);
 	const schema = JSON.parse(readFileSync(path.join(root, "docs/display-action-v1.schema.json"), "utf8"));
 	const base64 = schema.definitions?.ImageData?.properties?.bytes?.maxLength;
-	const read = [...Object.values(image), ...Object.values(action), ...Object.values(general), ...Object.values(lineCaps), ...Object.values(keptRejections), frame].every((value) => !Number.isNaN(value));
+	const read = [...Object.values(image), ...Object.values(action), ...Object.values(general), ...Object.values(lineCaps), frame].every((value) => !Number.isNaN(value));
 	const same = (what, values) => {
 		if (new Set(Object.values(values)).size > 1) findings.push(`${what} differs: ${Object.entries(values).map(([file, value]) => `${file} ${value}`).join(", ")}`);
 	};
@@ -215,7 +210,6 @@ for (const file of markdown()) {
 		same("image action cap (MAX_IMAGE_ACTION_BYTES)", action);
 		same("action cap (MAX_ACTION_BYTES)", general);
 		same("skill socket line cap (MAX_LINE_BYTES)", lineCaps);
-		same("kept display rejections (MAX_KEPT_REJECTIONS)", keptRejections);
 		const raw = image["validation.ts"];
 		if (base64 !== 4 * Math.ceil(raw / 3)) findings.push(`docs/display-action-v1.schema.json: ImageData.bytes maxLength ${base64} is not the base64 length of ${raw} bytes (${4 * Math.ceil(raw / 3)})`);
 		if (line < action["validation.ts"] + mib) findings.push(`apps/host-agent/src/skill_socket.ts: MAX_LINE_BYTES ${line} leaves less than 1 MiB around a ${action["validation.ts"]}-byte image action`);

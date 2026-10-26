@@ -548,13 +548,19 @@ impl DisplayGateState {
     }
 
     /// The active page's `report`, with the newest display sequence it has
-    /// applied and the one it could not render, if any.
+    /// applied and the one it could not render, if any. A sequence `delivery`
+    /// has not reached is an earlier process's, from a page left open across
+    /// a restart, and counts for nothing.
     pub(crate) fn report(
         &mut self,
         report: ScreenReport,
         applied_seq: Option<u64>,
         rejected: Option<(u64, String)>,
+        delivery: &DeliveryState,
     ) {
+        let next = delivery.next_sequence();
+        let applied_seq = applied_seq.filter(|&seq| seq < next);
+        let rejected = rejected.filter(|&(seq, _)| seq < next);
         let generation = report.generation;
         self.screen = report;
         self.confirmations
@@ -587,9 +593,7 @@ impl DisplayGateState {
 /// The most rejections `ConfirmState` keeps per generation. A display call
 /// waits at most `DISPLAY_CONFIRM_DEADLINE_MS`, so only the newest few can
 /// still have a waiter; the bound keeps a page that rejects everything from
-/// growing the map. The page keeps no more waiting to be sent
-/// (`apps/frontend/src/app/screenReporter.ts`; `scripts/check_hygiene.mjs`
-/// keeps the two equal).
+/// growing the map.
 const MAX_KEPT_REJECTIONS: usize = 16;
 
 #[derive(Clone, Default)]
@@ -599,9 +603,6 @@ pub(crate) struct ConfirmState {
     // generation yet" -- distinct from confirming sequence 0, which is a
     // real, reachable sequence number.
     pub(crate) watermark: Option<u64>,
-    // Every rejection the page has sent in this generation, newest
-    // `MAX_KEPT_REJECTIONS` by `seq`. The page sends each one once, so a
-    // later report without one must not clear it before its waiter looks.
     rejections: BTreeMap<u64, String>,
 }
 
