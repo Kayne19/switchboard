@@ -171,6 +171,12 @@ describe('only an error reaches the screen, and only while it stands', () => {
     expect(host.textContent).not.toMatch(/is listening|is working/);
   });
 
+  it('draws a server error said twice as the runtime says it', async () => {
+    await receive({ type: 'error', message: 'The model refused.' });
+    await receive({ type: 'error', message: 'The model refused.' });
+    expect(lineError()).toBe('LINE / ERRORError: The model refused.');
+  });
+
   // Each source takes down only its own error (#354). A turn's status is the
   // turn's: it leaves a capture failure up, still as the error, and the
   // turn's own words are never drawn.
