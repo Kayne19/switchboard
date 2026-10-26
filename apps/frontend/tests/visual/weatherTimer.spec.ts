@@ -26,6 +26,7 @@ async function readingFaults(page: Page, selector: string) {
     const frame = scope.getBoundingClientRect();
     const texts: Array<{ owner: HTMLElement; box: DOMRect }> = [];
     const name = (element: Element) => `${element.className || element.tagName}`.slice(0, 60);
+    const where = (box: DOMRect) => `${box.left.toFixed(1)}..${box.right.toFixed(1)} x ${box.top.toFixed(1)}..${box.bottom.toFixed(1)}`;
     for (const element of scope.querySelectorAll<HTMLElement>('*')) {
       const nodes = [...element.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE && node.textContent!.trim());
       if (nodes.length === 0) continue;
@@ -67,7 +68,7 @@ async function readingFaults(page: Page, selector: string) {
         const [p, q] = [texts[a].box, texts[b].box];
         const across = Math.min(p.right, q.right) - Math.max(p.left, q.left);
         const down = Math.min(p.bottom, q.bottom) - Math.max(p.top, q.top);
-        if (across > 1 && down > 1) faults.push(`${name(texts[a].owner)} over ${name(texts[b].owner)}`);
+        if (across > 1 && down > 1) faults.push(`${name(texts[a].owner)} ${where(p)} over ${name(texts[b].owner)} ${where(q)}`);
       }
     }
     return [...new Set(faults)];
