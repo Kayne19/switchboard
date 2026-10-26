@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AudioPlayback,
+  type AudioPlaybackOptions,
   MAX_AUDIO_REPLAY,
   MAX_AUDIO_UTTERANCE,
 } from "../../src/runtime/audioPlayback";
@@ -160,11 +161,20 @@ class FakeMediaSource {
   }
 }
 
+const playbacks: AudioPlayback[] = [];
+
+function playbackForTest(options: AudioPlaybackOptions): AudioPlayback {
+  const playback = new AudioPlayback(options);
+  playbacks.push(playback);
+  return playback;
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
 });
 
 afterEach(() => {
+  for (const playback of playbacks.splice(0)) playback.dispose();
   const left = vi.getTimerCount();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -176,7 +186,7 @@ describe("AudioPlayback replay ownership", () => {
   it("plays one clip at a time and ignores events from replaced clips", async () => {
     const player = fakePlayer();
     const { urls, revoked } = stubObjectUrls();
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: () => {},
@@ -433,7 +443,7 @@ describe("AudioPlayback replay ownership", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -491,7 +501,7 @@ describe("AudioPlayback and Web Audio", () => {
     });
     vi.stubGlobal("requestAnimationFrame", () => 1);
     vi.stubGlobal("cancelAnimationFrame", () => {});
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: () => {},
@@ -527,7 +537,7 @@ describe("AudioPlayback streaming", () => {
       return Promise.resolve();
     };
     vi.stubGlobal("MediaSource", FakeMediaSource);
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses?.push([text, error]),
@@ -1310,7 +1320,7 @@ describe("AudioPlayback complete replays", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const reached: number[] = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: () => {},
@@ -1339,7 +1349,7 @@ describe("AudioPlayback replay cap", () => {
     const player = fakePlayer();
     const { urls } = stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1375,7 +1385,7 @@ describe("AudioPlayback replay cap", () => {
     };
     vi.stubGlobal("MediaSource", FakeMediaSource);
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1411,7 +1421,7 @@ describe("AudioPlayback replay cap", () => {
     const { urls } = stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
     const reached: number[] = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1475,7 +1485,7 @@ describe("AudioPlayback utterance cap", () => {
     };
     vi.stubGlobal("MediaSource", FakeMediaSource);
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1519,7 +1529,7 @@ describe("AudioPlayback utterance cap", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1553,7 +1563,7 @@ describe("AudioPlayback failure reporting", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1584,7 +1594,7 @@ describe("AudioPlayback silent playback", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1616,7 +1626,7 @@ describe("AudioPlayback silent playback", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1639,7 +1649,7 @@ describe("AudioPlayback silent playback", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1666,7 +1676,7 @@ describe("AudioPlayback silent playback", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1695,7 +1705,7 @@ describe("AudioPlayback silent playback", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1716,7 +1726,7 @@ describe("AudioPlayback silent playback", () => {
     const player = fakePlayer();
     stubObjectUrls();
     const statuses: Array<[string, boolean | undefined]> = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (text, error) => statuses.push([text, error]),
@@ -1767,7 +1777,7 @@ describe("AudioPlayback level", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", () => {});
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: () => {},
@@ -1857,7 +1867,7 @@ describe("AudioPlayback level", () => {
       return 1;
     });
     vi.stubGlobal("cancelAnimationFrame", () => {});
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: () => {},
@@ -1893,7 +1903,7 @@ describe("AudioPlayback pause between messages", () => {
   it("waits the gap before the next message and none after the last", async () => {
     const player = fakePlayer();
     const { urls } = stubObjectUrls();
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: () => {},
@@ -1933,7 +1943,7 @@ describe("AudioPlayback pause between messages", () => {
   it("a new leg cancels a pending pause", () => {
     const player = fakePlayer();
     stubObjectUrls();
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: () => {},
@@ -2000,7 +2010,7 @@ describe("AudioPlayback holder: phase x event", () => {
     );
     const said: string[] = [];
     const reached: number[] = [];
-    const playback = new AudioPlayback({
+    const playback = playbackForTest({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (status, error) => said.push(error ? "!" + status : status),
