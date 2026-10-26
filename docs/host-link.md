@@ -361,8 +361,8 @@ The host agent sends every session event with its cursor:
 | `turn_end` | `turn_id`, `error?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
 | `tool_start` | `tool`, `call_id`, `args?`, `turn_id?` | A tool call started. `args` is the call's arguments. |
 | `tool_end` | `tool`, `call_id`, `error`, `result?`, `turn_id?` | A tool call ended. `error` is true when the tool failed; `result` is what the tool returned. |
-| `text` | `text`, `turn_id?` | An assistant message ended with this text. Inside a turn the host stamps that turn's id; a message that ends with no turn open has none. |
-| `error` | `message` | A model error, or retries exhausted. |
+| `text` | `text`, `turn_id?` | An assistant message ended with this text. Inside a turn the host stamps that turn's id; a message that ends with no turn open has none. The text of a failed model call is sent just before its `error`, and not at all if pi retries the call. |
+| `error` | `message` | A model call failed and pi did not retry it, or pi gave up retrying (one `error`, with pi's final error). A call pi retries is not sent. |
 | `compaction` | `phase`: `start` \| `end`, `reason` | The daemon compacted the context. The service resends the voice brief on the next routed line after `end`. |
 | `state` | `model`, `thinking` | Model and effective thinking level after `set_model` or `set_thinking`. |
 | `session_closed` | `reason`: `killed` \| `detached` \| `gone` \| `host_link_closed` | The host agent stopped tracking the session (`gone`: the daemon no longer has it — it was missing at a resync, or the daemon announced its close, as it does when another client kills it). `host_link_closed` never crosses the wire: the service synthesizes it for every subscribed session when the host's link drops or a newer link of the host fences it (see `join_call`), so a subscriber sees the session end the same way whether the host let go of it or went away. |
@@ -370,10 +370,23 @@ The host agent sends every session event with its cursor:
 A turn is not ended by `agent_end`: the daemon repeats it within one turn.
 Only `turn_end` means settled.
 
+pi may retry a failed model call. To retry, pi sends `auto_retry_start`,
+or, for a context overflow, compacts and sends `compaction_end` with
+`willRetry`, and it removes the failed call from the model's context.
+pi decides only after the failed call's message has ended. So inside a
+turn, the host agent holds that message's text and error, and discards
+them when pi retries. The host agent sends them once pi has shown it will
+not retry the call: at the next assistant message, when pi gives up
+(`auto_retry_end` with `success: false`, sent as one `error` with pi's
+final error), when the session closes, or just before `turn_end`. A retry
+that succeeds leaves no `error` in the turn. A failed call that ends with
+no turn open is sent at once.
+
 On the host agent, a tracked session's turn is one record,
 `Tracked.turn` in `apps/host-agent/src/sessions.ts`: idle (`null`), or open
-with its `turn_id` and `cause`. `SessionManager.#turnStep` is its only
-writer, and it sends `turn_start` and `turn_end`:
+with its `turn_id`, its `cause` and any held failed call.
+`SessionManager.#turnStep` is its only writer, and it sends `turn_start`,
+`turn_end`, and each assistant message's `text` and `error`:
 
 | Turn | Event | Next | Sent |
 |---|---|---|---|
@@ -385,15 +398,17 @@ writer, and it sends `turn_start` and `turn_end`:
 | idle | `abort` | idle | `resume_queue`; no `wait_for_idle` |
 | open | `abort` | open | `resume_queue`, then a new `wait_for_idle` |
 | open | `agent_start` | open | nothing: one more run of the same turn |
-| open | the latest `wait_for_idle` resolves | idle | `turn_end` |
-| open | the latest `wait_for_idle` fails | idle | `turn_end` with `error` |
+| open | the latest `wait_for_idle` resolves | idle | a held failed call's `text` and `error`, then `turn_end` |
+| open | the latest `wait_for_idle` fails | idle | a held failed call's `text` and `error`, then `turn_end` with `error` |
 | open | an earlier `wait_for_idle` answers | open | nothing |
-| any | `kill`, `detach`, the daemon's close, or a resync that finds it gone | untracked | `session_closed` only; it stands for the turn's end |
+| any | `kill`, `detach`, the daemon's close, or a resync that finds it gone | untracked | a held failed call's `text` and `error`, then `session_closed`; it stands for the turn's end |
 
 Each `wait_for_idle` carries the input count it was sent after; an answer
 settles the turn only if no input came after it and the session is still
 the same record. The table test in `apps/host-agent/tests/sessions.test.ts`
-("turn table") holds every row.
+("turn table") holds every row. The held failed call's own transitions are
+in the paragraph above the table, not in its rows; the failed model call
+tests in the same file hold them.
 
 `args`, `result` and the `turn_id` on tool events are additive and optional.
 They feed the service's debug page (`docs/debug-page.md`) and nothing else; an
