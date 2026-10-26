@@ -114,13 +114,32 @@ impl TurnBoundary {
     }
 }
 
+/// A caller's prompt being collected: where its turn's frames go, and the
+/// turns whose end the session took since it went out. The host's reply to
+/// the prompt is read on the prompt's task, so the pump may have taken the
+/// end of the turn it names first: such a reply binds nothing
+/// (`TurnEvent::PromptReplied`).
+struct Prompt {
+    collector: Collector,
+    ended: Vec<String>,
+}
+
+impl Prompt {
+    fn new(collector: Collector) -> Self {
+        Self {
+            collector,
+            ended: Vec::new(),
+        }
+    }
+}
+
 /// Where a project session's turn is. `TurnState::step` is its only
 /// writer (`docs/host-link.md`, "A project session's turn").
 enum TurnPhase {
     /// No turn.
     Idle,
     /// A caller's prompt is being collected: the turn's frames go to it.
-    Caller { collector: Collector },
+    Caller { prompt: Prompt },
     /// A self-woken run is held: it keeps its own text, and no other turn's
     /// frame reaches anyone while it is held.
     SelfWoken { run: SelfWokenRun },
@@ -128,21 +147,27 @@ enum TurnPhase {
     /// still being collected. It does so only once the caller's turn has
     /// settled on the host, so the run is behind that turn, and swallows its
     /// frames as it would alone.
-    CallerAndSelfWoken {
-        collector: Collector,
-        run: SelfWokenRun,
-    },
+    CallerAndSelfWoken { prompt: Prompt, run: SelfWokenRun },
     /// That run ended before the caller's prompt let go of its collector:
     /// the frames reach the collector again, and the session is not busy.
-    CallerSettled { collector: Collector },
+    CallerSettled { prompt: Prompt },
 }
 
 impl TurnPhase {
-    fn collector(&self) -> Option<&Collector> {
+    fn prompt(&self) -> Option<&Prompt> {
         match self {
-            Self::Caller { collector }
-            | Self::CallerAndSelfWoken { collector, .. }
-            | Self::CallerSettled { collector } => Some(collector),
+            Self::Caller { prompt }
+            | Self::CallerAndSelfWoken { prompt, .. }
+            | Self::CallerSettled { prompt } => Some(prompt),
+            Self::Idle | Self::SelfWoken { .. } => None,
+        }
+    }
+
+    fn prompt_mut(&mut self) -> Option<&mut Prompt> {
+        match self {
+            Self::Caller { prompt }
+            | Self::CallerAndSelfWoken { prompt, .. }
+            | Self::CallerSettled { prompt } => Some(prompt),
             Self::Idle | Self::SelfWoken { .. } => None,
         }
     }
@@ -156,8 +181,8 @@ impl TurnPhase {
 
     /// Hands `frame` to the caller's prompt being collected, if there is one.
     fn forward(&self, frame: TurnFrame) -> Vec<TurnEffect> {
-        self.collector()
-            .map(|collector| vec![TurnEffect::Forward(collector.clone(), frame)])
+        self.prompt()
+            .map(|prompt| vec![TurnEffect::Forward(prompt.collector.clone(), frame)])
             .unwrap_or_default()
     }
 
@@ -175,8 +200,8 @@ impl TurnPhase {
     fn holding(self, run: SelfWokenRun) -> Self {
         match self {
             Self::Idle => Self::SelfWoken { run },
-            Self::Caller { collector } | Self::CallerSettled { collector } => {
-                Self::CallerAndSelfWoken { collector, run }
+            Self::Caller { prompt } | Self::CallerSettled { prompt } => {
+                Self::CallerAndSelfWoken { prompt, run }
             }
             held @ (Self::SelfWoken { .. } | Self::CallerAndSelfWoken { .. }) => held,
         }
@@ -186,8 +211,8 @@ impl TurnPhase {
     fn ending_run(self, how: RunEnding) -> (Self, Vec<TurnEffect>) {
         match self {
             Self::SelfWoken { run } => (Self::Idle, vec![TurnEffect::RunEnded(run.end(how))]),
-            Self::CallerAndSelfWoken { collector, run } => (
-                Self::CallerSettled { collector },
+            Self::CallerAndSelfWoken { prompt, run } => (
+                Self::CallerSettled { prompt },
                 vec![TurnEffect::RunEnded(run.end(how))],
             ),
             other @ (Self::Idle | Self::Caller { .. } | Self::CallerSettled { .. }) => {
@@ -206,11 +231,8 @@ impl TurnPhase {
         };
         match self {
             Self::SelfWoken { run: held } => (Self::SelfWoken { run }, vec![replaced(held)]),
-            Self::CallerAndSelfWoken {
-                collector,
-                run: held,
-            } => (
-                Self::CallerAndSelfWoken { collector, run },
+            Self::CallerAndSelfWoken { prompt, run: held } => (
+                Self::CallerAndSelfWoken { prompt, run },
                 vec![replaced(held)],
             ),
             other @ (Self::Idle | Self::Caller { .. } | Self::CallerSettled { .. }) => {
@@ -267,6 +289,18 @@ pub(crate) enum TurnEffect {
     },
 }
 
+impl TurnEffect {
+    fn ended_turn(&self) -> Option<&str> {
+        match self {
+            Self::Report(boundary) if boundary.ended => boundary.turn_id.as_deref(),
+            Self::RunEnded(end) | Self::RunReplaced { ended: end, .. } => {
+                end.report.turn_id.as_deref()
+            }
+            Self::Report(_) | Self::Forward(..) | Self::AskAdmission(..) => None,
+        }
+    }
+}
+
 /// A project session's turn.
 pub(crate) struct TurnState {
     phase: TurnPhase,
@@ -298,27 +332,28 @@ impl TurnState {
     /// left to do. The only writer of the phase.
     pub(crate) fn step(&mut self, event: TurnEvent) -> Vec<TurnEffect> {
         let phase = std::mem::replace(&mut self.phase, TurnPhase::Idle);
-        let (next, effects) = match event {
+        let (mut next, effects) = match event {
             TurnEvent::PromptStarted(collector) => {
+                let prompt = Prompt::new(collector);
                 let next = match phase {
                     TurnPhase::SelfWoken { run } | TurnPhase::CallerAndSelfWoken { run, .. } => {
-                        TurnPhase::CallerAndSelfWoken { collector, run }
+                        TurnPhase::CallerAndSelfWoken { prompt, run }
                     }
                     TurnPhase::Idle
                     | TurnPhase::Caller { .. }
-                    | TurnPhase::CallerSettled { .. } => TurnPhase::Caller { collector },
+                    | TurnPhase::CallerSettled { .. } => TurnPhase::Caller { prompt },
                 };
                 (next, Vec::new())
             }
             TurnEvent::PromptEnded(ended) => {
                 let next = match phase {
-                    TurnPhase::Caller { collector } | TurnPhase::CallerSettled { collector }
-                        if collector.same_channel(&ended) =>
+                    TurnPhase::Caller { prompt } | TurnPhase::CallerSettled { prompt }
+                        if prompt.collector.same_channel(&ended) =>
                     {
                         TurnPhase::Idle
                     }
-                    TurnPhase::CallerAndSelfWoken { collector, run }
-                        if collector.same_channel(&ended) =>
+                    TurnPhase::CallerAndSelfWoken { prompt, run }
+                        if prompt.collector.same_channel(&ended) =>
                     {
                         TurnPhase::SelfWoken { run }
                     }
@@ -335,12 +370,11 @@ impl TurnState {
             // of its own; a turn opened for the prompt does, and a second
             // bind of one id changes nothing.
             TurnEvent::PromptReplied { turn_id } => {
-                let effects = match phase.collector() {
-                    Some(_) => vec![TurnEffect::Report(TurnBoundary::opened(
-                        Some(turn_id),
-                        "input".into(),
-                    ))],
-                    None => Vec::new(),
+                let effects = match phase.prompt() {
+                    Some(prompt) if !prompt.ended.contains(&turn_id) => vec![TurnEffect::Report(
+                        TurnBoundary::opened(Some(turn_id), "input".into()),
+                    )],
+                    _ => Vec::new(),
                 };
                 (phase, effects)
             }
@@ -361,6 +395,14 @@ impl TurnState {
             TurnEvent::Event { seq, event } => Self::on_event(phase, seq, event),
             TurnEvent::Snapshot { seq, info } => Self::on_snapshot(phase, seq, info),
         };
+        if let Some(prompt) = next.prompt_mut() {
+            prompt.ended.extend(
+                effects
+                    .iter()
+                    .filter_map(TurnEffect::ended_turn)
+                    .map(str::to_owned),
+            );
+        }
         self.phase = next;
         effects
     }

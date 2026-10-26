@@ -456,20 +456,26 @@ reports the reply's turn as the caller turn's start
 (`TurnEvent::PromptReplied`, stepped by `prompt_as` on the prompt's task),
 and the one bind in `open_host_turn` binds the operation to it; a turn the
 host opened for the prompt reports its own start too, and the second bind
-of one id changes nothing. The host's end of that turn then settles the
-operation as an `input` turn's end does, whatever the run's cause, so the
-rule above holds for a `follow_up` too. A bring-up has the same shape with
+of one id changes nothing. With the reply read before the run's end, the
+host's end of that turn then settles the operation as an `input` turn's end
+does, whatever the run's cause, and the rule above holds for a `follow_up`
+too. With the end read first (the reply is read on the prompt's task, the
+end on the pump's, and nothing orders them), the operation is not bound
+yet, so the end settles nothing: the operation closes when the prompt
+returns, as it did before this bind existed, and a run the host starts in
+that sliver is refused as before (#109). A bring-up has the same shape with
 no operation yet: a takeover of a busy desk session, or a transfer that
 resumes a saved session the host reattached busy after its restart, sends
 its first prompt into the open turn (#239). There the bind lands on the
-starting line (`Line::Starting`'s `intro_turn`), and adoption opens the intro
-operation bound to it; if the candidate's first sign of life adopts it
-before the reply is read, the bind lands on the intro operation directly,
-and both orders end the same way. It follows that every bring-up's intro
-operation is bound to its host turn now, where it was unbound before: a
-module call inside an intro that names no turn, or another turn, is refused,
-as it is inside a bound caller turn. Protocol 2 hosts stamp every call made
-inside a turn with its id.
+starting line (`Line::Starting`'s `intro_turn`), and adoption opens the
+intro operation bound to it; if the candidate's first sign of life adopts
+it before the reply is read, the bind lands on the intro operation
+directly, and both orders end the same way. It follows that a bring-up's
+intro operation is bound to its host turn now, where it was unbound before,
+whenever that turn is still open when the reply is read: a module call
+inside such an intro that names no turn, or another turn, is refused, as it
+is inside a bound caller turn. Protocol 2 hosts stamp every call made inside
+a turn with its id.
 
 The report runs on the prompt's task, not the pump's, so it is the one
 turn report not ordered before the turn's module calls: a call the host
@@ -477,20 +483,43 @@ makes right after its reply can still be refused, as every such call was
 before. It also gives the locks one more edge: `prompt_as` holds the PBX
 lock and the session's `turn_lock` while the report takes
 `operation_transition`. The edge is safe because nothing that holds
-`operation_transition` waits on a prompt or on a `turn_lock`; keep it so.
-The report can also run after the pump has settled the turn it names, when
-the host's `turn_start` and `turn_end` both came before the prompt's task
-read the reply: it then finds no open operation, or a run's bound to its own
-id, and the bind is refused as stale. It cannot stamp a stale turn on a
-newer caller operation, because the turn worker is the one production
-caller of `begin_prompt` and runs turns one at a time; a second caller of
-`begin_prompt` would have to keep that true.
+`operation_transition` waits on a prompt, on a `turn_lock`, or on the PBX
+lock; keep it so. The reply can also be read after the pump has taken the
+end of the turn it names: a turn the host opened for the prompt whose
+`turn_start` and `turn_end` both came first, or a `follow_up` run that
+ended first. The session's turn keeps, with the prompt being collected, the
+turns whose end it took since that prompt went out (`session_turn.rs`,
+`Prompt::ended`), and a reply naming one of them reports nothing. Without
+that, the `follow_up` case bound the still-open,
+unbound operation to a turn that was over, and the ended run spoke with the
+caller's authority until the prompt returned. A reply naming a turn that
+ended before the prompt went out is not caught: the reply names the turn
+the prompt went into, so no protocol-2 host sends one. The report cannot
+stamp a stale turn on a newer caller operation either, because the turn
+worker is the one production caller of `begin_prompt` and runs turns one
+at a time; a second caller of `begin_prompt` would have to keep that true.
 `a_caller_prompt_sent_into_a_self_woken_run_can_answer` in
 `apps/backend/tests/test_turns.rs` drives the caller's case, and checks
-that the run's end settled the operation. `a_busy_desk_takeover_prompt_can_answer`
-and `a_busy_resumed_session_prompt_can_answer` drive the two bring-ups
-through either order; `a_candidates_intro_turn_binds_the_intro_operation`
-in `apps/backend/tests/test_lifecycle.rs` pins the candidate's bind alone.
+that the run's end settled the operation.
+`a_reply_read_after_its_run_ended_binds_nothing` there puts the pump ahead
+of the prompt's task (a word of the run sent ahead of the reply wakes it
+first; `#[tokio::test]` runs on the current-thread scheduler, which polls
+tasks in the order they were woken) and checks that the ended run has no
+authority. It also asserts the order it arranged (the end settled nothing,
+so the operation is still open when the prompt returns), so a scheduler
+that read the reply first would fail it rather than let it pass without
+checking anything. The session-turn table's `PromptIntoEndedRun` row
+(`apps/backend/tests/test_project_session.rs`) pins the unreported start
+without depending on scheduling: the rig sends the run's end before the
+host's reply, waits for the pump to read it, then replies.
+`a_busy_desk_takeover_prompt_can_answer` and
+`a_busy_resumed_session_prompt_can_answer` drive the two bring-ups and
+accept whichever order the reply and the adoption land in; the fake replies
+at once and the sign of life follows, so in practice they run the reply
+first. The adopted-first bind is pinned at the coordinator by the call-line
+table row `adopted | bind_turn => bound`, and
+`a_candidates_intro_turn_binds_the_intro_operation` in
+`apps/backend/tests/test_lifecycle.rs` pins the candidate's bind alone.
 
 `a_turn_resumed_after_an_external_abort_can_speak` and
 `a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles` in

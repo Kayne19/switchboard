@@ -36,33 +36,17 @@ impl HostTurns {
     /// Lets go of the held run if it is session `instance_id`'s run that
     /// `which` names, and returns its operation. A late end from an older
     /// run on the same session does not release a newer one.
-    async fn release_self_woken(
-        &self,
-        instance_id: u64,
-        which: WhichRun<'_>,
-    ) -> Option<OperationIdentity> {
-        self.self_woken
-            .lock()
-            .await
-            .take_if(|run| {
-                run.instance_id == instance_id
-                    && match which {
-                        WhichRun::Turn(turn_id) => {
-                            run.operation.turn_id.as_deref() == Some(turn_id)
-                        }
-                        WhichRun::OfClosedSession => true,
-                    }
-            })
-            .map(|run| run.operation)
-    }
-
-    /// Whether the run held, whichever session's, is host turn `turn_id`.
-    async fn holds_turn(&self, turn_id: &str) -> bool {
-        self.self_woken
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|run| run.operation.turn_id.as_deref() == Some(turn_id))
+    async fn release_self_woken(&self, instance_id: u64, which: WhichRun<'_>) -> Release {
+        let mut held = self.self_woken.lock().await;
+        let named = |run: &SelfWokenRun| match which {
+            WhichRun::Turn(turn_id) => run.operation.turn_id.as_deref() == Some(turn_id),
+            WhichRun::OfClosedSession => true,
+        };
+        match held.take_if(|run| run.instance_id == instance_id && named(run)) {
+            Some(run) => Release::Released(run.operation),
+            None if held.as_ref().is_some_and(named) => Release::HeldElsewhere,
+            None => Release::NotHeld,
+        }
     }
 
     /// Whether session `instance_id` holds an admitted self-woken run.
@@ -83,6 +67,17 @@ enum WhichRun<'a> {
     Turn(&'a str),
     /// Whichever run the session held when it closed.
     OfClosedSession,
+}
+
+/// What a release found held (`HostTurns::release_self_woken`).
+enum Release {
+    /// The run named was held for the session: its operation, released.
+    Released(OperationIdentity),
+    /// The run named is held, for another session instance of the leg: a
+    /// late end of an older run on the same session ends nothing.
+    HeldElsewhere,
+    /// No run named is held.
+    NotHeld,
 }
 
 /// A self-woken run the application admitted as an operation of its own:
@@ -180,19 +175,8 @@ async fn act_on_turn(state: &AppState, turn: ProjectTurn) -> bool {
             settle_caller_turn(state, &turn, &turn_id);
             false
         }
-        // A run the application never held can still be the caller's turn:
-        // a prompt sent into it as a `follow_up` bound the caller's
-        // operation to it, and the host's end settles that operation as it
-        // settles an `input` turn's, so a run the host starts right behind
-        // it is admitted (#107, #109). A run held for another session
-        // instance of the leg is neither: a late end of an older run on the
-        // same session ends nothing.
         HostTurn::RunEnded { turn_id, text } => {
-            if !end_self_woken_run(state, &turn, &turn_id, text).await
-                && !state.0.host_turns.holds_turn(&turn_id).await
-            {
-                settle_caller_turn(state, &turn, &turn_id);
-            }
+            end_self_woken_run(state, &turn, &turn_id, text).await;
             false
         }
         HostTurn::Unnamed { cause } => {
@@ -302,36 +286,38 @@ async fn admit_self_woken_run(
 
 /// The end of the self-woken run `turn_id` on session `instance_id`: its
 /// operation closes, it is traced to its end, and its written words reach
-/// the caller's transcript. The end of a run not held, or of one whose
-/// operation a rescue already closed, ends nothing.
+/// the caller's transcript. The end of a run whose operation a rescue
+/// already closed ends nothing.
+///
+/// A run the application never held can still be the caller's turn: a
+/// prompt sent into it as a `follow_up` bound the caller's operation to it,
+/// and the host's end settles that operation as it settles an `input`
+/// turn's, so a run the host starts right behind it is admitted (#107,
+/// #109). A run held for another session instance of the leg is neither.
 ///
 /// A run cut short by its session's close, while that session's leg is
 /// still on the line, is left to the leg's retirement
 /// (`end_run_of_closed_session`), which ends it under the PBX lock once the
 /// dead leg is off the line. A caller turn waiting behind the run then runs
-/// on the leg that replaced it, never on the dead one (#270).
-///
-/// True when the end was a held run's, or is left to the retirement; false
-/// when no run of that id was held.
-async fn end_self_woken_run(
-    state: &AppState,
-    turn: &ProjectTurn,
-    turn_id: &str,
-    text: String,
-) -> bool {
+/// on the leg that replaced it, never on the dead one (#270). A caller
+/// operation bound to such a run closes when its prompt returns on the
+/// session's close.
+async fn end_self_woken_run(state: &AppState, turn: &ProjectTurn, turn_id: &str, text: String) {
     if turn.cut_short && state.0.coordinator.current_identity().token == turn.token {
-        return true;
+        return;
     }
-    let Some(operation) = state
+    match state
         .0
         .host_turns
         .release_self_woken(turn.instance_id, WhichRun::Turn(turn_id))
         .await
-    else {
-        return false;
-    };
-    close_self_woken_run(state, turn.instance_id, operation, text).await;
-    true
+    {
+        Release::Released(operation) => {
+            close_self_woken_run(state, turn.instance_id, operation, text).await
+        }
+        Release::HeldElsewhere => {}
+        Release::NotHeld => settle_caller_turn(state, turn, turn_id),
+    }
 }
 
 /// Ends the self-woken run session `instance_id` held when it closed. The
@@ -339,7 +325,7 @@ async fn end_self_woken_run(
 /// lock (`app_state.rs`, the foreground-closed callback). A run already
 /// ended ends nothing.
 pub(crate) async fn end_run_of_closed_session(state: &AppState, instance_id: u64) {
-    let Some(operation) = state
+    let Release::Released(operation) = state
         .0
         .host_turns
         .release_self_woken(instance_id, WhichRun::OfClosedSession)

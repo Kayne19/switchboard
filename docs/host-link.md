@@ -420,7 +420,7 @@ lock.
 |---|---|---|---|
 | idle | a prompt starts | caller | |
 | self-woken | a prompt starts | caller and self-woken | |
-| caller, caller and self-woken, caller settled | the host's reply to the prompt names the turn it went into | unchanged | that turn reported as a caller turn's start (`input`): the application binds the prompt's operation to it, so a run the prompt joined as a `follow_up` answers with the caller's authority, and its end settles that operation |
+| caller, caller and self-woken, caller settled | the host's reply to the prompt names the turn it went into | unchanged | that turn reported as a caller turn's start (`input`): the application binds the prompt's operation to it, so a run the prompt joined as a `follow_up` answers with the caller's authority, and its end settles that operation. Nothing is reported if the turn's end was taken since the prompt went out: the turn is over, and the reply binds nothing |
 | caller, caller settled | the prompt returns or is cancelled | idle | |
 | caller and self-woken | the prompt returns or is cancelled | self-woken | |
 | idle | `turn_start`, `autonomous` or `unknown` | self-woken | start reported; the answer is not used |

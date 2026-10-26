@@ -224,14 +224,14 @@ the speech worker.
 | Report | The application |
 |---|---|
 | a self-woken start whose token is not the leg on the line's | ignores it |
-| `turn_start`, `input`, or the reply to a `prompt` naming the turn it went into (the session's turn reports it as this start) | binds the turn id to the caller's operation; while a candidate is staged, a start with its token is kept as its intro turn, and adoption opens the intro operation bound to it (adopted first, the bind lands on the intro operation directly); any other token is refused |
+| `turn_start`, `input`, or the reply to a `prompt` naming the turn it went into (the session's turn reports it as this start, unless it took that turn's end since the prompt went out: then it reports nothing) | binds the turn id to the caller's operation; while a candidate is staged, a start with its token is kept as its intro turn, and adoption opens the intro operation bound to it (adopted first, the bind lands on the intro operation directly); any other token is refused |
 | `turn_start`, `autonomous`, with a turn id | opens an operation for the run if the leg is free, and holds the run (its session instance and operation) until its end; one is held at a time |
 | `turn_start`, `unknown` (a turn a reconnect snapshot found open), or any other cause | admits nothing |
 | a start that replaces a held run (`ProjectTurn::replaces`) | takes the held run's end first, then the start, under one gate, so the operation passes to the new run |
 | any report that names no turn | refuses it: every turn has an id |
 | `turn_end`, `input` | closes the open operation bound to that id (`settle_turn`) |
 | the end of a self-woken run (any other cause) | for the held run (same session instance and turn id): closes its operation, traces its end, and writes its text, if any, to the transcript; for a run not held, settles the caller's operation if one is bound to that turn (a prompt sent into the run as a `follow_up`), as an `input` end does; a run held for another session instance ends nothing |
-| the end of a self-woken run its session's close cut short | while that leg is on the line, nothing: the leg's retirement ends the run, under the PBX lock, after the leg is off the line (`end_run_of_closed_session`); otherwise as any end |
+| the end of a self-woken run its session's close cut short | while that leg is on the line, nothing: the leg's retirement ends the run, under the PBX lock, after the leg is off the line (`end_run_of_closed_session`), and a caller operation bound to the run (a `follow_up`) closes when its prompt returns on the session's close; otherwise as any end |
 
 The table test `a_host_reported_turn_moves_by_its_table`
 (`apps/backend/tests/test_host_turns.rs`) holds every phase of the line against
