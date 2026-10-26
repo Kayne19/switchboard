@@ -508,11 +508,23 @@ enum SpeechEvent {
     /// none of its own has reached the page yet: it is not said, as nothing
     /// new from the old leg is after a hand-off (#437).
     HandedOffBeforeHeard,
+    /// The same, for an utterance whose start went out when the audio ahead
+    /// of it closed: the page has some of it, so it finishes (#424, #526).
     HandedOffAfterItsStartWentOut,
+    /// The same, but the audio ahead closes after the hand-off, so this
+    /// utterance's start goes out under a leg the page has left.
+    HandedOffBeforeItsStartWentOut,
+    /// The body drains to its end behind another utterance's open audio,
+    /// and the call adopts a new leg before that audio closes.
     HandedOffWhileHeld,
+    /// The same, and the audio ahead closes right after the hand-off.
+    HandedOffWhileHeldThenAheadCloses,
     /// The provider's body fails partway.
     BodyFails,
+    /// The speech deadline cuts the body after its first audio went out.
     CutByDeadline,
+    /// The same, with no browser connected.
+    CutByDeadlineNoBrowser,
     /// The body drains to its end with a browser connected.
     BodyDrained,
     /// The body drains to its end with no browser connected.
@@ -548,7 +560,9 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
     let deadline = Duration::from_millis(25_000);
     let speaker = match event {
         SpeechEvent::ProviderRefuses => Speaker::offline(100, deadline),
-        SpeechEvent::CutByDeadline => Speaker::test_cut_by_deadline(100, deadline),
+        SpeechEvent::CutByDeadline | SpeechEvent::CutByDeadlineNoBrowser => {
+            Speaker::test_cut_by_deadline(100, deadline)
+        }
         SpeechEvent::RetiredBeforeAdmission
         | SpeechEvent::HandedOffBeforeAdmission
         | SpeechEvent::BodyDrained
@@ -557,7 +571,9 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
         | SpeechEvent::HandedOffDuringDrain
         | SpeechEvent::HandedOffBeforeHeard
         | SpeechEvent::HandedOffAfterItsStartWentOut
+        | SpeechEvent::HandedOffBeforeItsStartWentOut
         | SpeechEvent::HandedOffWhileHeld
+        | SpeechEvent::HandedOffWhileHeldThenAheadCloses
         | SpeechEvent::BodyFails => Speaker::test_gated(100, deadline, gate.clone()),
     };
     if matches!(event, SpeechEvent::BodyFails) {
@@ -572,7 +588,7 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
     );
     // The page, when there is one: what it is sent is what the row reads.
     let mut page = match event {
-        SpeechEvent::BodyDrainedNoBrowser => None,
+        SpeechEvent::BodyDrainedNoBrowser | SpeechEvent::CutByDeadlineNoBrowser => None,
         _ => Some(state.register_connection().await.0),
     };
     start_speech_worker_for_test(&state);
@@ -591,7 +607,9 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
         event,
         SpeechEvent::HandedOffBeforeHeard
             | SpeechEvent::HandedOffAfterItsStartWentOut
+            | SpeechEvent::HandedOffBeforeItsStartWentOut
             | SpeechEvent::HandedOffWhileHeld
+            | SpeechEvent::HandedOffWhileHeldThenAheadCloses
     ) {
         Some(state.0.audio.lock().await.reserve(generation))
     } else {
@@ -626,7 +644,9 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
             | SpeechEvent::HandedOffDuringDrain
             | SpeechEvent::HandedOffBeforeHeard
             | SpeechEvent::HandedOffAfterItsStartWentOut
+            | SpeechEvent::HandedOffBeforeItsStartWentOut
             | SpeechEvent::HandedOffWhileHeld
+            | SpeechEvent::HandedOffWhileHeldThenAheadCloses
             | SpeechEvent::BodyFails => {
                 timeout(Duration::from_secs(1), gate.wait_until_read())
                     .await
@@ -646,10 +666,23 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
                         hand_off();
                         gate.release();
                     }
+                    SpeechEvent::HandedOffBeforeItsStartWentOut => {
+                        let ahead = ahead.expect("an utterance holds the page");
+                        hand_off();
+                        finish_audio(&state, ahead, generation).await;
+                        gate.release();
+                    }
                     SpeechEvent::HandedOffWhileHeld => {
                         gate.release();
                         body_read_to_its_end(&state, "One line.").await;
                         hand_off();
+                    }
+                    SpeechEvent::HandedOffWhileHeldThenAheadCloses => {
+                        let ahead = ahead.expect("an utterance holds the page");
+                        gate.release();
+                        body_read_to_its_end(&state, "One line.").await;
+                        hand_off();
+                        finish_audio(&state, ahead, generation).await;
                     }
                     _ => gate.release(),
                 }
@@ -668,7 +701,7 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
         tokio::task::yield_now().await;
     }
     if let Some(ahead) = ahead {
-        state.0.audio.lock().await.finish(ahead, generation);
+        finish_audio(&state, ahead, generation).await;
     }
     let sent = page
         .as_mut()
@@ -761,7 +794,23 @@ async fn every_end_of_a_speech_request_completes_it_once() {
         },
         Row {
             phase: "draining",
+            event: SpeechEvent::HandedOffBeforeItsStartWentOut,
+            log_spoken: true,
+            answer: Err(superseded),
+            page_error: false,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
             event: SpeechEvent::HandedOffWhileHeld,
+            log_spoken: true,
+            answer: Err(superseded),
+            page_error: false,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::HandedOffWhileHeldThenAheadCloses,
             log_spoken: true,
             answer: Err(superseded),
             page_error: false,
@@ -774,6 +823,14 @@ async fn every_end_of_a_speech_request_completes_it_once() {
             answer: Ok(Played::CutShort),
             page_error: false,
             spoken_line: true,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::CutByDeadlineNoBrowser,
+            log_spoken: true,
+            answer: Err("speech deadline expired"),
+            page_error: false,
+            spoken_line: false,
         },
         Row {
             phase: "draining",
