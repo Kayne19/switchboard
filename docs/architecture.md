@@ -235,7 +235,10 @@ the speech worker.
 
 The table test `a_host_reported_turn_moves_by_its_table`
 (`apps/backend/tests/test_host_turns.rs`) holds every phase of the line against
-every report.
+every report. No phase there binds a caller's operation to a rescued run, so
+`the_end_of_a_rescued_run_settles_the_caller_turn_bound_to_it` beside it pins
+the run-end row's clause for a held run whose operation a rescue already
+closed.
 
 ### 4. Audio is an adapter boundary
 
