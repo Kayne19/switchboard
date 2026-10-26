@@ -462,7 +462,7 @@ rule above holds for a `follow_up` too. A bring-up has the same shape with
 no operation yet: a takeover of a busy desk session, or a transfer that
 resumes a saved session the host reattached busy after its restart, sends
 its first prompt into the open turn (#239). There the bind lands on the
-staged candidate (`CandidateLeg::intro_turn`), and adoption opens the intro
+starting line (`Line::Starting`'s `intro_turn`), and adoption opens the intro
 operation bound to it; if the candidate's first sign of life adopts it
 before the reply is read, the bind lands on the intro operation directly,
 and both orders end the same way. It follows that every bring-up's intro
