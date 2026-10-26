@@ -1249,16 +1249,20 @@ impl TtsTransport for ImmediateTtsTransport {
 }
 
 #[cfg(test)]
-struct CutByDeadlineTtsTransport;
+struct CutByDeadlineTtsTransport {
+    chunks: usize,
+}
 
 #[cfg(test)]
 impl TtsTransport for CutByDeadlineTtsTransport {
     fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
-        Box::pin(async {
-            let stream = futures_util::stream::iter([
-                Ok::<Vec<u8>, AudioError>(vec![1, 2, 3]),
-                Err(AudioError::Deadline),
-            ]);
+        let chunks = self.chunks;
+        Box::pin(async move {
+            let stream = futures_util::stream::iter(
+                (0..chunks)
+                    .map(|_| Ok::<Vec<u8>, AudioError>(vec![1, 2, 3]))
+                    .chain([Err(AudioError::Deadline)]),
+            );
             Ok(TtsResponse {
                 status: StatusCode::OK,
                 content_length: None,
@@ -1320,7 +1324,15 @@ impl Speaker {
         Self::with_test_transport(
             max_chars,
             speech_deadline,
-            Arc::new(CutByDeadlineTtsTransport),
+            Arc::new(CutByDeadlineTtsTransport { chunks: 1 }),
+        )
+    }
+
+    pub(crate) fn test_deadline_before_audio(max_chars: usize, speech_deadline: Duration) -> Self {
+        Self::with_test_transport(
+            max_chars,
+            speech_deadline,
+            Arc::new(CutByDeadlineTtsTransport { chunks: 0 }),
         )
     }
 

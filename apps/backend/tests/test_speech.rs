@@ -532,6 +532,8 @@ enum SpeechEvent {
     CutByDeadline,
     /// The same, with no browser connected.
     CutByDeadlineNoBrowser,
+    /// The speech deadline cuts the body before any of its audio.
+    DeadlineBeforeAudio,
     /// The body drains to its end with a browser connected.
     BodyDrained,
     /// The body drains to its end with no browser connected.
@@ -570,6 +572,7 @@ async fn complete_one_request(event: SpeechEvent, log_spoken: bool) -> SpeechCom
         SpeechEvent::CutByDeadline | SpeechEvent::CutByDeadlineNoBrowser => {
             Speaker::test_cut_by_deadline(100, deadline)
         }
+        SpeechEvent::DeadlineBeforeAudio => Speaker::test_deadline_before_audio(100, deadline),
         SpeechEvent::RetiredBeforeAdmission
         | SpeechEvent::HandedOffBeforeAdmission
         | SpeechEvent::BodyDrained
@@ -837,6 +840,14 @@ async fn every_end_of_a_speech_request_completes_it_once() {
             log_spoken: true,
             answer: Err("speech deadline expired"),
             page_error: false,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::DeadlineBeforeAudio,
+            log_spoken: true,
+            answer: Err("speech deadline expired"),
+            page_error: true,
             spoken_line: false,
         },
         Row {
