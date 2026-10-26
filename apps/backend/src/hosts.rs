@@ -1268,7 +1268,7 @@ impl FakeHostAgent {
                 .lock()
                 .unwrap()
                 .commands
-                .push(json!({"name": name, "args": args}));
+                .push(json!({"id": id.clone(), "name": name, "args": args}));
             let session = args["session"].as_str().unwrap_or_default().to_owned();
             let mut event = |link: &FakeLink, session: &str, event: Value| {
                 cursor += 1;
@@ -1356,12 +1356,15 @@ impl FakeHostAgent {
                 Ok(result) => frame["result"] = result,
                 Err((code, message)) => frame["error"] = json!({"code": code, "message": message}),
             }
+            // A follow_up went into the turn already open: a real host opens
+            // none for it.
+            let follow_up = frame["result"]["sent_as"] == "follow_up";
             link.send(frame);
             if !ok {
                 continue;
             }
             match name.as_str() {
-                "prompt" => {
+                "prompt" if !follow_up => {
                     turns += 1;
                     let turn_id = format!("turn-{turns}");
                     let start = json!({"kind": "turn_start", "cause": "input", "turn_id": turn_id});
@@ -1399,7 +1402,7 @@ impl FakeHostAgent {
                                             .lock()
                                             .unwrap()
                                             .commands
-                                            .push(json!({"name": wanted, "args": frame["args"]}));
+                                            .push(json!({"id": frame["id"], "name": wanted, "args": frame["args"]}));
                                         link.send(json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": {"sent_as": wanted, "turn_id": turn_id}}));
                                         break;
                                     }

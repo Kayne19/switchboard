@@ -1225,12 +1225,20 @@ enum TurnHappens {
     SessionCloses,
     /// A caller's prompt goes out.
     PromptStarts,
+    /// A caller's prompt goes out, and the host sends it into the held run
+    /// `auto-1` as a `follow_up`: its reply names the run.
+    PromptIntoRun,
+    /// A caller's prompt goes out, the held run `auto-1` ends before the
+    /// host's reply is read, and the reply names the run (`follow_up`). The
+    /// prompt skips that end, sent before its reply, so an idle snapshot
+    /// ends it before the row is read: `returned «»` is that snapshot.
+    PromptIntoEndedRun,
     /// The caller's prompt is cancelled.
     PromptCancelled,
 }
 
 impl TurnHappens {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 16] = [
         Self::StartsSelfWoken,
         Self::StartsSelfWokenAdmitted,
         Self::StartsInput,
@@ -1244,6 +1252,8 @@ impl TurnHappens {
         Self::SnapshotOpen,
         Self::SessionCloses,
         Self::PromptStarts,
+        Self::PromptIntoRun,
+        Self::PromptIntoEndedRun,
         Self::PromptCancelled,
     ];
 
@@ -1251,6 +1261,7 @@ impl TurnHappens {
     fn possible_at(self, at: TurnAt) -> bool {
         match self {
             Self::PromptStarts => !at.collecting(),
+            Self::PromptIntoRun | Self::PromptIntoEndedRun => matches!(at, TurnAt::SelfWoken),
             Self::PromptCancelled => at.collecting(),
             _ => true,
         }
@@ -1355,15 +1366,23 @@ impl TurnRig {
 
     /// Answers the next command named `name` the service sends.
     async fn answer(link: &mut crate::hosts::FakeLink, name: &str, result: Value) {
+        let command = Self::command(link, name).await;
+        Self::reply(link, &command, result);
+    }
+
+    async fn command(link: &mut crate::hosts::FakeLink, name: &str) -> Value {
         loop {
             let frame = within("a command", link.recv())
                 .await
                 .expect("the link is up");
             if frame["type"] == "command" && frame["name"] == name {
-                link.send(json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": result}));
-                return;
+                return frame;
             }
         }
+    }
+
+    fn reply(link: &crate::hosts::FakeLink, command: &Value, result: Value) {
+        link.send(json!({"type": "reply", "id": command["id"], "epoch": link.epoch, "ok": true, "result": result}));
     }
 
     fn event(&mut self, event: Value) {
@@ -1423,6 +1442,26 @@ impl TurnRig {
         let session = self.session.clone();
         self.prompting = Some(tokio::spawn(async move { session.prompt(message).await }));
         Self::answer(&mut self.link, "prompt", reply).await;
+    }
+
+    /// A prompt the host answers with `reply` only once the pump has read
+    /// `event`: the session's turn takes the frame before the prompt's
+    /// task reads the reply.
+    async fn prompt_into_after(&mut self, message: &'static str, event: Value, reply: Value) {
+        let session = self.session.clone();
+        let prompting = tokio::spawn(async move { session.prompt(message).await });
+        let command = Self::command(&mut self.link, "prompt").await;
+        self.event(event);
+        self.settle().await;
+        Self::reply(&self.link, &command, reply);
+        self.snapshot(json!({"session": "s1", "busy": false, "turn_open": false}));
+        within("the prompt's task steps the reply and returns", async {
+            while !prompting.is_finished() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        self.prompting = Some(prompting);
     }
 
     async fn reach(&mut self, at: TurnAt) {
@@ -1509,6 +1548,18 @@ impl TurnRig {
                 .await;
             }
             TurnHappens::PromptStarts => self.prompt("next").await,
+            TurnHappens::PromptIntoRun => {
+                self.prompt_into("next", json!({"sent_as": "follow_up", "turn_id": "auto-1"}))
+                    .await
+            }
+            TurnHappens::PromptIntoEndedRun => {
+                self.prompt_into_after(
+                    "next",
+                    end("auto-1"),
+                    json!({"sent_as": "follow_up", "turn_id": "auto-1"}),
+                )
+                .await
+            }
             TurnHappens::PromptCancelled => {
                 let prompting = self.prompting.take().expect("a prompt is running");
                 prompting.abort();
@@ -1600,7 +1651,7 @@ Idle               | CallerEnds              | end input t-in                   
 Idle               | SnapshotIdle            | -                                                             | -    | -          | -                                     | -
 Idle               | SnapshotOpen            | start autonomous snap-1                                       | busy | autonomous | -                                     | -
 Idle               | SessionCloses           | -                                                             | -    | gone       | -                                     | -
-Idle               | PromptStarts            | -                                                             | busy | -          | running «»                            | -
+Idle               | PromptStarts            | start input t-in                                              | busy | -          | running «»                            | -
 
 # A caller's turn: its frames go to its collector, and only the `turn_end` of the turn its prompt's
 # reply named settles it. Another turn's end is still reported as an input turn's end.
@@ -1633,7 +1684,9 @@ SelfWoken          | CallerEnds              | -                                
 SelfWoken          | SnapshotIdle            | end autonomous auto-1 «run words»                             | -    | -          | -                                     | auto-1: run words
 SelfWoken          | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | -                                     | auto-1: run words
 SelfWoken          | SessionCloses           | end autonomous auto-1                                         | -    | gone       | -                                     | auto-1: run words
-SelfWoken          | PromptStarts            | -                                                             | busy | autonomous | running «»                            | -
+SelfWoken          | PromptStarts            | start input t-in                                              | busy | autonomous | running «»                            | -
+SelfWoken          | PromptIntoRun           | start input auto-1                                            | busy | autonomous | running «»                            | -
+SelfWoken          | PromptIntoEndedRun      | end autonomous auto-1 «run words»                             | -    | -          | returned «»                           | auto-1: run words
 
 # Both: the run swallows the caller's frames too, and a second start replaces it the same way.
 CallerAndSelfWoken | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
@@ -1680,7 +1733,7 @@ Replaced           | CallerEnds              | -                                
 Replaced           | SnapshotIdle            | end autonomous auto-2 «second words»                          | -    | -          | -                                     | auto-2: second words
 Replaced           | SnapshotOpen            | end autonomous auto-2 «second words»; start autonomous snap-1 | busy | autonomous | -                                     | auto-2: second words
 Replaced           | SessionCloses           | end autonomous auto-2                                         | -    | gone       | -                                     | auto-2: second words
-Replaced           | PromptStarts            | -                                                             | busy | autonomous | running «»                            | -
+Replaced           | PromptStarts            | start input t-in                                              | busy | autonomous | running «»                            | -
 
 # A prompt sent into the held run as a `follow_up`: the run swallows its frames, but the run's end reaches
 # the prompt too, which waits for it (#512).

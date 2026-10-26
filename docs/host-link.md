@@ -357,7 +357,7 @@ The host agent sends every session event with its cursor:
 
 | `event.kind` | Fields | Meaning |
 |---|---|---|
-| `turn_start` | `cause`: `input` \| `autonomous` \| `unknown`, `turn_id` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). `turn_id` is stable for the turn. A busy snapshot rebuilt after a host-agent restart uses `unknown`: it has an id, but its cause gives it no delivery authority. |
+| `turn_start` | `cause`: `input` \| `autonomous` \| `unknown`, `turn_id` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). `turn_id` is stable for the turn. A busy snapshot rebuilt after a host-agent restart uses `unknown`: it has an id, but its cause gives it no delivery authority of its own; it gets the caller's when a `prompt` is sent into it as a `follow_up`. |
 | `turn_end` | `turn_id`, `error?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
 | `tool_start` | `tool`, `call_id`, `args?`, `turn_id?` | A tool call started. `args` is the call's arguments. |
 | `tool_end` | `tool`, `call_id`, `error`, `result?`, `turn_id?` | A tool call ended. `error` is true when the tool failed; `result` is what the tool returned. |
@@ -429,9 +429,11 @@ The service keeps one turn state per project session: `TurnState` in
 It runs under the turn's lock and returns what is left to do (hand a frame
 to the caller's prompt, report a turn boundary to the application, ask the
 application to admit a self-woken start, or end a self-woken run), which
-the session's pump does once the lock is released. The application's
-answer to an admission comes back as an event of its own, so nothing
-waits under the lock.
+whoever stepped it does once the lock is released: the session's pump for
+the host's events and snapshots, the prompt's own task for the prompt's
+start, end and the host's reply to it. The application's answer to an
+admission comes back as an event of its own, so nothing waits under the
+lock.
 
 | Phase | Busy | A frame of no turn the session holds | A module call that names no turn |
 |---|---|---|---|
@@ -445,6 +447,7 @@ waits under the lock.
 |---|---|---|---|
 | idle | a prompt starts | caller | |
 | self-woken | a prompt starts | caller and self-woken | |
+| caller, caller and self-woken, caller settled | the host's reply to the prompt names the turn it went into | unchanged | that turn reported as a caller turn's start (`input`): the application binds the prompt's operation to it, so a run the prompt joined as a `follow_up` answers with the caller's authority, and its end settles that operation. Nothing is reported if the turn's end was taken since the prompt went out: the turn is over, and the reply binds nothing |
 | caller, caller settled | the prompt returns or is cancelled | idle | |
 | caller and self-woken | the prompt returns or is cancelled | self-woken | |
 | idle | `turn_start`, `autonomous` or `unknown` | self-woken | start reported; the answer is not used |
@@ -452,7 +455,7 @@ waits under the lock.
 | self-woken, caller and self-woken | `turn_start`, `autonomous` or `unknown`, of another turn | unchanged, the new run held in the old one's place | the old run's final text published; its end reported with the new start, taken together |
 | any | `turn_start`, `input` | unchanged | start reported |
 | self-woken, caller and self-woken | `text` of the run | unchanged | the run keeps it; it goes to the prompt too, which keeps it only if the prompt went into the run as a `follow_up` (its reply names the run) |
-| self-woken, caller and self-woken | `turn_end` of the run | idle, caller settled | final text published; end reported with it; goes to the prompt, which it ends if the prompt went into the run as a `follow_up` (its reply names the run) |
+| self-woken, caller and self-woken | `turn_end` of the run | idle, caller settled | final text published; end reported with it (the application closes the run's operation, or, for a run it never held, settles the caller's operation bound to it); goes to the prompt, which it ends if the prompt went into the run as a `follow_up` (its reply names the run) |
 | self-woken, caller and self-woken | an idle snapshot (it names no turn) | idle, caller settled | final text published; end reported with it (the snapshot's `last_text` stands in for none); the snapshot goes to the prompt |
 | self-woken, caller and self-woken | a snapshot with another turn open | unchanged, that turn held in the run's place | as for another self-woken start |
 | self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it, marked cut short (the application ends the run when it retires the leg); goes to the prompt |
