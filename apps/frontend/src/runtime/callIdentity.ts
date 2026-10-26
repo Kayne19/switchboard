@@ -68,6 +68,8 @@ export interface IdentityStep {
    * other message.
    */
   readonly expected: boolean;
+  /** An `epoch` that names a generation other than the one the page held. False for anything else. */
+  readonly epochMoved: boolean;
 }
 
 /** What the page holds after `message`, and what the change means. */
@@ -83,6 +85,7 @@ export function follow(identity: CallIdentity, message: IdentityMessage): Identi
         carry,
         unmark: null,
         expected: carry !== null || message.generation === identity.epoch,
+        epochMoved: message.generation !== identity.epoch,
       };
     }
     case "candidate":
@@ -108,6 +111,7 @@ export function follow(identity: CallIdentity, message: IdentityMessage): Identi
         carry: null,
         unmark: message.route,
         expected: false,
+        epochMoved: false,
       };
     default: {
       const exhaustive: never = message;
@@ -118,5 +122,5 @@ export function follow(identity: CallIdentity, message: IdentityMessage): Identi
 
 /** A move that touches no clip and is no epoch. */
 function moved(identity: CallIdentity): IdentityStep {
-  return { identity, carry: null, unmark: null, expected: false };
+  return { identity, carry: null, unmark: null, expected: false, epochMoved: false };
 }

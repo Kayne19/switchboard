@@ -722,13 +722,19 @@ export class CallRuntime {
         // currently playing clip from the old leg. Do this before allowing
         // reconnect retry, otherwise a pre-rescue clip can cross the barrier.
         const epoch = message.generation;
-        const { carry, expected } = this.followIdentity(message);
+        const pastSnapshot = this.link.ready;
+        const { carry, expected, epochMoved } = this.followIdentity(message);
         // A handoff on a live connection lets the goodbye already playing
         // finish and keeps hands-free listening: a transfer this tab saw
         // adopted, or a return to the operator (same generation, new route).
         // A hangup, a rescue or a reconnect's first epoch still cuts
         // playback off at once and turns hands-free off.
-        const handoff = this.link.ready && expected;
+        const handoff = pastSnapshot && expected;
+        const endsHeldLeg = pastSnapshot || epochMoved;
+        if (endsHeldLeg) {
+          this.withdrawError("line");
+          this.withdrawError("turn");
+        }
         const resubmitted = carry ? this.outbox.carry(carry) : 0;
         this.handsFree.epochChanged(handoff);
         const neverSent = this.outbox.retireOtherEpochs(epoch);
@@ -753,6 +759,7 @@ export class CallRuntime {
           this.playback.handOffToGeneration(epoch);
         } else {
           this.playback.resetForGeneration(epoch);
+          this.withdrawError("playback");
           this.spokenLines.retire();
         }
         break;

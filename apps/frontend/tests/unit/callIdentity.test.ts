@@ -520,15 +520,16 @@ describe("follow", () => {
       carry: { route: "alpha", generation: 4 },
       unmark: null,
       expected: true,
+      epochMoved: true,
     });
     // A hangup while connecting moves the epoch on further: nothing goes along.
-    expect(follow(alphaAdopted, epoch(5))).toMatchObject({ carry: null, expected: false });
+    expect(follow(alphaAdopted, epoch(5))).toMatchObject({ carry: null, expected: false, epochMoved: true });
     // Any epoch ends the wait, the one it names or not.
     expect(follow(alphaAdopted, epoch(3)).identity.adoption).toBeNull();
   });
 
   it("expects its own epoch again, and an unannounced one is a cut", () => {
-    expect(follow(at3, epoch(3))).toMatchObject({ carry: null, expected: true });
+    expect(follow(at3, epoch(3))).toMatchObject({ carry: null, expected: true, epochMoved: false });
     expect(follow(alphaStarting, epoch(4))).toMatchObject({
       identity: { epoch: 4, candidate: null, adoption: null },
       carry: null,
@@ -551,6 +552,7 @@ describe("follow", () => {
       carry: null,
       unmark: null,
       expected: false,
+      epochMoved: false,
     });
     for (const [reason, generation] of [["rolled_back", 3], ["rescued", 4]] as const) {
       expect(follow(alphaAdopted, clearedAlpha(reason, generation))).toEqual({
@@ -558,6 +560,7 @@ describe("follow", () => {
         carry: null,
         unmark: "alpha",
         expected: false,
+        epochMoved: false,
       });
     }
   });

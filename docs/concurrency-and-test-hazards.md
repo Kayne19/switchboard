@@ -290,10 +290,13 @@ the operator; before adoption the route is still the old one, and the rescue
 has already abandoned the candidate.
 
 On the browser side an `epoch` drops what the old leg put on screen (its
-objects, speech, focus, activity, and any view it asked for) and keeps the
-conversation, which belongs to the call. The route label on it changes when the
-status arrives. A reconnect is followed by the history snapshot, which replaces
-the transcript and hides the conversation if the server has none.
+objects, speech, focus, activity and any view it asked for) and the line's
+and the turn's errors, except on a reconnect's snapshot of the same
+generation. It keeps the conversation, which belongs to the call, and a
+microphone's error, which belongs to the device. The route label on it
+changes when the status arrives. A reconnect is followed by the history
+snapshot, which replaces the transcript and hides the conversation if the
+server has none.
 
 ## Delivery and picker ordering
 

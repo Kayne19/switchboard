@@ -434,14 +434,25 @@ name one:
 | source | who says it | its errors | what takes them down |
 |---|---|---|---|
 | `connection` | `CallLink`; `lineUp`, `lineDown`, `retry()` | "Connection error", "Keepalive missed", "Disconnected. Reconnecting..." | a socket opening (the idle line), `retry()` |
-| `line` | the route, model and thinking pickers; hangup; `candidate`, `candidate_cleared` | "That did not go through", "Could not hang up" | the next pick, a line request starting, a hangup tried again, a transfer starting |
-| `turn` | the outbox and its clips; `epoch`'s clip notices; `thinking`, `queued`, `reply`; the server's `error` and `routing_unavailable` | "Error: ...", routing unavailable, "Waiting to send", "Too many unsent voice clips", "The line changed before N clip(s) went out" | the turn's next step: a clip going out or accepted, `thinking`, `queued`, `reply` |
-| `playback` | `PlaybackStatus` | paused, blocked, refused, silent, stream failed | the clip sounding again after a pause or block ("Audio resumed."), the queue emptying (the idle line) |
+| `line` | the route, model and thinking pickers; hangup; `candidate`, `candidate_cleared` | "That did not go through", "Could not hang up" | the next pick, a line request starting, a hangup tried again, a transfer starting, an epoch that ends the leg |
+| `turn` | the outbox and its clips; `epoch`'s clip notices; `thinking`, `queued`, `reply`; the server's `error` and `routing_unavailable` | "Error: ...", routing unavailable, "Waiting to send", "Too many unsent voice clips", "The line changed before N clip(s) went out" | the turn's next step: a clip going out or accepted, `thinking`, `queued`, `reply`; an epoch that ends the leg |
+| `playback` | `PlaybackStatus` | paused, blocked, refused, silent, stream failed | the clip sounding again after a pause or block ("Audio resumed."), the queue emptying (the idle line), an epoch that cuts the old leg's audio off |
 | `microphone` | `PushToTalk`; hands-free's published `error` | no microphone, cannot record, recording failed or taken, any hands-free failure | a recording starting or a press ending without one; hands-free turning on (published `starting`) |
 
 `candidate_cleared` puts the idle line back only when the newest status said,
 drawn or not, is the transfer's "Connecting to ...". The writer-by-report
 table in `tests/unit/statusSource.test.ts` pins each row through the runtime.
+
+An `epoch` that ends the leg the page held takes down the line's and the
+turn's errors. Every epoch after a socket's snapshot ends it; the snapshot
+ends it only when it names another generation (`IdentityStep.epochMoved`),
+so a reconnect at the same generation keeps them, even when an agent handed
+the caller back while the page was away. A hangup from a project leg sends
+two epochs at the new generation (the rescue's, then the operator leg's
+announcement), so the second also takes down what was said between them,
+such as "The line changed before N clip(s) went out". Playback's errors go
+with any epoch but a handoff, where the goodbye plays on. The
+writer-by-epoch table in `tests/unit/statusSource.test.ts` pins each.
 
 Playback is in `src/runtime/audioPlayback.ts`, and every way it can fail is
 reported the same way. A clip the element refuses, a stream it will not take,
