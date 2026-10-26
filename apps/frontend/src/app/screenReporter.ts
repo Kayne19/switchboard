@@ -5,10 +5,11 @@
 // the newest scene waits behind it. The service does not acknowledge a report
 // it ignores (a tab that is not the active one, another generation, a view it
 // does not know), so a report unanswered for `ACK_DEADLINE_MS` is taken as
-// ignored and the line moves on. Each display the page declines is reported
-// once, one per report, oldest first; the page reports again while one
-// waits, and no report says a seq is applied past a rejection still waiting
-// (#378). `ScreenReporter` is the one owner of that line; its phase x event
+// ignored and the line moves on. Each display the page declines goes in one
+// report, oldest first, and again on the next connection if the line drops
+// before that report's ack; the page reports again while one waits, and no
+// report says a seq is applied past a rejection still waiting (#378).
+// `ScreenReporter` is the one owner of that line; its phase x event
 // table is in apps/frontend/ARCHITECTURE.md
 // ("Transport boundary") and pinned by tests/unit/screenReporter.test.tsx.
 

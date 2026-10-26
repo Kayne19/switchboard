@@ -380,9 +380,10 @@ active one, another generation, a view it does not know), so the deadline is
 what lets an older tab report again once it becomes the active one. The
 deadline names its report and is cleared on leaving `awaiting`, so one that
 fires late is dropped. A report that goes clears the queue: nothing older
-than the report on the wire is sent after it. Each declined display is sent once, one per report, lowest `seq` first
-(#378): a report carries the lowest rejection, and only the report sent with that same object takes it off the
-list. A report's `applied_seq` stays below every rejection still waiting,
+than the report on the wire is sent after it. Declined displays go one per
+report, lowest `seq` first (#378): a report carries the lowest rejection, and
+only the report sent with that same object takes it off the list. A report's
+`applied_seq` stays below every rejection still waiting,
 because the service takes a display at or under the reported `applied_seq`
 with no rejection as rendered. An `epoch` keeps the rejections (a `seq` is
 the delivery's, and a same-generation epoch leaves their display calls
@@ -392,8 +393,12 @@ reach a restarted service that counts again from 0. The snapshot replay
 raises the applied `seq` again when the stage has anything to replay, and
 otherwise the next display does. The rejections stay through it, and the one
 on the wire comes back, since the service may not have read it: the same
-service may still be waiting on them, and they only hold the applied `seq`
-lower. The phase-by-event
+service may still be waiting on them. Until a report carries them, they hold
+the applied `seq` lower. The page cannot tell a restarted service from the one
+it left. A restarted service drops a kept rejection whose `seq` it has not
+reached, but it takes one whose `seq` its new count has passed as a rejection
+of its own display at that `seq`, and that display's call answers rejected
+(`docs/visual-channel.md`, "Confirmed rendering"). The phase-by-event
 table in `tests/unit/screenReporter.test.tsx` pins each row through the
 adapter.
 
