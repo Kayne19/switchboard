@@ -447,12 +447,16 @@ An `epoch` that ends the leg the page held takes down the line's and the
 turn's errors. Every epoch after a socket's snapshot ends it; the snapshot
 ends it only when it names another generation (`IdentityStep.epochMoved`),
 so a reconnect at the same generation keeps them, even when an agent handed
-the caller back while the page was away. A hangup from a project leg sends
-two epochs at the new generation (the rescue's, then the operator leg's
-announcement), so the second also takes down what was said between them,
-such as "The line changed before N clip(s) went out". Playback's errors go
-with any epoch but a handoff, where the goodbye plays on. The
-writer-by-epoch table in `tests/unit/statusSource.test.ts` pins each.
+the caller back while the page was away. A page control that rescues the
+leg sends two epochs: a hangup from a project leg sends the rescue's and
+then the operator leg's announcement, at the same generation; a `/connect`,
+or a `/model` or `/thinking` redial, sends the rescue's and then the new
+leg's adoption, one generation on. The second takes down what was said
+between them: the rescue's "The line changed before N clip(s) went out",
+and the "Please repeat it." errors for clips the rescue dropped.
+Playback's errors go with any epoch but a handoff, where the goodbye plays
+on. The writer-by-epoch table in `tests/unit/statusSource.test.ts` pins
+each.
 
 Playback is in `src/runtime/audioPlayback.ts`, and every way it can fail is
 reported the same way. A clip the element refuses, a stream it will not take,

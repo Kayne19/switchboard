@@ -318,7 +318,11 @@ and settled replies. Cancellation releases a slot so a stale TTS result cannot
 wedge later speech. The browser drops queued/playing audio and the outbox clips
 that never went out on a new epoch, and tells the caller about those. A stale
 clip that did go out stays until it receives its ID-bearing `stale_epoch`
-error, then is removed from the outbox rather than retried forever.
+error, then is removed from the outbox rather than retried forever. Both
+notices last only until the next epoch on the live line, and after a rescue
+by a page control (a hangup from a project leg, a `/connect`, a redial) that
+epoch follows at once: the new leg's, which takes them down
+(`apps/frontend/ARCHITECTURE.md`, "Transport boundary").
 
 The route/model/thinking pickers serialize their HTTP operations. A failed picker
 request restores the value that was selected before that request, unless a newer
