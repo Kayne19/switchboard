@@ -202,6 +202,39 @@ test("explanations read Markdown, scroll, and open a history the caller can type
   }
 });
 
+test("a typed turn over the service's cap stays in the field with the reason, and one at the cap in emoji goes whole", async ({ page }) => {
+  const cap = 16 * 1024;
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 4 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}&chrome=0`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === "hello")).toBe(true);
+    fixtureServer.broadcast({ type: "history", entries: [transcriptEntry({ role: "caller", text: "Show me the call path.", id: "clip-1" })] });
+    await page.locator(".transcript-toggle").click();
+    const drawer = page.getByRole("dialog", { name: "Conversation history" });
+    const input = drawer.getByRole("textbox", { name: "Conversation input" });
+    await expect(input).toBeFocused();
+
+    await input.fill("x".repeat(cap + 1));
+    await input.press("Enter");
+    await expect(drawer.getByRole("status")).toHaveText(`NOT SENT / TOO LONG / ${cap + 1} OF ${cap} CHARACTERS`);
+    expect(await input.evaluate((field: HTMLInputElement) => field.value.length)).toBe(cap + 1);
+    await expect(input).toBeFocused();
+
+    const rockets = "\u{1F680}".repeat(cap);
+    await input.fill(rockets);
+    await input.press("Enter");
+    await expect(input).toHaveValue("");
+    await expect(drawer.getByRole("status")).toHaveCount(0);
+    await expect
+      .poll(() => fixtureServer.frames.filter((frame) => frame.type === "typed_turn").map((frame) => frame.text === rockets))
+      .toEqual([true]);
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
 test("the live response keeps a log of what was said, the newest section at the top of the box (#113, #178)", async ({ page }) => {
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 2 });
   const { wsUrl } = await fixtureServer.start();
