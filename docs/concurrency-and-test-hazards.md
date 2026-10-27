@@ -647,9 +647,8 @@ The rule: a spec reads a scene's parts from `CURRENT_SCENE`
 scopes the wait in front of that read the same way. It does not wait the
 exit out. A read anchored on an element takes the scene that holds it,
 `element.closest('.scene')`. Behind a modal (focus, the history) every
-scene is inert and `CURRENT_SCENE` matches nothing; a spec reads the scene
-there by its kind, as composition.spec does with
-`[data-scene="architecture"]`.
+scene is inert and `CURRENT_SCENE` matches nothing; a spec that reads
+the scene there selects it by its kind (`[data-scene="..."]`).
 
 ## A test that reads what the page is sent
 
