@@ -131,6 +131,14 @@ jobs:
           path: ~/.cache/ms-playwright
           key: playwright-${{ matrix.browser }}-${{ runner.os }}-${{ steps.release.outputs.release }}-${{ hashFiles('package-lock.json') }}
 
+      # The image's apt leaves a mirror only after 15 seconds with no data, so
+      # it stays on an azure.archive.ubuntu.com node that trickles packages
+      # without stalling. Delete this step, and its case in
+      # apps/frontend/tests/unit/browserCi.test.ts, when
+      # actions/runner-images#14823 is fixed.
+      - name: Drop the Azure apt mirror
+        run: sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+
       - name: Install ${{ matrix.browser }}
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps ${{ matrix.browser }}
