@@ -7,9 +7,8 @@
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { TranscriptDrawer } from '../../src/components/TranscriptDrawer';
+import { MAX_TYPED_TURN_CHARS as CAP } from '../../src/protocol';
 import { mount, type } from './sceneHarness';
-
-const CAP = 16 * 1024;
 
 function composer() {
   const onSend = vi.fn((_text: string) => true);

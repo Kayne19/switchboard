@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { DisplayFixtureServer } from "../integration/display-fixture-server.mjs";
+import { MAX_TYPED_TURN_CHARS } from "../../src/protocol";
 import { transcriptEntry } from "../fixtures/serverMessages";
 
 const longReply = [
@@ -203,7 +204,6 @@ test("explanations read Markdown, scroll, and open a history the caller can type
 });
 
 test("a typed turn over the service's cap stays in the field with the reason, and one at the cap in emoji goes whole", async ({ page }) => {
-  const cap = 16 * 1024;
   const fixtureServer = new DisplayFixtureServer({ initialGeneration: 4 });
   const { wsUrl } = await fixtureServer.start();
 
@@ -216,13 +216,13 @@ test("a typed turn over the service's cap stays in the field with the reason, an
     const input = drawer.getByRole("textbox", { name: "Conversation input" });
     await expect(input).toBeFocused();
 
-    await input.fill("x".repeat(cap + 1));
+    await input.fill("x".repeat(MAX_TYPED_TURN_CHARS + 1));
     await input.press("Enter");
-    await expect(drawer.getByRole("status")).toHaveText(`NOT SENT / TOO LONG / ${cap + 1} OF ${cap} CHARACTERS`);
-    expect(await input.evaluate((field: HTMLInputElement) => field.value.length)).toBe(cap + 1);
+    await expect(drawer.getByRole("status")).toHaveText(`NOT SENT / TOO LONG / ${MAX_TYPED_TURN_CHARS + 1} OF ${MAX_TYPED_TURN_CHARS} CHARACTERS`);
+    expect(await input.evaluate((field: HTMLInputElement) => field.value.length)).toBe(MAX_TYPED_TURN_CHARS + 1);
     await expect(input).toBeFocused();
 
-    const rockets = "\u{1F680}".repeat(cap);
+    const rockets = "\u{1F680}".repeat(MAX_TYPED_TURN_CHARS);
     await input.fill(rockets);
     await input.press("Enter");
     await expect(input).toHaveValue("");

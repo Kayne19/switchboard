@@ -576,6 +576,11 @@ export function clipHeader(clip: {
 	});
 }
 
+/// The longest turn the caller may type, in code points once trimmed: the
+/// service's `MAX_TYPED_TURN_CHARS` (`apps/backend/src/caller_input.rs`),
+/// which `scripts/check_hygiene.mjs` holds this to.
+export const MAX_TYPED_TURN_CHARS = 16 * 1024;
+
 /// A turn the caller typed instead of spoke.
 ///
 /// It is a transcript that needs no transcription, and it carries the same
