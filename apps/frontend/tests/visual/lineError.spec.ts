@@ -140,8 +140,10 @@ for (const size of SIZES) for (const error of ERRORS) {
 const TURN_FAILED = 'The call worker failed on that turn: the operator stopped answering.';
 
 function hangUpFromAProjectLeg(server: DisplayFixtureServer) {
-  server.setGeneration(server.generation + 1);
-  server.broadcast({ type: 'epoch', generation: server.generation });
+  server.generation += 1;
+  const epoch = { type: 'epoch', generation: server.generation };
+  server.broadcast(epoch);
+  server.broadcast(epoch);
   server.broadcast(statusMessage({ route: 'operator', label: 'Operator' }));
   server.broadcast({
     type: 'spoken',
