@@ -2082,8 +2082,9 @@ describe("AudioPlayback holder: phase x event", () => {
   // were reached, and what was said.
   //
   // Utterance n carries the bytes "un". Utterances 1 and 2 are the ones the
-  // phase set up; 3 arrives with the `arrives` events, with its bytes or with
-  // none at all.
+  // phase set up, 2 with no audio in the last two; 3 arrives with the
+  // `arrives` events, with its bytes or with none at all. A state change the
+  // page was not told of shows as "(page not told)".
 
   const text = (value: string) => new TextEncoder().encode(value).buffer;
   const decoder = new TextDecoder();
@@ -2120,11 +2121,12 @@ describe("AudioPlayback holder: phase x event", () => {
     );
     const said: string[] = [];
     const reached: number[] = [];
+    const toldDrained: boolean[] = [];
     const playback = new AudioPlayback({
       player: player as unknown as HTMLAudioElement,
       idleText: "idle",
       onStatus: (status, error) => said.push(error ? "!" + status : status),
-      onChange: () => {},
+      onChange: () => toldDrained.push(playback.isDrained()),
       onUtterance: (sequence) => reached.push(sequence),
       onAudioLevel: () => {},
       gapMs: options.gapMs ?? 0,
@@ -2168,6 +2170,7 @@ describe("AudioPlayback holder: phase x event", () => {
       frames,
       said,
       reached,
+      toldDrained,
       settle,
       arrive,
       arriveEmpty,
@@ -2305,6 +2308,22 @@ describe("AudioPlayback holder: phase x event", () => {
       await at.settle();
       return at;
     },
+    "replay playing (2 queued, with no audio)": async () => {
+      const at = rig({ streaming: false });
+      at.arrive(1);
+      at.settlePlay("resolve");
+      at.arriveEmpty(2);
+      await at.settle();
+      return at;
+    },
+    "stream playing (2 queued, with no audio)": async () => {
+      const at = rig({ streaming: true });
+      at.arrive(1);
+      at.settlePlay("resolve");
+      at.arriveEmpty(2);
+      await at.settle();
+      return at;
+    },
   };
 
   const events: Record<string, (at: Rig) => void> = {
@@ -2343,7 +2362,11 @@ describe("AudioPlayback holder: phase x event", () => {
       return [
         await element(at),
         at.playback.isPlaying ? "sounding" : "silent",
-        at.playback.isDrained() ? "drained" : "busy",
+        (at.playback.isDrained() ? "drained" : "busy") +
+          (at.toldDrained.at(-1) === undefined ||
+          at.toldDrained.at(-1) === at.playback.isDrained()
+            ? ""
+            : " (page not told)"),
         at.frames.size ? "metered" : "unmetered",
         "plays +" + (at.player.playCalls.length - plays),
         "reached [" + at.reached.slice(reached).join(",") + "]",
@@ -2402,7 +2425,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "empty; silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "empty; silent; busy; unmetered; plays +0; reached [3]; said []",
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming on":
         "empty; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2430,7 +2453,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "replay u1; sounding; busy; metered; plays +0; reached [3]; said []",
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming on":
         "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming off":
@@ -2458,7 +2481,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "replay u1; sounding; busy; metered; plays +0; reached [3]; said []",
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming on":
         "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming off":
@@ -2486,7 +2509,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "replay u1; silent; busy; unmetered; plays +0; reached [3]; said []",
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming on":
         "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2514,7 +2537,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "replay u1; silent; busy; unmetered; plays +0; reached [3]; said []",
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming on":
         "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2542,7 +2565,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "replay u1; silent; busy; unmetered; plays +0; reached [3]; said []",
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming on":
         "replay u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2570,7 +2593,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "replay u1; sounding; busy; metered; plays +1; reached [1]; said []",
       "3 arrives with no audio":
-        "empty; silent; busy; unmetered; plays +0; reached [3]; said []",
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said []",
       "streaming on":
         "empty; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2598,7 +2621,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "replay u1; sounding; busy; metered; plays +0; reached [3]; said []",
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming on":
         "replay u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming off":
@@ -2626,7 +2649,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "stream (no bytes); silent; busy; unmetered; plays +0; reached [3]; said []",
+        "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
       "streaming on":
         "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2654,7 +2677,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "stream u1; sounding; busy; metered; plays +0; reached [3]; said []",
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming on":
         "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming off":
@@ -2682,7 +2705,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "stream u1; silent; busy; unmetered; plays +0; reached [3]; said []",
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming on":
         "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2710,7 +2733,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "stream u1; silent; busy; unmetered; plays +0; reached [3]; said []",
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming on":
         "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2738,7 +2761,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "stream u1; silent; busy; unmetered; plays +0; reached [3]; said []",
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming on":
         "stream u1; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2766,7 +2789,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "empty; silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "empty; silent; busy; unmetered; plays +0; reached [3]; said []",
+        "empty; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming on":
         "empty; silent; busy; unmetered; plays +0; reached []; said []",
       "streaming off":
@@ -2794,7 +2817,63 @@ describe("AudioPlayback holder: phase x event", () => {
       "3 arrives":
         "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "3 arrives with no audio":
-        "stream u1; sounding; busy; metered; plays +0; reached [3]; said []",
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming on":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming off":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "replay playing (2 queued, with no audio)": {
+      "ended":
+        "empty; silent; drained; unmetered; plays +0; reached [2]; said [idle]",
+      "pause":
+        "replay u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
+      "error":
+        "empty; silent; drained; unmetered; plays +0; reached [2]; said [!Audio failed to play (MEDIA_ERR_DECODE). | idle]",
+      "play resolves":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "play rejects":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "gesture":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "empty; silent; drained; unmetered; plays +0; reached [2]; said [!Audio started but produced no sound (nothing played in 1000ms). | idle]",
+      "3 arrives":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "3 arrives with no audio":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming on":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "streaming off":
+        "replay u1; sounding; busy; metered; plays +0; reached []; said []",
+      "reset":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+      "dispose":
+        "empty; silent; drained; unmetered; plays +0; reached []; said []",
+    },
+    "stream playing (2 queued, with no audio)": {
+      "ended":
+        "stream u1; silent; drained; unmetered; plays +0; reached [2]; said [idle]",
+      "pause":
+        "stream u1; silent; busy; unmetered; plays +0; reached []; said [!Audio paused — tap or click anywhere on this page to resume.]",
+      "error":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (MEDIA_ERR_DECODE).]",
+      "play resolves":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "play rejects":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "gesture":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "2.5 s, no progress":
+        "replay u1; sounding; busy; metered; plays +1; reached [1]; said [!Streaming audio failed; using the complete replay (no playback progress).]",
+      "3 arrives":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
+      "3 arrives with no audio":
+        "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming on":
         "stream u1; sounding; busy; metered; plays +0; reached []; said []",
       "streaming off":
@@ -2883,6 +2962,7 @@ describe("AudioPlayback holder: phase x event", () => {
         at.arriveEmpty(2);
         at.arrive(3);
         await at.settle();
+        expect(at.reached, "it waits its turn").toEqual([1]);
         events.ended(at);
         at.settlePlay("resolve");
         await at.settle();
