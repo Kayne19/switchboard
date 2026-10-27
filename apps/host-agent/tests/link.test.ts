@@ -267,6 +267,72 @@ test("snapshot order: an event published while the session is described goes out
 	}
 });
 
+test("reconnect: an event published while the welcome sync describes another session is sent once, in cursor order", async () => {
+	const service = await FakeService.start();
+	let release: (() => void) | null = null;
+	const held = new Promise<void>((r) => (release = r));
+	let describing = false;
+	const { link } = makeLink(service, {
+		sessions: () => ["a0", "b1"],
+		describe: async (h) => {
+			if (h === "a0") {
+				describing = true;
+				await held;
+			}
+			return { session: h, busy: false };
+		},
+	});
+	try {
+		link.publish("b1", { kind: "text", text: "missed while down" });
+		service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: 2, cursors: { b1: `${link.bootId}:0` } });
+		link.start();
+		const l = await service.link(0);
+		await until(() => describing);
+		link.publish("b1", { kind: "turn_end", turn_id: "turn-1" });
+		(release as unknown as () => void)();
+		await l.next((m) => m.type === "synced");
+		const b1 = l.received.filter((m) => m.type === "event" && m.session === "b1").map((m) => parseCursor(m.cursor)?.seq);
+		assert.deepEqual(b1, [1, 2]);
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
+
+test("reconnect: an event published while the welcome sync describes another session goes out after its own snapshot", async () => {
+	const service = await FakeService.start();
+	let release: (() => void) | null = null;
+	const held = new Promise<void>((r) => (release = r));
+	let describing = false;
+	const { link } = makeLink(service, {
+		sessions: () => ["a0", "a1"],
+		describe: async (h) => {
+			if (h === "a0") {
+				describing = true;
+				await held;
+			}
+			return { session: h, busy: false };
+		},
+	});
+	try {
+		link.start();
+		const l = await service.link(0);
+		await until(() => describing);
+		const during = link.publish("a1", { kind: "turn_end", turn_id: "turn-1" });
+		(release as unknown as () => void)();
+		await l.next((m) => m.type === "synced");
+		const a1 = l.received.filter((m) => m.session === "a1");
+		assert.deepEqual(
+			a1.map((m) => m.type),
+			["snapshot", "event"],
+		);
+		assert.equal(a1[1].cursor, during);
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
+
 test("reconnect: a cursor from another boot or beyond the buffer gets a fresh snapshot", async () => {
 	const service = await FakeService.start();
 	const { link } = makeLink(service, { sessions: () => ["a1", "a2"], bufferLimit: 2, describe: async (h) => ({ session: h, busy: false }) });
