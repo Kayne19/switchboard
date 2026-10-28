@@ -688,7 +688,7 @@ async fn an_arriving_clip_is_logged_with_the_mime_the_browser_recorded() {
 /// frame that answers it, after checking the clip went no further.
 async fn the_error_that_answers_a_clip(command: &str, id: &str) -> Value {
     let state = state_with_stt(Some(command.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     upload_clip(&state, &mut connection, id, generation).await;
     let clip_worker = tokio::spawn(process_clips(state.clone()));

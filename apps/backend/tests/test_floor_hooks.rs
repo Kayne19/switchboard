@@ -892,7 +892,7 @@ async fn a_floor_release_with_no_page_keeps_the_update_for_the_page() {
 #[tokio::test]
 async fn a_floor_release_whose_page_goes_while_it_waits_closes_its_audio_slot() {
     let state = state();
-    let (connection, _, _) = state.register_connection().await;
+    let (connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
