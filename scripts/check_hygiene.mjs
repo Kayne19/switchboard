@@ -230,6 +230,44 @@ function ownerFindings(file, text, row) {
 	return [];
 }
 
+// The engine-rules check's reading: every `-webkit-` name in `sources`
+// against the rows of docs/ipad.md's "Engine-specific code in the tree".
+function engineRuleFindings(ipad, sources) {
+	const webkitName = /-webkit-[a-z]+(?:-[a-z]+)*/g;
+	const namesIn = (text) =>
+		new Set(
+			text
+				.replace(/\bWebkit([A-Z]\w*)/g, (_, rest) => `-webkit-${rest.replace(/(?<=.)[A-Z]/g, (letter) => `-${letter}`).toLowerCase()}`)
+				.match(webkitName) ?? [],
+		);
+	const stale = "docs/ipad.md: no rows in the Engine-specific code table (the check needs updating)";
+	const out = [];
+	const table = ipad.split("## Engine-specific code in the tree")[1]?.split(/\n## /)[0] ?? "";
+	const lines = table.split("\n");
+	const rule = lines.findIndex((line) => /^\|[\s:|-]+\|$/.test(line));
+	const rows = rule < 0 ? [] : lines.slice(rule + 1).filter((line) => line.startsWith("|"));
+	if (rows.length === 0) return [stale];
+	const listed = new Map();
+	for (const row of rows) {
+		const [where = "", what = ""] = row.split("|").slice(1);
+		const file = where.match(/^\s*`([^`]+)`/)?.[1];
+		if (!file) {
+			out.push(`docs/ipad.md: a row of the Engine-specific code table starts with no file: ${row.slice(0, 60)}`);
+			continue;
+		}
+		const names = namesIn(`${where} ${what}`);
+		listed.set(file, new Set([...(listed.get(file) ?? []), ...names]));
+		if (names.size > 0 && !(file in sources)) out.push(`docs/ipad.md: lists ${[...names].join(", ")} in ${file}, which is not a stylesheet or script in apps/frontend/src`);
+	}
+	for (const [file, text] of Object.entries(sources)) {
+		const claimed = listed.get(file) ?? new Set();
+		const used = namesIn(text);
+		for (const name of used) if (!claimed.has(name)) out.push(`${file}: uses ${name}, which docs/ipad.md "Engine-specific code in the tree" does not list for it`);
+		for (const name of claimed) if (!used.has(name)) out.push(`docs/ipad.md: lists ${name} in ${file}, which does not use it`);
+	}
+	return out;
+}
+
 // The markdown the doc checks read.
 const markdown = (ctx) => ["AGENTS.md", "README.md", "docs", "apps", "skills", "extensions"].flatMap((start) => [...ctx.files(start, new Set([".md"]))]);
 
@@ -896,7 +934,59 @@ const checks = [
 			},
 		],
 	},
+	{
+		// Every `-webkit-` name in apps/frontend/src is listed in the "Engine-specific
+		// code in the tree" table of docs/ipad.md, against the file that uses it,
+		// and every `-webkit-` name a row's Where or What cell lists is used by the
+		// file the row names. A rule added without its row, or a row kept after its
+		// rule went, leaves the table naming the wrong set. A camelCase style key
+		// (`WebkitLineClamp`) counts as its kebab-case name.
+		name: "engine rules listed",
+		run(ctx) {
+			const sources = {};
+			for (const file of ctx.files("apps/frontend/src", new Set([".css", ".ts", ".tsx"]))) sources[file] = ctx.read(file);
+			for (const finding of engineRuleFindings(ctx.read("docs/ipad.md"), sources)) ctx.report(finding);
+		},
+		violations: engineSamples().violations,
+		clean: engineSamples().clean,
+	},
 ];
+
+// The engine-rules check's samples: docs/ipad.md and the sources it is held to.
+function engineSamples() {
+	const table = (...rows) => `## Engine-specific code in the tree\n\n| Where | What | Why |\n|---|---|---|\n${rows.join("\n")}\n\n## Next\n`;
+	const a = "apps/frontend/src/a.css";
+	const clamp = "| `apps/frontend/src/a.css`, `.x` | `display: -webkit-box` with `-webkit-line-clamp` | why |";
+	const bar = "| `apps/frontend/src/a.css`, `::-webkit-scrollbar` beside `scrollbar-width: none` | hiding | unlike -webkit-gone, it stays |";
+	const userAgent = "| `apps/frontend/src/b.ts` | a user-agent branch | a WebKit bug |";
+	const cssClean = ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n.y::-webkit-scrollbar { display: none; }";
+	const tree = (ipad, sources) => ({ "docs/ipad.md": ipad, ...sources });
+	return {
+		clean: [tree(table(clamp, bar, userAgent), { [a]: cssClean })],
+		violations: [
+			// A rule with no row (the greedy name).
+			tree(table(clamp, bar, userAgent), { [a]: `${cssClean}\n.x { -webkit-box-orient: vertical; }` }),
+			// A value with no row.
+			tree(table(bar), { [a]: ".y::-webkit-scrollbar { display: none; }\n.x { display: -webkit-box; }" }),
+			// A pseudo-element with no row.
+			tree(table(clamp), { [a]: ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n.y::-webkit-scrollbar { }" }),
+			// An at-rule with no row.
+			tree(table(clamp), { [a]: ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n@supports (-webkit-appearance: none) { }" }),
+			// A camelCase style key with no row.
+			tree(table(bar), { [a]: ".y::-webkit-scrollbar { }", "apps/frontend/src/c.tsx": "const s = { WebkitLineClamp: 2 };" }),
+			// A row for a rule that is gone.
+			tree(table(clamp), { [a]: ".x { color: red; }" }),
+			// A row for a file that is gone.
+			tree(table(clamp), {}),
+			// A rule listed under another file.
+			tree(table(clamp), { [a]: cssClean, "apps/frontend/src/b.css": ".y { -webkit-line-clamp: 2; }" }),
+			// A row with no file.
+			tree(table("| not a path | `-webkit-x` | why |"), { [a]: cssClean }),
+			// A table that is missing.
+			tree("# no table\n", { [a]: cssClean }),
+		],
+	};
+}
 
 
 const selfTestOnly = process.argv.includes("--self-test");
