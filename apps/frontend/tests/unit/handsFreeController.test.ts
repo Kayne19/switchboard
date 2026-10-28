@@ -124,6 +124,23 @@ function fakeAudio() {
   return { node, context };
 }
 
+/** The microtasks a start settles in (the fakes never wait on a clock). */
+async function drain(ticks = 50): Promise<void> {
+  for (let tick = 0; tick < ticks; tick += 1) await Promise.resolve();
+}
+
+/** MODE as the page taps it, with the start it began settled. */
+async function tapMode(harness: { instance: HandsFreeController }): Promise<void> {
+  harness.instance.toggle();
+  await drain();
+}
+
+/** MODE tapped on, and hands-free listening for the wake word. */
+async function armHandsFree(harness: { instance: HandsFreeController }): Promise<void> {
+  await tapMode(harness);
+  expect(harness.instance.currentState).toBe("armed");
+}
+
 function controller() {
   const detector = fakeDetector();
   const endpointer = fakeEndpointer();
@@ -216,8 +233,7 @@ describe("the hands-free controller over fakes", () => {
   it("walks start, wake, capture and stop without recursing", async () => {
     stubBrowser();
     const harness = controller();
-    expect(await harness.instance.enable()).toBe(true);
-    expect(harness.instance.currentState).toBe("armed");
+    await armHandsFree(harness);
     expect(harness.detector.resets).toBeGreaterThan(0);
     expect(harness.endpointer.resets).toBeGreaterThan(0);
 
@@ -235,7 +251,7 @@ describe("the hands-free controller over fakes", () => {
       detector: harness.detector.resets,
       endpointer: harness.endpointer.resets,
     };
-    harness.instance.disable();
+    harness.instance.toggle();
     expect(harness.instance.currentState).toBe("off");
     expect(harness.detector.resets).toBeGreaterThan(resets.detector);
     expect(harness.endpointer.resets).toBeGreaterThan(resets.endpointer);
@@ -247,7 +263,7 @@ describe("the hands-free controller over fakes", () => {
   it("listens for the wake word again when the awaited turn brings no reply", async () => {
     stubBrowser();
     const harness = controller();
-    expect(await harness.instance.enable()).toBe(true);
+    await armHandsFree(harness);
     harness.detector.hear();
     harness.endpointer.speechStarts();
     harness.recorder.ondataavailable?.({ data: new Blob(["cough"]) });
@@ -263,7 +279,7 @@ describe("the hands-free controller over fakes", () => {
   it("does not wait for a reply to an utterance the page could not send", async () => {
     stubBrowser();
     const harness = controller();
-    expect(await harness.instance.enable()).toBe(true);
+    await armHandsFree(harness);
     harness.refuseClips();
     harness.detector.hear();
     harness.endpointer.speechStarts();
@@ -276,7 +292,7 @@ describe("the hands-free controller over fakes", () => {
   it("does not wait for a reply to a follow-up that kept nothing", async () => {
     stubBrowser();
     const harness = controller();
-    expect(await harness.instance.enable()).toBe(true);
+    await armHandsFree(harness);
     harness.instance.replyClosed(4, true);
     harness.advance(400);
     expect(harness.instance.currentState).toBe("lease");
@@ -290,7 +306,7 @@ describe("the hands-free controller over fakes", () => {
   it("resets both detectors when a wake grace lapses", async () => {
     stubBrowser();
     const harness = controller();
-    expect(await harness.instance.enable()).toBe(true);
+    await armHandsFree(harness);
     harness.detector.hear();
     const resets = {
       detector: harness.detector.resets,
@@ -352,16 +368,15 @@ describe("the hands-free controller over fakes", () => {
       onState: () => undefined,
     });
 
-    const first = instance.enable();
-    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    instance.toggle();
+    await drain(20);
     instance.pauseForPtt();
     instance.resumeAfterPtt();
-    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    await drain(20);
     expect(instance.currentState).toBe("armed");
 
     releaseFirstModule();
-    expect(await first).toBe(false);
-    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    await drain(20);
     expect(closed, "the overtaken start closes its own context").toEqual([1]);
     expect(stopped, "and stops its own microphone").toEqual([1]);
     expect(instance.currentState).toBe("armed");
@@ -374,11 +389,11 @@ describe("the hands-free controller over fakes", () => {
     const harness = controller();
     harness.audio.context.state = "suspended";
     harness.audio.context.resume = () => new Promise<undefined>(() => undefined);
-    const start = harness.instance.enable();
-    for (let tick = 0; tick < 20; tick += 1) await Promise.resolve();
+    harness.instance.toggle();
+    await drain(20);
     expect(harness.instance.currentState).toBe("starting");
     harness.advance(3_000);
-    expect(await start).toBe(false);
+    await drain();
     expect(harness.instance.currentState).toBe("error");
     expect(harness.instance.isEnabled).toBe(false);
   });
@@ -386,16 +401,13 @@ describe("the hands-free controller over fakes", () => {
   it("pauses for push-to-talk and resumes", async () => {
     stubBrowser();
     const harness = controller();
-    expect(await harness.instance.enable()).toBe(true);
+    await armHandsFree(harness);
     harness.instance.pauseForPtt();
     expect(harness.instance.currentState).toBe("paused_ptt");
     expect(harness.detector.resets).toBeGreaterThan(1);
     expect(harness.endpointer.resets).toBeGreaterThan(1);
     harness.instance.resumeAfterPtt();
-    // `resumeAfterPtt` starts the enable path without awaiting it; the fakes
-    // settle in microtasks, so the test drains them instead of waiting on a
-    // clock.
-    for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+    await drain();
     expect(harness.instance.currentState).toBe("armed");
   });
 
@@ -403,9 +415,9 @@ describe("the hands-free controller over fakes", () => {
   // speaking. The capture they retire must not outlive them: a capture left
   // behind makes every later wake word open nothing (#256).
   const retirements = {
-    disable: async (harness: ReturnType<typeof controller>) => {
-      harness.instance.disable();
-      await harness.instance.enable();
+    "MODE off and on": async (harness: ReturnType<typeof controller>) => {
+      harness.instance.toggle();
+      await tapMode(harness);
     },
     pauseForPtt: async (harness: ReturnType<typeof controller>) => {
       harness.instance.pauseForPtt();
@@ -413,7 +425,7 @@ describe("the hands-free controller over fakes", () => {
     },
     "a rescue epoch": async (harness: ReturnType<typeof controller>) => {
       harness.instance.epochChanged(false);
-      await harness.instance.enable();
+      await tapMode(harness);
     },
     // A hand-off keeps listening: the next wake word needs no MODE.
     "a hand-off epoch": async (harness: ReturnType<typeof controller>) => {
@@ -421,20 +433,20 @@ describe("the hands-free controller over fakes", () => {
     },
     "a detector failure": async (harness: ReturnType<typeof controller>) => {
       harness.detector.breakDown(new Error("engine gone"));
-      await harness.instance.enable();
+      await tapMode(harness);
     },
   };
   for (const [how, retire] of Object.entries(retirements)) {
     it(`captures again after ${how} during a capture`, async () => {
       stubBrowser();
       const harness = controller();
-      expect(await harness.instance.enable()).toBe(true);
+      await armHandsFree(harness);
       harness.detector.hear();
       harness.endpointer.speechStarts();
       expect(harness.instance.currentState).toBe("capturing");
 
       await retire(harness);
-      for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+      await drain();
       expect(harness.instance.currentState).toBe("armed");
       expect(harness.instance.isCapturing).toBe(false);
       expect(harness.clips).toEqual([]);
@@ -449,7 +461,7 @@ describe("the hands-free controller over fakes", () => {
   it("stops on a detector failure and says which one failed", async () => {
     stubBrowser();
     const harness = controller();
-    expect(await harness.instance.enable()).toBe(true);
+    await armHandsFree(harness);
     const resets = {
       detector: harness.detector.resets,
       endpointer: harness.endpointer.resets,
@@ -467,7 +479,7 @@ describe("the hands-free controller over fakes", () => {
     harness.audio.context.audioWorklet.addModule = async () => {
       throw new Error("worklet missing");
     };
-    expect(await harness.instance.enable()).toBe(false);
+    await tapMode(harness);
     expect(harness.instance.currentState).toBe("error");
     expect(harness.detector.resets).toBeGreaterThan(0);
     expect(harness.endpointer.resets).toBeGreaterThan(0);
@@ -479,16 +491,15 @@ describe("the hands-free controller over fakes", () => {
   it("is off after a resume it refuses", async () => {
     stubBrowser();
     const harness = controller();
-    expect(await harness.instance.enable()).toBe(true);
+    await armHandsFree(harness);
     harness.instance.pauseForPtt();
     harness.pressPtt(true);
     harness.instance.resumeAfterPtt();
-    for (let tick = 0; tick < 50; tick += 1) await Promise.resolve();
+    await drain();
     expect(harness.instance.currentState).toBe("error");
     expect(harness.instance.isEnabled).toBe(false);
 
     harness.pressPtt(false);
-    expect(await harness.instance.enable()).toBe(true);
-    expect(harness.instance.currentState).toBe("armed");
+    await armHandsFree(harness);
   });
 });

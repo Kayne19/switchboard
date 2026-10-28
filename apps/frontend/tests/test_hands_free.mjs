@@ -18,10 +18,6 @@ const endpointSource = readFileSync(
 );
 const sileroSource = readFileSync("apps/frontend/src/silero_vad.ts", "utf8");
 const worklet = readFileSync("apps/frontend/src/vad-worklet.ts", "utf8");
-const runtime = readFileSync(
-	"apps/frontend/src/runtime/callRuntime.ts",
-	"utf8",
-);
 const pageSource = readFileSync("apps/frontend/index.html", "utf8");
 const page = readFileSync("static/index.html", "utf8");
 const packageRuntime = readFileSync(
@@ -427,14 +423,19 @@ for (const text of [worklet, source, machineSource]) {
 	assert.doesNotMatch(text, /"speech_start"|"speech_end"|reset_endpoint/);
 	assert.doesNotMatch(text, /noiseFloor|MIN_ENERGY/);
 }
-assert.match(runtime, /createWakeWordDetector/);
-assert.match(runtime, /import\("\.\.\/wake_word"\)/);
-assert.match(runtime, /createSpeechEndpointer/);
-assert.match(runtime, /import\("\.\.\/silero_vad"\)/);
+// Each detector is a lazy chunk the entry bundle must name.
+{
+	const assets = readdirSync("static/v17-assets");
+	const entryFile = page.match(/<script type="module"[^>]* src="\/v17-assets\/([^"]+)"/)?.[1];
+	assert.ok(entryFile, "the page names its entry bundle");
+	const entry = readFileSync(`static/v17-assets/${entryFile}`, "utf8");
+	for (const chunk of ["wake_word", "silero_vad"]) {
+		const files = assets.filter((file) => new RegExp(`^${chunk}-.*\\.js$`).test(file));
+		assert.equal(files.length, 1, `${chunk} is a chunk of its own`);
+		assert.ok(entry.includes(`import("./${files[0]}")`), `the entry bundle imports ${files[0]}`);
+	}
+}
 assert.match(wakeWordSource, /import \{ WakeWordEngine \}/);
-assert.match(runtime, /final_response_audio_closed/);
-assert.match(runtime, /isSnapshotReady: \(\) => this\.link\.ready/);
-assert.match(runtime, /submitHandsFreeClip/);
 // The engine and ONNX Runtime load from the committed /openwakeword/ files
 // through the page's import map; the import map must precede the bundle.
 for (const html of [pageSource, page]) {

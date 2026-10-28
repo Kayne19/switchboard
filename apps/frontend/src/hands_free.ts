@@ -229,20 +229,6 @@ export class HandsFreeController {
 		this.transition({ kind: "toggle" });
 	}
 
-	/** Settles once the start this call began ends: true when hands-free is listening. */
-	enable(): Promise<boolean> {
-		const before = this.state.phase;
-		this.transition({ kind: "enable" });
-		const after = this.state.phase;
-		if (after.kind === "starting" && after !== before)
-			return after.attempt.result;
-		return Promise.resolve(isEnabled(after));
-	}
-
-	disable(message = OFF_MESSAGE): void {
-		this.transition({ kind: "turnOff", message });
-	}
-
 	/** The page stops hands-free and drops a reply still waiting to drain. */
 	stop(reason: StopReason): void {
 		this.transition({ kind: "stop", reason });
@@ -492,7 +478,7 @@ export class HandsFreeController {
 			// failure, reported by the catch below.
 			const { detectors } = this.state;
 			await Promise.all([detectors?.wake?.load?.(), detectors?.speech?.load?.()]);
-			if (!this.isCurrent(attempt)) return attempt.finish(false);
+			if (!this.isCurrent(attempt)) return;
 			const context = this.createAudioContext();
 			parts.context = context;
 			if (typeof context.audioWorklet?.addModule !== "function")
@@ -506,7 +492,7 @@ export class HandsFreeController {
 				// (#446). It ends hands-free as that stop does.
 				if (this.isCurrent(attempt))
 					this.transition({ kind: "stop", reason: "hidden" });
-				return attempt.finish(false);
+				return;
 			}
 			await this.resumeAudio(context);
 			await context.audioWorklet.addModule(
@@ -514,7 +500,7 @@ export class HandsFreeController {
 			);
 			if (!this.isCurrent(attempt)) {
 				releaseGraph(parts);
-				return attempt.finish(false);
+				return;
 			}
 			const source = context.createMediaStreamSource(stream);
 			parts.source = source;
@@ -532,11 +518,9 @@ export class HandsFreeController {
 					this.onWorkletMessage(event.data);
 			};
 			this.transition({ kind: "graphReady", attempt, graph });
-			attempt.finish(true);
 		} catch (error) {
 			releaseGraph(parts);
 			this.transition({ kind: "startFailed", attempt, error });
-			attempt.finish(false);
 		}
 	}
 
