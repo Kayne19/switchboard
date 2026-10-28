@@ -256,6 +256,13 @@ impl ProjectInner {
             .unwrap_or_default()
     }
 
+    /// Makes `token` the call token module calls must carry, and returns
+    /// the one they had to carry until now.
+    fn swap_token(&self, token: String) -> String {
+        let mut current = self.token.lock().unwrap_or_else(PoisonError::into_inner);
+        std::mem::replace(&mut *current, token)
+    }
+
     /// Moves the session's turn on `event` (`TurnState::step`) under its
     /// lock, and returns what is left to do. A prompt's start and end leave
     /// nothing.
@@ -819,7 +826,7 @@ impl ProjectSession {
     }
 
     /// Puts the session on the call with `token`: module calls must carry it
-    /// from now on, and any carrying an earlier one are refused.
+    /// once the host accepts it, and any carrying an earlier one are refused.
     pub async fn join_call(
         &self,
         token: &str,
@@ -832,6 +839,12 @@ impl ProjectSession {
 
     /// Puts the session on the call in an explicit delivery mode. Background
     /// sessions stay live but the host agent refuses their speech.
+    ///
+    /// The new token is taken before the host answers: a module call the
+    /// host sends right after accepting the join can be read ahead of the
+    /// reply, and must pass. A join the host refuses keeps the token the
+    /// host still holds (#555); a join that fails any other way ends the
+    /// session, so the restore there is moot.
     pub async fn join_call_mode(
         &self,
         token: &str,
@@ -839,15 +852,17 @@ impl ProjectSession {
         speech_deadline_ms: u64,
         mode: &str,
     ) -> Result<(), PiSessionError> {
-        if let Ok(mut current) = self.inner.token.lock() {
-            *current = token.to_owned();
+        let previous = self.inner.swap_token(token.to_owned());
+        let joined = self
+            .command(
+                "join_call",
+                json!({"token": token, "persona": persona, "speech_deadline_ms": speech_deadline_ms, "mode": mode}),
+            )
+            .await;
+        if joined.is_err() {
+            self.inner.swap_token(previous);
         }
-        self.command(
-            "join_call",
-            json!({"token": token, "persona": persona, "speech_deadline_ms": speech_deadline_ms, "mode": mode}),
-        )
-        .await
-        .map(|_| ())
+        joined.map(|_| ())
     }
 
     /// Changes delivery mode without replacing the resident session.
