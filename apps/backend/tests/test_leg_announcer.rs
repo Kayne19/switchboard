@@ -64,7 +64,7 @@ async fn display_projection_route_reset() {
 #[tokio::test]
 async fn a_first_display_from_the_incoming_leg_survives_the_transfer_settling() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     begin_alpha_candidate(&state, "alpha-leg");
 
     // The incoming agent's first act is a drawing, which promotes its leg.
@@ -131,7 +131,7 @@ async fn a_first_display_from_the_incoming_leg_survives_the_transfer_settling() 
 #[tokio::test]
 async fn the_incoming_legs_first_words_are_not_cut_off_by_the_transfer_settling() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     begin_alpha_candidate(&state, "alpha-leg");
 
     // The agent's first streamed text is the sign of life that promotes it,
@@ -151,7 +151,7 @@ async fn the_incoming_legs_first_words_are_not_cut_off_by_the_transfer_settling(
 #[tokio::test]
 async fn returning_to_the_operator_still_clears_the_project_scene() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     begin_alpha_candidate(&state, "alpha-leg");
     let mut show = diagram_show();
     show["token"] = json!("alpha-leg");
@@ -185,7 +185,7 @@ async fn returning_to_the_operator_still_clears_the_project_scene() {
 #[tokio::test]
 async fn activity_from_a_leg_retired_by_a_rescue_is_not_published() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     begin_alpha_candidate(&state, "alpha-leg");
     assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
     queued_frames(&mut connection);
@@ -218,7 +218,7 @@ async fn activity_from_a_leg_retired_by_a_rescue_is_not_published() {
 #[tokio::test]
 async fn activity_from_a_process_that_is_not_the_candidate_does_not_promote_it() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     begin_alpha_candidate(&state, "alpha-leg");
     assert_eq!(types_of(&queued_frames(&mut connection)), ["candidate"]);
 

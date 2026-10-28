@@ -52,7 +52,7 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
         None
     }));
     fake.serve(host.connect_fake("scriptorium"));
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -130,7 +130,7 @@ async fn floor_update_queued_with_utility(
         std::sync::Arc::new(prewarm),
         client,
     ));
-    let (connection, _, _) = state.register_connection().await;
+    let (connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -333,7 +333,7 @@ done
         }
     }))
     .serve(state.0.hosts.connect_fake("test-host"));
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     spawn_workers(state.clone());
     let foreground_reply = state
         .0
@@ -471,7 +471,7 @@ done
         std::sync::Arc::new(prewarm),
         jev,
     ));
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -807,7 +807,7 @@ async fn an_agent_whose_newer_request_still_waits_stays_waiting_after_its_first_
         SttStreamAdapter::from_command(None),
     );
     crate::speech::start_speech_worker_for_test(&state);
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -852,7 +852,7 @@ async fn an_agent_whose_newer_request_still_waits_stays_waiting_after_its_first_
 #[tokio::test]
 async fn stale_floor_request_is_dropped_before_audio_reservation() {
     let state = state();
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -884,7 +884,7 @@ async fn stale_floor_request_is_dropped_before_audio_reservation() {
 #[tokio::test]
 async fn a_floor_release_that_waited_for_its_place_drops_a_leg_change_at_once() {
     let state = state();
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -940,7 +940,7 @@ async fn a_clipped_floor_line_shows_the_caller_its_whole_text() {
         SttStreamAdapter::from_command(None),
     );
     crate::speech::start_speech_worker_for_test(&state);
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state
         .0
         .coordinator

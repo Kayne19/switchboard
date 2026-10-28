@@ -807,7 +807,7 @@ gate's lock around each call.
 | Field | What it is |
 |---|---|
 | `projection` | the stage (`DisplayProjection`): objects, order, focus, speech |
-| `watermark` | the delivery `seq` of the newest display applied to the stage |
+| `watermark` | the delivery `seq` of the newest display applied to the stage, or none before any |
 | `screen` | the caller's screen as the page last reported it (`ScreenReport`), or stale |
 | `scene_leg` | the leg (`SceneLeg`: route and generation) the stage was last reset for |
 | `confirmations` | a `tokio::sync::watch<ConfirmState>`: what the page confirmed and rejected in the current generation |

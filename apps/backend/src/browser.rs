@@ -8,7 +8,7 @@ use crate::caller_input::{
     parse_typed_turn, route_typed_turn, start_stream_clip, ClipHeader, StreamChunkHeader,
 };
 use crate::delivery::{DeliveryConnection, DeliveryFrame, Event};
-use crate::display::{is_display_event, stamp_display_seq, ScreenReport};
+use crate::display::{stamp_display_seq, ScreenReport};
 use crate::page_controls::current_status;
 use crate::protocol::{CandidateEnd, ServerMessage};
 use axum::extract::ws::{Message, WebSocket};
@@ -21,14 +21,13 @@ use tokio::time::{timeout, Duration};
 use tracing::Instrument;
 
 impl AppState {
-    pub async fn register_connection(&self) -> (DeliveryConnection, Vec<Value>, u64) {
+    pub async fn register_connection(&self) -> (DeliveryConnection, Vec<Value>) {
         let mut gate = self.0.display_gate.lock().await;
         let connection = self.0.delivery.register();
         gate.mark_stale();
         self.0.floor.set_page_connected(true).await;
         self.start_debug_call();
-        let (snapshot_actions, watermark) = gate.reconnect_snapshot();
-        (connection, snapshot_actions, watermark)
+        (connection, gate.reconnect_snapshot())
     }
 
     pub async fn retire_connection(&self, epoch: u64) {
@@ -63,7 +62,7 @@ pub(crate) async fn ws(
         .on_upgrade(move |socket| websocket(socket, state))
 }
 async fn websocket(socket: WebSocket, state: AppState) {
-    let (connection, snapshot_actions, watermark) = state.register_connection().await;
+    let (connection, snapshot) = state.register_connection().await;
     // Two tabs are two connections. Everything one does, and the work it
     // starts, logs under its id and the generation it joined at.
     let span = tracing::info_span!(
@@ -71,7 +70,7 @@ async fn websocket(socket: WebSocket, state: AppState) {
         connection = connection.epoch,
         joined_generation = state.0.coordinator.generation()
     );
-    serve_connection(socket, state, connection, snapshot_actions, watermark)
+    serve_connection(socket, state, connection, snapshot)
         .instrument(span)
         .await;
 }
@@ -80,8 +79,7 @@ async fn serve_connection(
     socket: WebSocket,
     state: AppState,
     connection: DeliveryConnection,
-    snapshot_actions: Vec<Value>,
-    watermark: u64,
+    snapshot: Vec<Value>,
 ) {
     let epoch = connection.epoch;
     let connected_at = std::time::Instant::now();
@@ -91,18 +89,10 @@ async fn serve_connection(
     let mut dropped = connection.dropped;
     let writer_state = state.clone();
     let deliver = async move {
-        send_snapshot_sink(&mut sink, &writer_state, &snapshot_actions, watermark).await?;
+        send_snapshot_sink(&mut sink, &writer_state, snapshot).await?;
         while let Some(frame) = frames.recv().await {
             match frame {
                 DeliveryFrame::Event { sequence, event } => {
-                    if sequence <= watermark && is_display_event(&event) {
-                        tracing::trace!(
-                            sequence,
-                            epoch,
-                            "discarding replayed display event <= watermark"
-                        );
-                        continue;
-                    }
                     tracing::trace!(sequence, epoch, "delivering sequenced event");
                     send_event_sink(&mut sink, stamp_display_seq(event, sequence)).await?
                 }
@@ -191,18 +181,13 @@ async fn snapshot_messages(state: &AppState) -> Vec<ServerMessage> {
 async fn send_snapshot_sink(
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     state: &AppState,
-    snapshot_actions: &[Value],
-    watermark: u64,
+    snapshot: Vec<Value>,
 ) -> Result<(), axum::Error> {
     for message in snapshot_messages(state).await {
         send_event_sink(sink, Event::Json(message.to_value())).await?;
     }
-    for action in snapshot_actions {
-        let replay = ServerMessage::Display {
-            action: action.clone(),
-            seq: Some(watermark),
-        };
-        send_event_sink(sink, Event::Json(replay.to_value())).await?;
+    for frame in snapshot {
+        send_event_sink(sink, Event::Json(frame)).await?;
     }
     Ok(())
 }

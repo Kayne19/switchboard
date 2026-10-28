@@ -181,7 +181,7 @@ fn a_failing_decision() -> crate::redial::Redial {
 #[tokio::test]
 async fn speech_queued_while_a_page_control_starts_a_leg_is_dropped_with_notice_on_adoption() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let (control, turn_worker) =
         queue_a_clip_while_a_page_control_starts_a_leg(&state, "while-connecting").await;
 
@@ -253,7 +253,7 @@ done
         SttAdapter::from_command(None),
         SttStreamAdapter::from_command(None),
     );
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let (control, turn_worker) =
         queue_a_clip_while_a_page_control_starts_a_leg(&state, "while-connecting").await;
     assert!(state.0.coordinator.is_candidate());
@@ -410,7 +410,7 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
         registry,
         std::sync::Arc::new(prewarm),
     ));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
 
     // The operator puts the caller through, as a turn the rescue can cancel.
     let turn_state = state.clone();
@@ -488,7 +488,7 @@ async fn a_hangup_mid_intro_after_adoption_drops_the_incoming_leg_by_name() {
 #[tokio::test]
 async fn hanging_up_with_nothing_on_the_line_says_so() {
     let state = state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let before = state.0.coordinator.generation();
 
     let (code, body) = request_json(
@@ -525,7 +525,7 @@ async fn hanging_up_with_nothing_on_the_line_says_so() {
 async fn hanging_up_the_operator_from_the_page_discards_its_process() {
     let root = scratch_root("api-hangup-operator");
     let state = state_with_agents(&root);
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state.0.switchboard.lock().await.handle("hello").await;
     let operator = state
         .0
@@ -599,7 +599,7 @@ async fn hanging_up_a_project_leg_from_the_page_does_not_wait_for_its_turn() {
         .await
         .unwrap();
     within("locked_rx", locked_rx).await.unwrap();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let before = state.0.coordinator.generation();
 
     let (code, body) = timeout(
@@ -859,7 +859,7 @@ async fn a_page_control_for_a_generation_the_call_has_left_changes_nothing() {
     let state = &call.state;
     let generation = state.0.coordinator.generation();
     let stale = generation - 1;
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
 
     for (path, body, detail) in [
         (
@@ -1100,7 +1100,7 @@ async fn a_picker_redial_decided_for_a_leg_the_caller_has_left_cancels_nothing()
     let left = state.0.switchboard.lock().await.force_hangup().await;
     assert_eq!(left.as_deref(), Some("alpha"));
     let generation = state.0.coordinator.generation();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     call.prewarm.settle_catalog(
         "scriptorium",
         crate::prewarm::CatalogState::Ready {
@@ -1210,7 +1210,7 @@ async fn a_turn_cancelled_by_a_rescue_ends_its_trace() {
 async fn a_rescue_and_the_call_boundaries_are_traced() {
     use crate::debug::DebugEvent;
     let state = state();
-    let (connection, _, _) = state.register_connection().await;
+    let (connection, _) = state.register_connection().await;
     cancel_active_operations(&state).await;
     let generation = state.0.coordinator.generation();
     state.retire_connection(connection.epoch).await;
@@ -1434,7 +1434,7 @@ impl AlphaCall {
         let state = &self.state;
         let generation = state.0.coordinator.generation();
         let before = state.0.coordinator.status();
-        let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+        let (mut connection, _) = state.register_connection().await;
 
         let body = at_generation(state, body);
         let (code, answer) = request_json(state, Method::POST, path, Some(body.clone())).await;

@@ -466,9 +466,10 @@ pub(crate) struct DisplayGateState {
     /// The leg the projection was last reset for; `None` until one is
     /// announced, and again from a rescue until the next one is.
     scene_leg: Option<SceneLeg>,
-    /// The delivery sequence of the newest display applied to the stage. A
-    /// new leg leaves it: sequences are the delivery's, not the leg's.
-    watermark: u64,
+    /// The delivery sequence of the newest display applied to the stage, or
+    /// `None` before any. A new leg leaves it: sequences are the delivery's,
+    /// not the leg's.
+    watermark: Option<u64>,
     /// What the page has confirmed or rejected in the current generation. A
     /// display call waits on it (`confirmations`); a new leg, a rescue or a
     /// report from a newer generation starts it again.
@@ -481,7 +482,7 @@ impl DisplayGateState {
             projection: DisplayProjection::default(),
             screen: ScreenReport::initial(),
             scene_leg: None,
-            watermark: 0,
+            watermark: None,
             confirmations: watch::Sender::new(ConfirmState::default()),
         }
     }
@@ -506,7 +507,7 @@ impl DisplayGateState {
         );
         let (delivered, sequence) = delivery.publish_sequenced(event);
         self.projection.apply(action, sequence);
-        self.watermark = sequence;
+        self.watermark = Some(sequence);
         (delivered, sequence)
     }
 
@@ -567,10 +568,24 @@ impl DisplayGateState {
             .send_modify(|confirm| confirm.fold_report(generation, applied_seq, rejected));
     }
 
-    /// What a page that connects is sent to rebuild the stage, and the
-    /// sequence it stands for.
-    pub(crate) fn reconnect_snapshot(&self) -> (Vec<Value>, u64) {
-        (self.projection.snapshot_actions(), self.watermark)
+    /// What a page that connects is sent to rebuild the stage: one display
+    /// frame per action, each stamped with the sequence the stage stands for.
+    /// Empty before any display has been applied.
+    pub(crate) fn reconnect_snapshot(&self) -> Vec<Value> {
+        let Some(seq) = self.watermark else {
+            return Vec::new();
+        };
+        self.projection
+            .snapshot_actions()
+            .into_iter()
+            .map(|action| {
+                ServerMessage::Display {
+                    action,
+                    seq: Some(seq),
+                }
+                .to_value()
+            })
+            .collect()
     }
 
     /// What the page has confirmed or rejected, as it changes; a display call
@@ -586,7 +601,10 @@ impl DisplayGateState {
         let confirm = self.confirmations.borrow();
         self.projection.order.is_empty()
             || (confirm.generation == generation
-                && confirm.watermark.is_some_and(|w| w >= self.watermark))
+                && match self.watermark {
+                    None => true,
+                    Some(mine) => confirm.watermark.is_some_and(|w| w >= mine),
+                })
     }
 }
 
@@ -653,13 +671,6 @@ impl ConfirmState {
 }
 
 pub(crate) const DISPLAY_CONFIRM_DEADLINE_MS: u64 = 2500;
-
-pub(crate) fn is_display_event(event: &Event) -> bool {
-    match event {
-        Event::Json(v) => v.get("type").and_then(Value::as_str) == Some("display"),
-        _ => false,
-    }
-}
 
 pub(crate) fn stamp_display_seq(event: Event, sequence: u64) -> Event {
     match event {

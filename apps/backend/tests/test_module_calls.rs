@@ -88,7 +88,7 @@ async fn browser_screen_state_is_available_to_the_agent_view_tool() {
 #[tokio::test]
 async fn view_reports_requested_diagram_as_unconfirmed_until_the_browser_acks() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let epoch = connection.epoch;
 
     let handle = post_display_in_task(&state, diagram_show()).await;
@@ -458,7 +458,7 @@ async fn speak_is_refused_as_busy_when_the_speech_queue_is_full() {
     // Every place in the queue is reserved and never sent, so the worker
     // has nothing to drain and every place stays taken.
     let state = state();
-    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     let _taken: Vec<_> = std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect();
     let answer = timeout(
         Duration::from_secs(1),
@@ -480,7 +480,7 @@ async fn speak_is_refused_as_busy_when_the_speech_queue_is_full() {
 #[tokio::test]
 async fn speak_with_no_audio_slot_is_answered_as_undelivered() {
     let state = state();
-    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     {
         let mut audio = state.0.audio.lock().await;
@@ -501,7 +501,7 @@ async fn speak_with_no_audio_slot_is_answered_as_undelivered() {
 async fn speak_that_fails_to_synthesize_is_answered_with_the_workers_reason() {
     // Every synthesis fails in-process (`Speaker::offline`).
     let state = state();
-    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     let (code, body) =
         module_call_json(&state, "speak", "operator", None, json!({"text":"Hello."})).await;
     assert_eq!(code, StatusCode::BAD_GATEWAY);
@@ -940,7 +940,7 @@ async fn display_projection_generation_race() {
 #[tokio::test]
 async fn display_reports_rendered_only_after_the_browser_confirms() {
     let state = state();
-    let (mut connection, _snapshot, _wm) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let epoch = connection.epoch;
 
     let handle = post_display_in_task(&state, diagram_show()).await;
@@ -983,7 +983,7 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
 #[tokio::test]
 async fn an_applied_seq_this_process_has_not_sent_confirms_nothing() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let (_, last) = state
         .0
@@ -1020,7 +1020,7 @@ async fn an_applied_seq_this_process_has_not_sent_confirms_nothing() {
 #[tokio::test]
 async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let (_, last) = state
         .0
@@ -1058,7 +1058,7 @@ async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
 #[tokio::test]
 async fn display_reports_unconfirmed_when_the_browser_stays_silent() {
     let state = state();
-    let (connection, _s, _w) = state.register_connection().await;
+    let (connection, _) = state.register_connection().await;
     let _ = connection.receiver; // keep the connection alive, never ack
     let (code, body) = agent_call_json(&state, "/display", diagram_show()).await;
     assert_eq!(code, StatusCode::OK);
@@ -1069,7 +1069,7 @@ async fn display_reports_unconfirmed_when_the_browser_stays_silent() {
 #[tokio::test]
 async fn display_reports_rejection_from_the_browser() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let epoch = connection.epoch;
     let handle = post_display_in_task(&state, diagram_show()).await;
     let DeliveryFrame::Event { sequence, .. } =
@@ -1108,7 +1108,7 @@ async fn display_reports_rejection_from_the_browser() {
 #[tokio::test]
 async fn display_reports_a_rejection_that_a_later_report_followed() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let epoch = connection.epoch;
     let handle = post_display_in_task(&state, diagram_show()).await;
     let sequence = frames_until(&mut connection, "display")
@@ -1152,7 +1152,7 @@ async fn display_reports_a_rejection_that_a_later_report_followed() {
 #[tokio::test]
 async fn display_reports_new_leg_when_a_transfer_overtakes_the_confirmation() {
     let state = state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let waiting = {
         let state = state.clone();
         tokio::spawn(async move {
@@ -1281,7 +1281,7 @@ async fn a_module_call_carrying_a_retired_token_is_refused() {
 #[tokio::test]
 async fn background_view_reports_but_does_not_change_the_screen() {
     let state = state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -1319,7 +1319,7 @@ async fn a_background_refusal_reaches_the_module_as_its_bare_reason() {
     // The module and SKILL.md branch on `caller_away`; the sentence that
     // explains it stays in the result (#234).
     let state = state();
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -1353,7 +1353,7 @@ async fn a_background_refusal_reaches_the_module_as_its_bare_reason() {
 #[tokio::test]
 async fn background_speak_is_refused_and_held_display_is_released_on_promotion() {
     let state = state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -1408,7 +1408,7 @@ async fn background_speak_is_refused_and_held_display_is_released_on_promotion()
 #[tokio::test]
 async fn every_background_display_is_held_and_replayed_on_promotion() {
     let state = state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
