@@ -539,9 +539,9 @@ async fn a_speak_the_deadline_cuts_after_its_audio_played_is_answered_cut_short(
     let state = AppState::new(
         crate::pbx::Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
         crate::history::TranscriptLog::new(10),
-        crate::audio::Speaker::test_cut_by_deadline(100, Duration::from_millis(25_000)),
-        crate::audio::SttAdapter::from_command(None),
-        crate::audio::SttStreamAdapter::from_command(None),
+        crate::tts::Speaker::test_cut_by_deadline(100, Duration::from_millis(25_000)),
+        crate::stt::SttAdapter::from_command(None),
+        crate::stt::SttStreamAdapter::from_command(None),
     );
     let (mut page, _) = state.register_connection().await;
     start_speech_worker_for_test(&state);

@@ -47,9 +47,9 @@ fn state(hosts: Hosts) -> AppState {
     AppState::new(
         crate::pbx::Switchboard::new(&config, registry, Arc::new(prewarm)),
         crate::history::TranscriptLog::new(10),
-        crate::audio::Speaker::offline(100, Duration::from_millis(25_000)),
-        crate::audio::SttAdapter::from_command(None),
-        crate::audio::SttStreamAdapter::from_command(None),
+        crate::tts::Speaker::offline(100, Duration::from_millis(25_000)),
+        crate::stt::SttAdapter::from_command(None),
+        crate::stt::SttStreamAdapter::from_command(None),
     )
 }
 

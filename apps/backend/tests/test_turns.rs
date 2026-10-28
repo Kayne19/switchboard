@@ -4,7 +4,6 @@ use crate::app_state::{
     assert_lifecycle_consistent, debug_events, next_event_of, scratch_root, state, state_on,
     state_with_agents, state_with_agents_options, state_with_jev, until_debug,
 };
-use crate::audio::{Speaker, TestTtsGate};
 use crate::browser::PageFeed;
 use crate::browser::{frames_until, types_of};
 use crate::caller_input::assert_dropped_with_notice;
@@ -19,6 +18,7 @@ use crate::pi_client::{LegSession, PiSession, PiSessionError, Turn};
 use crate::project_session::{AgentCall, ProjectTurn};
 use crate::registry::Registry;
 use crate::router::Decision;
+use crate::tts::{Speaker, TestTtsGate};
 use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};

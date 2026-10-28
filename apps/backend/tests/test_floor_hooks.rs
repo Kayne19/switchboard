@@ -3,7 +3,6 @@ use crate::app_state::{
     assert_lifecycle_consistent, debug_events, state, state_with_jev, until_debug,
 };
 use crate::app_state::{spawn_workers, AppState};
-use crate::audio::{Speaker, SttAdapter, SttStreamAdapter};
 use crate::browser::frames_until;
 use crate::caller_input::route_final_transcript;
 use crate::delivery::DeliveryConnection;
@@ -14,6 +13,8 @@ use crate::jev::{answer_for, fake_jev_client, routing_answers, test_client};
 use crate::module_calls::request_to_speak;
 use crate::pbx::Switchboard;
 use crate::registry::{Project, Registry};
+use crate::stt::{SttAdapter, SttStreamAdapter};
+use crate::tts::Speaker;
 use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};

@@ -5,7 +5,6 @@ use crate::app_state::{
     begin_alpha_candidate, catalog_of, debug_events, hold_turn_lock, scratch_root, state, state_on,
     state_with_agents, until_debug,
 };
-use crate::audio::{Speaker, SttAdapter, SttStreamAdapter};
 use crate::browser::{frames_until, queued_frames, types_of};
 use crate::caller_input::assert_dropped_with_notice;
 use crate::history::TranscriptLog;
@@ -13,6 +12,8 @@ use crate::hosts::{FakeHostAgent, FakeLog, Step};
 use crate::pbx::{Switchboard, OPERATOR};
 use crate::pi_client::{LegSession, PiSession};
 use crate::registry::Registry;
+use crate::stt::{SttAdapter, SttStreamAdapter};
+use crate::tts::Speaker;
 use crate::turns::alpha_caller_turn_in_flight;
 use crate::within;
 use axum::http::{Method, StatusCode};
