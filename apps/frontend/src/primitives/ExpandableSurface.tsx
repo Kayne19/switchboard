@@ -6,6 +6,8 @@ interface ExpandableSurfaceProps {
   /** The name of the surface's own button, which opens the object in focus: "Expand table". */
   ariaLabel: string;
   className?: string;
+  /** It fills the panel frame to its inner box: the surface lays out in the frame's rows (`.expandable-surface--framed`). */
+  framed?: boolean;
 }
 
 // An object's surface: a tap on anything it holds opens the object in focus,
@@ -28,7 +30,7 @@ interface ExpandableSurfaceProps {
 // as the gesture that unlocks audio (callRuntime), and a stopped click
 // would be a tap the page never heard. Enter or Space in a scroll it holds
 // opens the object as a tap would, unless the scroll took the key.
-export function ExpandableSurface({ children, onActivate, ariaLabel, className }: ExpandableSurfaceProps) {
+export function ExpandableSurface({ children, onActivate, ariaLabel, className, framed }: ExpandableSurfaceProps) {
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return;
     onActivate();
@@ -45,7 +47,7 @@ export function ExpandableSurface({ children, onActivate, ariaLabel, className }
   };
 
   return (
-    <div className={`expandable-surface${className ? ` ${className}` : ''}`} onClick={handleClick} onKeyDown={handleKeyDown}>
+    <div className={`expandable-surface${framed ? ' expandable-surface--framed' : ''}${className ? ` ${className}` : ''}`} onClick={handleClick} onKeyDown={handleKeyDown}>
       <button className="expandable-surface__expand" type="button" tabIndex={0} aria-label={ariaLabel} />
       {children}
     </div>

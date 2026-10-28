@@ -367,7 +367,7 @@ describe('the panel frame round a calendar', () => {
     };
   }
 
-  it('stands it in the box inside both of the frame\u2019s steps, as a share of the frame\u2019s height, in the main slot', () => {
+  it('pins the shared framed rule: the box inside both of the frame\u2019s steps, as a share of the frame\u2019s height, in the main slot', () => {
     const steps = panelSteps();
     // One step serves both edges: the frame steps in as far at its foot as at its head.
     expect(steps.bottom).toBe(steps.top);
@@ -378,8 +378,8 @@ describe('the panel frame round a calendar', () => {
     // its height, which the layout sets), not a padding in stage units.
     // It is the panel rule, which a type keeping more room than the inset
     // widens (--slot-top, --slot-bottom); the calendar keeps none.
-    const slot = '.calendar-object > .expandable-surface';
-    expect(declared(slot, 'grid-template-rows')).toEqual(['max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px))']);
+    const slot = '.expandable-surface--framed';
+    expect(declared(slot, 'grid-template-rows')).toEqual(['var(--framed-rows, max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px)))']);
     expect(declared('.calendar-object .expandable-surface', '--slot-top')).toEqual([]);
     expect(declared('.calendar-object .expandable-surface', '--slot-bottom')).toEqual([]);
     expect(declared('.calendar-object .expandable-surface', 'padding')).toEqual(['0 clamp(18px, 2.2cqw, 38px)']);

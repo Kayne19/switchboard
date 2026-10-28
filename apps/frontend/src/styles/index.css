@@ -1196,6 +1196,8 @@ button {
   background: #000;
 }
 .chart-object > .expandable-surface {
+  /* Keeps the landscape chart out of the framed grid. */
+  display: block;
   position: relative;
   z-index: 1;
   flex: 1 1 0;
@@ -4357,18 +4359,13 @@ button {
    assumed: a calendar's grid, a list's last rows and a figure's caption ran
    over the lower step. Timers and a forecast keep their own padding, which
    clears both steps (frame.spec.ts). */
-.calendar-object > .expandable-surface,
-.tasks-object > .expandable-surface,
-.inbox-object > .expandable-surface,
-.image-object > .expandable-surface {
+/* A surface may replace the track list with `--framed-rows`; what it holds stays in row 2. */
+.expandable-surface--framed {
   display: grid;
-  grid-template-rows: max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px));
+  grid-template-rows: var(--framed-rows, max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px)));
 }
 /* What the surface holds, not its own button, which stands over all of it. */
-.calendar-object > .expandable-surface > :not(.expandable-surface__expand),
-.tasks-object > .expandable-surface > :not(.expandable-surface__expand),
-.inbox-object > .expandable-surface > :not(.expandable-surface__expand),
-.image-object > .expandable-surface > :not(.expandable-surface__expand) {
+.expandable-surface--framed > :not(.expandable-surface__expand) {
   grid-row: 2;
   min-height: 0;
 }
@@ -5874,17 +5871,12 @@ button {
   .training-charts--compare .chart-object {
     min-height: 38cqh;
   }
-  /* The plot's foot stands above the panel's lower step, with the panel's
-     gap: on a tall portrait slot the step outgrows the 8 px, and the first
-     tick sat on it. */
+  /* The plot's foot row stays at or above the panel's lower step, so the
+     first tick clears it. */
   .chart-object > .expandable-surface {
     display: grid;
-    grid-template-rows: minmax(0, 1fr) max(8px, var(--panel-inset));
-    padding: 14px 8px 0;
-  }
-  .chart-object > .expandable-surface > :not(.expandable-surface__expand) {
-    grid-row: 1;
-    min-height: 0;
+    --framed-rows: 14px minmax(0, 1fr) max(8px, var(--panel-inset));
+    padding: 0 8px;
   }
   .chart-notes {
     --note-width: min(78%, 460px);

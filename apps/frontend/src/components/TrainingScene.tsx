@@ -152,7 +152,7 @@ export function trainingContent(
                 <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object" data-chart-id={chart.id}>
                   <TechFrame variant="panel" />
                   <ObjectSurface object={chart}>
-                    <ExpandableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
+                    <ExpandableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`} framed>
                       <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} led={chartNoteAnchors(chart, led)} />
                     </ExpandableSurface>
                   </ObjectSurface>
