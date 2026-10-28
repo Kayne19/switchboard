@@ -1296,7 +1296,7 @@ async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
         deadline: std::time::Instant::now() + Duration::from_secs(5),
         scope: ContinuationScope::FreshTurn,
         group: state.0.new_speech_group(),
-        with_transcript: false,
+        transcript: None,
     };
     let earlier_ends = async {
         body_read_to_its_end(&state, "The later line.").await;
@@ -1347,7 +1347,7 @@ async fn a_line_still_held_at_its_deadline_never_plays() {
         deadline: std::time::Instant::now() + Duration::from_millis(400),
         scope: ContinuationScope::FreshTurn,
         group: state.0.new_speech_group(),
-        with_transcript: true,
+        transcript: Some("The later line.".into()),
     };
     let answer = within(
         "the later line's answer",
@@ -1407,7 +1407,7 @@ async fn a_line_the_deadline_cuts_while_held_never_plays() {
         deadline: std::time::Instant::now() + Duration::from_millis(400),
         scope: ContinuationScope::FreshTurn,
         group: state.0.new_speech_group(),
-        with_transcript: true,
+        transcript: Some("The later line.".into()),
     };
     let answer = within(
         "the later line's answer",
