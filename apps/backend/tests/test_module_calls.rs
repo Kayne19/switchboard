@@ -266,12 +266,26 @@ async fn a_refused_reason_or_target_lists_the_names_it_takes() {
             json!({"detail": "invalid reason: expected one of finished, needs_decision, problem"})
         );
     }
-    let (code, body) = agent_call_json(&state, "/view", json!({"target": "screen"})).await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body,
-        json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"})
-    );
+    // Target matching is exact: old aliases, other case and padding are refused.
+    for target in [
+        "screen",
+        "stage",
+        "bay2",
+        "transcript",
+        "routing",
+        "magi",
+        "overview",
+        "Comms",
+        " comms ",
+    ] {
+        let (code, body) = agent_call_json(&state, "/view", json!({"target": target})).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{target:?}");
+        assert_eq!(
+            body,
+            json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"}),
+            "{target:?}"
+        );
+    }
 }
 
 // A background agent's request is shown on the debug page as it is on the
@@ -302,13 +316,12 @@ async fn a_request_to_speak_reaches_the_debug_bus() {
 
 #[tokio::test]
 async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
-    let (code, body) =
-        agent_call_json(&state(), "/view", json!({"target":"","colour":"red"})).await;
-    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(
-        body["detail"].as_str().unwrap().contains("colour"),
-        "{body}"
-    );
+    for field in ["colour", "reason"] {
+        let (code, body) =
+            agent_call_json(&state(), "/view", json!({"target": "", field: "red"})).await;
+        assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(body["detail"].as_str().unwrap().contains(field), "{body}");
+    }
     let reply = module_call(
         &state(),
         AgentCall {
@@ -876,8 +889,7 @@ async fn display_projection_generation_race() {
 
     let valid_view = json!({
         "token": "operator",
-        "target": "visual",
-        "reason": "inspect"
+        "target": "visual"
     });
     let (code, _) = agent_call_json(&state, "/view", valid_view).await;
     assert_eq!(code, StatusCode::OK);
@@ -911,8 +923,7 @@ async fn display_projection_generation_race() {
     // Stale token on /view must also be rejected with 409 CONFLICT!
     let stale_view = json!({
         "token": "operator",
-        "target": "theater",
-        "reason": "late"
+        "target": "theater"
     });
     let (code, resp) = agent_call_json(&state, "/view", stale_view).await;
     assert_eq!(code, StatusCode::CONFLICT);

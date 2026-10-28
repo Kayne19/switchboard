@@ -1457,7 +1457,7 @@ test('tool activity panel truncates long names and stays clear of the response',
     expect(railGeometry.toolTruncated).toBe(true);
     expect(railGeometry.detailTruncated).toBe(true);
 
-    fixtureServer.broadcast({ type: 'view', target: 'comms', reason: '' });
+    fixtureServer.broadcast({ type: 'view', target: 'comms' });
     const conversationPanel = page.locator('.tool-activity--conversation');
     await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
     await expect(conversationPanel).toBeVisible();
@@ -1581,7 +1581,7 @@ test('no live chat card stands in before the first response', async ({ page }) =
     await expect(page.locator('.live-chat-card')).toHaveCount(0);
 
     // The conversation scene keeps its own open-line prompt.
-    fixtureServer.broadcast({ type: 'view', target: 'comms', reason: '' });
+    fixtureServer.broadcast({ type: 'view', target: 'comms' });
     await expect(page.locator('.conversation-answer__text')).toHaveText('Line open. Speak when ready.');
   } finally {
     await fixtureServer.stop();

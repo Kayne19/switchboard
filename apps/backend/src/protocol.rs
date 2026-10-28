@@ -152,7 +152,7 @@ pub enum ServerMessage {
         seq: Option<u64>,
     },
     /// The agent asked for a view of the workspace.
-    View { target: String, reason: String },
+    View { target: String },
     /// The browser's `screen_state` report was applied.
     ScreenStateAck,
     /// State of every service-tracked project agent.

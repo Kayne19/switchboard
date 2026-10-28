@@ -136,7 +136,7 @@ test('Esc and EXIT leave the system view for auto, and the report says so', asyn
     await expect(page.locator('.stage')).toHaveAttribute('data-scene-kind', 'training');
     await expect.poll(() => reportedView(server)).toBe('auto');
 
-    server.broadcast({ type: 'view', target: 'system', reason: '' });
+    server.broadcast({ type: 'view', target: 'system' });
     await expect(page.locator('.stage')).toHaveAttribute('data-view', 'system');
     await page.locator('[data-scene="system"] .system__exit').click();
     await expect(page.locator('.stage')).toHaveAttribute('data-view', 'auto');

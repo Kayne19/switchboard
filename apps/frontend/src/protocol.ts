@@ -80,6 +80,9 @@ export interface CandidateMessage {
 /// How a candidate leg ended.
 export type CandidateEnd = "adopted" | "rolled_back" | "rescued";
 
+/// The views an agent can ask the page for (`VIEW_TARGETS` in the service).
+export type ViewName = "auto" | "visual" | "comms" | "system" | "theater";
+
 /// The candidate leg on `route` ended, and `reason` says how. Only an adopted
 /// candidate's clips are carried to its epoch. A connection's snapshot starts
 /// with an `adopted` one when the leg on the line was adopted at the current
@@ -247,8 +250,7 @@ export interface DisplayMessage {
 /// The agent asked for a view of the workspace.
 export interface ViewMessage {
 	type: "view";
-	target: string;
-	reason: string;
+	target: ViewName;
 }
 
 /// The page's `screen_state` report was applied.
@@ -447,7 +449,7 @@ const MESSAGE_FIELDS: { [Type in MessageType]: MessageFields<Type> } = {
 		success: boolean,
 	},
 	display: { action: present, seq: optional(number) },
-	view: { target: string, reason: string },
+	view: { target: oneOf<ViewName>("auto", "visual", "comms", "system", "theater") },
 	screen_state_ack: {},
 	agents_state: {
 		agents: list(object<AgentState>({

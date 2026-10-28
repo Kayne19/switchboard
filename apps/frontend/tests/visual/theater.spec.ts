@@ -120,7 +120,7 @@ test('Esc and EXIT leave the theater for auto, and the report says so', async ({
     await expect(page.locator('.stage')).toHaveAttribute('data-scene-kind', 'training');
     await expect.poll(() => reportedView(server)).toBe('auto');
 
-    server.broadcast({ type: 'view', target: 'theater', reason: '' });
+    server.broadcast({ type: 'view', target: 'theater' });
     await expect(page.locator('.stage')).toHaveAttribute('data-view', 'theater');
     await page.locator('.theater__exit').click();
     await expect(page.locator('.stage')).toHaveAttribute('data-view', 'auto');

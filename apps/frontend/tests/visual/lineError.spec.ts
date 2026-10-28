@@ -123,10 +123,10 @@ for (const size of SIZES) for (const error of ERRORS) {
       for (const action of fixtures.training) server.broadcast({ type: 'display', action });
       await drawnClear(page, 'training', error.text);
 
-      server.broadcast({ type: 'view', target: 'theater', reason: '' });
+      server.broadcast({ type: 'view', target: 'theater' });
       await drawnClear(page, 'theater', error.text);
 
-      server.broadcast({ type: 'view', target: 'system', reason: '' });
+      server.broadcast({ type: 'view', target: 'system' });
       const system = page.locator('[data-scene="system"]');
       await expect(system.locator('.system__status'), 'system: said in its STATUS row').toContainText(error.text);
       await expect(system.locator('.channel-stack__error'), 'system: not over the corner stack').toHaveCount(0);
