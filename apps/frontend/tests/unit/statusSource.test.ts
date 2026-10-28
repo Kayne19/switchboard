@@ -54,6 +54,9 @@ function namedError(name: string): Error {
   return error;
 }
 
+/** The epoch the harness's call is on. */
+const HELD_EPOCH = 0;
+
 /** A runtime on a greeted socket, and the switches its fakes answer to. */
 async function harness() {
   const listeners = new Map<string, Set<Handler>>();
@@ -123,7 +126,7 @@ async function harness() {
   const socket = FakeSocket.latest();
   socket.open();
   socket.receive(helloAck());
-  socket.receive({ type: "epoch", generation: 0 });
+  socket.receive({ type: "epoch", generation: HELD_EPOCH });
   await settle();
   let sequence = 0;
   const handsFree = () => {
@@ -139,9 +142,9 @@ async function harness() {
     /** One whole replay of the agent's voice arrives. */
     clip: async () => {
       sequence += 1;
-      socket.receive({ type: "audio_start", generation: 0, sequence, mime: "audio/mpeg", format: "mp3" });
+      socket.receive({ type: "audio_start", generation: HELD_EPOCH, sequence, mime: "audio/mpeg", format: "mp3" });
       socket.onmessage?.({ data: new TextEncoder().encode("speech").buffer } as MessageEvent);
-      socket.receive({ type: "audio_done", generation: 0, sequence, done: true });
+      socket.receive({ type: "audio_done", generation: HELD_EPOCH, sequence, done: true });
       await settle();
     },
   };
@@ -407,5 +410,62 @@ describe("the status line, in sequence", () => {
       expect({ status, statusError }).toEqual(shown);
       h.runtime.dispose();
     });
+  }
+});
+
+type EpochArrival =
+  | "hang up from a project leg"
+  | "transfer adopted"
+  | "return to the operator"
+  | "reconnect into the held leg"
+  | "reconnect into another call";
+
+function reconnect(h: Harness, generation: number) {
+  h.socket.drop();
+  h.runtime.retry();
+  const next = FakeSocket.latest();
+  next.open();
+  next.receive(helloAck());
+  next.receive({ type: "epoch", generation });
+}
+
+const EPOCHS: Record<EpochArrival, (h: Harness) => void> = {
+  "hang up from a project leg": (h) => {
+    h.socket.receive({ type: "epoch", generation: HELD_EPOCH + 1 });
+    h.socket.receive({ type: "epoch", generation: HELD_EPOCH + 1 });
+  },
+  "transfer adopted": (h) => {
+    h.socket.receive({ type: "candidate_cleared", route: "alpha", generation: HELD_EPOCH + 1, reason: "adopted" });
+    h.socket.receive({ type: "epoch", generation: HELD_EPOCH + 1 });
+  },
+  "return to the operator": (h) => h.socket.receive({ type: "epoch", generation: HELD_EPOCH }),
+  "reconnect into the held leg": (h) => reconnect(h, HELD_EPOCH),
+  "reconnect into another call": (h) => reconnect(h, HELD_EPOCH + 1),
+};
+
+const TAKEN_DOWN: Record<EpochArrival, StatusSource[]> = {
+  "hang up from a project leg": ["line", "turn", "playback"],
+  "transfer adopted": ["line", "turn"],
+  "return to the operator": ["line", "turn"],
+  "reconnect into the held leg": ["connection", "playback"],
+  "reconnect into another call": ["connection", "line", "turn", "playback"],
+};
+
+describe("the status line, when an epoch arrives", () => {
+  for (const arrival of Object.keys(EPOCHS) as EpochArrival[]) {
+    for (const writer of WRITERS) {
+      it(`${writer} error standing | ${arrival}`, async () => {
+        const h = await harness();
+        await REPORTS[writer].error.run(h);
+        await settle();
+        EPOCHS[arrival](h);
+        await settle();
+        const { status, statusError } = h.runtime.currentState;
+        expect(statusError ? status : null, "the error the page draws").toBe(
+          TAKEN_DOWN[arrival].includes(SOURCE[writer]) ? null : REPORTS[writer].error.text,
+        );
+        h.runtime.dispose();
+      });
+    }
   }
 });

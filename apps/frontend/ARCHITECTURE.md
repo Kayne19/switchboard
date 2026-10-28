@@ -29,6 +29,7 @@ The reducer stores semantic objects by stable ID, insertion order, speech state,
 - the agent's objects, order and speech (`agentObjects`, `agentOrder`, `agentSpeech`), from the `display` channel;
 - the runtime's (`runtimeObjects`, `runtimeOrder`, `runtimeSpeech`): the conversation and other page-owned objects, whose IDs start with `RUNTIME_ID_PREFIX` (`__runtime/`), so an agent ID never lands there;
 - `objects`, `order` and `speech`, the two merged, which the renderer reads;
+- `lineError`, the line's standing error (`runtime_say` and `runtime_unsay` to `RUNTIME_LINE_ERROR_ID`), held apart from speech so that no line Damocles says replaces it;
 - `workspace` (the requested view, and the effective view: the one the page draws and reports, `computeEffectiveView`), `activity`, `toolRun`, `listening`, `focusId` and `revision`.
 
 Stable IDs are critical. Reusing an ID for `show` updates the object in place and allows React and Motion to preserve continuity.
@@ -62,9 +63,10 @@ A visual primary's composition is named for its type (`sceneKind`, from `VISUAL_
 Every composition is drawn by one `SceneShell` (`src/components/Scenes.tsx`).
 The shell owns what every page has: the frame and heading, the Damocles
 presence, the rail (metrics, live response, note, progress, tool activity),
-the footer caption, the CHANNEL / MODE stack in the bottom-left corner, and
-the transcript entry point. A composition only fills the main slot and names
-what its rail carries. A feature that crosses compositions is added to the
+the footer caption, the CHANNEL / MODE stack in the bottom-left corner with
+the line's error at its head, and the transcript entry point. A composition
+only fills the main slot and names what its rail carries. A feature that
+crosses compositions is added to the
 shell once; it is never wired into a composition by hand. The presence reads
 the voice level from the registered voice runtime, so no page can leave it
 out.
@@ -91,6 +93,15 @@ what the microphone is doing. With no runtime -- the demo page -- there is
 nothing to switch and the control is disabled. No composition labels that
 corner: a per-page `DISPLAY / ...` label stood there before, and the
 conversation page carried a static stack that always read PUSH-TO-TALK.
+
+A standing line error heads the corner stack, above CHANNEL and MODE, on
+every page but the system view, whose STATUS row says it (see "Transport
+boundary"). The shell measures how tall it stands (`useLineErrorRoom`) and
+sets that as `--line-error-room`; each layout keeps its foot that much
+higher, so the error covers nothing the page draws: a layout drawn as a
+grid on the scene (idle, conversation, theater, system) by the scene's own
+bottom padding, a content scene by its grid's foot. A long error scrolls in
+at most five lines, so the room stays bounded.
 
 The theater view (`theater`, #277) is one more layout of the shell, not a
 composition: the primary alone, in the focus box (`StagedObject` in
@@ -188,6 +199,7 @@ lifecycle; each reader owns only what it reads.
 | `ListViewport` | `src/primitives/ListViewport.tsx` | whether the list scrolls, across, and the pinned band's depth |
 | `Spot`, `WeatherPrimitive` | `src/primitives/WeatherPrimitive.tsx` | whether the spot line sets the chance of rain aside; the condition line's width in a small slot |
 | `useRailUnder` | `src/components/Scenes.tsx` | whether the rail stands under the main column |
+| `useLineErrorRoom` | `src/components/Scenes.tsx` | how tall the line's error stands at the head of the corner stack |
 | `useCalloutPlaced` | `src/components/Scenes.tsx` | whether the main slot's graph draws the scene's note as a callout (see below) |
 | `useCrowded`, `useRailFit` | `src/components/Rail.tsx` | whether the note leads a crowded column; under the column, the rail's fit and the note's floor |
 | `ChartNotes` | `src/components/ChartNotes.tsx` | the chart canvas the notes' layer follows |
@@ -405,12 +417,16 @@ through the adapter.
 
 Every failure the runtime cannot recover from is reported as status text with
 `statusError` set -- no microphone, a browser that cannot record, a recorder
-that stopped, a line that will not connect. `runtime.tsx` puts that text on
-screen through `runtime_say` to `RUNTIME_LINE_ERROR_ID`, as a server `error`
-is, once per text; the rail draws it as `LINE / ERROR`, in red, never as
-Damocles's explanation. Ordinary status -- the idle line, a turn under way --
-is never drawn: the presence itself shows what the line is doing. A status
-that kept the flag of an error before it was drawn as that error, so the turn
+that stopped, a line that will not connect, a server `error`. `runtime.tsx`
+puts that text on screen through `runtime_say` to `RUNTIME_LINE_ERROR_ID`,
+once per text. The shell draws it once, on every page but the system
+view, as `LINE / ERROR` in red at the head of the corner stack (see "Scene
+shell"), never as Damocles's explanation. The reducer holds it apart from
+speech (`ControllerState.lineError`), so no line Damocles says or is heard
+saying replaces it, and the rail's note slot never carries it, so no note
+does either. Ordinary status -- the idle line, a turn under way -- is never
+drawn: the presence itself shows what the line is doing. A status that kept
+the flag of an error before it was drawn as that error, so the turn
 after a failure put "Connected. Tap Talk and speak." beside the visual
 (#213). An error with nowhere to go is a browser that fails silently, which
 is what a caller tapping Damocles on an iPad saw.
@@ -421,24 +437,39 @@ Every status names its source and says whether it is an error
 standing error, and `say` is its one writer. An error stands until its own
 source says something that is not one, or withdraws it; the page is given the
 newest error still standing, and with none the newest status, as text, so the
-card leaves (`runtime_unsay`). When the newest error is taken down, an older
-one still standing is drawn again. One slot that any status cleared let
-playback's idle line, at the end of the agent's audio, take down a server
-error or a lost connection (#354). The runtime binds each part's sink to its
-source where it builds the part, so playback, push-to-talk and the link never
-name one:
+error leaves the corner stack (`runtime_unsay`). When the newest error is
+taken down, an older one still standing is drawn again. One slot that any
+status cleared let playback's idle line, at the end of the agent's audio,
+take down a server error or a lost connection (#354). The runtime binds each
+part's sink to its source where it builds the part, so playback,
+push-to-talk and the link never name one:
 
 | source | who says it | its errors | what takes them down |
 |---|---|---|---|
 | `connection` | `CallLink`; `lineUp`, `lineDown`, `retry()` | "Connection error", "Keepalive missed", "Disconnected. Reconnecting..." | a socket opening (the idle line), `retry()` |
-| `line` | the route, model and thinking pickers; hangup; `candidate`, `candidate_cleared` | "That did not go through", "Could not hang up" | the next pick, a line request starting, a hangup tried again, a transfer starting |
-| `turn` | the outbox and its clips; `epoch`'s clip notices; `thinking`, `queued`, `reply`; the server's `error` and `routing_unavailable` | "Error: ...", routing unavailable, "Waiting to send", "Too many unsent voice clips", "The line changed before N clip(s) went out" | the turn's next step: a clip going out or accepted, `thinking`, `queued`, `reply` |
-| `playback` | `PlaybackStatus` | paused, blocked, refused, silent, stream failed | the clip sounding again after a pause or block ("Audio resumed."), the queue emptying (the idle line) |
+| `line` | the route, model and thinking pickers; hangup; `candidate`, `candidate_cleared` | "That did not go through", "Could not hang up" | the next pick, a line request starting, a hangup tried again, a transfer starting, an epoch that ends the leg |
+| `turn` | the outbox and its clips; `epoch`'s clip notices; `thinking`, `queued`, `reply`; the server's `error` and `routing_unavailable` | "Error: ...", routing unavailable, "Waiting to send", "Too many unsent voice clips", "The line changed before N clip(s) went out" | the turn's next step: a clip going out or accepted, `thinking`, `queued`, `reply`; an epoch that ends the leg |
+| `playback` | `PlaybackStatus` | paused, blocked, refused, silent, stream failed | the clip sounding again after a pause or block ("Audio resumed."), the queue emptying (the idle line), an epoch that cuts the old leg's audio off |
 | `microphone` | `PushToTalk`; hands-free's published `error` | no microphone, cannot record, recording failed or taken, any hands-free failure | a recording starting or a press ending without one; hands-free turning on (published `starting`) |
 
 `candidate_cleared` puts the idle line back only when the newest status said,
 drawn or not, is the transfer's "Connecting to ...". The writer-by-report
 table in `tests/unit/statusSource.test.ts` pins each row through the runtime.
+
+An `epoch` that ends the leg the page held takes down the line's and the
+turn's errors. Every epoch after a socket's snapshot ends it; the snapshot
+ends it only when it names another generation (`IdentityStep.epochMoved`),
+so a reconnect at the same generation keeps them, even when an agent handed
+the caller back while the page was away. A page control that rescues the
+leg sends two epochs: a hangup from a project leg sends the rescue's and
+then the operator leg's announcement, at the same generation; a `/connect`,
+or a `/model` or `/thinking` redial, sends the rescue's and then the new
+leg's adoption, one generation on. The second takes down what was said
+between them: the rescue's "The line changed before N clip(s) went out",
+and the "Please repeat it." errors for clips the rescue dropped.
+Playback's errors go with any epoch but a handoff, where the goodbye plays
+on. The writer-by-epoch table in `tests/unit/statusSource.test.ts` pins
+each.
 
 Playback is in `src/runtime/audioPlayback.ts`, and every way it can fail is
 reported the same way. A clip the element refuses, a stream it will not take,

@@ -1539,10 +1539,13 @@ test('an agent say and a line error still show beside the live chat card', async
     await expect(page.locator('.rail-note')).toHaveCount(0);
 
     fixtureServer.broadcast({ type: 'error', message: 'LINE ERROR / TRANSFER FAILED' });
-    await expect(page.locator('.rail-note')).toContainText('LINE ERROR / TRANSFER FAILED');
+    const lineError = page.locator('.channel-stack__error');
+    await expect(lineError, 'the line\'s, at the head of the corner stack').toContainText('LINE ERROR / TRANSFER FAILED');
+    await expect(page.locator('.rail-note'), 'never a rail note').toHaveCount(0);
 
     fixtureServer.broadcast({ type: 'display', action: { op: 'say', text: 'AGENT SAY EXPLANATION' } });
     await expect(page.locator('.rail-note')).toContainText('AGENT SAY EXPLANATION');
+    await expect(lineError, 'what Damocles says does not hide it').toContainText('LINE ERROR / TRANSFER FAILED');
     await expect(live).toContainText('The map is up.');
   } finally {
     await fixtureServer.stop();

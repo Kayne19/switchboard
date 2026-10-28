@@ -290,10 +290,13 @@ the operator; before adoption the route is still the old one, and the rescue
 has already abandoned the candidate.
 
 On the browser side an `epoch` drops what the old leg put on screen (its
-objects, speech, focus, activity, and any view it asked for) and keeps the
-conversation, which belongs to the call. The route label on it changes when the
-status arrives. A reconnect is followed by the history snapshot, which replaces
-the transcript and hides the conversation if the server has none.
+objects, speech, focus, activity and any view it asked for), the line's and
+the turn's errors, except on a reconnect's snapshot of the same generation,
+and playback's, except on a handoff. It keeps the conversation, which belongs to the call, and a
+microphone's error, which belongs to the device. The route label on it
+changes when the status arrives. A reconnect is followed by the history
+snapshot, which replaces the transcript and hides the conversation if the
+server has none.
 
 ## Delivery and picker ordering
 
@@ -315,7 +318,11 @@ and settled replies. Cancellation releases a slot so a stale TTS result cannot
 wedge later speech. The browser drops queued/playing audio and the outbox clips
 that never went out on a new epoch, and tells the caller about those. A stale
 clip that did go out stays until it receives its ID-bearing `stale_epoch`
-error, then is removed from the outbox rather than retried forever.
+error, then is removed from the outbox rather than retried forever. Both
+notices last only until the next epoch on the live line, and after a rescue
+by a page control (a hangup from a project leg, a `/connect`, a redial) that
+epoch follows at once: the new leg's, which takes them down
+(`apps/frontend/ARCHITECTURE.md`, "Transport boundary").
 
 The route/model/thinking pickers serialize their HTTP operations. A failed picker
 request restores the value that was selected before that request, unless a newer

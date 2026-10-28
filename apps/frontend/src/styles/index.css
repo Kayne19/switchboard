@@ -111,6 +111,11 @@ button {
   overflow: hidden;
   background: #000;
   --reading-text-size: clamp(15px, 1.28cqw, 22px);
+  /* A layout drawn as a grid on the scene (idle, conversation, theater,
+     system) stands its foot above a line error at the head of the corner
+     stack (--line-error-room, set by SceneShell); a content scene raises
+     its grid instead (.content-grid). */
+  padding-bottom: calc(var(--scene-foot, 0px) + var(--line-error-room, 0px));
 }
 .tech {
   font-family:
@@ -254,6 +259,7 @@ button {
    scroll with nothing to focus inside it in the tab order. */
 .annotation-card__text:focus-visible,
 .live-chat-card__text:focus-visible,
+.channel-stack__error-text:focus-visible,
 .conversation-answer__text:focus-visible,
 .transcript__body:focus-visible,
 .rich-text__code-block:focus-visible,
@@ -535,7 +541,9 @@ button {
   align-self: center;
   width: min(62cqw, 1000px);
   height: min(31cqh, 330px);
-  min-height: 180px;
+  /* A stage too short for its 31cqh keeps the box readable, less the room
+     a line error takes under it: at 844x390 the whole 180px met the error. */
+  min-height: calc(180px - var(--line-error-room, 0px));
   z-index: 2;
 }
 .conversation-answer__tag {
@@ -669,6 +677,35 @@ button {
 }
 .channel-stack__mode:disabled {
   cursor: default;
+}
+/* A standing line error heads the stack (ChannelStack): red, in the prose
+   face, below the reading size as the corner's other words are (it is the
+   line's status, not content). The gap under it is fixed: the shell
+   measures the box through a content-box observer, which a stage-relative
+   padding would change unseen. */
+.channel-stack__error {
+  display: grid;
+  gap: 0.5em;
+  max-width: min(36rem, 44cqw);
+  padding-bottom: 10px;
+  color: var(--red);
+}
+/* Never cut: a long error (a server's, up to a few hundred characters)
+   scrolls in at most five lines, or a sixth of a short stage, so the room
+   the layouts give it stays bounded. */
+.channel-stack__error-text {
+  max-height: min(calc(5 * 1.35em), 16cqh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
+  pointer-events: auto;
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1cqw, 16px);
+  line-height: 1.35;
+  letter-spacing: normal;
+  text-transform: none;
+  overflow-wrap: anywhere;
 }
 .transcript-toggle {
   /* Over the corner stack where they overlap (see `channel-stack`). Inside
@@ -844,6 +881,7 @@ button {
   --rail: clamp(210px, 17.5cqw, 340px);
   --scene-gap: clamp(42px, 4.6cqw, 96px);
   --footer-y: 6.7cqh;
+  --content-foot: 12.2cqh;
 }
 /* The heading runs to the stage's far edge and no further: a long title
    (up to 128 characters) or subtitle is cut there with an ellipsis. */
@@ -881,7 +919,7 @@ button {
   left: var(--edge);
   right: var(--edge);
   top: 11.2cqh;
-  bottom: 12.2cqh;
+  bottom: calc(var(--content-foot) + var(--line-error-room, 0px));
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--rail);
   gap: var(--scene-gap);
@@ -5375,11 +5413,12 @@ button {
   align-items: center;
   padding-top: max(6cqh, 34px);
   padding-inline: 4cqw;
-  padding-bottom: var(--scene-foot);
+  --scene-foot: calc(7.3cqh + 44px);
 }
 .scene--theater .transcript-reveal,
 .scene--system .transcript-reveal {
   height: var(--scene-foot);
+}
 }
 /* Held to the room between the header and the corner stack at every
    aspect, over the focus box's own sizes (a noted chart in portrait is
@@ -5712,6 +5751,12 @@ button {
     left: 6cqw;
     bottom: 7.2cqh;
   }
+  .channel-stack__error {
+    max-width: min(36rem, 88cqw);
+  }
+  .channel-stack__error-text {
+    font-size: clamp(13px, 1.8cqw, 16px);
+  }
   .transcript-toggle {
     bottom: 6.2cqh;
   }
@@ -5720,7 +5765,7 @@ button {
   .tool-activity--conversation {
     left: 6cqw;
     right: 6cqw;
-    bottom: 12cqh;
+    bottom: calc(12cqh + var(--line-error-room, 0px));
     translate: none;
     max-width: 420px;
     margin-inline: auto;
@@ -5750,6 +5795,7 @@ button {
     --edge: clamp(16px, 4cqw, 42px);
     --scene-gap: clamp(14px, 2.2cqh, 26px);
     --footer-y: 3.8cqh;
+    --content-foot: 9.2cqh;
   }
   .scene-heading {
     top: 4.8cqh;
@@ -5763,7 +5809,6 @@ button {
   .content-grid {
     --rail-presence-height: calc(var(--rail-presence-width) * 1133 / 944 + var(--rail-signal-height));
     top: 9.2cqh;
-    bottom: 9.2cqh;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 59cqh) minmax(min(max(var(--rail-floor, 0px), var(--rail-presence-height)), (100% - var(--scene-gap)) / 2), 1fr);
     gap: var(--scene-gap);
@@ -6048,6 +6093,7 @@ button {
     --edge: clamp(20px, 3.4cqw, 66px);
     --rail: clamp(190px, 15cqw, 300px);
     --scene-gap: clamp(32px, 3.7cqw, 72px);
+    --content-foot: 14cqh;
   }
   /* A stage twice as wide as tall has the width a metric card does not use
      and not the height for a visual's cell under it: on a phone on its
@@ -6068,7 +6114,6 @@ button {
   }
   .content-grid {
     top: 13cqh;
-    bottom: 14cqh;
   }
   .scene-heading {
     top: 5cqh;
