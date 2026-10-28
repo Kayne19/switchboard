@@ -64,9 +64,18 @@ async function receive(message: object) {
 // One utterance of audio, start to finish.
 async function receiveUtterance(sequence: number) {
   await receive({ type: 'audio_start', generation: 1, sequence, mime: 'audio/mpeg', format: 'mp3' });
+  // This realm's ArrayBuffer: the link takes a binary frame by `instanceof`,
+  // and under jsdom a TextEncoder's buffer is another realm's, which it drops.
+  const audio = new ArrayBuffer(3);
+  new Uint8Array(audio).set(new TextEncoder().encode('mp3'));
   await act(async () => {
-    socket.onmessage?.({ data: new TextEncoder().encode('mp3').buffer } as MessageEvent);
+    socket.onmessage?.({ data: audio } as MessageEvent);
   });
+  await receive({ type: 'audio_done', generation: 1, sequence, done: true });
+}
+
+async function receiveUtteranceWithNoAudio(sequence: number) {
+  await receive({ type: 'audio_start', generation: 1, sequence, mime: 'audio/mpeg', format: 'mp3' });
   await receive({ type: 'audio_done', generation: 1, sequence, done: true });
 }
 
@@ -175,6 +184,34 @@ describe('the live response follows the audio (#112)', () => {
 
     await receiveUtterance(4);
     expect(liveText()).toBe('Putting you through.');
+  });
+
+  it('shows a reply whose utterance has no audio at its turn, after the line being heard', async () => {
+    await receiveUtterance(1);
+    await receive(spoken('First line.', 1));
+    await receive({ type: 'reply', text: 'The reply.', route: 'alpha', voiced: true, sequence: 2 });
+    await receiveUtteranceWithNoAudio(2);
+    expect(liveText(), 'the first line is still the one being heard').toBe('First line.');
+    expect(loggedTexts()).toEqual(['First line.']);
+
+    await finishPlaying();
+    expect(liveText()).toBe('The reply.');
+  });
+
+  it('keeps the queued lines ahead of a reply whose utterance has no audio', async () => {
+    await receiveUtterance(1);
+    await receive(spoken('First line.', 1));
+    await receiveUtterance(2);
+    await receive(spoken('Second line.', 2));
+    await receive({ type: 'reply', text: 'The reply.', route: 'alpha', voiced: true, sequence: 3 });
+    await receiveUtteranceWithNoAudio(3);
+    expect(liveText()).toBe('First line.');
+
+    await finishPlaying();
+    expect(liveText(), 'the queued line is heard in its turn').toBe('Second line.');
+    expect(loggedTexts()).toEqual(['First line.', 'Second line.']);
+    await finishPlaying();
+    expect(liveText()).toBe('The reply.');
   });
 
   it('shows a line that has no audio at once', async () => {

@@ -454,7 +454,7 @@ one writer, `enter`:
 | `gap` | | the timer of the pause between two messages (`INTER_UTTERANCE_GAP_MS`, 0 today) |
 | `replay` | `attaching`, `starting`, `playing`, `paused` | a whole replay's blob URL, its element handlers and its level meter; the silence watch while starting or playing; the `play()` attempt until it settles |
 | `stream` | `attaching`, `opening`, `playing`, `paused`, `blocked` | its `MseSource` (`mseStream.ts`), handlers and meter; the open watch while opening, the silence watch while playing |
-| `cutOff` | | a stream taken off the element while its bytes were still arriving: nothing plays before its whole replay, queued on its `audio_done` |
+| `cutOff` | | a stream taken off the element while its bytes were still arriving: nothing plays before its whole replay, queued on its `audio_done`; one that brought no audio is over then |
 
 Moving to another holder releases what the old one put on the element:
 handlers off, meter stopped, element unloaded, URL revoked. A stream that
@@ -484,12 +484,27 @@ reached the cap after about 70 minutes of speech, and every reply after it
 was silent (#431). `MAX_AUDIO_UTTERANCE` (32 MiB) bounds one utterance.
 An utterance whose next chunk would pass either cap ends there, through the
 same path as its `audio_done` (`endUtterance`): a stream is finished with
-what went in and keeps the element, and a whole utterance is queued with
-what arrived. Its later chunks and its own `audio_done` find nothing
-arriving. The status line says the reply is too long to play in full, or
-that too much audio is waiting, and that its full text is in the transcript
-(`PlaybackStatus.overLimit`). A cap is not a streaming failure: streaming
-stays as it was.
+what went in and keeps the element, unless nothing went in (below), and a
+whole utterance is queued with what arrived. Its later chunks and its own
+`audio_done` find nothing arriving. The status line says the reply is too
+long to play in full, or that too much audio is waiting, and that its full
+text is in the transcript (`PlaybackStatus.overLimit`). A cap is not a
+streaming failure: streaming stays as it was.
+
+An utterance can end with no audio at all: its `audio_start` and
+`audio_done` come with nothing between them, or its first chunk would pass a
+cap. Nothing empty is left on the element for it. Chromium answers an empty
+stream or an empty blob with an element error, and an empty stream's error
+would turn streaming off for the call; WebKit leaves an empty stream on the
+element with neither `ended` nor an error, so nothing after it would play
+until the next leg. One that waits keeps its place in line, as every
+utterance does, and when its turn comes it is reached and over at once
+(`passOver`): its line is shown in its turn, and what waits after it
+follows. One that took the element while it was still arriving is
+unloaded from it when it ends, and one cut off from it while still arriving
+ends the same way; what waits follows. Unloading is what keeps both engines
+going, not leaving the source un-ended: an empty source ended just before
+it is unloaded leaves no error and no stall in either.
 
 A clip that produced no sound is noticed whatever `play()` does with its
 promise. `NO_PROGRESS_MS` is armed when the attempt is made, not when
