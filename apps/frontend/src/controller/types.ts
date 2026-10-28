@@ -218,7 +218,7 @@ export interface ImageData {
 // ---- Personal-assistant types ----------------------------------------------
 //
 // Times are written three ways (docs/display-tool.md, "Time values"), each a
-// string on the wire that `parseTimeValue` in validation.ts reads, the one
+// string on the wire that `parseTimeValue` in validation/time.ts reads, the one
 // time parser the page has. A calendar, a to-do list, a forecast and an
 // inbox are drawn from the times the agent sends, with no page clock and no
 // zone maths: "today" and "now" are data. Only a timer runs on the page

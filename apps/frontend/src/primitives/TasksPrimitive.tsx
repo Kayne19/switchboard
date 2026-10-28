@@ -1,6 +1,6 @@
 import { Fragment, useMemo } from 'react';
 import type { TaskItem, TasksData, TaskState } from '../controller/types';
-import { parseTimeValue, type TimeValue } from '../controller/validation';
+import { parseTimeValue, type TimeValue } from '../controller/validation/time';
 import { ListViewport } from './ListViewport';
 import { NoteBadge } from './NoteMarker';
 import { ArrowGlyph } from './MetricsPrimitive';

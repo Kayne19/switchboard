@@ -990,7 +990,7 @@ rules"); the reasons are these.
   browser's decoder reads, never parsed as a document, so it adds no script
   surface. SVG is refused for exactly that reason: it is markup and can carry
   script. `format` cannot smuggle it in, because both validators
-  (`validation.ts`, `visual_protocol.rs`) decode the head of `bytes` and check
+  (`validation/image.ts`, `visual_protocol.rs`) decode the head of `bytes` and check
   it starts with the signature `format` names.
 - **The page builds the source.** The `img` source is
   `data:image/<format>;base64,<bytes>`, built by `ImagePrimitive` from the two

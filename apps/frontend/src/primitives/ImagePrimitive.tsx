@@ -1,6 +1,6 @@
 import { useMemo, useState, type CSSProperties } from 'react';
 import type { ImageData, ImageFormat } from '../controller/types';
-import { base64DecodedLength } from '../controller/validation';
+import { base64DecodedLength } from '../controller/validation/image';
 import type { Slot } from './slot';
 
 // The only image types the page draws, by the format the validators

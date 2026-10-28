@@ -178,7 +178,7 @@ for (const file of markdown()) {
 	};
 	const mib = 1024 * 1024;
 	const image = {
-		"validation.ts": cap("apps/frontend/src/controller/validation.ts", /^export const MAX_IMAGE_BYTES = ([^;]+);$/m),
+		"validation/image.ts": cap("apps/frontend/src/controller/validation/image.ts", /^export const MAX_IMAGE_BYTES = ([^;]+);$/m),
 		"visual_protocol.rs": cap("apps/backend/src/visual_protocol.rs", /^pub const MAX_IMAGE_BYTES: usize = ([^;]+);$/m),
 		"__init__.py": cap("skills/switchboard/src/switchboard/__init__.py", /^_MAX_IMAGE_BYTES = (.+)$/m),
 	};
@@ -216,7 +216,7 @@ for (const file of markdown()) {
 		same("action cap (MAX_ACTION_BYTES)", general);
 		same("skill socket line cap (MAX_LINE_BYTES)", lineCaps);
 		same("typed turn cap (MAX_TYPED_TURN_CHARS)", typedTurn);
-		const raw = image["validation.ts"];
+		const raw = image["validation/image.ts"];
 		if (base64 !== 4 * Math.ceil(raw / 3)) findings.push(`docs/display-action-v1.schema.json: ImageData.bytes maxLength ${base64} is not the base64 length of ${raw} bytes (${4 * Math.ceil(raw / 3)})`);
 		if (line < action["validation.ts"] + mib) findings.push(`apps/host-agent/src/skill_socket.ts: MAX_LINE_BYTES ${line} leaves less than 1 MiB around a ${action["validation.ts"]}-byte image action`);
 		if (frame < line + mib) findings.push(`apps/backend/src/hosts.rs: MAX_HOST_FRAME_BYTES ${frame} leaves less than 1 MiB around a ${line}-byte skill socket line`);

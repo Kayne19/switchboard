@@ -6,7 +6,7 @@
 // and in a compact slot, and the item a note names.
 import { describe, expect, it } from 'vitest';
 import type { TaskItem, TasksData } from '../../src/controller/types';
-import { parseTimeValue } from '../../src/controller/validation';
+import { parseTimeValue } from '../../src/controller/validation/time';
 import { fixtures } from '../../src/fixtures/scenes';
 import {
   LONG_TASK_LIST,

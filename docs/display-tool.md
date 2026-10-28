@@ -150,7 +150,7 @@ The page lays a graph out in layers along the reading axis (left to right in lan
 
 ### Time values
 
-Every time in a display action is a string in one of three forms. Each validator has one parser for them (`parseTimeValue` in `validation.ts`, `parse_time_value` in `visual_protocol.rs`), and every type that carries a time uses it.
+Every time in a display action is a string in one of three forms. Each validator has one parser for them (`parseTimeValue` in `validation/time.ts`, `parse_time_value` in `visual_protocol.rs`), and every type that carries a time uses it.
 
 | form | written | example | where |
 | --- | --- | --- | --- |
