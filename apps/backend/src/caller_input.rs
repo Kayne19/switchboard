@@ -415,7 +415,10 @@ pub(crate) fn parse_clip_header(
     Ok((id, mime, generation))
 }
 
-/// The longest turn a caller may type, the same bound `/speak` puts on text.
+/// The longest turn a caller may type, in code points once trimmed.
+/// The page refuses a longer one before it sends it (`MAX_TYPED_TURN_CHARS`
+/// in `apps/frontend/src/protocol.ts`; `scripts/check_hygiene.mjs` keeps the
+/// two equal).
 pub(crate) const MAX_TYPED_TURN_CHARS: usize = 16 * 1024;
 
 /// A turn the caller typed: `(id, generation, text)`.

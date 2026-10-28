@@ -14,7 +14,7 @@ import { ControllerProvider, useController } from '../../src/controller/context'
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { helloAck } from '../fixtures/serverMessages';
 import { testLine } from './lineControls';
-import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
+import { mount, rerender, stubResizeObserver, type, unmountAll } from './sceneHarness';
 
 type Controller = ReturnType<typeof useController>;
 
@@ -95,14 +95,6 @@ function input(): HTMLInputElement {
 function click(element: Element) {
   act(() => {
     (element as HTMLElement).click();
-  });
-}
-
-function type(field: HTMLInputElement, value: string) {
-  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
-  act(() => {
-    setValue.call(field, value);
-    field.dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
 

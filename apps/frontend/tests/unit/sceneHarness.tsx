@@ -15,6 +15,7 @@
 //   the controller holds.
 // - `stubResizeObserver` is opt-in, not in setupFiles: some files install
 //   one that reports (railFit.test.tsx, calendarPaging.test.tsx).
+// - `type` sets a field's value as typing does, so its `onChange` runs.
 //
 // The act-environment flag every file used to set is in setup.ts.
 import { act, useEffect, type ReactNode } from 'react';
@@ -131,6 +132,18 @@ export function stubResizeObserver(): void {
 export function referenced(within: ParentNode, value: string | null | undefined): Element | null {
   const id = value?.match(/^url\(#(.+)\)$/)?.[1];
   return id ? ([...within.querySelectorAll('[id]')].find((element) => element.id === id) ?? null) : null;
+}
+
+/**
+ * Puts `value` in `field` through the value setter React tracks, then fires
+ * `input`: React reads that as typing and runs the field's `onChange`.
+ */
+export function type(field: HTMLInputElement, value: string): void {
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+  act(() => {
+    setValue.call(field, value);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  });
 }
 
 /** Unmounts everything mounted, now; the harness does it after each test. */
