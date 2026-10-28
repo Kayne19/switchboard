@@ -243,7 +243,7 @@ async fn speak(state: AppState, req: Speak) -> Response {
             ContinuationScope::FreshTurn
         },
         group: group.unwrap_or_else(|| state.0.new_speech_group()),
-        log_spoken: true,
+        transcript: Some(req.text.clone()),
     };
     match send_speech(&state, admission, reserved).await {
         Ok(()) => {
@@ -542,7 +542,8 @@ async fn display(
                 );
                 return Json(json!({
                     "delivered": true, "rendered": false,
-                    "reason": "the caller's screen moved to a new leg before this was confirmed"
+                    "reason": "new_leg",
+                    "detail": "the caller's screen moved to a new leg before this was confirmed, and that cleared the stage: this is not on screen"
                 }))
                 .into_response();
             }

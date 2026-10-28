@@ -204,21 +204,28 @@ async fn a_level_refused_after_the_model_changed_keeps_the_new_model() {
     board.shutdown().await;
 }
 
-/// A command that fails on the link, not by the host's answer, ends the
-/// leg: the service still ends the session it created, so it does not run
-/// on with the caller's conversation and block a desk takeover (#291).
+/// A command that fails, not one the host refuses, ends the leg: the
+/// service still ends the session it created, so it does not run on with
+/// the caller's conversation and block a desk takeover (#291).
 #[tokio::test]
-async fn a_model_change_the_link_fails_still_ends_the_session_on_its_host() {
-    let (mut board, log) = on_alpha_refusing("set_model", "stale_epoch").await;
-    let live = board.agent.clone().expect("alpha is on the line");
+async fn a_model_change_that_fails_still_ends_the_session_on_its_host() {
+    for code in ["stale_epoch", "daemon_unreachable"] {
+        let (mut board, log) = on_alpha_refusing("set_model", code).await;
+        let live = board.agent.clone().expect("alpha is on the line");
 
-    let decided = board.planner.model_change("anthropic/next").await;
-    let reply = redialed(&mut board, decided).await;
+        let decided = board.planner.model_change("anthropic/next").await;
+        let reply = redialed(&mut board, decided).await;
 
-    assert!(reply.error.is_some(), "{reply:?}");
-    assert!(!live.alive());
-    assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
-    board.shutdown().await;
+        assert!(reply.error.is_some(), "{code}: {reply:?}");
+        assert!(!live.alive(), "{code}: the session is still in use");
+        assert_eq!(board.coordinator.route(), OPERATOR, "{code}");
+        assert_eq!(
+            until_named(&log, "kill").await,
+            [json!({"session": "s1"})],
+            "{code}"
+        );
+        board.shutdown().await;
+    }
 }
 
 #[test]

@@ -443,6 +443,93 @@ reply to a `prompt` names the turn the prompt went into, so the prompt ends
 only on that turn's `turn_end`, never on another's (host-link protocol 2).
 A host agent that predates this is refused at hello.
 
+The turn the reply names can be one the host already had open. When the
+caller's operation wins the race above, the run is refused an operation of
+its own, and the caller's prompt reaches a session that is running it: the
+host sends the prompt into the run as a `follow_up`, and its reply names the
+run. The run is then the caller's answer (#512), but it opens no turn of its
+own, so no `turn_start` with cause `input` ever crossed to bind the caller's
+operation to it. Its `speak` and `display`, which the host stamps with the
+run's turn and cause, were refused as a self-woken call without authority
+while the caller waited for exactly that answer. So the session's turn
+reports the reply's turn as the caller turn's start
+(`TurnEvent::PromptReplied`, stepped by `prompt_as` on the prompt's task),
+and the one bind in `open_host_turn` binds the operation to it; a turn the
+host opened for the prompt reports its own start too, and the second bind
+of one id changes nothing. With the reply read before the run's end, the
+host's end of that turn then settles the operation as an `input` turn's end
+does, whatever the run's cause, and the rule above holds for a `follow_up`
+too. With the end read first (the reply is read on the prompt's task, the
+end on the pump's, and nothing orders them), the operation is not bound
+yet, so the end settles nothing: the operation closes when the prompt
+returns, as it did before this bind existed, and a run the host starts in
+that sliver is refused as before (#109). A bring-up has the same shape with
+no operation yet: a takeover of a busy desk session, or a transfer that
+resumes a saved session the host reattached busy after its restart, sends
+its first prompt into the open turn (#239). There the bind lands on the
+starting line (`Line::Starting`'s `intro_turn`), and adoption opens the
+intro operation bound to it; if the candidate's first sign of life adopts
+it before the reply is read, the bind lands on the intro operation
+directly, and both orders end the same way. It follows that a bring-up's
+intro operation is bound to its host turn now, where it was unbound before,
+whenever that turn is still open when the reply is read: a module call
+inside such an intro that names no turn, or another turn, is refused, as it
+is inside a bound caller turn. Protocol 2 hosts stamp every call made inside
+a turn with its id.
+
+The report runs on the prompt's task, not the pump's, so it is the one
+turn report not ordered before the turn's module calls: a call the host
+makes right after its reply can still be refused, as every such call was
+before. It also gives the locks one more edge: `prompt_as` holds the PBX
+lock and the session's `turn_lock` while the report takes
+`operation_transition`. The edge is safe because nothing that holds
+`operation_transition` waits on a prompt, on a `turn_lock`, or on the PBX
+lock; keep it so. The reply can also be read after the pump has taken the
+end of the turn it names: a turn the host opened for the prompt whose
+`turn_start` and `turn_end` both came first, or a `follow_up` run that
+ended first. The session's turn keeps, with the prompt being collected, the
+turns whose end it took since that prompt went out (`session_turn.rs`,
+`Prompt::ended`), and a reply naming one of them reports nothing. Without
+that, the `follow_up` case bound the still-open,
+unbound operation to a turn that was over, and the ended run spoke with the
+caller's authority until the prompt returned. The check runs when the
+reply is stepped, not when its bind takes `operation_transition`, so one
+order is still open (#542): the reply is stepped before the run's end, the
+pump steps and reports that end before the reply's report takes the lock,
+and the bind then lands on the ended turn, which keeps the caller's
+operation until the prompt returns. A reply naming a turn that
+ended before the prompt went out is not caught: the reply names the turn
+the prompt went into, so no protocol-2 host sends one. The report cannot
+stamp a stale turn on a newer caller operation either, because the turn
+worker is the one production caller of `begin_prompt` and runs turns one
+at a time; a second caller of `begin_prompt` would have to keep that true.
+`a_caller_prompt_sent_into_a_self_woken_run_can_answer` in
+`apps/backend/tests/test_turns.rs` drives the caller's case, and checks
+that the run's end settled the operation.
+`a_reply_read_after_its_run_ended_binds_nothing` there has the service
+step the run's end before the reply, and checks that the ended run has no
+authority. Like the clip tests in "A clip on the wire when the leg is
+adopted", which order their steps with a gated sidecar or a held session
+guard, it decides that order with something it owns, not with the
+scheduler: it sends the end, then a module call, and replies only once the
+pump has answered that call. The pump reads the session's frames in order,
+so by then it has taken the end. A host sends a `follow_up`'s reply ahead
+of the run's end; here the end goes first. The prompt skips the frames sent
+before its reply, so an idle snapshot ends it instead, and its return shows
+that its task has stepped the reply.
+The session-turn table's `PromptIntoEndedRun` row
+(`apps/backend/tests/test_project_session.rs`) pins the unreported start the
+same way: the rig sends the run's end before the host's reply, waits for
+the pump to read it, replies, and ends the prompt with an idle snapshot.
+`a_busy_desk_takeover_prompt_can_answer` and
+`a_busy_resumed_session_prompt_can_answer` drive the two bring-ups and
+accept whichever order the reply and the adoption land in; the fake replies
+at once and the sign of life follows, so in practice they run the reply
+first. The adopted-first bind is pinned at the coordinator by the call-line
+table row `adopted | bind_turn => bound`, and
+`a_candidates_intro_turn_binds_the_intro_operation` in
+`apps/backend/tests/test_lifecycle.rs` pins the candidate's bind alone.
+
 `a_turn_resumed_after_an_external_abort_can_speak` and
 `a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles` in
 `apps/backend/tests/test_turns.rs` send the two frames back to back.
@@ -530,6 +617,100 @@ every test that runs alongside it, and filtering on message content does not
 make it private: another test can send the same kind of message. If no
 per-test seam exists, add one that production also uses, as the debug bus is,
 rather than a `#[cfg(test)]` global.
+
+## A log capture scoped to one thread
+
+A few backend tests assert on a log line, because the journal is the only
+place that says it: the mime a caller's browser recorded, or why a host frame
+was dropped. They used to capture the line with a subscriber scoped to the
+test's thread (`tracing::subscriber::set_default` or `with_default`, with an
+`EnvFilter` and a `DebugLogLayer` on the test's own bus).
+`an_arriving_clip_is_logged_with_the_mime_the_browser_recorded` failed now and
+then under load with `left: []`: the `clip arrived` line never reached the
+capture (#368, #427, #211).
+
+The scope is one thread, but tracing keeps what it learns about a callsite for
+the whole process. Each `info!` is a callsite. The first time any thread
+reaches it, tracing asks whether a subscriber wants its events and stores the
+answer, the callsite's interest, in the callsite. While one subscriber is live
+in the process, tracing-core asks only the default of the thread that reached
+the callsite. A test that captures nothing, on another thread, has no default.
+So when it reaches `clip arrived` first, while the capturing test's subscriber
+is the only one live, the callsite is cached as never until the next
+subscriber is created, and the capturing test's own line is skipped. The test
+passes alone and fails beside a test that uploads a clip at the wrong moment:
+the interest cache is a process-global that every test shares, the hazard
+above in another form.
+
+Measured on master: a test that lets another thread reach the callsite first
+fails 10 runs in 10 when run alone. Under load, each round ran four full test
+binaries at once, two built from master and two built with the fix, so both
+saw the same load. The 1-minute load average at the start of a round was 30
+to 82, except for two rounds at 13 and 26. Master's binary failed 10 of 260
+runs, each one in this test. None of the 260 fix runs failed this test. Only
+60 of them ran the code that landed, at 51107365. The other 200 ran two
+earlier builds of the same capture, one from before review and a pilot build
+that also held two more repro tests. Two of the 260 fix runs failed in
+another test, once each, and neither test is touched by this change.
+
+`debug::capture_logs(&bus)` (`apps/backend/src/debug.rs`) is the fix. Its
+first call installs the test binary's only subscriber, as the global default:
+an `EnvFilter` of `switchboard=info` and a layer that hands each line to the
+capture of the thread that logged it. Each call puts a `DebugLogLayer` on the
+test's bus in its thread's slot, and the guard it returns empties the slot
+when dropped. With a global subscriber, every thread's default is that
+subscriber, so no callsite is cached as never for want of one.
+
+The subscriber is a `#[cfg(test)]` global, which the rule above says to avoid.
+It is one here because tracing's dispatch is process-global already:
+production installs one global subscriber too. The test still observes
+through what it owns. It reads
+its own bus, the line reaches it through production's `DebugLogLayer`, and the
+slot is keyed by thread, so no test reads another's lines.
+
+The install has one window of its own. It enables `info` before it publishes
+the subscriber, and a callsite another thread registers in between finds no
+subscriber and is cached as never. `capture_logs` has tracing work out every
+interest again right after the install. That repairs such a callsite, unless
+the other thread looked for the subscriber before the install published it
+and stores its answer after the repair. That window is a few instructions
+wide, and it has not been seen.
+
+The capture is per thread, as the scoped subscriber was. A `#[tokio::test]`
+runs its tasks on the test's thread, so their lines are captured. A line
+logged on another thread is not: a `#[tokio::test(flavor = "multi_thread")]`
+worker, a `spawn_blocking` closure, a thread the test starts. A test of code
+that logs there runs it on the default current-thread runtime, or reads the
+fact from something it owns, such as an event on its bus.
+
+The rule: a backend test captures logs with `capture_logs`, never with a
+subscriber of its own. `scripts/check_hygiene.mjs` refuses `set_default`,
+`with_default` and `.with_subscriber(` in `apps/backend`.
+
+## A test that runs the machine's pi
+
+The operator and the routing utility are local processes started from
+`SWITCHBOARD_PI_BINARY`, whose default is `pi`, looked up on the PATH.
+`Config::for_tests` used to take that default too, so a test that reached
+the operator without naming a fake ran whatever `pi` the PATH held: the real
+one on a development box, none on CI. Such a test passed on the box and
+failed on CI, or, if it never looked at the operator's answer, passed on
+both while it prompted the real pi on the box.
+`a_caller_turn_never_goes_to_another_projects_session` was the second kind:
+the turn it drives returns the caller to the operator.
+
+`Config::for_tests` now sets the operator's runtime to a path that does not
+exist (`NO_PI` in `apps/backend/src/main.rs`) unless the test names one. The
+start fails where it fails on CI, at the spawn, on a missing file, and the
+path names `fake_operator`. A turn that reaches the operator sees it
+unavailable on both machines alike. The service's own default is still `pi`.
+
+The rule: a test that reaches the operator or the routing utility names its
+runtime, such as `fake_operator`, `fake_routing_process`, or a script of its
+own written through `write_executable_script`.
+`a_test_that_reaches_the_operator_without_its_fake_runs_no_pi_on_the_path` in
+`apps/backend/tests/test_operator.rs` puts a `pi` on the PATH the operator is
+given, names no runtime, and checks that the operator does not start.
 
 ## A time budget measured on the wall clock
 
@@ -756,7 +937,7 @@ requester, writes the spoken line, or shows the page a speech error.
 | draining | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
 | draining | the generation moves on | `Stopped(Superseded)` | not spoken | no | no |
 | draining | the body fails, or the task panics | `Failed` | the error | at the current generation | no |
-| draining | the body ends, a browser took it | `Spoken` | spoken | no | if `log_spoken` |
+| draining | the body ends, a browser took it | `Spoken` | spoken | no | if it carries a `transcript` line (a `speak` or a floor line) |
 | draining | the body ends, no browser took it | `NotDelivered` | not delivered | no | no |
 
 Only a rescue stops a request, and it retires the generation first, so a

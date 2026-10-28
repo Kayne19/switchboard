@@ -585,11 +585,7 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
     let (code, body) = within("the display call", waiting).await.unwrap();
     assert_eq!(
         (code, &body["rendered"], &body["reason"]),
-        (
-            StatusCode::OK,
-            &json!(false),
-            &json!("the caller's screen moved to a new leg before this was confirmed")
-        ),
+        (StatusCode::OK, &json!(false), &json!("new_leg")),
         "a display waiting on the rescued leg"
     );
     want.leg = None;

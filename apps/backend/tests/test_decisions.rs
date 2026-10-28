@@ -693,25 +693,32 @@ async fn a_caller_prompt_the_host_refuses_keeps_the_leg() {
     board.shutdown().await;
 }
 
-/// A caller's prompt that fails on the link left the session unusable: the
-/// leg ends, and the caller is back on the operator.
+/// A caller's prompt that fails, not one the host refuses, left the session
+/// unusable: the leg ends, and the caller is back on the operator.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_caller_prompt_that_fails_on_the_link_ends_the_leg() {
-    let (mut board, log, armed, _notices) = board_refusing_the_next_prompt("stale_epoch").await;
-    board.transfer_to(&transcript("start alpha"), "alpha").await;
-    let alpha = board.agent.clone().expect("alpha is on the line");
-    armed.store(true, std::sync::atomic::Ordering::Release);
+async fn a_caller_prompt_that_fails_ends_the_leg() {
+    for code in ["stale_epoch", "daemon_unreachable"] {
+        let (mut board, log, armed, _notices) = board_refusing_the_next_prompt(code).await;
+        board.transfer_to(&transcript("start alpha"), "alpha").await;
+        let alpha = board.agent.clone().expect("alpha is on the line");
+        armed.store(true, std::sync::atomic::Ordering::Release);
 
-    let reply = board.handle_agent_ctx(&transcript("continue work")).await;
+        let reply = board.handle_agent_ctx(&transcript("continue work")).await;
 
-    assert_eq!(reply.route, OPERATOR, "{reply:?}");
-    assert!(!alpha.alive());
-    assert_eq!(
-        crate::pbx::until_named(&log, "kill").await,
-        [serde_json::json!({"session": "s1"})]
-    );
-    board.shutdown().await;
+        assert_eq!(reply.route, OPERATOR, "{code}: {reply:?}");
+        assert_eq!(
+            reply.text,
+            format!("alpha stopped responding, so I closed it.\n\n{code} for the test")
+        );
+        assert!(!alpha.alive(), "{code}: the session is still in use");
+        assert_eq!(
+            crate::pbx::until_named(&log, "kill").await,
+            [serde_json::json!({"session": "s1"})],
+            "{code}"
+        );
+        board.shutdown().await;
+    }
 }
 
 /// A background prompt the host refuses fails alone (#423): the resident
@@ -1991,11 +1998,21 @@ async fn a_route_to_a_project_id_another_project_uses_as_an_alias_goes_to_that_i
 /// The coordinator names alpha while the PBX still holds beta (an adopted
 /// transfer whose task was cancelled before it committed). The caller's
 /// words must not go to beta under alpha's name (#236).
+#[cfg(unix)]
 #[tokio::test]
 async fn a_caller_turn_never_goes_to_another_projects_session() {
+    let root = scratch_dir("turn-on-another-session");
+    let operator = root.join("operator");
+    crate::pi_client::write_executable_script(
+        &operator,
+        r#"while IFS= read -r _line; do
+printf '%s\n' '{"type":"message_update","assistantMessageEvent":{"type":"text_end","content":"Operator here."}}'
+printf '%s\n' '{"type":"agent_settled"}'
+done"#,
+    );
     let mut board = board_on(
         vec![project("alpha", ""), project("beta", "")],
-        &[],
+        &[("SWITCHBOARD_PI_BINARY", &operator.to_string_lossy())],
         two_model_catalog(),
     );
     let log = serve(&board, Box::new(|_, _| says("On it.")));
@@ -2003,12 +2020,18 @@ async fn a_caller_turn_never_goes_to_another_projects_session() {
     assert_eq!(reply.route, "beta", "{reply:?}");
     crate::pbx::put_on(&board, "alpha", "anthropic/current", two_model_catalog());
 
-    board.handle_agent_ctx(&transcript("carry on")).await;
+    let reply = board.handle_agent_ctx(&transcript("carry on")).await;
 
     assert!(
         !prompts(&log).iter().any(|prompt| prompt == "carry on"),
         "{:?}",
         prompts(&log)
     );
+    assert_eq!(
+        (reply.route.as_str(), reply.text.as_str()),
+        ("operator", "Operator here."),
+        "{reply:?}"
+    );
     board.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
 }

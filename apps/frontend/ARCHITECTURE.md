@@ -358,37 +358,46 @@ The reports themselves belong to `ScreenReporter` (`src/app/screenReporter.ts`);
 `screen_state` is on the wire until its `screen_state_ack`, and the newest
 scene waits behind it. Its state is one value written only by `transition`:
 the phase (`line`), the queued report, the generation of the last `epoch`,
-the highest applied display `seq`, the rejections not yet sent (lowest `seq` first, one per `seq`, at most
-`MAX_KEPT_REJECTIONS`, the service's own bound), and the scene the page last rendered at this
-generation.
+the highest display `seq` applied on this connection, the rejections waiting
+to be sent (lowest `seq` first, one per `seq`), and the scene the page last
+rendered at this generation.
 
 | phase | holds | event | next | effect |
 |---|---|---|---|---|
 | `unready` | — | scene | `unready` | the report is queued |
 | `unready` | — | ack | `unready` | none: an ack answers a report sent after the epoch |
 | any | — | `epoch` | `idle` | the generation is the new one; the report on the wire and the queued one are given up |
-| any but `unready` | — | line down | `unready` | the report on the wire is given up |
+| any | — | line down | `unready` | the report on the wire is given up and its rejection, if any, joins the list again; the applied `seq` is forgotten |
 | `idle` | — | scene | `awaiting` | the report goes; a socket that refuses it leaves it queued, in `idle` |
 | `idle` | — | ack | `idle`, or `awaiting` | the queued report, if any, goes |
 | `awaiting` | the report, its deadline | scene equal to the report on the wire | `awaiting` | the queued report is dropped |
 | `awaiting` | the report, its deadline | another scene | `awaiting` | it replaces the queued report |
 | `awaiting` | the report, its deadline | ack, or `ACK_DEADLINE_MS` (2 s) without one | `idle`, or `awaiting` | the queued report goes; with none queued and a rejection waiting, the scene is reported again to carry it |
-| any | — | display applied / declined | same | the applied `seq` rises / the rejection joins the list in `seq` order (past the bound the lowest goes), and the next report carries the lowest |
+| any | — | display applied / declined | same | the applied `seq` rises / the rejection joins the list in `seq` order, and the next report carries the lowest |
 
 The service does not acknowledge a report it ignores (a tab that is not the
 active one, another generation, a view it does not know), so the deadline is
 what lets an older tab report again once it becomes the active one. The
 deadline names its report and is cleared on leaving `awaiting`, so one that
 fires late is dropped. A report that goes clears the queue: nothing older
-than the report on the wire is sent after it. Each declined display is sent once, one per report, lowest `seq` first
-(#378): a report carries the lowest rejection, and only the report sent with that same object takes it off the
-list. A report's `applied_seq` stays below every rejection still waiting,
+than the report on the wire is sent after it. Declined displays go one per
+report, lowest `seq` first (#378): a report carries the lowest rejection, and
+only the report sent with that same object takes it off the list. A report's
+`applied_seq` stays below every rejection still waiting,
 because the service takes a display at or under the reported `applied_seq`
 with no rejection as rendered. An `epoch` keeps the rejections (a `seq` is
 the delivery's, and a same-generation epoch leaves their display calls
-waiting) and forgets the scene. The phase-by-event
-table in `tests/unit/screenReporter.test.tsx` pins each row through the
-adapter.
+waiting) and forgets the scene. A line down forgets the applied `seq`: a
+`seq` is the service process's delivery counter, so the next connection may
+reach a restarted service that counts again from 0. The snapshot replay
+raises the applied `seq` again when the stage has anything to replay, and
+otherwise the next display does. The rejections stay through it, and the one
+on the wire comes back, since the service may not have read it: the same
+service may still be waiting on them. After a restart, the new service takes
+a kept rejection whose `seq` its count has passed as a rejection of its own
+display at that `seq` (`docs/visual-channel.md`, "Confirmed rendering"). The
+phase-by-event table in `tests/unit/screenReporter.test.tsx` pins each row
+through the adapter.
 
 Every failure the runtime cannot recover from is reported as status text with
 `statusError` set -- no microphone, a browser that cannot record, a recorder

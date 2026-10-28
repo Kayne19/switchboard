@@ -217,7 +217,7 @@ async fn release_floor(
         deadline: std::time::Instant::now() + state.0.speech_deadline,
         scope,
         group: state.0.new_speech_group(),
-        log_spoken: true,
+        transcript: Some(text.clone()),
     };
     let floor_id = Some(request.floor_debug_id());
     let result = send_speech(state, admission, reserved).await;

@@ -15,7 +15,7 @@ use crate::jev::fake_jev_client;
 use crate::module_calls::{diagram_show, module_call, request_to_speak};
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::{Switchboard, OPERATOR};
-use crate::pi_client::{LegSession, PiSession};
+use crate::pi_client::{LegSession, PiSession, PiSessionError, Turn};
 use crate::project_session::{AgentCall, ProjectTurn};
 use crate::registry::Registry;
 use crate::router::Decision;
@@ -1718,4 +1718,407 @@ fn caller_turn_settles_into_a_self_woken_one(state: &AppState, turn_id: &str) {
         state,
         json!({"kind":"turn_start","cause":"autonomous","turn_id":turn_id}),
     );
+}
+
+/// The caller's words reach a session that has just woken itself: the host
+/// sends them into that run as a `follow_up`, and its reply names the run
+/// (`auto-1`). The run is then the caller's answer (#512): its words are
+/// what the prompt returns. A project agent answers the caller by
+/// `speak` and shows them with `display`, so those calls, which the host
+/// stamps with the run's turn and cause, must be admitted while the
+/// caller's turn runs; refused, the caller hears nothing back.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_caller_prompt_sent_into_a_self_woken_run_can_answer() {
+    let root = scratch_root("prompt-into-run-answers");
+    let PromptIntoWokenRun {
+        state,
+        token,
+        caller,
+        prompt,
+        ..
+    } = prompt_into_woken_run(
+        &root,
+        Some(json!({"sent_as": "follow_up", "turn_id": "auto-1"})),
+    )
+    .await;
+    bind_may_land(&state, &token, "auto-1", "autonomous").await;
+
+    let shown = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: token.clone(),
+            turn_id: Some("auto-1".into()),
+            cause: Some("autonomous".into()),
+            args: diagram_show(),
+        },
+    )
+    .await;
+
+    alpha_host_event(
+        &state,
+        json!({"kind":"text","text":"On main.","turn_id":"auto-1"}),
+    );
+    alpha_host_event(&state, json!({"kind":"turn_end","turn_id":"auto-1"}));
+    let answered = within("the prompt returns", prompt)
+        .await
+        .expect("the prompt task")
+        .expect("the prompt");
+    assert_eq!(answered.text, "On main.", "the run is the caller's answer");
+    assert_eq!(
+        shown["status"], "accepted",
+        "the answer to the caller's words was refused: {shown}"
+    );
+    assert!(
+        !state.0.coordinator.finish_operation(&caller),
+        "the host's end of the run settled the caller's operation bound to it"
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// The host's reply to the prompt is read on the prompt's task, so the pump
+/// can take the run's end first. That end settles nothing (the operation is
+/// not bound yet), and the late reply names a turn that is over: it must
+/// bind nothing, or the ended run would speak with the caller's authority
+/// until the prompt returned.
+///
+/// Pins the service stepping a run's end before the reply. A host replies
+/// to a `follow_up` first, so this test sends the end ahead of it; the
+/// prompt skips frames sent before its reply, so an idle snapshot ends it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_reply_read_after_its_run_ended_binds_nothing() {
+    let root = scratch_root("reply-after-run-end");
+    let PromptIntoWokenRun {
+        state,
+        token,
+        caller,
+        prompt,
+        command,
+        host,
+    } = prompt_into_woken_run(&root, None).await;
+    let epoch = state.0.hosts.link_epoch("scriptorium").unwrap();
+    alpha_host_event(&state, json!({"kind":"turn_end","turn_id":"auto-1"}));
+    state.0.hosts.send_fake(
+        "scriptorium",
+        json!({"type":"module_call","id":"probe-1","session":"s1","token":token,"call":"view","args":{}}),
+    );
+    within("the pump has read the run's end", async {
+        while !host
+            .module_replies()
+            .iter()
+            .any(|reply| reply["id"] == "probe-1")
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    state.0.hosts.send_fake(
+        "scriptorium",
+        json!({"type":"reply","id":command["id"],"epoch":epoch,"ok":true,
+               "result":{"sent_as":"follow_up","turn_id":"auto-1"}}),
+    );
+    state.0.hosts.send_fake(
+        "scriptorium",
+        json!({"type":"snapshot","session":"s1","cursor":"external",
+               "info":{"turn_open":false,"busy":false,"last_text":"On main."}}),
+    );
+    let answered = within("the prompt returns", prompt)
+        .await
+        .expect("the prompt task")
+        .expect("the prompt");
+    assert_eq!(
+        answered.text, "On main.",
+        "the idle snapshot's last words are the caller's answer"
+    );
+    let shown = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: token.clone(),
+            turn_id: Some("auto-1".into()),
+            cause: Some("autonomous".into()),
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(
+        shown["status"], "refused",
+        "a turn that has ended has no authority: {shown}"
+    );
+    assert!(
+        state.0.coordinator.finish_operation(&caller),
+        "the run's end settled nothing, so the operation is still open"
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A caller's prompt sent into a run the session woke itself with, as far
+/// as the host's reply: the caller's operation is admitted, the session
+/// wakes itself (`auto-1`) and the run is refused an operation of its own,
+/// then the prompt goes out and reaches the host.
+#[cfg(unix)]
+struct PromptIntoWokenRun {
+    state: AppState,
+    token: String,
+    caller: OperationIdentity,
+    prompt: tokio::task::JoinHandle<Result<Turn, PiSessionError>>,
+    /// The `prompt` command as the host saw it.
+    command: Value,
+    host: crate::hosts::FakeLog,
+}
+
+/// `reply` is what the host answers the prompt with; `None` leaves the
+/// reply to the test.
+#[cfg(unix)]
+async fn prompt_into_woken_run(root: &std::path::Path, reply: Option<Value>) -> PromptIntoWokenRun {
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }));
+    fake.on_command = Some(Box::new(move |name, args| {
+        (name == "prompt"
+            && args["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("which branch"))
+        .then(|| reply.clone().map(Ok))
+    }));
+    let (state, host) = state_with_agents_and_jev(root, fake);
+    let (token, instance_id) = foreground_alpha_turn(&state).await;
+    let session = match state.0.active_session.lock().await.clone() {
+        Some(LegSession::Project(session)) => session,
+        _ => panic!("alpha is on the line"),
+    };
+    let caller = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("the caller's turn is admitted");
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-1"}),
+    );
+    within("the session holds the run", async {
+        while !session.busy() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    assert!(
+        !state
+            .0
+            .host_turns
+            .holds_self_woken_for_test(instance_id)
+            .await,
+        "the caller's operation holds the line, so the run gets none of its own"
+    );
+    let prompt = tokio::spawn(async move {
+        session
+            .prompt_as("which branch are you on?", "caller", None)
+            .await
+    });
+    let command = within("the prompt reaches the host", async {
+        loop {
+            if let Some(command) = host.commands().into_iter().find(|command| {
+                command["name"] == "prompt"
+                    && command["args"]["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("which branch")
+            }) {
+                return command;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    PromptIntoWokenRun {
+        state,
+        token,
+        caller,
+        prompt,
+        command,
+        host,
+    }
+}
+
+/// A bring-up whose session is busy when the caller's words reach it.
+#[cfg(unix)]
+#[derive(Clone, Copy, Debug)]
+enum BusyBringUp {
+    /// A desk session taken over while it runs a turn the host saw start on
+    /// its own (`autonomous`).
+    Takeover,
+    /// A saved session the host reattached busy after its own restart, so
+    /// its turn has no cause (`unknown`), resumed by a transfer.
+    Resume,
+}
+
+/// The caller's words go to a session that is busy with a run the service
+/// did not start: the host sends them into that run as a `follow_up`, and
+/// its reply names the run (`open-1`). The bring-up's intro turn is that
+/// run (#239), so the run's `speak` and `display`, which the host stamps
+/// with its turn and cause, must be admitted once the candidate is adopted;
+/// refused, the caller hears nothing back.
+#[cfg(unix)]
+async fn a_busy_bring_up_prompt_can_answer(kind: BusyBringUp) {
+    let root = scratch_root(&format!("busy-bring-up-{kind:?}"));
+    let cwd = root.to_string_lossy().into_owned();
+    let (session, cause) = match kind {
+        BusyBringUp::Takeover => ("desk-1", "autonomous"),
+        BusyBringUp::Resume => ("s-old", "unknown"),
+    };
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }));
+    let listed_cwd = cwd.clone();
+    fake.on_command = Some(Box::new(move |name, args| match (kind, name) {
+        (BusyBringUp::Resume, "list_sessions") => Some(Some(Ok(json!({"sessions":[{
+            "session": session, "session_id": "saved-alpha", "project": "alpha",
+            "cwd": listed_cwd, "provenance": "created", "busy": true,
+        }]})))),
+        (BusyBringUp::Resume, "open_session") => Some(Some(Ok(json!({
+            "session": session, "session_id": "saved-alpha", "project": "alpha",
+            "cwd": args["cwd"], "provenance": "created", "busy": true,
+            "turn_open": true, "thinking": "medium",
+        })))),
+        (BusyBringUp::Takeover, "attach") => Some(Some(Ok(json!({
+            "session": args["session"], "session_id": "desk-saved", "name": null,
+            "project": args["project"], "cwd": args["cwd"], "provenance": "taken_over",
+            "busy": true, "turn_open": true, "model": "anthropic/current",
+            "thinking": "medium", "call_mode": null, "last_text": null,
+        })))),
+        (_, "prompt") if args["session"] == session => Some(Some(Ok(
+            json!({"sent_as": "follow_up", "turn_id": "open-1"}),
+        ))),
+        _ => None,
+    }));
+    let (state, host) = state_with_agents_and_jev(&root, fake);
+    let host_event = |event: Value| {
+        state.0.hosts.send_fake(
+            "scriptorium",
+            json!({"type": "event", "session": session, "cursor": "external", "event": event}),
+        );
+    };
+
+    // The turn worker holds the caller's operation while the PBX brings the
+    // leg up inside it.
+    let caller = state
+        .0
+        .coordinator
+        .begin_prompt(&state.0.coordinator.current_identity())
+        .expect("the caller's turn is admitted");
+    let bringing_up = tokio::spawn({
+        let state = state.clone();
+        async move {
+            let mut board = state.0.switchboard.lock().await;
+            match kind {
+                BusyBringUp::Takeover => {
+                    let desk = json!({
+                        "session": session, "session_id": "desk-saved",
+                        "cwd": cwd, "provenance": null,
+                    });
+                    board
+                        .take_over("which branch are you on?", "alpha", Ok(Some(desk)))
+                        .await
+                }
+                BusyBringUp::Resume => {
+                    board
+                        .transfer_to(
+                            &crate::pbx::TransferContext {
+                                exact_caller_transcript: "which branch are you on?".into(),
+                                ..Default::default()
+                            },
+                            "alpha",
+                        )
+                        .await
+                }
+            }
+        }
+    });
+    within("the prompt reaches the host", async {
+        while host
+            .named("prompt")
+            .iter()
+            .all(|args| args["session"] != session)
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    let token = host
+        .named("join_call")
+        .iter()
+        .find(|args| args["session"] == session)
+        .and_then(|args| args["token"].as_str().map(str::to_owned))
+        .expect("the session joined the call");
+
+    // The run the host already had open shows a sign of life, which adopts
+    // the candidate.
+    host_event(json!({"kind":"turn_start","cause":cause,"turn_id":"open-1"}));
+    host_event(json!({"kind":"tool_start","tool":"bash","call_id":"c1","turn_id":"open-1"}));
+    bind_may_land(&state, &token, "open-1", cause).await;
+
+    let shown = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: token.clone(),
+            turn_id: Some("open-1".into()),
+            cause: Some(cause.into()),
+            args: diagram_show(),
+        },
+    )
+    .await;
+
+    host_event(json!({"kind":"text","text":"On main.","turn_id":"open-1"}));
+    host_event(json!({"kind":"turn_end","turn_id":"open-1"}));
+    let reply = within("the bring-up returns", bringing_up)
+        .await
+        .expect("the bring-up task");
+    assert_eq!(reply.route, "alpha", "{}", reply.text);
+    assert_eq!(reply.text, "On main.", "the run is the caller's answer");
+    assert_eq!(
+        shown["status"], "accepted",
+        "the answer to the caller's words was refused: {shown}"
+    );
+    assert!(
+        !state.0.coordinator.finish_operation(&caller),
+        "the intro replaced the caller's operation at adoption and the commit closed it"
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Gives the bind of `turn_id` to the leg holding `token` a bounded moment
+/// to land: the host's reply is read on the prompt's task. It never fails;
+/// the module call that follows is the check, whether the bind came or not.
+#[cfg(unix)]
+async fn bind_may_land(state: &AppState, token: &str, turn_id: &str, cause: &str) {
+    let _ = timeout(Duration::from_secs(10), async {
+        while state
+            .0
+            .coordinator
+            .accept_side_effect(token, Some(turn_id), Some(cause))
+            .is_err()
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_busy_desk_takeover_prompt_can_answer() {
+    a_busy_bring_up_prompt_can_answer(BusyBringUp::Takeover).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_busy_resumed_session_prompt_can_answer() {
+    a_busy_bring_up_prompt_can_answer(BusyBringUp::Resume).await;
 }

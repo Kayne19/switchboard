@@ -384,7 +384,7 @@ pub struct ScreenState {
     /// The epoch the report was made under.
     #[serde(default, deserialize_with = "lenient")]
     pub generation: Option<u64>,
-    /// The newest display `seq` the page has applied.
+    /// The newest display `seq` the page has applied on this connection.
     #[serde(default, deserialize_with = "lenient")]
     pub applied_seq: Option<u64>,
     #[serde(default, deserialize_with = "lenient_object")]

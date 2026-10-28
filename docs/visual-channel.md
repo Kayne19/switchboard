@@ -760,23 +760,34 @@ the channel closes that gap with an explicit confirm/reject round trip.
 
 **On the wire.** Every `display` frame the backend sends — live or replayed
 on reconnect — is `{"type":"display","seq":<n>,"action":<normalized>}`.
-`seq` is drawn from the same monotonic counter that sequences every
-delivered event, stamped on just before the frame leaves
-(`stamp_display_seq`). A reconnect snapshot stamps every replayed action
-with the gate's watermark as of connect time, since the snapshot as a whole
-represents the projection at that point in the stream.
+`seq` is drawn from the counter that sequences every delivered event,
+stamped on just before the frame leaves (`stamp_display_seq`). The counter
+belongs to the service process: it rises for as long as the process runs and
+starts again at 0 when the service restarts. A reconnect snapshot stamps
+every replayed action with the gate's watermark as of connect time, since the
+snapshot as a whole represents the projection at that point in the stream.
 
 **The browser's report.** The existing `screen_state` message (sent whenever
 the page applies or declines a frame) carries two more fields:
-- `applied_seq`: the highest `seq` the page has actually rendered so far,
-  held below the next rejection still waiting on the page (below), so it
-  never passes a rejection the service has not heard.
+- `applied_seq`: the highest `seq` the page has actually rendered on this
+  connection, held below the next rejection still waiting on the page
+  (below), so it never passes a rejection the service has not heard. A page
+  open across a restart reconnects to a process that counts again from 0, so
+  it reports none of the seqs it applied before the line went down. The
+  snapshot replay raises it again when the stage has anything to replay, and
+  otherwise the next display does. Until the page applies a display on a
+  connection, its reports leave the field out, so a display applied just
+  before a drop to the same service, and not yet acknowledged, can go
+  unconfirmed.
 - `rejected` (optional): `{ seq, reason }` for a frame the page could not
-  apply. The page keeps every one it has not sent, lowest `seq` first and at most
-  as many as the service keeps (`MAX_KEPT_REJECTIONS`, 16), and a report
-  carries the lowest; it leaves the list only when the report that
+  apply. The page keeps every one it has not sent, lowest `seq` first, and
+  drops none unsent: its display call may still be waiting, and `applied_seq`
+  passes it only once a report has carried it. A report carries the lowest;
+  it leaves the list only when the report that
   carries it is the one actually transmitted, so an intervening,
-  rejection-less report can't silently swallow it. While one is left, the
+  rejection-less report can't silently swallow it. If the line drops before
+  that report's ack, the service may never have read it, so the rejection
+  joins the list again and goes on the next connection. While one is left, the
   page reports again when the line is free, one rejection per report
   (#378). Each waits for the ack of the report before it, so several declined
   together reach the service one round trip apart.
@@ -818,30 +829,37 @@ fields together:
 | a new leg (once per `SceneLeg`) | `begin_leg` | `LegAnnouncer::begin_scene` | `projection` cleared, `screen` stale, `confirmations` start the leg's generation, `scene_leg` = the leg; nothing when the stage already belongs to it |
 | a rescue | `rescue` | `release_rescued_work` (`page_controls.rs`), the release every page control's rescue and shutdown share | `projection` cleared, `screen` stale, `confirmations` start the rescue's generation, `scene_leg` = none |
 | a page connects; the active page retires | `mark_stale` | `register_connection`, `retire_connection` (`browser.rs`) | `screen` stale |
-| the active page reports, in the current generation | `report` | `apply_screen_state` (`browser.rs`) | `screen` replaced; the report folded into `confirmations` |
+| the active page reports, in the current generation | `report` | `apply_screen_state` (`browser.rs`) | `screen` replaced; the report folded into `confirmations`, less any `seq` the delivery has not reached |
 
 The `watermark` is the delivery's sequence, not the leg's: a new leg and a
 rescue leave it. A rescue moves the generation without a new leg, and the
 page drops the old leg's objects on its `epoch`; the gate is reset with
 that `epoch`, under its lock, so the stage, `view` and a page that
 reconnects before the next leg is announced all agree with the page. A
-display still waiting on the rescued leg is answered at once ("moved to a
-new leg"). The stage belongs to no leg until the next announcement, which
+display still waiting on the rescued leg is answered at once, with
+`new_leg`. The stage belongs to no leg until the next announcement, which
 resets it as any other would. A redial that keeps the session clears it
 too: the page drops the objects on the rescue's `epoch`, and the agent
 draws again on the new leg.
 
 Every `screen_state` report folds its `applied_seq` into the confirmations as
 a running per-generation maximum, and adds its `rejected`, if it carries
-one, to `rejections`. Only the active connection's report counts, and only
+one, to `rejections`. A `seq` at or past the delivery's next sequence is
+left out of both: this process has not sent it, so it is an earlier
+process's, from a page that stayed open across a restart. A `seq` below it
+is taken as this process's. The page cannot tell a restarted service from
+the one it left, so a rejection it kept through a restart that the new
+count has passed names one of the new process's displays, whose call then
+answers rejected. Only the active connection's report counts, and only
 for the current generation; any other is ignored and not acknowledged
 (`apply_screen_state` in `apps/backend/src/browser.rs`). A report whose
 `view` is not one the page has is answered with an error. Two tabs are two
 connections, and the newest one is active. When the active tab closes, the
 newest tab still open takes over (`DeliveryState::retire`), and the screen
 the agent's `view` reads is stale until that tab sends its next report. The
-page sends each rejection once, and a `watch` keeps only its latest value,
-so a rejection is never cleared by a later report without one: it stays in
+page sends each rejection in at most one report per connection (`rejected`,
+above), and a `watch` keeps only its latest value, so a rejection is never
+cleared by a later report without one: it stays in
 the map, and a waiter checks the map for its own `seq` before it checks the
 watermark. The map keeps the newest `MAX_KEPT_REJECTIONS` (16) by `seq`; a
 display call waits at most `DISPLAY_CONFIRM_DEADLINE_MS`, so only the newest
@@ -880,14 +898,16 @@ call's `result` and turns into the line it prints:
 - `{"delivered": true, "rendered": true}` — the browser confirmed this `seq`.
 - `{"delivered": true, "rendered": false, "rejected": true, "reason": "..."}`
   — the browser nacked this exact `seq`. The skill prints the page's reason
-  and tells the agent to adjust the payload; for the other `rendered: false`
-  answers below it prints the `reason` too.
+  and tells the agent to adjust the payload.
 - `{"delivered": true, "rendered": false, "reason": "no confirmation from
-  the browser"}` — the deadline passed with nothing seen.
-- `{"delivered": true, "rendered": false, "reason": "the caller's screen
-  moved to a new leg before this was confirmed"}` — the call transferred
-  while the wait was in flight, so any confirmation still coming is for a
-  generation the agent is no longer on.
+  the browser"}` — the deadline passed with nothing seen. The skill prints
+  the `reason` and says the display may not be visible yet.
+- `{"delivered": true, "rendered": false, "reason": "new_leg", "detail":
+  "..."}` — the call moved to a new leg, or was rescued, while the wait was
+  in flight. That cleared the stage, so the display is not on screen, and
+  any confirmation still coming is for a generation the agent is no longer
+  on. The skill branches on the code: it says the display is not shown and
+  tells the agent to draw it again if it still matters (#493).
 - `{"delivered": false, "reason": "no browser connected"}` — nothing to wait
   on; the action is still recorded in the projection and greets the next
   connection. The module reply makes it `accepted` with no `held`, and the

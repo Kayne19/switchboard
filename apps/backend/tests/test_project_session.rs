@@ -1046,52 +1046,104 @@ async fn a_project_session_ends_by_its_table() {
 /// agent keeps tracking the session through a link drop, so once the host
 /// links again its frames, a replay say, still name it; a module call
 /// carrying the token the closed handle had must be refused by the host
-/// link, not answered by that handle.
+/// link, not answered by that handle. A newer link that fences the old one
+/// takes the session down the same way (`docs/host-link.md`, `join_call`).
 #[tokio::test]
 async fn a_session_whose_host_link_closed_reads_no_more_frames() {
-    let hosts = debug_hosts();
-    let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
-    let _log = fake.serve(hosts.connect_fake("scriptorium"));
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = Arc::clone(&calls);
-    let on_module: ModuleCallback = Arc::new(move |_| {
-        counted.fetch_add(1, Ordering::AcqRel);
-        Box::pin(async { json!({"status": "delivered"}) })
-            as Pin<Box<dyn Future<Output = Value> + Send>>
-    });
-    let launch = debug_launch(&crate::debug::DebugBus::new(), Some(on_module));
-    let (session, _) = ProjectSession::create(&hosts, launch)
-        .await
-        .expect("the session opens");
-    session
-        .join_call("call-token", "", 1000)
-        .await
-        .expect("the session joins the call");
+    for (fenced, closing) in [
+        (false, "the dropped link's session to close"),
+        (true, "the fenced link's session to close"),
+    ] {
+        let hosts = debug_hosts();
+        let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+        let _log = fake.serve(hosts.connect_fake("scriptorium"));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&calls);
+        let on_module: ModuleCallback = Arc::new(move |_| {
+            counted.fetch_add(1, Ordering::AcqRel);
+            Box::pin(async { json!({"status": "delivered"}) })
+                as Pin<Box<dyn Future<Output = Value> + Send>>
+        });
+        let launch = debug_launch(&crate::debug::DebugBus::new(), Some(on_module));
+        let (session, _) = ProjectSession::create(&hosts, launch)
+            .await
+            .expect("the session opens");
+        session
+            .join_call("call-token", "", 1000)
+            .await
+            .expect("the session joins the call");
 
-    hosts.disconnect_fake("scriptorium");
-    within("the session to close", async {
-        while session.alive() {
-            tokio::time::sleep(Duration::from_millis(1)).await;
+        let newer = if fenced {
+            Some(hosts.connect_fake("scriptorium"))
+        } else {
+            hosts.disconnect_fake("scriptorium");
+            None
+        };
+        within(closing, async {
+            while session.alive() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        let mut link = newer.unwrap_or_else(|| hosts.connect_fake("scriptorium"));
+        link.send(json!({
+            "type": "module_call", "id": "m1", "session": "s1", "token": "call-token",
+            "call": "speak", "args": {"text": "still here"},
+        }));
+        let reply = within("the module reply", link.recv())
+            .await
+            .expect("the link is up");
+
+        assert_eq!(reply["type"], "module_reply", "{closing}: {reply}");
+        assert_eq!(reply["status"], "refused", "{closing}: {reply}");
+        assert_eq!(reply["reason"], "not_on_call", "{closing}: {reply}");
+        assert_eq!(
+            calls.load(Ordering::Acquire),
+            0,
+            "{closing}: the closed handle answered"
+        );
+    }
+}
+
+/// A prompt can go out after its session's link closed but before the
+/// session has read the `host_link_closed` that ends it. The host agent
+/// still tracks the session, so it answers on its newer link, after that
+/// close. The close still ends the prompt; the prompt does not wait out its
+/// turn deadline for a turn whose frames no longer reach it.
+#[tokio::test]
+async fn a_prompt_sent_before_its_session_hears_the_link_close_ends_with_the_session() {
+    for (fenced, how) in [(false, "dropped and relinked"), (true, "fenced")] {
+        let hosts = debug_hosts();
+        let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+        let _log = fake.serve(hosts.connect_fake("scriptorium"));
+        let launch = debug_launch(&crate::debug::DebugBus::new(), None);
+        let (session, _) = ProjectSession::create(&hosts, launch)
+            .await
+            .expect("the session opens");
+        session
+            .join_call("call-token", "", 1000)
+            .await
+            .expect("the session joins the call");
+
+        if !fenced {
+            hosts.disconnect_fake("scriptorium");
         }
-    })
-    .await;
-    let mut link = hosts.connect_fake("scriptorium");
-    link.send(json!({
-        "type": "module_call", "id": "m1", "session": "s1", "token": "call-token",
-        "call": "speak", "args": {"text": "still here"},
-    }));
-    let reply = within("the module reply", link.recv())
-        .await
-        .expect("the link is up");
+        let newer = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+        let _newer_log = newer.serve(hosts.connect_fake("scriptorium"));
+        assert!(
+            session.alive(),
+            "{how}: the session heard the close before the prompt went out"
+        );
+        let turn = within("the prompt", session.prompt("hello"))
+            .await
+            .expect("the prompt went out");
 
-    assert_eq!(reply["type"], "module_reply", "{reply}");
-    assert_eq!(reply["status"], "refused", "{reply}");
-    assert_eq!(reply["reason"], "not_on_call", "{reply}");
-    assert_eq!(
-        calls.load(Ordering::Acquire),
-        0,
-        "the closed handle answered"
-    );
+        assert!(
+            turn.failed,
+            "{how}: the prompt did not end with its session"
+        );
+        assert_eq!(turn.error, "the project session ended", "{how}");
+    }
 }
 
 /// Where a project session's turn is when a row of the turn table's event
@@ -1173,12 +1225,20 @@ enum TurnHappens {
     SessionCloses,
     /// A caller's prompt goes out.
     PromptStarts,
+    /// A caller's prompt goes out, and the host sends it into the held run
+    /// `auto-1` as a `follow_up`: its reply names the run.
+    PromptIntoRun,
+    /// A caller's prompt goes out, the held run `auto-1` ends before the
+    /// host's reply is read, and the reply names the run (`follow_up`). The
+    /// prompt skips that end, sent before its reply, so an idle snapshot
+    /// ends it before the row is read: `returned «»` is that snapshot.
+    PromptIntoEndedRun,
     /// The caller's prompt is cancelled.
     PromptCancelled,
 }
 
 impl TurnHappens {
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 16] = [
         Self::StartsSelfWoken,
         Self::StartsSelfWokenAdmitted,
         Self::StartsInput,
@@ -1192,6 +1252,8 @@ impl TurnHappens {
         Self::SnapshotOpen,
         Self::SessionCloses,
         Self::PromptStarts,
+        Self::PromptIntoRun,
+        Self::PromptIntoEndedRun,
         Self::PromptCancelled,
     ];
 
@@ -1199,6 +1261,7 @@ impl TurnHappens {
     fn possible_at(self, at: TurnAt) -> bool {
         match self {
             Self::PromptStarts => !at.collecting(),
+            Self::PromptIntoRun | Self::PromptIntoEndedRun => matches!(at, TurnAt::SelfWoken),
             Self::PromptCancelled => at.collecting(),
             _ => true,
         }
@@ -1303,15 +1366,23 @@ impl TurnRig {
 
     /// Answers the next command named `name` the service sends.
     async fn answer(link: &mut crate::hosts::FakeLink, name: &str, result: Value) {
+        let command = Self::command(link, name).await;
+        Self::reply(link, &command, result);
+    }
+
+    async fn command(link: &mut crate::hosts::FakeLink, name: &str) -> Value {
         loop {
             let frame = within("a command", link.recv())
                 .await
                 .expect("the link is up");
             if frame["type"] == "command" && frame["name"] == name {
-                link.send(json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": result}));
-                return;
+                return frame;
             }
         }
+    }
+
+    fn reply(link: &crate::hosts::FakeLink, command: &Value, result: Value) {
+        link.send(json!({"type": "reply", "id": command["id"], "epoch": link.epoch, "ok": true, "result": result}));
     }
 
     fn event(&mut self, event: Value) {
@@ -1371,6 +1442,26 @@ impl TurnRig {
         let session = self.session.clone();
         self.prompting = Some(tokio::spawn(async move { session.prompt(message).await }));
         Self::answer(&mut self.link, "prompt", reply).await;
+    }
+
+    /// A prompt the host answers with `reply` only once the pump has read
+    /// `event`: the session's turn takes the frame before the prompt's
+    /// task reads the reply.
+    async fn prompt_into_after(&mut self, message: &'static str, event: Value, reply: Value) {
+        let session = self.session.clone();
+        let prompting = tokio::spawn(async move { session.prompt(message).await });
+        let command = Self::command(&mut self.link, "prompt").await;
+        self.event(event);
+        self.settle().await;
+        Self::reply(&self.link, &command, reply);
+        self.snapshot(json!({"session": "s1", "busy": false, "turn_open": false}));
+        within("the prompt's task steps the reply and returns", async {
+            while !prompting.is_finished() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        self.prompting = Some(prompting);
     }
 
     async fn reach(&mut self, at: TurnAt) {
@@ -1457,6 +1548,18 @@ impl TurnRig {
                 .await;
             }
             TurnHappens::PromptStarts => self.prompt("next").await,
+            TurnHappens::PromptIntoRun => {
+                self.prompt_into("next", json!({"sent_as": "follow_up", "turn_id": "auto-1"}))
+                    .await
+            }
+            TurnHappens::PromptIntoEndedRun => {
+                self.prompt_into_after(
+                    "next",
+                    end("auto-1"),
+                    json!({"sent_as": "follow_up", "turn_id": "auto-1"}),
+                )
+                .await
+            }
             TurnHappens::PromptCancelled => {
                 let prompting = self.prompting.take().expect("a prompt is running");
                 prompting.abort();
@@ -1548,7 +1651,7 @@ Idle               | CallerEnds              | end input t-in                   
 Idle               | SnapshotIdle            | -                                                             | -    | -          | -                                     | -
 Idle               | SnapshotOpen            | start autonomous snap-1                                       | busy | autonomous | -                                     | -
 Idle               | SessionCloses           | -                                                             | -    | gone       | -                                     | -
-Idle               | PromptStarts            | -                                                             | busy | -          | running «»                            | -
+Idle               | PromptStarts            | start input t-in                                              | busy | -          | running «»                            | -
 
 # A caller's turn: its frames go to its collector, and only the `turn_end` of the turn its prompt's
 # reply named settles it. Another turn's end is still reported as an input turn's end.
@@ -1581,7 +1684,9 @@ SelfWoken          | CallerEnds              | -                                
 SelfWoken          | SnapshotIdle            | end autonomous auto-1 «run words»                             | -    | -          | -                                     | auto-1: run words
 SelfWoken          | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | -                                     | auto-1: run words
 SelfWoken          | SessionCloses           | end autonomous auto-1                                         | -    | gone       | -                                     | auto-1: run words
-SelfWoken          | PromptStarts            | -                                                             | busy | autonomous | running «»                            | -
+SelfWoken          | PromptStarts            | start input t-in                                              | busy | autonomous | running «»                            | -
+SelfWoken          | PromptIntoRun           | start input auto-1                                            | busy | autonomous | running «»                            | -
+SelfWoken          | PromptIntoEndedRun      | end autonomous auto-1 «run words»                             | -    | -          | returned «»                           | auto-1: run words
 
 # Both: the run swallows the caller's frames too, and a second start replaces it the same way.
 CallerAndSelfWoken | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
@@ -1628,7 +1733,7 @@ Replaced           | CallerEnds              | -                                
 Replaced           | SnapshotIdle            | end autonomous auto-2 «second words»                          | -    | -          | -                                     | auto-2: second words
 Replaced           | SnapshotOpen            | end autonomous auto-2 «second words»; start autonomous snap-1 | busy | autonomous | -                                     | auto-2: second words
 Replaced           | SessionCloses           | end autonomous auto-2                                         | -    | gone       | -                                     | auto-2: second words
-Replaced           | PromptStarts            | -                                                             | busy | autonomous | running «»                            | -
+Replaced           | PromptStarts            | start input t-in                                              | busy | autonomous | running «»                            | -
 
 # A prompt sent into the held run as a `follow_up`: the run swallows its frames, but the run's end reaches
 # the prompt too, which waits for it (#512).

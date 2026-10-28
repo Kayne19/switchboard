@@ -81,6 +81,11 @@ type Trigger =
   | "MODE, ptt end"
   | "load lands"
   | "load fails"
+  | "MODE, load lands"
+  | "MODE twice, first load fails, second lands"
+  | "MODE twice, first load lands"
+  | "MODE, hidden at the grant, then its event"
+  | "MODE, hidden at the grant, shown before its event"
   | "page hidden, load lands"
   | "pagehide, load lands"
   | "dispose, load lands"
@@ -210,7 +215,9 @@ function harness() {
   };
   const counts = { loads: 0, asked: 0 };
   let load: "lands" | "fails" | "held" = "lands";
-  let held: { land: () => void; fail: () => void } | null = null;
+  const held: Array<{ land: () => void; fail: () => void }> = [];
+  let grant: (() => void) | null = null;
+  let holdGrant = false;
   let drained = true;
   vi.spyOn(AudioPlayback.prototype, "isDrained").mockImplementation(() => drained);
   const page = { visibilityState: "visible" as DocumentVisibilityState };
@@ -231,10 +238,10 @@ function harness() {
       if (load === "fails") return Promise.reject(new Error("model missing"));
       if (load === "lands") return Promise.resolve(detector);
       return new Promise<WakeDetector>((resolve, reject) => {
-        held = {
+        held.push({
           land: () => resolve(detector),
           fail: () => reject(new Error("model missing")),
-        };
+        });
       });
     },
     loadSpeechEndpointer: async () => endpointer,
@@ -243,7 +250,10 @@ function harness() {
         ...options,
         getUserMedia: async () => {
           counts.asked += 1;
-          return stream();
+          if (!holdGrant) return stream();
+          return new Promise<MediaStream>((resolve) => {
+            grant = () => resolve(stream());
+          });
         },
         createAudioContext: fakeContext,
         createWorkletNode: () =>
@@ -281,11 +291,24 @@ function harness() {
     loadFails: () => (load = "fails"),
     loadLands: () => (load = "lands"),
     land: async () => {
-      held!.land();
+      held.at(-1)!.land();
       await settle();
     },
     fail: async () => {
-      held!.fail();
+      held.at(-1)!.fail();
+      await settle();
+    },
+    failFirst: async () => {
+      held[0].fail();
+      await settle();
+    },
+    landFirst: async () => {
+      held[0].land();
+      await settle();
+    },
+    holdGrant: () => (holdGrant = true),
+    grant: async () => {
+      grant!();
       await settle();
     },
     hear: () => detect(),
@@ -295,6 +318,9 @@ function harness() {
       page.visibilityState = state;
       documentListeners.get("visibilitychange")!({} as Event);
     },
+    /** WebKit changes the state at once and dispatches its event in a later task. */
+    hideBeforeItsEvent: () => (page.visibilityState = "hidden"),
+    fireVisibilityChange: () => documentListeners.get("visibilitychange")!({} as Event),
     pageHide: () => windowListeners.get("pagehide")!({} as Event),
     setDrained: (value: boolean) => {
       drained = value;
@@ -494,6 +520,41 @@ async function apply(h: Harness, event: Trigger): Promise<void> {
     case "load fails":
       await h.fail();
       break;
+    case "MODE, load lands":
+      runtime.toggleHandsFree();
+      await h.land();
+      break;
+    case "MODE twice, first load fails, second lands":
+      runtime.toggleHandsFree();
+      await settle();
+      runtime.toggleHandsFree();
+      await settle();
+      await h.failFirst();
+      await h.land();
+      break;
+    case "MODE twice, first load lands":
+      runtime.toggleHandsFree();
+      await settle();
+      runtime.toggleHandsFree();
+      await settle();
+      await h.landFirst();
+      break;
+    case "MODE, hidden at the grant, then its event":
+      h.holdGrant();
+      runtime.toggleHandsFree();
+      await settle();
+      h.hideBeforeItsEvent();
+      await h.grant();
+      h.fireVisibilityChange();
+      break;
+    case "MODE, hidden at the grant, shown before its event":
+      h.holdGrant();
+      runtime.toggleHandsFree();
+      await settle();
+      h.hideBeforeItsEvent();
+      await h.grant();
+      h.setVisibility("visible");
+      break;
     case "page hidden, load lands":
       h.setVisibility("hidden");
       await h.land();
@@ -557,8 +618,11 @@ const rows: Row[] = [
   { from: "unloaded", event: "ptt press", seen: { ...STOPPED, said: STANDBY } },
   { from: "unloaded", event: "reply closed", seen: { ...STOPPED, said: STANDBY }, lease: false },
 
-  // Loading: MODE waits for it; a page stop or a rescue epoch ends it, and the next MODE loads again.
-  { from: "loading", event: "MODE", seen: { ...ON, said: LOADING, loads: 0, asked: 0 } },
+  { from: "loading", event: "MODE", seen: { ...STOPPED, said: OFF, loads: 0, asked: 0 } },
+  { from: "loading", event: "MODE, load lands", seen: { ...STOPPED, said: OFF, asked: 0 } },
+  { from: "loading", event: "MODE twice", seen: { ...ON, said: LOADING, loads: 1, asked: 0 } },
+  { from: "loading", event: "MODE twice, first load fails, second lands", seen: { ...ON, said: LISTENING, error: null, loads: 1, asked: 1 } },
+  { from: "loading", event: "MODE twice, first load lands", seen: { ...ON, said: LOADING, loads: 1, asked: 0 } },
   { from: "loading", event: "load lands", seen: { ...ON, said: LISTENING, asked: 1 } },
   { from: "loading", event: "load fails", seen: { ...STOPPED, said: LOAD_FAILED, error: LOAD_FAILED, asked: 0 } },
   { from: "loading", event: "page hidden", seen: { ...STOPPED, said: HIDDEN } },
@@ -584,6 +648,8 @@ const rows: Row[] = [
   // Loaded and off: MODE starts without loading again; a stop says why.
   { from: "off", event: "MODE", seen: { ...ON, said: LISTENING, loads: 0, asked: 1 } },
   { from: "off", event: "page hidden", seen: { ...STOPPED, said: HIDDEN } },
+  { from: "off", event: "MODE, hidden at the grant, then its event", seen: { ...STOPPED, said: HIDDEN, error: null, asked: 1 } },
+  { from: "off", event: "MODE, hidden at the grant, shown before its event", seen: { ...STOPPED, said: HIDDEN, error: null, asked: 1 } },
   { from: "off", event: "pagehide", seen: { ...STOPPED, said: LEFT } },
   { from: "off", event: "dispose", seen: { ...STOPPED, said: LEFT } },
   { from: "off", event: "route", seen: { ...STOPPED, said: ROUTE } },

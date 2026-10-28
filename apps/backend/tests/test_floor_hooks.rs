@@ -923,6 +923,57 @@ async fn a_floor_release_that_waited_for_its_place_drops_a_leg_change_at_once() 
     assert_eq!(outcome, ReleaseOutcome::Drop);
 }
 
+#[tokio::test]
+async fn a_clipped_floor_line_shows_the_caller_its_whole_text() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_success(100, Duration::from_millis(25_000)),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    crate::speech::start_speech_worker_for_test(&state);
+    let (mut connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let line = "Grapes finished the migration and every table moved across cleanly. \
+                It needs you to decide whether to drop the old schema tonight.";
+    assert!(state
+        .0
+        .speaker
+        .clip_for_speech(line)
+        .ends_with("there's more on screen."));
+
+    let outcome = release_floor(
+        &state,
+        FloorRequest {
+            floor_id: 0,
+            project: "grapes".into(),
+            token: "grapes-token".into(),
+            generation: state.0.coordinator.generation(),
+            context: String::new(),
+            message: "Migration done; drop the old schema tonight?".into(),
+            reason: "needs_decision".into(),
+            held_display: false,
+        },
+        line.into(),
+    )
+    .await;
+    assert_eq!(outcome, ReleaseOutcome::Played);
+    let frames = frames_until(&mut connection, "spoken").await;
+    let spoken = frames.last().expect("a spoken frame");
+    assert_eq!(spoken["entry"]["text"], line, "{frames:#?}");
+}
+
 fn assert_serial_audio(frames: &[Value]) {
     let mut active = false;
     for frame in frames {

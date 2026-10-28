@@ -136,7 +136,10 @@ fn blank_values_mean_unset() {
             ("SWITCHBOARD_JEV_TIMEOUT_MS", blank),
             ("SWITCHBOARD_HISTORY_LIMIT", blank),
         ]);
-        assert_eq!(config.pi_binary, "pi", "{blank:?}");
+        assert_eq!(config.pi_binary, NO_PI, "{blank:?}");
+        let values = HashMap::from([("SWITCHBOARD_PI_BINARY".into(), blank.into())]);
+        let deployed = Config::from_values(&values, PathBuf::from("/tmp/env"));
+        assert_eq!(deployed.pi_binary, "pi", "{blank:?}");
         assert_eq!(config.agent_thinking, "medium", "{blank:?}");
         assert_eq!(config.bind, defaults.bind, "{blank:?}");
         assert_eq!(config.projects_file, defaults.projects_file, "{blank:?}");

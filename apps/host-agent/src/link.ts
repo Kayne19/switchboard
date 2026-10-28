@@ -9,7 +9,7 @@
 //   the service's cursor per session, or send a fresh snapshot.
 
 import { randomBytes } from "node:crypto";
-import { DaemonCommandError } from "./daemon_port.ts";
+import { DaemonCommandError, DaemonUnreachableError } from "./daemon_port.ts";
 import { CommandError, type LinkEvent } from "./sessions.ts";
 
 /**
@@ -49,7 +49,7 @@ export interface HostLinkOptions {
 	gitSha: string;
 	/** Versions reported in the hello. */
 	versions: () => { prime_agent_client: string | null; prime_agent_daemon: string | null; daemon_protocol: number | null };
-	/** Runs one command; throws CommandError or DaemonCommandError to refuse. */
+	/** Runs one command; what it throws becomes the reply's error (`errorOf`). */
 	command: (name: string, args: Record<string, unknown>) => Promise<unknown>;
 	/** The sessions whose events the service should know about. */
 	sessions: () => string[];
@@ -128,6 +128,7 @@ export function parseCursor(cursor: unknown): { bootId: string; seq: number } | 
 function errorOf(error: unknown): { code: string; message: string } {
 	if (error instanceof CommandError) return { code: error.code, message: error.message };
 	if (error instanceof DaemonCommandError) return { code: error.unsupported ? "unsupported" : "daemon_error", message: error.message };
+	if (error instanceof DaemonUnreachableError) return { code: "daemon_unreachable", message: error.message };
 	return { code: "failed", message: error instanceof Error ? error.message : String(error) };
 }
 

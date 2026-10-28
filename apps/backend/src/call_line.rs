@@ -226,6 +226,10 @@ pub(crate) enum Line {
         leg: LiveLeg,
         candidate: CandidateLeg,
         turn: Option<OperationIdentity>,
+        /// The host turn the candidate's bring-up prompt went into, once
+        /// the host named it (`bind_turn` with the candidate's token): the
+        /// intro operation's turn id when adoption opens it.
+        intro_turn: Option<String>,
     },
     /// The candidate was adopted on its first sign of life and holds the
     /// line, opening with its intro turn. The PBX commits it when the intro
@@ -416,19 +420,42 @@ impl Line {
                     _ => Err(LifecycleError::WrongPhase),
                 }
             }
+            // A turn binds once, to the open operation of the leg holding
+            // `token`. A staged candidate has no operation yet: its bring-up
+            // prompt's turn is kept on the starting line, and adoption opens
+            // the intro operation bound to it. A `follow_up` into a busy
+            // session's run is one such turn, and no start of its own ever
+            // binds it.
             Event::BindTurn { token, turn_id } => {
-                let Some(turn) = self.turn().filter(|_| leg.identity.token == token) else {
-                    return Err(LifecycleError::StaleLeg);
+                let mut next = self.clone();
+                let slot = match &mut next {
+                    Self::Starting {
+                        candidate,
+                        intro_turn,
+                        ..
+                    } if candidate.identity.token == token => intro_turn,
+                    Self::Open {
+                        leg,
+                        turn: Some(turn),
+                    }
+                    | Self::Starting {
+                        leg,
+                        turn: Some(turn),
+                        ..
+                    }
+                    | Self::Adopted {
+                        leg,
+                        turn: Some(turn),
+                        ..
+                    } if leg.identity.token == token => &mut turn.turn_id,
+                    _ => return Err(LifecycleError::StaleLeg),
                 };
-                match turn.turn_id.as_deref() {
+                match slot.as_deref() {
                     Some(bound) if bound != turn_id => Err(LifecycleError::StaleLeg),
                     Some(_) => unchanged(),
                     None => {
-                        let bound = OperationIdentity {
-                            turn_id: Some(turn_id.to_owned()),
-                            ..turn.clone()
-                        };
-                        Ok((self.with_turn(Some(bound)), None))
+                        *slot = Some(turn_id.to_owned());
+                        Ok((next, None))
                     }
                 }
             }
@@ -512,6 +539,7 @@ impl Line {
                     leg: leg.clone(),
                     candidate,
                     turn: self.turn().cloned(),
+                    intro_turn: None,
                 };
                 Ok((next, notice))
             }
@@ -541,12 +569,17 @@ impl Line {
             // open, is replaced by the intro: its owner's later
             // `finish_operation` finds nothing to close.
             Event::Adopt { token, intro } => match self {
-                Self::Starting { leg, candidate, .. } if candidate.identity.token == token => {
+                Self::Starting {
+                    leg,
+                    candidate,
+                    intro_turn,
+                    ..
+                } if candidate.identity.token == token => {
                     let adopted = LiveLeg::adopted(candidate);
                     let turn = OperationIdentity {
                         id: intro,
                         leg: adopted.identity.clone(),
-                        turn_id: None,
+                        turn_id: intro_turn.clone(),
                     };
                     let notice = candidate_notice(
                         &candidate.route,
@@ -583,6 +616,7 @@ impl Line {
                     leg,
                     candidate,
                     turn,
+                    ..
                 } if candidate.identity.generation == generation => {
                     let notice = candidate_notice(
                         &candidate.route,

@@ -4,7 +4,7 @@ use crate::app_state::AppState;
 use crate::app_state::{
     assert_lifecycle_consistent, begin_alpha_candidate, hold_turn_lock, state, update_agent_state,
 };
-use crate::browser::{handle_text_frame, queued_frames};
+use crate::browser::{frames_until, handle_text_frame, queued_frames, types_of};
 use crate::delivery::{DeliveryFrame, Event};
 use crate::pbx::{AgentNotice, AgentStateNotice, OPERATOR};
 use crate::project_session::AgentCall;
@@ -981,6 +981,81 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
 }
 
 #[tokio::test]
+async fn an_applied_seq_this_process_has_not_sent_confirms_nothing() {
+    let state = state();
+    let (mut connection, _s, _w) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    let (_, last) = state
+        .0
+        .delivery
+        .publish_sequenced(Event::Json(json!({"type":"activity"})));
+    let unsent = last + 1;
+    handle_text_frame(
+        &state,
+        connection.epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"auto","has_visual":false,
+                "generation":generation,"applied_seq":unsent})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    let call = post_display_in_task(&state, diagram_show()).await;
+    let frames = frames_until(&mut connection, "display").await;
+    assert!(
+        types_of(&frames).contains(&"screen_state_ack"),
+        "the report was taken"
+    );
+    assert_eq!(
+        frames.last().unwrap()["seq"],
+        unsent,
+        "the display took the seq the page named"
+    );
+    let (code, body) = within("the display call", call).await.unwrap();
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body["rendered"], false, "{body}");
+}
+
+#[tokio::test]
+async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
+    let state = state();
+    let (mut connection, _s, _w) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    let (_, last) = state
+        .0
+        .delivery
+        .publish_sequenced(Event::Json(json!({"type":"activity"})));
+    let unsent = last + 1;
+    handle_text_frame(
+        &state,
+        connection.epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"auto","has_visual":false,
+                "generation":generation,
+                "rejected":{"seq":unsent,"reason":"the old process's display"}})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    let call = post_display_in_task(&state, diagram_show()).await;
+    let frames = frames_until(&mut connection, "display").await;
+    assert!(
+        types_of(&frames).contains(&"screen_state_ack"),
+        "the report was taken"
+    );
+    assert_eq!(
+        frames.last().unwrap()["seq"],
+        unsent,
+        "the display took the seq the page named"
+    );
+    let (code, body) = within("the display call", call).await.unwrap();
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(body.get("rejected"), None, "{body}");
+}
+
+#[tokio::test]
 async fn display_reports_unconfirmed_when_the_browser_stays_silent() {
     let state = state();
     let (connection, _s, _w) = state.register_connection().await;
@@ -1027,28 +1102,34 @@ async fn display_reports_rejection_from_the_browser() {
     );
 }
 
-/// The page sends a rejection once. A later report without one, here the
-/// confirmation of the next action, must not hide it from the call still
-/// waiting on the rejected `seq` (#255).
+/// A later report without a rejection, here the confirmation of the next
+/// action, must not hide an earlier one from the call still waiting on the
+/// rejected `seq` (#255).
 #[tokio::test]
 async fn display_reports_a_rejection_that_a_later_report_followed() {
     let state = state();
     let (mut connection, _s, _w) = state.register_connection().await;
     let epoch = connection.epoch;
     let handle = post_display_in_task(&state, diagram_show()).await;
-    let DeliveryFrame::Event { sequence, .. } =
-        within("connection.receiver", connection.receiver.recv())
-            .await
-            .unwrap()
-    else {
-        panic!("expected a display event")
-    };
+    let sequence = frames_until(&mut connection, "display")
+        .await
+        .last()
+        .unwrap()["seq"]
+        .clone();
+    let mut next = diagram_show();
+    next["action"]["id"] = json!("d2");
+    let next_handle = post_display_in_task(&state, next).await;
+    let next_sequence = frames_until(&mut connection, "display")
+        .await
+        .last()
+        .unwrap()["seq"]
+        .clone();
     let generation = state.0.coordinator.generation();
     for report in [
         json!({"type":"screen_state","view":"auto","has_visual":false,"generation":generation,
                "rejected":{"seq":sequence,"reason":"unknown field in chart data: zeta"}}),
         json!({"type":"screen_state","view":"auto","has_visual":true,"generation":generation,
-               "visual_kind":"metric","applied_seq":sequence + 1}),
+               "visual_kind":"diagram","applied_seq":next_sequence}),
     ] {
         handle_text_frame(&state, epoch, &mut None, &mut None, &report.to_string())
             .await
@@ -1064,6 +1145,41 @@ async fn display_reports_a_rejection_that_a_later_report_followed() {
         body["reason"], "unknown field in chart data: zeta",
         "{body}"
     );
+    let (_code, body) = within("the next display call", next_handle).await.unwrap();
+    assert_eq!(body["rendered"], true, "{body}");
+}
+
+#[tokio::test]
+async fn display_reports_new_leg_when_a_transfer_overtakes_the_confirmation() {
+    let state = state();
+    let (mut connection, _, _) = state.register_connection().await;
+    let waiting = {
+        let state = state.clone();
+        tokio::spawn(async move {
+            module_call(
+                &state,
+                AgentCall {
+                    call: "display".into(),
+                    token: String::new(),
+                    turn_id: None,
+                    cause: None,
+                    args: diagram_show(),
+                },
+            )
+            .await
+        })
+    };
+    within("the display frame", connection.receiver.recv())
+        .await
+        .unwrap();
+    begin_alpha_candidate(&state, "alpha-leg");
+    assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
+    let reply = within("the display call", waiting).await.unwrap();
+    assert_eq!(reply["status"], "delivered", "{reply}");
+    assert_eq!(reply["reason"], Value::Null, "{reply}");
+    assert_eq!(reply["result"]["rendered"], false, "{reply}");
+    assert_eq!(reply["result"]["reason"], "new_leg", "{reply}");
+    assert!(reply["result"]["detail"].is_string(), "{reply}");
 }
 
 #[tokio::test]
