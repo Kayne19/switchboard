@@ -918,7 +918,7 @@ async fn a_promotion_whose_join_the_host_refuses_keeps_the_resident_on_the_call(
         .is_some_and(|session| session.same_session(&resident)));
 
     board
-        .start_background_part("alpha", "check the build")
+        .start_background_part_on("alpha", "check the build")
         .await
         .expect("the resident takes more work");
     within("the request to speak is answered", async {
@@ -1647,7 +1647,7 @@ async fn an_answer_naming_a_background_resident_brings_it_forward_with_the_words
     let log = serve(&board, Box::new(|_, _| says("handled")));
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta part")
+        .start_background_part_on("beta", "beta part")
         .await
         .expect("beta resident");
     let creates = log.named("create_session").len();
