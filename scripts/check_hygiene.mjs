@@ -438,6 +438,8 @@ const machines = [
 	{ file: "apps/backend/src/page_controls.rs", writer: /\bcoordinator\.generation\(\)/, max: 2, once: [/\.begin_rescue_at\(/, /\.begin_rescue_of\(/, /\bcoordinator\.settle\(/, /\.settle_at\(/] },
 	// modal-focus (#396): `transition` writes a dialog's focus phase; `leave` cancels the give-back's frame.
 	{ file: "apps/frontend/src/hooks/useModalFocus.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/cancelAnimationFrame\(/] },
+	// pinned-scroll (#415): `send` is the one writer of the scroll state; the effect's cleanup is the one disconnect.
+	{ file: "apps/frontend/src/hooks/usePinnedScroll.ts", writer: /\bstate\.current\s*=(?!=)/, max: 1, once: [/\.disconnect\(\)/] },
 	// browser-link: `transition` writes the call socket's link; `leave` clears its timer, and
 	// `close` is the one place a socket is closed (on leaving its phase, or after a failed send).
 	{ file: "apps/frontend/src/runtime/callLink.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.close\(\)/, /clearTimeout\(/] },
