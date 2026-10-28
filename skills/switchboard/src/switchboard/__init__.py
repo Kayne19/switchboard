@@ -340,6 +340,8 @@ def speak(text):
     _require_str("text", text)
 
     def describe(result):
+        if result.delivered and result.reason == "cut_short":
+            return "Cut off at the speech deadline. The caller heard only the start. If the rest matters, say it in a shorter line."
         if result.delivered or result.accepted:
             return "Spoken."
         return _common(result) or (

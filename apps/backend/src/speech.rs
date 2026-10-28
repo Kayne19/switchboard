@@ -4,12 +4,11 @@
 //! `floor_hooks.rs`.
 use crate::app_state::AppState;
 use crate::app_state::{
-    clear_active_operation, emit, emit_message, publish_status, spawn_registered_operation,
-    AppInner,
+    clear_active_operation, emit_message, publish_status, spawn_registered_operation, AppInner,
 };
 use crate::audio::TtsContinuity;
 use crate::debug::DebugEvent;
-use crate::delivery::Event;
+use crate::delivery::SlotReceipt;
 use crate::history::AGENT;
 use crate::protocol::ServerMessage;
 use futures_util::StreamExt;
@@ -177,7 +176,7 @@ pub(crate) struct SpeechRequest {
     /// A model swap invalidates the call's continuity chain.
     model: String,
     transcript: Option<String>,
-    result: oneshot::Sender<Result<(), String>>,
+    result: oneshot::Sender<Result<Played, String>>,
     /// The `/speak` request it answers; the synthesis logs under it although
     /// the speech worker runs it.
     span: tracing::Span,
@@ -375,36 +374,11 @@ async fn reserve_audio(state: &AppState, generation: u64) -> Option<u64> {
     Some(audio.reserve(generation))
 }
 
-async fn publish_audio_events(state: &AppState, events: Vec<Event>) -> bool {
-    let mut delivered = false;
-    for event in events {
-        delivered |= emit(state, event);
-    }
-    delivered
-}
-
-async fn start_audio(state: &AppState, sequence: u64, generation: u64) -> bool {
-    let events = {
-        let mut audio = state.0.audio.lock().await;
-        audio.start(sequence, generation)
-    };
-    publish_audio_events(state, events).await
-}
-
-async fn append_audio(state: &AppState, sequence: u64, generation: u64, bytes: Vec<u8>) -> bool {
-    let events = {
-        let mut audio = state.0.audio.lock().await;
-        audio.append(sequence, generation, bytes)
-    };
-    publish_audio_events(state, events).await
-}
-
 /// Closes an utterance's audio slot, which lets the slots behind it go out.
-/// One a rescue cleared is gone, and closing it sends nothing. True when a
-/// page took what it sent.
-pub(crate) async fn finish_audio(state: &AppState, sequence: u64, generation: u64) -> bool {
-    let events = state.0.audio.lock().await.finish(sequence, generation);
-    publish_audio_events(state, events).await
+/// One a rescue cleared is gone, and closing it sends nothing.
+pub(crate) async fn finish_audio(state: &AppState, sequence: u64, generation: u64) {
+    let mut audio = state.0.audio.lock().await;
+    audio.finish(sequence, generation, state.0.coordinator.generation());
 }
 
 fn continuity_for_request(
@@ -474,8 +448,9 @@ impl Utterance {
 enum Stopped {
     /// The rescue aborted its admission or its drain.
     Cancelled,
-    /// Its generation was left before it was admitted, or while it drained
-    /// before any of its audio reached the page (#437).
+    /// Its generation was left before it was admitted, or before any of its
+    /// audio reached the page under that generation: while it drained, or
+    /// while its slot waited behind another (#437).
     Superseded,
 }
 
@@ -488,15 +463,26 @@ impl std::fmt::Display for Stopped {
     }
 }
 
+/// How much of a spoken line a page took. A `speak` the deadline cut answers
+/// `cut_short`, which tells the agent to say less next time; a reply's
+/// utterances share one deadline, so a cut reply stops there and counts as not
+/// spoken for the turn (`final_response_audio_closed`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Played {
+    Whole,
+    CutShort,
+}
+
 /// How a speech request ended. Every exit of the worker yields exactly one,
 /// and `PendingSpeech::complete` is the only place one is acted on.
 #[derive(Debug)]
 enum SpeechOutcome {
-    /// The whole body drained and a browser took its audio.
-    Spoken { bytes: usize },
+    /// A browser took its audio: the whole body, or the start of one the
+    /// speech deadline cut.
+    Spoken { bytes: usize, played: Played },
     /// The whole body drained, but no browser took its audio.
     NotDelivered { bytes: usize },
-    /// A rescue stopped it.
+    /// A rescue or a hand-off stopped it.
     Stopped(Stopped),
     /// The provider or the speech task failed.
     Failed(crate::audio::AudioError),
@@ -520,7 +506,7 @@ struct PendingSpeech {
     utterance: Utterance,
     route: String,
     transcript: Option<String>,
-    result: oneshot::Sender<Result<(), String>>,
+    result: oneshot::Sender<Result<Played, String>>,
     started: std::time::Instant,
 }
 
@@ -539,8 +525,8 @@ impl PendingSpeech {
         } = self;
         let chars = utterance.text.chars().count();
         match outcome {
-            SpeechOutcome::Spoken { bytes } => {
-                tracing::info!(chars, bytes, elapsed = ?started.elapsed(), "synthesized a speech line");
+            SpeechOutcome::Spoken { bytes, played } => {
+                tracing::info!(chars, bytes, ?played, elapsed = ?started.elapsed(), "synthesized a speech line");
                 if let Some(text) = transcript {
                     if let Some(entry) = state
                         .0
@@ -560,7 +546,7 @@ impl PendingSpeech {
                         );
                     }
                 }
-                let _ = result.send(Ok(()));
+                let _ = result.send(Ok(played));
             }
             SpeechOutcome::NotDelivered { bytes } => {
                 tracing::info!(chars, bytes, elapsed = ?started.elapsed(), "synthesized a speech line");
@@ -621,21 +607,28 @@ async fn admit_speech(
     admitted
 }
 
-/// Streams an admitted utterance's body into its audio slot. A body drained
-/// to its end closes the slot and commits continuity. Any other end gives the
-/// slot back before it returns: the slots behind it emit only once it is
-/// closed, so a later drain that finished first would find its own audio
-/// held back and report it undelivered.
+/// Streams an admitted utterance's body into its audio slot, and answers
+/// from what the pages took of that slot once it has left the queue
+/// (`went_out`). A body drained to its end closes the slot and commits
+/// continuity. Any other end gives the slot back first: the slots behind it
+/// emit only once it is closed.
 async fn drain_speech_stream(
     state: AppState,
     mut stream: crate::audio::TtsChunkStream,
     utterance: Utterance,
+    deadline: std::time::Instant,
 ) -> SpeechOutcome {
     let (generation, sequence) = (utterance.generation, utterance.sequence);
     let request_id = stream.metadata().request_id.clone();
-    let mut delivered = start_audio(&state, sequence, generation).await;
+    let receipt = {
+        let mut audio = state.0.audio.lock().await;
+        audio.start(sequence, generation, state.0.coordinator.generation())
+    };
     let mut bytes = 0usize;
-    while let Some(chunk) = stream.next().await {
+    let played = loop {
+        let Some(chunk) = stream.next().await else {
+            break Played::Whole;
+        };
         // The call has moved on without a rescue: a hand-off (a transfer's
         // adoption). What the old leg is already saying finishes, and the
         // new leg's audio waits behind it in the audio order; an utterance
@@ -643,37 +636,113 @@ async fn drain_speech_stream(
         // nothing new from the old leg starts after the hand-off (#437). A
         // rescue or a shutdown aborts the drain instead. The stream's own
         // deadline (`TtsChunkStream`) bounds how long the new leg waits.
-        if generation != state.0.coordinator.generation() && !delivered {
+        if left_unheard(&state, generation, &receipt) {
             utterance.abandon(&state).await;
             return SpeechOutcome::Stopped(Stopped::Superseded);
         }
-        let chunk = match chunk {
-            Ok(chunk) => chunk,
+        match chunk {
+            Ok(chunk) => {
+                bytes = bytes.saturating_add(chunk.len());
+                for part in chunk.chunks(32 * 1024) {
+                    let mut audio = state.0.audio.lock().await;
+                    let line = state.0.coordinator.generation();
+                    audio.append(sequence, generation, part.to_vec(), line);
+                }
+            }
+            Err(crate::audio::AudioError::Deadline) if bytes > 0 => break Played::CutShort,
             Err(error) => {
                 utterance.abandon(&state).await;
                 return SpeechOutcome::Failed(error);
             }
-        };
-        bytes = bytes.saturating_add(chunk.len());
-        for part in chunk.chunks(32 * 1024) {
-            delivered |= append_audio(&state, sequence, generation, part.to_vec()).await;
+        }
+    };
+    // The slot closes before `went_out` runs: it waits for the slot to leave
+    // the queue, and an open slot would hold it until the deadline.
+    match played {
+        Played::CutShort => utterance.abandon(&state).await,
+        Played::Whole => {
+            finish_audio(&state, sequence, generation).await;
+            // A request id is useful only after the complete body has been
+            // consumed. The epoch/model/generation checks reject a late
+            // drain after a reset.
+            state.0.commit_continuity_ordered(
+                generation,
+                &utterance.model,
+                utterance.epoch,
+                sequence,
+                request_id,
+                utterance.text,
+            );
         }
     }
-    delivered |= finish_audio(&state, sequence, generation).await;
-    // A request id is useful only after the complete body has been consumed.
-    // The epoch/model/generation checks reject a late drain after a reset.
-    state.0.commit_continuity_ordered(
-        generation,
-        &utterance.model,
-        utterance.epoch,
-        sequence,
-        request_id,
-        utterance.text,
-    );
-    if delivered {
-        SpeechOutcome::Spoken { bytes }
+    match (
+        went_out(&state, generation, sequence, receipt, deadline).await,
+        played,
+    ) {
+        (WentOut::Heard, played) => SpeechOutcome::Spoken { bytes, played },
+        (WentOut::Unheard, Played::CutShort) => {
+            SpeechOutcome::Failed(crate::audio::AudioError::Deadline)
+        }
+        (WentOut::Unheard, Played::Whole) => SpeechOutcome::NotDelivered { bytes },
+        (WentOut::HandedOffUnheard, _) => SpeechOutcome::Stopped(Stopped::Superseded),
+    }
+}
+
+enum WentOut {
+    Heard,
+    Unheard,
+    HandedOffUnheard,
+}
+
+/// The call has handed off, and none of this utterance reached a page under
+/// its own leg, so it is not said (#437).
+fn left_unheard(state: &AppState, generation: u64, receipt: &SlotReceipt) -> bool {
+    generation != state.0.coordinator.generation() && !receipt.taken()
+}
+
+fn heard_or_not(receipt: &SlotReceipt) -> WentOut {
+    if receipt.taken() {
+        WentOut::Heard
     } else {
-        SpeechOutcome::NotDelivered { bytes }
+        WentOut::Unheard
+    }
+}
+
+/// Waits for a closed slot to leave the queue behind the slots ahead of it,
+/// at most until the request's deadline: a slot left open ahead of it would
+/// otherwise hold every requester behind it.
+async fn went_out(
+    state: &AppState,
+    generation: u64,
+    sequence: u64,
+    mut receipt: SlotReceipt,
+    deadline: std::time::Instant,
+) -> WentOut {
+    let line_moved = state.0.coordinator.operation_changed();
+    let expired = tokio::time::sleep_until(deadline.into());
+    tokio::pin!(expired);
+    loop {
+        // Made before the generation is read: a hand-off wakes it with
+        // `notify_waiters`, which wakes only the waiters made before it.
+        let handed_off = line_moved.notified();
+        tokio::pin!(handed_off);
+        if left_unheard(state, generation, &receipt) {
+            return WentOut::HandedOffUnheard;
+        }
+        if receipt.gone() {
+            return heard_or_not(&receipt);
+        }
+        if expired.is_elapsed() {
+            if state.0.audio.lock().await.silence(sequence) {
+                return WentOut::Unheard;
+            }
+            return heard_or_not(&receipt);
+        }
+        tokio::select! {
+            () = receipt.changed() => {}
+            () = &mut handed_off => {}
+            () = &mut expired => {}
+        }
     }
 }
 
@@ -765,7 +834,7 @@ async fn process_speech(state: AppState) {
             sequence,
             pending.utterance.text.clone(),
         );
-        let drain = drain_speech_stream(state.clone(), stream, pending.utterance.clone());
+        let drain = drain_speech_stream(state.clone(), stream, pending.utterance.clone(), deadline);
         let Some((task, task_id)) =
             spawn_registered_operation(&state, generation, drain.instrument(span)).await
         else {
@@ -956,11 +1025,14 @@ pub(crate) async fn deliver_turn_if_current(
         success,
     }
     .to_value();
-    let events = {
-        let mut audio = state.0.audio.lock().await;
-        audio.barrier(sequence, generation, barrier)
-    };
-    let _ = publish_audio_events(state, events).await;
+    let mut audio = state.0.audio.lock().await;
+    audio.barrier(
+        sequence,
+        generation,
+        barrier,
+        state.0.coordinator.generation(),
+    );
+    drop(audio);
     success
 }
 
@@ -1163,7 +1235,7 @@ pub(crate) async fn send_speech(
     state: &AppState,
     admission: SpeechAdmission,
     reserved: ReservedSpeech<'_>,
-) -> Result<(), SpeechFailure> {
+) -> Result<Played, SpeechFailure> {
     let SpeechAdmission {
         text,
         route,
@@ -1202,7 +1274,7 @@ async fn queue_speech(
     state: &AppState,
     admission: SpeechAdmission,
     reserved: Option<ReservedSpeech<'_>>,
-) -> Result<(), String> {
+) -> Result<Played, String> {
     let reserved = match reserved {
         Some(reserved) => reserved,
         None => reserve_speech(
@@ -1241,7 +1313,7 @@ async fn synthesize_reply_if_current(
         } else {
             ContinuationScope::ContinueCurrentTurn
         };
-        if let Err(error) = queue_speech(
+        match queue_speech(
             state,
             SpeechAdmission {
                 text: spoken.clone(),
@@ -1256,13 +1328,24 @@ async fn synthesize_reply_if_current(
         )
         .await
         {
-            if generation == state.0.coordinator.generation() {
-                tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
-            } else {
-                tracing::info!(%error, "a rescue stopped this reply's speech");
+            Ok(Played::Whole) => {}
+            Ok(Played::CutShort) => {
+                tracing::info!(
+                    chars = spoken.chars().count(),
+                    "the speech deadline cut this reply short"
+                );
+                success = false;
+                break;
             }
-            success = false;
-            break;
+            Err(error) => {
+                if generation == state.0.coordinator.generation() {
+                    tracing::error!(%error, chars = spoken.chars().count(), "synthesis failed; the caller hears nothing for this reply");
+                } else {
+                    tracing::info!(%error, "a rescue stopped this reply's speech");
+                }
+                success = false;
+                break;
+            }
         }
     }
     if let Some(first) = first {

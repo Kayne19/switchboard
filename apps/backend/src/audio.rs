@@ -1171,7 +1171,7 @@ struct OfflineTtsTransport;
 #[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct TestTtsGate {
-    started: Arc<Notify>,
+    reading: Arc<Notify>,
     release: Arc<Notify>,
     fail_first: Arc<AtomicBool>,
 }
@@ -1180,7 +1180,7 @@ pub(crate) struct TestTtsGate {
 impl TestTtsGate {
     pub(crate) fn new() -> Self {
         Self {
-            started: Arc::new(Notify::new()),
+            reading: Arc::new(Notify::new()),
             release: Arc::new(Notify::new()),
             fail_first: Arc::new(AtomicBool::new(false)),
         }
@@ -1190,8 +1190,8 @@ impl TestTtsGate {
         self.fail_first.store(true, Ordering::Release);
     }
 
-    pub(crate) async fn wait_started(&self) {
-        self.started.notified().await;
+    pub(crate) async fn wait_until_read(&self) {
+        self.reading.notified().await;
     }
 
     pub(crate) fn release(&self) {
@@ -1210,25 +1210,20 @@ impl TtsTransport for GatedTtsTransport {
         let gate = self.gate.clone();
         Box::pin(async move {
             let fail = gate.fail_first.swap(false, Ordering::AcqRel);
-            let (sender, receiver) = mpsc::channel(1);
-            tokio::spawn(async move {
-                gate.started.notify_one();
+            let body = futures_util::stream::once(async move {
+                gate.reading.notify_one();
                 gate.release.notified().await;
-                let item = if fail {
+                if fail {
                     Err(AudioError::Tts("gated test failure".into()))
                 } else {
-                    Ok(vec![1, 2, 3])
-                };
-                let _ = sender.send(item).await;
+                    Ok(vec![1u8, 2, 3])
+                }
             });
             Ok(TtsResponse {
                 status: StatusCode::OK,
                 content_length: Some(3),
                 request_id: Some("gated-request-id".into()),
-                stream: Box::pin(ChunkReceiverStream {
-                    receiver,
-                    task: None,
-                }) as TtsByteStream,
+                stream: Box::pin(body) as TtsByteStream,
             })
         })
     }
@@ -1247,6 +1242,31 @@ impl TtsTransport for ImmediateTtsTransport {
                 status: StatusCode::OK,
                 content_length: Some(3),
                 request_id: Some("test-request-id".into()),
+                stream: Box::pin(stream) as TtsByteStream,
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+struct CutByDeadlineTtsTransport {
+    chunks: usize,
+}
+
+#[cfg(test)]
+impl TtsTransport for CutByDeadlineTtsTransport {
+    fn send_stream(&self, _request: TtsRequest) -> TtsStreamFuture {
+        let chunks = self.chunks;
+        Box::pin(async move {
+            let stream = futures_util::stream::iter(
+                (0..chunks)
+                    .map(|_| Ok::<Vec<u8>, AudioError>(vec![1, 2, 3]))
+                    .chain([Err(AudioError::Deadline)]),
+            );
+            Ok(TtsResponse {
+                status: StatusCode::OK,
+                content_length: None,
+                request_id: Some("cut-request-id".into()),
                 stream: Box::pin(stream) as TtsByteStream,
             })
         })
@@ -1297,6 +1317,22 @@ impl Speaker {
             max_chars,
             speech_deadline,
             Arc::new(GatedTtsTransport { gate }),
+        )
+    }
+
+    pub(crate) fn test_cut_by_deadline(max_chars: usize, speech_deadline: Duration) -> Self {
+        Self::with_test_transport(
+            max_chars,
+            speech_deadline,
+            Arc::new(CutByDeadlineTtsTransport { chunks: 1 }),
+        )
+    }
+
+    pub(crate) fn test_deadline_before_audio(max_chars: usize, speech_deadline: Duration) -> Self {
+        Self::with_test_transport(
+            max_chars,
+            speech_deadline,
+            Arc::new(CutByDeadlineTtsTransport { chunks: 0 }),
         )
     }
 

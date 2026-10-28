@@ -259,10 +259,10 @@ a new connection) still retires everything at once (`resetForGeneration`).
 A clip of the old leg that is still arriving at a handoff finishes too
 (Kayne's decision on #437): what the old leg is already saying finishes, and
 the new leg's speech plays after it. Both halves hold it. The speech worker's
-drain stops at a moved generation only when none of its audio has reached
-the page yet (`drain_speech_stream`), so the utterance being said goes on and
-nothing new from the old leg starts; a rescue or a shutdown aborts the drain
-as before. The audio order holds the new leg's audio until the old clip's
+drain stops at a moved generation only when none of its audio reached a
+page under its own leg (`left_unheard`, below), so the utterance being said
+goes on and nothing new from the old leg starts; a rescue or a shutdown
+aborts the drain as before. The audio order holds the new leg's audio until the old clip's
 `audio_done`. The page takes the arriving clip's bytes and `audio_done` after
 the handoff and plays it whole. The wait is bounded: the speech deadline ends
 the old clip's stream (`TtsChunkStream`), and its slot then closes, and once
@@ -1025,19 +1025,51 @@ requester, writes the spoken line, or shows the page a speech error.
 | admitting | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
 | admitting | the provider refuses | `Failed` | the provider's error | at the current generation | no |
 | draining | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
-| draining | the generation moves on | `Stopped(Superseded)` | not spoken | no | no |
+| draining | the call hands off before any of its audio reached the page | `Stopped(Superseded)` | not spoken | no | no |
 | draining | the body fails, or the task panics | `Failed` | the error | at the current generation | no |
-| draining | the body ends, a browser took it | `Spoken` | spoken | no | if it carries a `transcript` line (a `speak` or a floor line) |
-| draining | the body ends, no browser took it | `NotDelivered` | not delivered | no | no |
+| draining | the speech deadline cuts the body after a browser took some of its audio | `Spoken` (`Played::CutShort`) | spoken, cut short | no | if it carries a `transcript` line (a `speak` or a floor line) |
+| draining | the body ends, and a browser took some of its slot | `Spoken` (`Played::Whole`) | spoken | no | if it carries a `transcript` line (a `speak` or a floor line) |
+| draining | the body ends, and no browser took any of its slot | `NotDelivered` | not delivered | no | no |
+| draining | the body ends behind an open slot, and the call hands off before that slot closes | `Stopped(Superseded)` | not spoken | no | no |
 
-Only a rescue stops a request, and it retires the generation first, so a
-`Stopped` request never reaches the page (#247). Every end but `Spoken` and
-`NotDelivered` gives back what the request holds, its pending continuity text
-and its audio slot (`Utterance::abandon`). The drain does this the moment its
-own body ends, because the slots queued behind it emit only once it is
-closed: a later drain that finished first would find its audio held back and
-report it undelivered. The completion does it again for the ends the drain
-never sees (admission, an abort, a panic); both steps are no-ops once done.
+Only a rescue or a hand-off stops a request, and either moves the generation
+first, so a `Stopped` request never reaches the page as said (#247, #437).
+Every end but `Spoken` and `NotDelivered` gives back what the request holds,
+its pending continuity text and its audio slot (`Utterance::abandon`). So
+does a body the deadline cut: its request id is not kept, because the
+provider stitches only to a body read to its end. The drain does this the
+moment its own body ends, because the slots queued behind it emit only once
+it is closed. The completion does it again for the ends the drain never sees
+(admission, an abort, a panic); both steps are no-ops once done.
 `every_end_of_a_speech_request_completes_it_once` in
 `apps/backend/tests/test_speech.rs` drives each row it can reach through the
-real worker.
+real worker. A reply's utterances share one deadline, so a reply whose
+utterance is cut short says nothing after it, and its speech counts as not
+spoken for the turn's `final_response_audio_closed`, as before.
+
+A request is answered from what the pages took of its own slot, whichever
+call sent it (#424). The audio queue (`AudioQueue` in `delivery.rs`) sends a
+slot's events only once every slot before it has closed, sends them while
+its caller holds the queue's lock, and records on the slot whether a page
+took any of them while the line was still at the slot's generation
+(`SlotReceipt`). The page drops an old leg's audio that starts after a
+hand-off, so what goes out after the line has moved on does not count. The
+start of an utterance that waited behind another one therefore counts as
+heard when the other one's close sends it before a hand-off, and the
+hand-off rule above lets that utterance finish; sent after the hand-off, it
+is not said (`left_unheard`: the line has moved on and no audio of the slot
+was taken). The rule applies in the drain and also while the slot is held
+after the body ends.
+
+A drain whose body ends while its slot is still held waits for the slot to
+go out before it answers (`went_out` in `speech.rs`), and stops waiting,
+superseded, if the call hands off first. It waits at most until the
+request's deadline, so a slot left open ahead of it cannot hold the
+requesters behind it. A slot still held then is silenced
+(`AudioQueue::silence`): its audio is dropped, and only its start and done
+go out in their turn, because the page holds a line that names an utterance
+until that utterance starts. The request is answered as not delivered, and
+a body the deadline cut while held as the failure it was before, and in
+both cases none of it plays. The wait wakes on the line's
+`operation_changed` notification, made before it reads the generation, as
+`admit_turn` makes its own.

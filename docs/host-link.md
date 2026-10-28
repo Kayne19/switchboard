@@ -620,6 +620,7 @@ The service answers:
 ```json
 { "type": "module_reply", "id": "m5", "status": "delivered", "reason": null }
 { "type": "module_reply", "id": "m6", "status": "delivered", "reason": null, "result": { "visible": ["..."] } }
+{ "type": "module_reply", "id": "m7", "status": "delivered", "reason": "cut_short", "result": { "delivered": true, "reason": "cut_short", "detail": "cut off at the speech deadline; the caller heard the start" } }
 ```
 
 `status` is `delivered`, `accepted`, `refused` or `failed`. A call made
@@ -631,8 +632,17 @@ refused. If no reply arrives in time, or the link is down, the module gets
 `failed`. In time is 30 s, or for `speak` the speech deadline and 5 s more
 (`SPEAK_REPLY_MARGIN_MS` in `skill_socket.ts`). The service starts its own
 speech deadline only when it admits the call, after the frame has crossed the
-link, and answers `delivered` once the whole line has played; the margin lets
-that answer, not the host agent's clock, decide. A call that cannot
+link, and answers `delivered` once the line's audio has gone out to the page,
+behind any line queued ahead of it; the margin lets that answer, not the host
+agent's clock, decide. A delivered reply's `reason` is taken from its result
+as a refused or failed reply's is (its `reason`, else its `detail`), and is
+`null` when the result has neither: `cut_short` for a `speak` the speech
+deadline cut after its start went out (`m7`; the caller heard only the
+start), or why the caller's screen has not confirmed a `display`. An
+`accepted` reply's `reason` is `null`, and a held background `display` is
+one: `held: true` and `caller_away` are in its result only. The exception
+is a `display` with no browser connected, which is answered `accepted` with
+the reason from its result, because its body has no `accepted` key. A call that cannot
 go out because the link's socket is already closing gets `failed` at once.
 
 Each wait on a `speak` has one owner, and each is longer than the one it
@@ -793,8 +803,9 @@ service's explanation stays in `result.detail`. A refusal for the leg
 is `result.code`. The skill's `display` line reads the code and does not ask
 for a new payload.
 
-A delivered reply's own `reason` is null, so the module reads why a
-delivered `display` is not on screen from `result.reason`. That is the code
+A delivered `display` reply carries the same reason at the top level and in
+`result.reason`, and the module reads why it is not on screen from the
+result. That is the code
 `new_leg` when a transfer or a rescue moved the call to a new generation
 before the caller's screen confirmed it, and a sentence for every other
 unrendered answer (the page's rejection reason, or "no confirmation from

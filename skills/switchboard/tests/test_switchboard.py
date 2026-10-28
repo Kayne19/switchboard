@@ -322,6 +322,17 @@ class CallsTest(ModuleTestCase):
                 last = host.calls()[-1]
                 self.assertEqual((last["call"], last["args"], last["token"]), (call, sent, TOKEN))
 
+    def test_a_speak_cut_short_at_the_speech_deadline_says_the_caller_heard_its_start(self):
+        detail = "cut off at the speech deadline; the caller heard the start"
+        self.host(reply=lambda request: {"status": "delivered", "reason": "cut_short", "result": {"delivered": True, "reason": "cut_short", "detail": detail}})
+        result, line = self.run_call(switchboard.speak, "A long line.")
+        self.assertEqual((result.status, result.reason, result.ok), ("delivered", "cut_short", True))
+        self.assertEqual(
+            line,
+            "switchboard.speak: Cut off at the speech deadline. The caller heard only the start. "
+            "If the rest matters, say it in a shorter line.",
+        )
+
     def test_view_describes_the_screen(self):
         screen = {"has_visual": True, "visual_kind": "diff", "title": "Code changes", "confirmed": True}
         self.host(reply=lambda request: {"status": "delivered", "reason": None, "result": {"screen": screen}})

@@ -11,8 +11,8 @@ use crate::protocol::ServerMessage;
 #[cfg(test)]
 use crate::speech::start_speech_worker_for_test;
 use crate::speech::{
-    reserve_speech, send_speech, trace_speech, ContinuationScope, ReserveFailure, SpeakUnder,
-    SpeechAdmission, SpeechFailure, WhenQueueFull,
+    reserve_speech, send_speech, trace_speech, ContinuationScope, Played, ReserveFailure,
+    SpeakUnder, SpeechAdmission, SpeechFailure, WhenQueueFull,
 };
 use crate::visual_protocol::invalid_name;
 use axum::extract::{State, WebSocketUpgrade};
@@ -245,11 +245,19 @@ async fn speak(state: AppState, req: Speak) -> Response {
         transcript: Some(req.text.clone()),
     };
     match send_speech(&state, admission, reserved).await {
-        Ok(()) => {
+        Ok(played) => {
             state.0.mark_foreground_audio(generation);
-            tracing::info!(generation, sequence, elapsed = ?started.elapsed(), "spoken");
+            tracing::info!(generation, sequence, ?played, elapsed = ?started.elapsed(), "spoken");
             trace_speech(&state, speaker, &req.text, None, None);
-            Json(delivery_response(true)).into_response()
+            Json(match played {
+                Played::Whole => delivery_response(true),
+                Played::CutShort => json!({
+                    "delivered": true,
+                    "reason": "cut_short",
+                    "detail": "cut off at the speech deadline; the caller heard the start",
+                }),
+            })
+            .into_response()
         }
         Err(SpeechFailure::NotSpoken(detail)) => {
             tracing::info!(generation, sequence, %detail, elapsed = ?started.elapsed(), "not spoken");
@@ -768,7 +776,7 @@ async fn module_reply(call: &str, response: Response) -> Value {
         .or_else(|| body.get("detail").and_then(Value::as_str))
         .map(str::to_owned);
     let (outcome, reason) = if status.is_success() && body["delivered"] == true {
-        ("delivered", None)
+        ("delivered", stated)
     } else if status.is_success() && body["accepted"] == true {
         ("accepted", None)
     } else if status.is_success() && call == "display" {

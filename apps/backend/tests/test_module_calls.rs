@@ -525,6 +525,71 @@ async fn speak_that_fails_to_synthesize_is_answered_with_the_workers_reason() {
     assert_eq!(body["reason"], body["detail"]);
 }
 
+/// A `speak` the speech deadline cuts after the caller heard its start is
+/// delivered, with the reason `cut_short`.
+#[tokio::test]
+async fn a_speak_the_deadline_cuts_after_its_audio_played_is_answered_cut_short() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = crate::registry::Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let state = AppState::new(
+        crate::pbx::Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        crate::history::TranscriptLog::new(10),
+        crate::audio::Speaker::test_cut_by_deadline(100, Duration::from_millis(25_000)),
+        crate::audio::SttAdapter::from_command(None),
+        crate::audio::SttStreamAdapter::from_command(None),
+    );
+    let (mut page, _) = state.register_connection().await;
+    start_speech_worker_for_test(&state);
+    let reply = module_call(
+        &state,
+        AgentCall {
+            call: "speak".into(),
+            token: "operator".into(),
+            turn_id: None,
+            cause: None,
+            args: json!({"text":"A long line the deadline cuts."}),
+        },
+    )
+    .await;
+    let sent: Vec<String> = std::iter::from_fn(|| page.receiver.try_recv().ok())
+        .filter_map(|frame| match frame {
+            DeliveryFrame::Event { event, .. } => Some(match event {
+                Event::AudioStart { .. } => "audio_start".to_owned(),
+                Event::AudioChunk { .. } => "chunk".to_owned(),
+                Event::AudioDone { .. } => "audio_done".to_owned(),
+                Event::Json(value) => value["type"].as_str().unwrap_or_default().to_owned(),
+            }),
+            DeliveryFrame::Message(_) => None,
+        })
+        .filter(|kind| {
+            ["audio_start", "chunk", "audio_done", "error", "spoken"].contains(&kind.as_str())
+        })
+        .collect();
+    assert_eq!(
+        reply,
+        json!({
+            "status": "delivered",
+            "reason": "cut_short",
+            "result": {
+                "delivered": true,
+                "reason": "cut_short",
+                "detail": "cut off at the speech deadline; the caller heard the start",
+            },
+        }),
+        "the caller heard the start of the line, but the agent was told it was not played"
+    );
+    assert_eq!(
+        sent,
+        ["audio_start", "chunk", "audio_done", "spoken"],
+        "the caller heard the start of the line, the line is in the transcript, and the page shows no error"
+    );
+}
+
 #[tokio::test]
 async fn display_protocol_validation_and_composition() {
     let state = state();
@@ -1113,6 +1178,57 @@ async fn display_reports_rejection_from_the_browser() {
     );
 }
 
+/// A delivered module reply carries its result's reason, so the agent learns
+/// why the page could not render a display (`docs/host-link.md`, "Module
+/// calls").
+#[tokio::test]
+async fn a_display_the_page_rejects_is_delivered_with_the_pages_reason() {
+    let state = state();
+    let (mut connection, _) = state.register_connection().await;
+    let epoch = connection.epoch;
+    let reply = tokio::spawn({
+        let state = state.clone();
+        async move {
+            module_call(
+                &state,
+                AgentCall {
+                    call: "display".into(),
+                    token: String::new(),
+                    turn_id: None,
+                    cause: None,
+                    args: diagram_show(),
+                },
+            )
+            .await
+        }
+    });
+    let DeliveryFrame::Event { sequence, .. } =
+        within("connection.receiver", connection.receiver.recv())
+            .await
+            .unwrap()
+    else {
+        panic!("expected a display event")
+    };
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut None,
+        &mut None,
+        &json!({"type":"screen_state","view":"auto","has_visual":false,
+               "rejected":{"seq":sequence,"reason":"unsupported node shape"},
+               "generation":state.0.coordinator.generation()})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    let reply = within("the display's module reply", reply).await.unwrap();
+    assert_eq!(
+        (reply["status"].clone(), reply["reason"].clone()),
+        (json!("delivered"), json!("unsupported node shape")),
+        "{reply}"
+    );
+}
+
 /// A later report without a rejection, here the confirmation of the next
 /// action, must not hide an earlier one from the call still waiting on the
 /// rejected `seq` (#255).
@@ -1187,7 +1303,7 @@ async fn display_reports_new_leg_when_a_transfer_overtakes_the_confirmation() {
     assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
     let reply = within("the display call", waiting).await.unwrap();
     assert_eq!(reply["status"], "delivered", "{reply}");
-    assert_eq!(reply["reason"], Value::Null, "{reply}");
+    assert_eq!(reply["reason"], "new_leg", "{reply}");
     assert_eq!(reply["result"]["rendered"], false, "{reply}");
     assert_eq!(reply["result"]["reason"], "new_leg", "{reply}");
     assert!(reply["result"]["detail"].is_string(), "{reply}");
@@ -1359,6 +1475,33 @@ async fn a_background_refusal_reaches_the_module_as_its_bare_reason() {
             "{call}: {reply}"
         );
     }
+}
+
+/// A held display is `accepted`, so its module reply carries no top-level
+/// reason; why it is held stays in the result (`docs/host-link.md`).
+#[tokio::test]
+async fn a_held_display_is_accepted_with_its_reason_in_the_result() {
+    let state = state();
+    let (_connection, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let reply = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: "background-token".into(),
+            turn_id: None,
+            cause: None,
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(reply["status"], "accepted", "{reply}");
+    assert_eq!(reply["reason"], Value::Null, "{reply}");
+    assert_eq!(reply["result"]["held"], true, "{reply}");
+    assert_eq!(reply["result"]["reason"], "caller_away", "{reply}");
 }
 
 #[tokio::test]

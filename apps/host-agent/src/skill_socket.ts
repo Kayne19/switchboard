@@ -53,10 +53,10 @@ const QUEUE_FULL = { status: "refused", reason: "queue_full" } as const;
  * How much longer than the speech deadline a relayed `speak` waits for the
  * service's answer. The service starts its own deadline only when it admits
  * the call, after the frame has crossed the link and waited for the session's
- * frame loop, and answers `delivered` when the whole line has played. If this
- * side gave up at the deadline itself, a line the caller heard to the end
- * could be reported `failed`, and the agent would say it again. With the
- * margin the service's answer decides.
+ * frame loop, and answers `delivered` once the line's audio has gone out, by
+ * that deadline. If this side gave up at the deadline itself, a line the
+ * caller heard to the end could be reported `failed`, and the agent would say
+ * it again. With the margin the service's answer decides.
  */
 export const SPEAK_REPLY_MARGIN_MS = 5_000;
 

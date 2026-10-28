@@ -55,6 +55,11 @@ matters). Say it is on screen only after "On screen.".
   A longer line is cut there, at a sentence end when one is near, and the
   caller hears "there's more on screen". Their screen shows the whole line,
   but they may not look, so keep what they must hear inside the cap.
+  That cut is by length and is decided before anything is said. The speech
+  deadline is a different cut, by time: a line that runs past it is cut off
+  there, its result is `delivered` with reason `cut_short`, and the caller
+  heard only the start. Do not repeat the whole line. If the rest matters,
+  say it in a shorter one.
 - `request_to_speak(message, reason)`: while the caller is on other work,
   queue what they should hear. `reason` is `finished`, `needs_decision` or
   `problem`. `message` is the real content, said the way you would say it: the

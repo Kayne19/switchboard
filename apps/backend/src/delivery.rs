@@ -14,7 +14,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 #[derive(Clone, Debug)]
 pub(crate) enum Event {
@@ -201,17 +201,42 @@ pub(crate) struct AudioSlot {
     events: Vec<Event>,
     started: bool,
     done: bool,
+    taken: watch::Sender<bool>,
 }
 
+/// What the pages took of one audio slot. The page plays a slot's audio only
+/// while the slot's generation is its own, so only what went out while the
+/// line was still at that generation counts. The slot drops its end when it
+/// leaves the queue, sent or cleared, and what has been taken is then final.
+pub(crate) struct SlotReceipt(watch::Receiver<bool>);
+
+impl SlotReceipt {
+    pub(crate) fn taken(&self) -> bool {
+        *self.0.borrow()
+    }
+    pub(crate) fn gone(&self) -> bool {
+        self.0.has_changed().is_err()
+    }
+    /// Returns once `taken` or `gone` may have changed.
+    pub(crate) async fn changed(&mut self) {
+        let _ = self.0.changed().await;
+    }
+}
+
+/// Each method takes `line`, the generation the call is at now: a slot's
+/// events go out once every slot before it has closed, and count as taken
+/// only if they go out while `line` is still the slot's generation.
 pub(crate) struct AudioQueue {
+    delivery: DeliveryState,
     next: u64,
     emit: u64,
     pub(crate) slots: BTreeMap<u64, AudioSlot>,
 }
 
 impl AudioQueue {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(delivery: DeliveryState) -> Self {
         Self {
+            delivery,
             next: 0,
             emit: 0,
             slots: BTreeMap::new(),
@@ -227,14 +252,16 @@ impl AudioQueue {
                 events: Vec::new(),
                 started: false,
                 done: false,
+                taken: watch::channel(false).0,
             },
         );
         sequence
     }
-    pub(crate) fn start(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
+    pub(crate) fn start(&mut self, sequence: u64, generation: u64, line: u64) -> SlotReceipt {
         let Some(slot) = self.slots.get_mut(&sequence) else {
-            return Vec::new();
+            return SlotReceipt(watch::channel(false).1);
         };
+        let receipt = SlotReceipt(slot.taken.subscribe());
         if slot.generation == generation && !slot.started {
             slot.started = true;
             slot.events.push(Event::AudioStart {
@@ -244,30 +271,31 @@ impl AudioQueue {
                 format: "mp3".into(),
             });
         }
-        self.drain_ready()
+        self.send_ready(line);
+        receipt
     }
-    pub(crate) fn append(&mut self, sequence: u64, generation: u64, audio: Vec<u8>) -> Vec<Event> {
+    pub(crate) fn append(&mut self, sequence: u64, generation: u64, audio: Vec<u8>, line: u64) {
         let Some(slot) = self.slots.get_mut(&sequence) else {
-            return Vec::new();
+            return;
         };
         if slot.generation == generation && !audio.is_empty() {
             slot.events.push(Event::AudioChunk { audio });
         }
-        self.drain_ready()
+        self.send_ready(line);
     }
-    pub(crate) fn barrier(&mut self, sequence: u64, generation: u64, value: Value) -> Vec<Event> {
+    pub(crate) fn barrier(&mut self, sequence: u64, generation: u64, value: Value, line: u64) {
         let Some(slot) = self.slots.get_mut(&sequence) else {
-            return Vec::new();
+            return;
         };
         if slot.generation == generation && !slot.done {
             slot.events.push(Event::Json(value));
             slot.done = true;
         }
-        self.drain_ready()
+        self.send_ready(line);
     }
-    pub(crate) fn finish(&mut self, sequence: u64, generation: u64) -> Vec<Event> {
+    pub(crate) fn finish(&mut self, sequence: u64, generation: u64, line: u64) {
         let Some(slot) = self.slots.get_mut(&sequence) else {
-            return Vec::new();
+            return;
         };
         if slot.generation == generation {
             if !slot.started {
@@ -287,23 +315,32 @@ impl AudioQueue {
             }
         }
         slot.done = true;
-        self.drain_ready()
+        self.send_ready(line);
     }
-    fn drain_ready(&mut self) -> Vec<Event> {
-        let mut ready = Vec::new();
-        while self.slots.contains_key(&self.emit) {
-            let done = {
-                let slot = self.slots.get_mut(&self.emit).expect("audio slot exists");
-                ready.append(&mut slot.events);
-                slot.done
-            };
-            if !done {
+    pub(crate) fn silence(&mut self, sequence: u64) -> bool {
+        let Some(slot) = self.slots.get_mut(&sequence) else {
+            return false;
+        };
+        slot.events
+            .retain(|event| !matches!(event, Event::AudioChunk { .. }));
+        true
+    }
+    fn send_ready(&mut self, line: u64) {
+        while let Some(slot) = self.slots.get_mut(&self.emit) {
+            let mut taken = false;
+            for event in slot.events.drain(..) {
+                taken |= self.delivery.publish(event);
+            }
+            if taken && slot.generation == line {
+                slot.taken
+                    .send_if_modified(|taken| !std::mem::replace(taken, true));
+            }
+            if !slot.done {
                 break;
             }
             self.slots.remove(&self.emit);
             self.emit += 1;
         }
-        ready
     }
     pub(crate) fn clear(&mut self) {
         self.slots.clear();
