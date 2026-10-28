@@ -15,37 +15,9 @@ import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { helloAck } from '../fixtures/serverMessages';
 import { testLine } from './lineControls';
 import { mount, rerender, stubResizeObserver, type, unmountAll } from './sceneHarness';
+import { FakeSocket } from './fakeSocket';
 
 type Controller = ReturnType<typeof useController>;
-
-class FakeSocket {
-  static latest: FakeSocket | null = null;
-  readyState = 0;
-  binaryType = 'blob';
-  sent: unknown[] = [];
-  onopen: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-
-  constructor(readonly url: string) {
-    FakeSocket.latest = this;
-  }
-
-  send(data: unknown) {
-    this.sent.push(data);
-  }
-
-  close() {
-    this.readyState = 3;
-  }
-
-  frames(): Array<Record<string, unknown>> {
-    return this.sent
-      .filter((frame): frame is string => typeof frame === 'string')
-      .map((frame) => JSON.parse(frame) as Record<string, unknown>);
-  }
-}
 
 let host: HTMLDivElement;
 let controller: Controller;
@@ -250,21 +222,20 @@ describe('the voice-free path from idle', () => {
 
   async function receive(message: object) {
     await act(async () => {
-      socket.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
+      socket.receive(message);
     });
   }
 
   beforeEach(async () => {
-    vi.stubGlobal('WebSocket', FakeSocket);
+    FakeSocket.install();
     // jsdom has no media playback; a new epoch resets the player.
     vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
     vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
     window.history.replaceState(null, '', '/?ws=ws://switchboard.test/ws');
     render(<App />);
-    socket = FakeSocket.latest!;
+    socket = FakeSocket.latest();
     await act(async () => {
-      socket.readyState = 1;
-      socket.onopen?.({} as Event);
+      socket.open();
     });
     await receive(helloAck());
     await receive({ type: 'epoch', generation: 4 });
@@ -280,12 +251,12 @@ describe('the voice-free path from idle', () => {
     type(field, 'What is on the line?');
     click(drawer()!.querySelector('button[type="submit"]')!);
 
-    const typed = socket.frames().filter((frame) => frame.type === 'typed_turn');
+    const typed = socket.sentOfType('typed_turn');
     expect(typed).toHaveLength(1);
     expect(typed[0]).toMatchObject({ generation: 4, text: 'What is on the line?' });
     expect(field.value).toBe('');
     // Nothing went out as speech.
-    expect(socket.frames().some((frame) => String(frame.type).startsWith('stt_') || frame.type === 'clip')).toBe(false);
+    expect(socket.sentJson().some((frame) => String(frame.type).startsWith('stt_') || frame.type === 'clip')).toBe(false);
 
     // The backend echoes a typed turn as the caller's transcript line.
     await receive({ type: 'transcript', id: typed[0].id, text: 'What is on the line?' });
@@ -310,8 +281,7 @@ describe('the voice-free path from idle', () => {
     // The runtime registers itself again on every connection change; the
     // field is live throughout, so it has no reason to take focus back.
     await act(async () => {
-      socket.readyState = 3;
-      socket.onclose?.({} as CloseEvent);
+      socket.drop();
     });
     expect(drawer()).not.toBeNull();
     expect(input().disabled).toBe(false);

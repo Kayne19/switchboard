@@ -613,9 +613,26 @@ for (const start of ["apps/backend/src", "apps/backend/tests"]) {
 	}
 }
 
+// 24. A frontend unit test fakes the page's WebSocket with the one FakeSocket
+//     (tests/unit/fakeSocket.ts), installs it with FakeSocket.install(), and
+//     drives it with its open, drop, receive and receiveRaw, not by calling a
+//     socket's handlers (#411). Eight copies had drifted: some recorded
+//     `send`, some did not, some closed at once and some never reported the
+//     close. A MessagePort's `onmessage` is not a socket's, and a send-only
+//     literal passed as a socket (pushToTalk) is a sink, not a fake.
+{
+	const socketFake = /\bclass\s+\w*Socket\b|\bclass\b[^{]*\bextends\s+WebSocket\b|\b\w*Socket\s*=\s*class\b|stubGlobal\(\s*['"]WebSocket['"]\s*,(?!\s*FakeSocket\b)/;
+	const socketHandler = /\b(?:\w*[sS]ocket\w*|FakeSocket\.latest\(\))(?:\(\)|\[[^\]]*\])?\??\.on(?:message|open|close|error)\?\.\(/;
+	for (const file of files(path.join(root, "apps/frontend/tests/unit"), new Set([".ts", ".tsx"]))) {
+		if (rel(file) === "apps/frontend/tests/unit/fakeSocket.ts") continue;
+		scan(file, socketFake, "a socket fake of its own: use FakeSocket from tests/unit/fakeSocket.ts (FakeSocket.install())");
+		scan(file, socketHandler, "a socket's handler called by hand: use FakeSocket's open, drop, receive or receiveRaw");
+	}
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render, one hook for a measured value, one log capture");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render, one hook for a measured value, one log capture, one socket fake");

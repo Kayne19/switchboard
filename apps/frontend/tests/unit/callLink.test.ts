@@ -236,7 +236,7 @@ function failSends(socket: FakeSocket) {
 
 /** The ping the socket sent last; the test answers it by hand. */
 function lastPing(socket: FakeSocket) {
-  return socket.sentJson().filter((frame) => frame.type === "ping").at(-1)!;
+  return socket.sentOfType("ping").at(-1)!;
 }
 
 async function greet(socket: FakeSocket, streaming = false) {
@@ -332,8 +332,7 @@ async function apply(h: Harness, event: Trigger): Promise<void> {
       break;
     case "opens, hello fails":
       failSends(socket);
-      socket.readyState = 1;
-      socket.onopen?.({} as Event);
+      socket.open();
       break;
     case "hello_ack, streaming":
       socket.receive(helloAck({ stt_streaming: true }));
@@ -345,7 +344,7 @@ async function apply(h: Harness, event: Trigger): Promise<void> {
       socket.drop();
       break;
     case "error":
-      socket.onerror?.({} as Event);
+      socket.error();
       break;
     case "retry":
       runtime.retry();
@@ -588,7 +587,7 @@ const rows: Row[] = [
 ];
 
 beforeEach(() => {
-  FakeSocket.instances = [];
+  FakeSocket.install();
   FakeRecorder.mimeType = "audio/webm";
   FakeRecorder.slow = false;
   vi.useFakeTimers();

@@ -11,36 +11,7 @@ import type { ControllerState, MessageData } from '../../src/controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { RuntimeIntegration } from '../../src/integration/runtime';
 import { helloAck, statusMessage, transcriptEntry } from '../fixtures/serverMessages';
-
-class FakeSocket {
-  static latest: FakeSocket | null = null;
-  readyState = 0;
-  binaryType = 'blob';
-  sent: unknown[] = [];
-  onopen: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-
-  constructor(readonly url: string) {
-    FakeSocket.latest = this;
-  }
-
-  send(data: unknown) {
-    this.sent.push(data);
-  }
-
-  close() {
-    this.readyState = 3;
-  }
-
-  screenStates(): Array<Record<string, unknown>> {
-    return this.sent
-      .filter((frame): frame is string => typeof frame === 'string')
-      .map((frame) => JSON.parse(frame) as Record<string, unknown>)
-      .filter((frame) => frame.type === 'screen_state');
-  }
-}
+import { FakeSocket } from './fakeSocket';
 
 let host: HTMLDivElement;
 let root: Root;
@@ -57,7 +28,7 @@ function StateRecorder() {
 
 async function receive(message: object) {
   await act(async () => {
-    socket.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
+    socket.receive(message);
   });
 }
 
@@ -69,7 +40,7 @@ async function receiveUtterance(sequence: number) {
   const audio = new ArrayBuffer(3);
   new Uint8Array(audio).set(new TextEncoder().encode('mp3'));
   await act(async () => {
-    socket.onmessage?.({ data: audio } as MessageEvent);
+    socket.receiveRaw(audio);
   });
   await receive({ type: 'audio_done', generation: 1, sequence, done: true });
 }
@@ -112,7 +83,7 @@ function transcriptTexts(): string[] {
 }
 
 beforeEach(async () => {
-  vi.stubGlobal('WebSocket', FakeSocket);
+  FakeSocket.install();
   player = null;
   playerEnded = false;
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
@@ -136,10 +107,9 @@ beforeEach(async () => {
       </ControllerProvider>,
     );
   });
-  socket = FakeSocket.latest!;
+  socket = FakeSocket.latest();
   await act(async () => {
-    socket.readyState = 1;
-    socket.onopen?.({} as Event);
+    socket.open();
   });
   await receive(helloAck());
   await receive({ type: 'epoch', generation: 1 });

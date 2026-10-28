@@ -68,7 +68,7 @@ commit.
   `.only` test, no user-agent checks, bounded test awaits, no page under
   the notch, one runtime ID prefix, stage-relative sizes, one writer per lifecycle
   machine, no new phase fields on a lifecycle owner, one composition a
-  render, one log capture, live paths, routes and settings in the docs); a new rule of that
+  render, one log capture, one socket fake, live paths, routes and settings in the docs); a new rule of that
   kind gets a check there. Both Playwright configs also set `forbidOnly` on CI, so a focused
   spec fails its browser leg.
 - CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
@@ -203,6 +203,13 @@ commit.
   wrong phase or an end missed on one exit, and each fix had added a flag.
   `scripts/check_hygiene.mjs` holds each machine to one writer and holds
   the owners that are not machines yet to the phase fields they have.
+- A frontend unit test fakes the page's WebSocket with the one `FakeSocket`
+  (`apps/frontend/tests/unit/fakeSocket.ts`), installed with
+  `FakeSocket.install()` and driven with its `open`, `drop`, `error`,
+  `receive` and `receiveRaw`. Eight local copies had drifted (some recorded
+  `send`, some did not, some closed at once and some never reported the
+  close). `scripts/check_hygiene.mjs` refuses a socket class of its own and a
+  socket's handler called by hand.
 - Tests never touch the network, ElevenLabs, a whisper model, or the real `pi`
   or `ssh`. Fake executables go through `write_executable_script`; PBX tests
   drive transfers through `Prewarm::settled`, which exercises the production
