@@ -121,6 +121,10 @@ function MainWithAux({
   );
 }
 
+// ---- End of the aux row ----
+
+// ---- Values the shell reads from the layout ----
+
 // Whether the rail stands under the main column (a portrait stage) rather
 // than beside it, read from where the two boxes lie in their grid, not from
 // a media query. Where it does, the rail's note reads whole (useRailFit),
@@ -176,7 +180,20 @@ function useCalloutPlaced(mainRef: RefObject<HTMLDivElement | null>, note: NoteD
   return read.note === null || read.drawn;
 }
 
-// ---- End of the aux row ----
+// How tall the line's error stands at the head of the corner stack: every
+// layout gives it that room above its foot (`--line-error-room`), so the
+// error covers nothing the page draws. With no error there is no room.
+function useLineErrorRoom(error: string | null, errorRef: RefObject<HTMLDivElement | null>): number {
+  const room = useMeasured(
+    () => (error === null ? null : errorRef.current),
+    (element) => element.offsetHeight,
+    { initial: 0 },
+    [error, errorRef],
+  );
+  return error === null ? 0 : room;
+}
+
+// ---- End of the values read from the layout ----
 
 const FALLBACK_MESSAGE: MessageData = {
   context: 'OPERATOR LINE',
@@ -286,6 +303,10 @@ export function SceneShell(props: SceneProps) {
   // The note a diagram carries as a callout still marks its node first.
   const pageNotes = [...(content?.note ? [content.note] : []), ...(content?.moreNotes ?? []).map((object) => object.data)];
   const railMotion = useLayoutMotion({ layout: true });
+  // The system view shows the line's error as its STATUS row.
+  const lineError = layout !== 'system' ? state.lineError : null;
+  const errorRef = useRef<HTMLDivElement>(null);
+  const errorRoom = useLineErrorRoom(lineError, errorRef);
   const presence = (
     <DamoclesPresence
       listening={state.listening}
@@ -305,6 +326,7 @@ export function SceneShell(props: SceneProps) {
       // ends, and the copy AnimatePresence keeps has the props it had before
       // a modal opened, so its MODE was a tab stop behind the history (#268).
       inert={behindModal || !isPresent}
+      style={errorRoom > 0 ? ({ '--line-error-room': `${errorRoom}px` } as CSSProperties) : undefined}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -312,7 +334,7 @@ export function SceneShell(props: SceneProps) {
       {/* Every page carries the corner stack once (#180): the shell draws it
           here, not a composition, so the idle, conversation and content
           pages cannot drift apart on what the microphone is doing. */}
-      <ChannelStack handsFree={handsFree} onToggleMode={onToggleMode} />
+      <ChannelStack handsFree={handsFree} onToggleMode={onToggleMode} lineError={lineError} errorRef={errorRef} />
       {content ? (
         <>
           <div className="scene-heading">
@@ -349,7 +371,6 @@ export function SceneShell(props: SceneProps) {
           <ConversationCorners />
           <div className="conversation-presence-band">{presence}</div>
           <ConversationAnswer composition={composition} />
-          <TranscriptToggle onOpen={() => setTranscriptOpen(true)} />
           <ToolActivity activity={state.activity} placement="conversation" />
         </>
       ) : staged ? (
@@ -376,14 +397,10 @@ export function SceneShell(props: SceneProps) {
           <div className="theater__presence">{presence}</div>
         </>
       ) : (
-        <>
-          {presence}
-          {/* The idle stage keeps the transcript toggle in its conversation-page
-              place, hidden until the pointer reaches the bottom band, so the
-              typed line is reachable before anyone has spoken. */}
-          {isPresent ? <TranscriptToggle reveal="hover" onOpen={() => setTranscriptOpen(true)} /> : null}
-        </>
+        presence
       )}
+      {/* A content page reaches the history through its rail instead. */}
+      {layout !== 'content' && isPresent ? <TranscriptToggle reveal={layout === 'conversation' ? 'resting' : 'hover'} onOpen={() => setTranscriptOpen(true)} /> : null}
     </motion.section>
   );
 }

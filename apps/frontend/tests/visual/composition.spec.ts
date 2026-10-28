@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { FRAME_GEOMETRIES, openScene, runActions } from './helpers';
+import { CURRENT_SCENE, FRAME_GEOMETRIES, openScene, runActions } from './helpers';
 
 // The aux row's geometry, which the unit tests cannot see: jsdom draws no
 // boxes. tests/unit/auxRowLayout.test.ts pins the stylesheet rules these
@@ -29,22 +29,22 @@ const crowded = [
 async function show(page: Page, actions: unknown[]) {
   await openScene(page, 'architecture');
   await runActions(page, [{ op: 'clear' }, ...actions]);
-  await expect(page.locator('.composed-aux')).toBeVisible();
+  await expect(page.locator(`${CURRENT_SCENE} .composed-aux`)).toBeVisible();
   await page.waitForTimeout(600);
 }
 
 // Each aux cell's box, the boxes of the image inside it, and the row's.
 async function auxGeometry(page: Page) {
-  return page.evaluate(() => {
+  return page.locator(CURRENT_SCENE).evaluate((scene) => {
     const box = (element: Element | null) => {
       if (!element) return null;
       const { left, top, right, bottom, height } = element.getBoundingClientRect();
       return { left, top, right, bottom, height };
     };
-    const row = document.querySelector<HTMLElement>('.composed-aux')!;
+    const row = scene.querySelector<HTMLElement>('.composed-aux')!;
     return {
       row: { ...box(row)!, scrollHeight: row.scrollHeight, clientHeight: row.clientHeight },
-      main: box(document.querySelector('.content-grid > .content-main')),
+      main: box(scene.querySelector('.content-grid > .content-main')),
       cells: [...row.querySelectorAll('.composed-aux-object')].map((cell) => ({
         visual: cell.classList.contains('composed-aux-object--visual'),
         kind: [...cell.classList].find((name) => name.startsWith('composed-aux-object--') && name !== 'composed-aux-object--visual'),
@@ -103,8 +103,8 @@ for (const viewport of viewports) {
       crowded.find((action) => action.id === 'deploy'),
       { op: 'show', id: 'matrix', type: 'table', data: table },
     ]);
-    const heights = await page.evaluate(() => {
-      const height = (selector: string) => document.querySelector(selector)?.getBoundingClientRect().height ?? 0;
+    const heights = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+      const height = (selector: string) => scene.querySelector(selector)?.getBoundingClientRect().height ?? 0;
       return { charts: height('.training-charts'), aux: height('.composed-aux'), underCharts: height('.training-progress') };
     });
     // The progress joins the table in the aux row rather than taking the
@@ -133,8 +133,8 @@ for (const viewport of viewports) {
     await openScene(page, 'composed');
     await expect(page.locator('[data-scene="architecture"] .composed-aux [data-testid="table"]')).toBeVisible();
     await expect(page.locator('.composed-aux [data-testid="image"]')).toHaveAttribute('data-state', 'ready');
-    const shares = await page.evaluate(() => {
-      const height = (selector: string) => document.querySelector(selector)!.getBoundingClientRect().height;
+    const shares = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+      const height = (selector: string) => scene.querySelector(selector)!.getBoundingClientRect().height;
       return { main: height('.content-grid > .content-main'), diagram: height('.diagram-object'), aux: height('.composed-aux') };
     });
     expect(shares.diagram).toBeGreaterThan(shares.aux);
@@ -147,7 +147,7 @@ for (const viewport of viewports) {
 test('a table in a narrow aux cell breaks between words, never inside one', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await show(page, crowded);
-  const broken = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('.composed-aux .table-grid td .table-grid__text')]
+  const broken = await page.locator(CURRENT_SCENE).evaluate((scene) => [...scene.querySelectorAll<HTMLElement>('.composed-aux .table-grid td .table-grid__text')]
     .filter((node) => !/\s/.test(node.textContent ?? ''))
     .filter((node) => node.getClientRects().length > 1)
     .map((node) => node.textContent));
@@ -171,11 +171,11 @@ const visualsOf = () => Object.values(window.SwitchboardController!.state().agen
 
 // Every state the aux row is drawn in over 1.2 s: its height, and each cell's with what it drew.
 async function auxRowStates(page: Page): Promise<string[]> {
-  return page.evaluate(() => new Promise<string[]>((resolve) => {
+  return page.evaluate((current) => new Promise<string[]>((resolve) => {
     const states = new Set<string>();
     const start = performance.now();
     const look = () => {
-      const row = document.querySelector('.composed-aux')!;
+      const row = document.querySelector(`${current} .composed-aux`)!;
       const cells = [...row.querySelectorAll('.composed-aux-object')].map((cell) => {
         const drawn = cell.querySelector('[data-layout], .drawing-viewport');
         return `${cell.getBoundingClientRect().height.toFixed(1)}:${drawn?.getAttribute('data-layout') ?? drawn?.className ?? ''}`;
@@ -185,7 +185,7 @@ async function auxRowStates(page: Page): Promise<string[]> {
       else resolve([...states]);
     };
     requestAnimationFrame(look);
-  }));
+  }), CURRENT_SCENE);
 }
 
 for (const scene of auxScenes) {
@@ -209,7 +209,7 @@ for (const scene of auxScenes) {
           { ...source, id: 'aux-source', role: 'primary' },
           ...[...visuals, ...beside].map((visual) => ({ ...visual, role: 'secondary' })),
         ]);
-        await expect(page.locator('.composed-aux')).toBeVisible();
+        await expect(page.locator(`${CURRENT_SCENE} .composed-aux`)).toBeVisible();
         await page.waitForTimeout(900);
         expect(await auxRowStates(page)).toHaveLength(1);
       });
@@ -233,11 +233,11 @@ test('timers in an aux cell are drawn in one layout from their first frame / ult
   const [timers] = await page.evaluate(visualsOf);
   await openScene(page, 'plan');
   const visuals = await page.evaluate(visualsOf);
-  const drawn = page.evaluate(() => new Promise<string[]>((resolve) => {
+  const drawn = page.evaluate((current) => new Promise<string[]>((resolve) => {
     const layouts = new Set<string>();
     let first: number | null = null;
     const look = () => {
-      const layout = document.querySelector('.composed-aux [data-testid="timer"]')?.getAttribute('data-layout');
+      const layout = document.querySelector(`${current} .composed-aux [data-testid="timer"]`)?.getAttribute('data-layout');
       if (layout) {
         first ??= performance.now();
         layouts.add(layout);
@@ -246,7 +246,7 @@ test('timers in an aux cell are drawn in one layout from their first frame / ult
       else resolve([...layouts]);
     };
     requestAnimationFrame(() => setTimeout(look, 0));
-  }));
+  }), CURRENT_SCENE);
   await runActions(page, [
     { op: 'clear' },
     { ...source, id: 'aux-source', role: 'primary' },

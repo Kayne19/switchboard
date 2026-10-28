@@ -290,10 +290,13 @@ the operator; before adoption the route is still the old one, and the rescue
 has already abandoned the candidate.
 
 On the browser side an `epoch` drops what the old leg put on screen (its
-objects, speech, focus, activity, and any view it asked for) and keeps the
-conversation, which belongs to the call. The route label on it changes when the
-status arrives. A reconnect is followed by the history snapshot, which replaces
-the transcript and hides the conversation if the server has none.
+objects, speech, focus, activity and any view it asked for), the line's and
+the turn's errors, except on a reconnect's snapshot of the same generation,
+and playback's, except on a handoff. It keeps the conversation, which belongs to the call, and a
+microphone's error, which belongs to the device. The route label on it
+changes when the status arrives. A reconnect is followed by the history
+snapshot, which replaces the transcript and hides the conversation if the
+server has none.
 
 ## Delivery and picker ordering
 
@@ -315,7 +318,11 @@ and settled replies. Cancellation releases a slot so a stale TTS result cannot
 wedge later speech. The browser drops queued/playing audio and the outbox clips
 that never went out on a new epoch, and tells the caller about those. A stale
 clip that did go out stays until it receives its ID-bearing `stale_epoch`
-error, then is removed from the outbox rather than retried forever.
+error, then is removed from the outbox rather than retried forever. Both
+notices last only until the next epoch on the live line, and after a rescue
+by a page control (a hangup from a project leg, a `/connect`, a redial) that
+epoch follows at once: the new leg's, which takes them down
+(`apps/frontend/ARCHITECTURE.md`, "Transport boundary").
 
 The route/model/thinking pickers serialize their HTTP operations. A failed picker
 request restores the value that was selected before that request, unless a newer
@@ -743,6 +750,45 @@ test about the page clock uses vitest's fake timers
 the fake time with `vi.getMockedSystemTime()` or `new Date()`, since the gate
 refuses `Date.now` whatever clock it reads.
 
+## A timer a test leaves armed
+
+A playback whose clip is meant to be sounding arms a stall watch
+(`ProgressWatch`, 3 s by default) on the real clock. `audioPlayback.test.ts`
+runs in node, and each of its tests stubs what a browser has
+(`requestAnimationFrame`, `MediaSource`, object URLs) for itself; `afterEach`
+removes the stubs. Eighteen of its tests ran on the real clock, ended with a
+clip sounding or opening, and never disposed the playback, so the watch
+outlived the test.
+
+Vitest runs each file in a worker of its own and ends the worker with the
+file, so a watch still armed when the file ends never fires. Unloaded, the
+file's tests take a second or two. On a loaded machine they can run past 3 s,
+and then a watch an early test left fires during a later test in the same
+file, after the early test's stubs are gone. In one `npm test` run such a
+watch reached the level meter's `cancelAnimationFrame` and threw. Every test
+passed, and the uncaught error failed the run.
+
+Every test in the file now runs on vitest's fake clock, and `afterEach` drops
+whatever timers are left with `vi.useRealTimers()`, so none can fire in a
+later test. Before that, `afterEach` disposes every playback the test made
+through `playbackForTest` (`AudioPlayback.dispose` cancels every timer a
+playback holds) and fails the test if a timer is still armed.
+
+`callRuntime.test.ts` had the same shape on its failure path: each test
+disposes its runtime after its expects, so a failing expect skipped the
+dispose and left the playback's watch armed, and the same `ReferenceError`
+followed. Its `beforeEach` now puts every test on the fake clock too.
+
+The rule: a unit test whose code under test arms timers runs on the fake
+clock, and ends what it started (a playback, a runtime) before its stubs go.
+`audioPlayback.test.ts` and `callRuntime.test.ts` follow it. In the other
+node unit files no passing test leaves a real timer armed after its teardown.
+`pushToTalk.test.ts` runs on the real clock and stays there: `PushToTalk`
+arms no timer (its level meter runs on `requestAnimationFrame`, which the
+tests stub with one that schedules nothing), and the file's only timer is its
+own `settle`, a `setTimeout(0)` every caller awaits, so a failing expect
+cannot leave one armed.
+
 ## A test await with no deadline
 
 Many backend tests wait on a channel the code under test feeds: a floor
@@ -794,6 +840,42 @@ for merely the first report. The replay test waits for the metric row to be
 visible and then polls until the newest report carries the generation,
 `has_visual` and the object id it expects. That is the shape the same spec
 already uses for every later drawing in it.
+
+## A test that reads the scene that is leaving
+
+A scene change does not take the old scene away at once. The stage keeps
+the scene that is leaving in the document through its exit, about 400 ms
+and longer on a loaded runner, and marks it inert from the frame it starts
+to leave (`apps/frontend/src/components/Scenes.tsx`). Until the exit ends
+the stage holds two scenes, or three, and the leaving one usually comes
+first. So `document.querySelector('.content-grid > .content-main')`
+returns the leaving scene's column. `openScene` is a scene change too: the
+fixture loads after the page's first render, so the idle scene is leaving
+for the first 400 ms or so.
+
+At 390x844, from the architecture fixture to a short plan, the leaving
+column is 488 px and the plan's is 498 px from its first frame; the rails
+under them differ by those 10 px. A spec that read once, 600 ms in,
+measured the leaving column whenever the exit outlasted the wait:
+progress.spec found the panel 4.9 px off its column's centre (#341), and
+composition.spec found the aux row 9.8 px past the column (CI, WebKit at
+390x844). #391 took the switch from one column to the other for a page
+relayout. There is none: the plan's column never moves.
+
+The hazard is a one-shot `document.querySelector` read, in the page, of a
+part the leaving scene can also hold: a column, an aux row, a rail, a
+heading. A strict Playwright locator (`toBeVisible`, `locator.evaluate`)
+fails at once on two matches instead of reading the wrong one, and a count
+assertion retries until the exit ends. A read of an object only the new
+scene shows finds that one.
+
+The rule: a spec reads a scene's parts from `CURRENT_SCENE`
+(`apps/frontend/tests/visual/helpers.ts`), the scene that is not inert, and
+scopes the wait in front of that read the same way. It does not wait the
+exit out. A read anchored on an element takes the scene that holds it,
+`element.closest('.scene')`. Behind a modal (focus, the history) every
+scene is inert and `CURRENT_SCENE` matches nothing; a spec that reads
+the scene there selects it by its kind (`[data-scene="..."]`).
 
 ## A test that reads what the page is sent
 

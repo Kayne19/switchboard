@@ -110,8 +110,8 @@ drawn for the one asked for; the scene (`sceneKind`) and the report
 | `auto` | `auto`: the content scene when something is on stage, else the conversation or the idle page |
 | `visual` | `visual` when something is on stage: the content scene, as `auto` draws it (the primary in the main slot, the rail beside it); else `auto` |
 | `comms` | `comms`: the conversation page, whatever is on stage |
-| `system` | `system`, whatever is on stage: the line (who is on it), the route, model and thinking pickers, HANG UP and the status line, from the call runtime (`SystemPanel`); Damocles compact beside it, the corner stack in its corner. On the demo page, with no call: `NO CALL` |
-| `theater` | `theater` when something is on stage: the primary alone, in the focus box, with the notes about it, a `THEATER / <TYPE>` header and `EXIT / ESC`; the corner stack, and Damocles, compact, in a column at its right. Else `auto` |
+| `system` | `system`, whatever is on stage: the line (who is on it), the route, model and thinking pickers, HANG UP and the status line, from the call runtime (`SystemPanel`); Damocles compact beside it, the corner stack in its corner, the history's toggle as in the theater. On the demo page, with no call: `NO CALL` |
+| `theater` | `theater` when something is on stage: the primary alone, in the focus box, with the notes about it, a `THEATER / <TYPE>` header and `EXIT / ESC`; the corner stack, and Damocles, compact, in a column at its right; the history's toggle where the idle page has it, in the band under the box. Else `auto` |
 
 The theater view is the focus box drawn as the scene (`StagedObject`, shared
 with the focus layer), not over it: it is not modal, so Damocles, MODE and

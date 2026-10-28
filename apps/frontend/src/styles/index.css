@@ -111,6 +111,11 @@ button {
   overflow: hidden;
   background: #000;
   --reading-text-size: clamp(15px, 1.28cqw, 22px);
+  /* A layout drawn as a grid on the scene (idle, conversation, theater,
+     system) stands its foot above a line error at the head of the corner
+     stack (--line-error-room, set by SceneShell); a content scene raises
+     its grid instead (.content-grid). */
+  padding-bottom: calc(var(--scene-foot, 0px) + var(--line-error-room, 0px));
 }
 .tech {
   font-family:
@@ -254,6 +259,7 @@ button {
    scroll with nothing to focus inside it in the tab order. */
 .annotation-card__text:focus-visible,
 .live-chat-card__text:focus-visible,
+.channel-stack__error-text:focus-visible,
 .conversation-answer__text:focus-visible,
 .transcript__body:focus-visible,
 .rich-text__code-block:focus-visible,
@@ -510,6 +516,9 @@ button {
 .scene--idle .damocles-presence {
   transform: translateY(-1.2cqh);
 }
+.scene--idle .transcript-reveal {
+  height: max(14cqh, 88px);
+}
 
 /* Conversation */
 .scene--conversation {
@@ -532,7 +541,9 @@ button {
   align-self: center;
   width: min(62cqw, 1000px);
   height: min(31cqh, 330px);
-  min-height: 180px;
+  /* A stage too short for its 31cqh keeps the box readable, less the room
+     a line error takes under it: at 844x390 the whole 180px met the error. */
+  min-height: calc(180px - var(--line-error-room, 0px));
   z-index: 2;
 }
 .conversation-answer__tag {
@@ -629,8 +640,8 @@ button {
    so the stack takes that page's edge and footer line instead. */
 .channel-stack {
   position: absolute;
-  /* Above the idle page's bottom band (`transcript-reveal`), a hover region
-     that would otherwise take every click meant for MODE. The conversation
+  /* Above the bottom band (`transcript-reveal`), a hover region that would
+     otherwise take every click meant for MODE. The conversation
      page's toggle stands above the stack in turn: on a 390px-wide phone the
      two boxes overlap by 25px, and that toggle keeps all of its clicks
      (issues.spec.ts, "leaves the transcript toggle clickable"); MODE keeps
@@ -667,10 +678,39 @@ button {
 .channel-stack__mode:disabled {
   cursor: default;
 }
+/* A standing line error heads the stack (ChannelStack): red, in the prose
+   face, below the reading size as the corner's other words are (it is the
+   line's status, not content). The gap under it is fixed: the shell
+   measures the box through a content-box observer, which a stage-relative
+   padding would change unseen. */
+.channel-stack__error {
+  display: grid;
+  gap: 0.5em;
+  max-width: min(36rem, 44cqw);
+  padding-bottom: 10px;
+  color: var(--red);
+}
+/* Never cut: a long error (a server's, up to a few hundred characters)
+   scrolls in at most five lines, or a sixth of a short stage, so the room
+   the layouts give it stays bounded. */
+.channel-stack__error-text {
+  max-height: min(calc(5 * 1.35em), 16cqh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--orange-rgb), 0.4) transparent;
+  pointer-events: auto;
+  font-family: var(--font-prose);
+  font-size: clamp(13px, 1cqw, 16px);
+  line-height: 1.35;
+  letter-spacing: normal;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
 .transcript-toggle {
-  /* Over the corner stack where they overlap (see `channel-stack`). On the
-     idle page this is scoped inside the bottom band's own layer, so there
-     the stack stays on top of both. */
+  /* Over the corner stack where they overlap (see `channel-stack`). Inside
+     the bottom band it is scoped to the band's own layer, so there the
+     stack stays on top of both. */
   z-index: 4;
   position: absolute;
   left: 50%;
@@ -700,17 +740,11 @@ button {
   color: var(--orange);
   letter-spacing: 0.21em;
 }
-/* On the idle stage the same toggle sits in the same place, inside a band
-   along the bottom edge, and stays out of sight until the pointer enters the
-   band. Hidden, it keeps its box and its tab stop, so keyboard focus shows it
-   as well. The band stops well short of the Damocles presence and sits
-   beneath it, so the glyph keeps every click. */
 .transcript-reveal {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: max(14cqh, 88px);
   z-index: 2;
 }
 .transcript-reveal .transcript-toggle {
@@ -847,6 +881,7 @@ button {
   --rail: clamp(210px, 17.5cqw, 340px);
   --scene-gap: clamp(42px, 4.6cqw, 96px);
   --footer-y: 6.7cqh;
+  --content-foot: 12.2cqh;
 }
 /* The heading runs to the stage's far edge and no further: a long title
    (up to 128 characters) or subtitle is cut there with an ellipsis. */
@@ -884,7 +919,7 @@ button {
   left: var(--edge);
   right: var(--edge);
   top: 11.2cqh;
-  bottom: 12.2cqh;
+  bottom: calc(var(--content-foot) + var(--line-error-room, 0px));
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--rail);
   gap: var(--scene-gap);
@@ -5370,12 +5405,18 @@ button {
    stage, as focus is: never from the viewport (#271). */
 .scene--theater,
 .scene--system {
+  --scene-foot: calc(7.3cqh + 44px);
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: minmax(0, 1fr);
   column-gap: clamp(12px, 2.4cqw, 40px);
   align-items: center;
-  padding: max(6cqh, 34px) 4cqw calc(7.3cqh + 44px);
+  padding-top: max(6cqh, 34px);
+  padding-inline: 4cqw;
+}
+.scene--theater .transcript-reveal,
+.scene--system .transcript-reveal {
+  height: var(--scene-foot);
 }
 /* Held to the room between the header and the corner stack at every
    aspect, over the focus box's own sizes (a noted chart in portrait is
@@ -5708,6 +5749,12 @@ button {
     left: 6cqw;
     bottom: 7.2cqh;
   }
+  .channel-stack__error {
+    max-width: min(36rem, 88cqw);
+  }
+  .channel-stack__error-text {
+    font-size: clamp(13px, 1.8cqw, 16px);
+  }
   .transcript-toggle {
     bottom: 6.2cqh;
   }
@@ -5716,7 +5763,7 @@ button {
   .tool-activity--conversation {
     left: 6cqw;
     right: 6cqw;
-    bottom: 12cqh;
+    bottom: calc(12cqh + var(--line-error-room, 0px));
     translate: none;
     max-width: 420px;
     margin-inline: auto;
@@ -5746,6 +5793,7 @@ button {
     --edge: clamp(16px, 4cqw, 42px);
     --scene-gap: clamp(14px, 2.2cqh, 26px);
     --footer-y: 3.8cqh;
+    --content-foot: 9.2cqh;
   }
   .scene-heading {
     top: 4.8cqh;
@@ -5759,7 +5807,6 @@ button {
   .content-grid {
     --rail-presence-height: calc(var(--rail-presence-width) * 1133 / 944 + var(--rail-signal-height));
     top: 9.2cqh;
-    bottom: 9.2cqh;
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 59cqh) minmax(min(max(var(--rail-floor, 0px), var(--rail-presence-height)), (100% - var(--scene-gap)) / 2), 1fr);
     gap: var(--scene-gap);
@@ -6044,6 +6091,7 @@ button {
     --edge: clamp(20px, 3.4cqw, 66px);
     --rail: clamp(190px, 15cqw, 300px);
     --scene-gap: clamp(32px, 3.7cqw, 72px);
+    --content-foot: 14cqh;
   }
   /* A stage twice as wide as tall has the width a metric card does not use
      and not the height for a visual's cell under it: on a phone on its
@@ -6064,7 +6112,6 @@ button {
   }
   .content-grid {
     top: 13cqh;
-    bottom: 14cqh;
   }
   .scene-heading {
     top: 5cqh;

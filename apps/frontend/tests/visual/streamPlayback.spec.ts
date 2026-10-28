@@ -187,3 +187,103 @@ test.describe("a handoff in this engine", () => {
     expect(result.second, "the new leg's clip is heard after it").toBeGreaterThan(1.2);
   });
 });
+
+test.describe("an utterance with no audio in this engine", () => {
+  const orders = {
+    "then one with audio": [
+      [1, "none"],
+      [2, "audio"],
+    ],
+    "ending once its source has opened, then one with audio": [
+      [1, "none, ending late"],
+      [2, "audio"],
+    ],
+    "behind one with audio, then another": [
+      [1, "audio"],
+      [2, "none"],
+      [3, "audio"],
+    ],
+  } as const;
+  for (const streaming of [true, false])
+    for (const [name, steps] of Object.entries(orders))
+      test(`${name} (${streaming ? "streaming" : "whole replay"}): the next is heard, and no error shows`, async ({
+        page,
+      }) => {
+        test.setTimeout(60_000);
+        await page.goto("/");
+        const target = steps[steps.length - 1][0];
+        const result = await page.evaluate(
+          async ({ base64, streaming, steps, target }) => {
+            const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+            const specifier = "/src/runtime/audioPlayback.ts";
+            const module = (await import(/* @vite-ignore */ specifier)) as {
+              NO_PROGRESS_MS: number;
+              AudioPlayback: new (options: Record<string, unknown>) => {
+                readonly streamingEnabled: boolean;
+                setStreamingEnabled(enabled: boolean): void;
+                receiveAudioStart(message: Record<string, unknown>): void;
+                receiveAudioChunk(data: ArrayBuffer): void;
+                receiveAudioDone(message: Record<string, unknown>): void;
+                isDrained(): boolean;
+                dispose(): void;
+              };
+            };
+            const player = document.createElement("audio");
+            document.body.appendChild(player);
+            const statuses: Array<[string, boolean]> = [];
+            let playing = 0;
+            const playback = new module.AudioPlayback({
+              player,
+              idleText: "idle",
+              onStatus: (text: string, error?: boolean) =>
+                statuses.push([text, error === true]),
+              onChange: () => {},
+              onUtterance: (sequence: number) => {
+                playing = sequence;
+              },
+              gapMs: 0,
+            });
+            playback.setStreamingEnabled(streaming);
+            const offered = playback.streamingEnabled;
+            for (const [sequence, audio] of steps) {
+              playback.receiveAudioStart({ generation: 0, sequence, mime: "audio/mpeg" });
+              if (audio === "audio")
+                for (let at = 0; at < bytes.length; at += 1_500)
+                  playback.receiveAudioChunk(
+                    bytes.slice(at, at + 1_500).buffer as ArrayBuffer,
+                  );
+              if (audio === "none, ending late")
+                await new Promise((resolve) => setTimeout(resolve, 300));
+              playback.receiveAudioDone({ generation: 0, sequence, done: true });
+            }
+            let heard = 0;
+            const deadline = Date.now() + 15_000;
+            while (Date.now() < deadline && heard <= 1.2) {
+              await new Promise((resolve) => setTimeout(resolve, 50));
+              if (playing === target) heard = Math.max(heard, player.currentTime);
+            }
+            const tail = Date.now() + 2 * module.NO_PROGRESS_MS;
+            while (Date.now() < tail && !playback.isDrained())
+              await new Promise((resolve) => setTimeout(resolve, 50));
+            const drained = playback.isDrained();
+            const streamed = playback.streamingEnabled;
+            playback.dispose();
+            player.remove();
+            return { offered, heard, drained, streamed, statuses };
+          },
+          { base64: clip, streaming, steps, target },
+        );
+
+        expect(result.heard, "the utterance after it is heard").toBeGreaterThan(1.2);
+        expect(result.drained, "and then nothing is left playing").toBe(true);
+        const errors = result.statuses
+          .filter(([, error]) => error)
+          .map(([text]) => text);
+        const refused = result.offered && !result.streamed;
+        if (refused)
+          expect(errors, "only this engine's refusal of a stream with audio").toEqual([
+            "Streaming audio failed; using the complete replay (no playback progress).",
+          ]);
+        else expect(errors, "nothing is reported").toEqual([]);
+      });
+});

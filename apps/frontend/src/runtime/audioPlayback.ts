@@ -143,7 +143,8 @@ type Holder =
   /**
    * A stream taken off the element while its bytes were still arriving. The
    * element is free, but nothing plays before its whole replay, which is
-   * queued when its `audio_done` comes.
+   * queued when its `audio_done` comes; one that brought no audio is over
+   * then.
    */
   | { kind: "cutOff"; utterance: Utterance };
 
@@ -384,13 +385,17 @@ export class AudioPlayback {
   }
 
   /**
-   * `utterance` has no more bytes, on its `audio_done` or at a cap: a
-   * stream is finished with what went in, and a whole utterance is queued.
+   * `utterance` has no more bytes, on its `audio_done` or at a cap. An empty
+   * stream on the element, or cut off from it, is over there: it is neither
+   * finished nor replayed (see `passOver`).
    */
   private endUtterance(utterance: Utterance, done: boolean): void {
     utterance.done = done;
     this.arriving = null;
-    if (utterance.stream) utterance.stream.finish(done);
+    if (utterance.bytes === 0 && heldUtterance(this.holder) === utterance) {
+      this.enter({ kind: "idle" });
+      this.afterClip();
+    } else if (utterance.stream) utterance.stream.finish(done);
     else {
       this.queueReplay(utterance);
       const holder = this.holder;
@@ -483,9 +488,10 @@ export class AudioPlayback {
   }
 
   /**
-   * A clip played to its end, failed, or went silent, and the element is
-   * free: what waits follows after the pause between messages. When nothing
-   * waits, the idle line, so no error the clip reported outlives it (#260).
+   * A clip played to its end, failed, or went silent, or an utterance with
+   * no audio was passed over, and the element is free: what waits follows
+   * after the pause between messages. When nothing waits, the idle line, so
+   * no error the clip reported outlives it (#260).
    */
   private afterClip(): void {
     if (!this.audioQueue.length && !this.streamQueue.length) {
@@ -499,6 +505,17 @@ export class AudioPlayback {
     }
     const timer = setTimeout(() => this.gapElapsed(timer), gap);
     this.enter({ kind: "gap", timer });
+  }
+
+  /**
+   * Nothing empty is put on the element: Chromium answers an empty source
+   * with an element error, and WebKit leaves an empty stream on the element
+   * with neither `ended` nor an error.
+   */
+  private passOver(sequence: number | undefined): void {
+    if (sequence !== undefined) this.options.onUtterance?.(sequence);
+    this.notifyPlaybackChange();
+    this.afterClip();
   }
 
   private gapElapsed(timer: ReturnType<typeof setTimeout>): void {
@@ -522,10 +539,15 @@ export class AudioPlayback {
 
   // --- Whole replays ----------------------------------------------------
 
-  /** The head of `audioQueue` takes the element. */
+  /** The head of `audioQueue` takes the element, or is passed over if empty. */
   private startReplay(): void {
     const blob = this.audioQueue.shift();
     if (!blob) return;
+    const sequence = this.replaySequences.get(blob);
+    if (blob.size === 0) {
+      this.passOver(sequence);
+      return;
+    }
     const player = this.player;
     const clip: ReplayClip = {
       blob,
@@ -536,7 +558,6 @@ export class AudioPlayback {
     };
     this.enter({ kind: "replay", clip, phase: { kind: "attaching" } });
     this.meterReplay(clip);
-    const sequence = this.replaySequences.get(blob);
     if (sequence !== undefined) this.options.onUtterance?.(sequence);
     const resetTerminal = () => {
       const phase = this.replayPhase(clip);
@@ -690,11 +711,18 @@ export class AudioPlayback {
 
   // --- Streams ----------------------------------------------------------
 
-  /** The head of `streamQueue` takes the element. */
+  /**
+   * The head of `streamQueue` takes the element, still arriving or not; one
+   * that ended with no audio is passed over.
+   */
   private startStream(): void {
     const utterance = this.streamQueue.shift();
     const source = utterance?.stream;
     if (!utterance || !source) return;
+    if (utterance.bytes === 0 && utterance !== this.arriving) {
+      this.passOver(utterance.sequence);
+      return;
+    }
     const player = this.player;
     const clip: StreamClip = {
       utterance,
@@ -900,8 +928,8 @@ export class AudioPlayback {
     const utterances = new Set<Utterance>(this.streamQueue);
     if (this.arriving) utterances.add(this.arriving);
     const holder = this.holder;
-    if (holder.kind === "stream") utterances.add(holder.clip.utterance);
-    if (holder.kind === "cutOff") utterances.add(holder.utterance);
+    const held = heldUtterance(holder);
+    if (held) utterances.add(held);
     let bytes = 0;
     for (const utterance of utterances) bytes += utterance.bytes;
     for (const replay of this.audioQueue) bytes += replay.size;
@@ -1001,6 +1029,13 @@ function occupant(holder: Holder): object | null {
     default:
       return unreachable(holder);
   }
+}
+
+/** The utterance on the element, or cut off from it while still arriving. */
+function heldUtterance(holder: Holder): Utterance | null {
+  if (holder.kind === "stream") return holder.clip.utterance;
+  if (holder.kind === "cutOff") return holder.utterance;
+  return null;
 }
 
 function watchOf(holder: Holder): ProgressWatch | null {

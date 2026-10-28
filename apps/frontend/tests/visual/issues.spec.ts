@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
 import { statusMessage, transcriptEntry } from '../fixtures/serverMessages';
-import { openScene } from './helpers';
+import { CURRENT_SCENE, openScene } from './helpers';
 
 async function openController(page: Page) {
   await openScene(page, 'architecture');
@@ -49,11 +49,11 @@ test('secondary metric and note compose in either action order without oversized
 
   for (const order of ['metric-first', 'note-first'] as const) {
     await showSecondaryMetricAndNote(page, order);
-    const geometry = await page.evaluate(() => {
-      const metric = document.querySelector<HTMLElement>('.metric-row')!;
-      const note = document.querySelector<HTMLElement>('.annotation-card')!;
-      const main = document.querySelector<HTMLElement>('.content-main')!;
-      const rail = document.querySelector<HTMLElement>('.content-rail')!;
+    const geometry = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+      const metric = scene.querySelector<HTMLElement>('.metric-row')!;
+      const note = scene.querySelector<HTMLElement>('.annotation-card')!;
+      const main = scene.querySelector<HTMLElement>('.content-main')!;
+      const rail = scene.querySelector<HTMLElement>('.content-rail')!;
       const metricBox = metric.getBoundingClientRect();
       const noteBox = note.getBoundingClientRect();
       return {
@@ -87,12 +87,12 @@ test('primary metric is a compact angular card and uses its configured caption',
     });
   });
 
-  const metric = page.locator('.metrics--primary .metric-row');
+  const metric = page.locator(`${CURRENT_SCENE} .metrics--primary .metric-row`);
   await expect(metric).toBeVisible();
   await expect(page.locator('.scene-footer span').last()).toHaveText('EDGE / LAST 5 MIN');
   const style = await metric.evaluate((element) => {
     const metricBox = element.getBoundingClientRect();
-    const mainBox = document.querySelector<HTMLElement>('.content-main')!.getBoundingClientRect();
+    const mainBox = element.closest('.scene')!.querySelector<HTMLElement>('.content-main')!.getBoundingClientRect();
     return {
       clipPath: getComputedStyle(element).clipPath,
       metricHeight: metricBox.height,
@@ -257,24 +257,24 @@ for (const { chart, viewport } of chartNoteCases) {
       expect(before.height - after.height).toBeLessThanOrEqual(band[0] + 24);
     }
 
-    const geometry = await page.evaluate(() => {
-      const panel = document.querySelector<HTMLElement>('.chart-object[data-chart-id="loss"]')!.getBoundingClientRect();
-      const layer = document.querySelector<HTMLElement>('.chart-notes')!.getBoundingClientRect();
+    const geometry = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+      const panel = scene.querySelector<HTMLElement>('.chart-object[data-chart-id="loss"]')!.getBoundingClientRect();
+      const layer = scene.querySelector<HTMLElement>('.chart-notes')!.getBoundingClientRect();
       // A note with no place on the chart clear of its data is shown in
       // the rail; its card stays in the layer out of view, to be measured.
-      const cards = [...document.querySelectorAll<HTMLElement>('.chart-note:not(.chart-note--away)')].map((element) => {
+      const cards = [...scene.querySelectorAll<HTMLElement>('.chart-note:not(.chart-note--away)')].map((element) => {
         const box = element.getBoundingClientRect();
         return { id: element.dataset.note!, left: box.left, top: box.top, right: box.right, bottom: box.bottom };
       });
-      const away = [...document.querySelectorAll<HTMLElement>('.chart-note--away')].map((element) => ({
+      const away = [...scene.querySelectorAll<HTMLElement>('.chart-note--away')].map((element) => ({
         id: element.dataset.note!,
         hidden: getComputedStyle(element).visibility === 'hidden',
         text: element.querySelector('.annotation-card__text')?.textContent ?? '',
       }));
-      const rail = document.querySelector<HTMLElement>('.content-rail .rail-note')?.textContent ?? '';
-      const band = document.querySelector<HTMLElement>('.chart-note-band')?.textContent ?? null;
+      const rail = scene.querySelector<HTMLElement>('.content-rail .rail-note')?.textContent ?? '';
+      const band = scene.querySelector<HTMLElement>('.chart-note-band')?.textContent ?? null;
       // Each series' line as drawn, on the page.
-      const svg = document.querySelector<SVGSVGElement>('.chart-object[data-chart-id="loss"] .chart-primitive > svg')!;
+      const svg = scene.querySelector<SVGSVGElement>('.chart-object[data-chart-id="loss"] .chart-primitive > svg')!;
       const matrix = svg.getScreenCTM()!;
       const lines = Object.fromEntries([...svg.querySelectorAll('.chart-series-group')].map((group) => [
         group.getAttribute('data-series')!,
@@ -283,8 +283,8 @@ for (const { chart, viewport } of chartNoteCases) {
           return { x: matrix.a * x + matrix.c * y + matrix.e, y: matrix.b * x + matrix.d * y + matrix.f };
         }),
       ]));
-      const values = document.querySelectorAll('.chart-marker__value').length;
-      const leaders = [...document.querySelectorAll<SVGGElement>('.chart-note-leader')].map((group) => ({
+      const values = scene.querySelectorAll('.chart-marker__value').length;
+      const leaders = [...scene.querySelectorAll<SVGGElement>('.chart-note-leader')].map((group) => ({
         id: group.dataset.note!,
         points: group.querySelector('polyline')!.getAttribute('points')!.split(' ').map((pair) => {
           const [x, y] = pair.split(',').map(Number);
@@ -552,12 +552,12 @@ for (const { chart, viewport } of pointNoteCases) {
     // under the chart in the band under it (chartNotePlace.spec.ts).
     await expect.poll(async () => (await page.locator('.chart-note').count()) + (await page.locator('.chart-note-band').count())).toBe(Object.keys(spec.notes).length);
     await page.waitForTimeout(600);
-    const geometry = await page.evaluate(() => {
+    const geometry = await page.locator(CURRENT_SCENE).evaluate((scene) => {
       const box = (element: Element) => {
         const rect = element.getBoundingClientRect();
         return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
       };
-      const svg = document.querySelector<SVGSVGElement>('.chart-object .chart-primitive > svg')!;
+      const svg = scene.querySelector<SVGSVGElement>('.chart-object .chart-primitive > svg')!;
       const matrix = svg.getScreenCTM()!;
       const toClient = (x: number, y: number) => ({ x: matrix.a * x + matrix.c * y + matrix.e, y: matrix.b * x + matrix.d * y + matrix.f });
       // The plot is the box the grid closes.
@@ -571,9 +571,9 @@ for (const { chart, viewport } of pointNoteCases) {
         line: [...(group.querySelector('.chart-series')?.getAttribute('d') ?? '').matchAll(/[ML] ([-\d.]+) ([-\d.]+)/g)].map((match) => toClient(Number(match[1]), Number(match[2]))),
         points: [...group.querySelectorAll('.chart-point')].map((point) => toClient(Number(point.getAttribute('cx')), Number(point.getAttribute('cy')))),
       }]));
-      const layer = document.querySelector('.chart-notes')?.getBoundingClientRect() ?? { left: 0, top: 0 };
-      const notes = [...document.querySelectorAll<HTMLElement>('.chart-note')].map((card) => {
-        const group = document.querySelector(`.chart-note-leader[data-note="${card.dataset.note}"]`);
+      const layer = scene.querySelector('.chart-notes')?.getBoundingClientRect() ?? { left: 0, top: 0 };
+      const notes = [...scene.querySelectorAll<HTMLElement>('.chart-note')].map((card) => {
+        const group = scene.querySelector(`.chart-note-leader[data-note="${card.dataset.note}"]`);
         const polyline = group?.querySelector('polyline');
         return {
           id: card.dataset.note!,
@@ -590,8 +590,8 @@ for (const { chart, viewport } of pointNoteCases) {
       });
       // A point whose note is not laid over the chart keeps a hollow ring.
       const rings = [...svg.querySelectorAll('.chart-note-ring')].map((ring) => toClient(Number(ring.getAttribute('cx')), Number(ring.getAttribute('cy'))));
-      const rail = [...document.querySelectorAll('.content-rail .rail-note, .chart-note-band')].map((element) => element.textContent).join(' ');
-      return { plot, series, notes, rings, rail, values: document.querySelectorAll('.chart-marker__value').length };
+      const rail = [...scene.querySelectorAll('.content-rail .rail-note, .chart-note-band')].map((element) => element.textContent).join(' ');
+      return { plot, series, notes, rings, rail, values: scene.querySelectorAll('.chart-marker__value').length };
     });
     const near = (p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) => {
       const dx = b.x - a.x;
@@ -1242,12 +1242,12 @@ test('wide chat output wraps inside the live card instead of scrolling sideways'
     });
     fixtureServer.broadcast({ type: 'spoken', entry: transcriptEntry({ role: 'agent', text: reply, id: 'reply-wide' }) });
 
-    const card = page.locator('.live-chat-card');
+    const card = page.locator(`${CURRENT_SCENE} .live-chat-card`);
     await expect(card).toBeVisible();
     await expect(card).toContainText('0123456789abcdef');
     const geometry = await card.evaluate((element) => {
       const box = element.getBoundingClientRect();
-      const rail = document.querySelector<HTMLElement>('.content-rail__details')!.getBoundingClientRect();
+      const rail = element.closest('.scene')!.querySelector<HTMLElement>('.content-rail__details')!.getBoundingClientRect();
       const text = element.querySelector<HTMLElement>('.live-chat-card__text')!;
       const textBox = text.getBoundingClientRect();
       return {
@@ -1539,10 +1539,13 @@ test('an agent say and a line error still show beside the live chat card', async
     await expect(page.locator('.rail-note')).toHaveCount(0);
 
     fixtureServer.broadcast({ type: 'error', message: 'LINE ERROR / TRANSFER FAILED' });
-    await expect(page.locator('.rail-note')).toContainText('LINE ERROR / TRANSFER FAILED');
+    const lineError = page.locator('.channel-stack__error');
+    await expect(lineError, 'the line\'s, at the head of the corner stack').toContainText('LINE ERROR / TRANSFER FAILED');
+    await expect(page.locator('.rail-note'), 'never a rail note').toHaveCount(0);
 
     fixtureServer.broadcast({ type: 'display', action: { op: 'say', text: 'AGENT SAY EXPLANATION' } });
     await expect(page.locator('.rail-note')).toContainText('AGENT SAY EXPLANATION');
+    await expect(lineError, 'what Damocles says does not hide it').toContainText('LINE ERROR / TRANSFER FAILED');
     await expect(live).toContainText('The map is up.');
   } finally {
     await fixtureServer.stop();

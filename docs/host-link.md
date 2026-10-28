@@ -146,8 +146,15 @@ session:
   the buffered events (ending with `session_closed`) when it can, or else
   sends a new `session_closed` event with reason `gone`.
 
-Then it sends `{ "type": "synced", "epoch": 7 }`. The buffer keeps the last
-1000 events per session.
+It starts all of these as soon as the welcome arrives, before any other
+frame or event is handled: the replays and `session_closed` events go out
+at once, and every snapshot is started at once. So an event published
+during the sync goes out after its session's replay or snapshot (see
+"Snapshots"), never ahead of it, and never again inside the replay.
+
+Then, once the snapshots it started are out, it sends
+`{ "type": "synced", "epoch": 7 }`. The buffer keeps the last 1000 events
+per session.
 
 ### Heartbeat
 

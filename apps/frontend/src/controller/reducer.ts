@@ -7,7 +7,7 @@ import type {
   ToolRunState,
   WorkspaceState,
 } from './types';
-import { RUNTIME_ID_PREFIX } from './types';
+import { RUNTIME_ID_PREFIX, RUNTIME_LINE_ERROR_ID } from './types';
 
 export function normalizeViewTarget(target: string | null | undefined): string | null {
   if (!target) return null;
@@ -96,6 +96,7 @@ export function createInitialState(): ControllerState {
     objects: {},
     order: [],
     speech: null,
+    lineError: null,
     workspace: createInitialWorkspaceState(),
     activity: null,
     toolRun: createInitialToolRun(),
@@ -181,6 +182,7 @@ function syncCombinedState(
     objects,
     order,
     speech,
+    lineError: state.lineError,
     workspace: updatedWorkspace,
     activity: state.activity,
     toolRun: state.toolRun,
@@ -311,6 +313,11 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
     }
     case 'runtime_say':
     case 'say': {
+      // The line's error is not speech: a line Damocles is heard saying
+      // after it must not take it down.
+      if (action.op === 'runtime_say' && action.target === RUNTIME_LINE_ERROR_ID) {
+        return state.lineError === action.text ? state : { ...state, lineError: action.text, revision };
+      }
       const isRuntime = action.op === 'runtime_say' || Boolean(action.target?.startsWith(RUNTIME_ID_PREFIX));
       if (isRuntime) {
         const runtimeSpeech: SpeechState = {
@@ -352,24 +359,9 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
         );
       }
     }
-    case 'runtime_unsay': {
-      // Only what was said to the target goes: a line Damocles has spoken
-      // since stays.
-      if (state.runtimeSpeech?.target !== action.target) return state;
-      return syncCombinedState(
-        state,
-        state.agentObjects,
-        state.agentOrder,
-        state.agentSpeech,
-        state.runtimeObjects,
-        state.runtimeOrder,
-        null,
-        state.workspace,
-        state.focusId,
-        state.listening,
-        revision,
-      );
-    }
+    case 'runtime_unsay':
+      if (state.lineError === null) return state;
+      return { ...state, lineError: null, revision };
     case 'focus': {
       const targetId = action.id && (state.agentObjects[action.id] || state.runtimeObjects[action.id])
         ? action.id
