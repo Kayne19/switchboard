@@ -415,8 +415,16 @@ export class HostLink {
 		this.#status({ state: "linked", epoch });
 		const cursors = (message.cursors ?? {}) as Record<string, unknown>;
 		const tracked = new Set(this.#o.sessions());
+		await Promise.all(this.#catchUp(cursors, tracked));
+		if (this.#ws !== ws) return;
+		// Buffers of sessions no longer tracked are not needed after a sync.
+		for (const handle of [...this.#buffers.keys()]) if (!tracked.has(handle)) this.#buffers.delete(handle);
+		this.#send({ type: "synced", epoch });
+	}
+
+	#catchUp(cursors: Record<string, unknown>, tracked: Set<string>): Promise<void>[] {
+		const snapshots: Promise<void>[] = [];
 		for (const handle of new Set([...tracked, ...Object.keys(cursors)])) {
-			if (this.#ws !== ws) return;
 			const cursor = parseCursor(cursors[handle]);
 			const buffer = this.#buffers.get(handle);
 			const canReplay = cursor !== null && buffer !== undefined && cursor.bootId === this.bootId && cursor.seq >= buffer.evictedThrough;
@@ -425,17 +433,14 @@ export class HostLink {
 					if (b.seq > cursor.seq) this.#send({ type: "event", session: handle, cursor: formatCursor(this.bootId, b.seq), event: b.event, replayed: true });
 				}
 			} else if (tracked.has(handle)) {
-				await this.sendSnapshot(handle);
+				snapshots.push(this.sendSnapshot(handle));
 			} else {
 				// The service knows a session this host agent no longer tracks.
 				const seq = ++this.#seq;
 				this.#send({ type: "event", session: handle, cursor: formatCursor(this.bootId, seq), event: { kind: "session_closed", reason: "gone" } });
 			}
 		}
-		if (this.#ws !== ws) return;
-		// Buffers of sessions no longer tracked are not needed after a sync.
-		for (const handle of [...this.#buffers.keys()]) if (!tracked.has(handle)) this.#buffers.delete(handle);
-		this.#send({ type: "synced", epoch });
+		return snapshots;
 	}
 
 	#beat(ws: SocketLike): void {
