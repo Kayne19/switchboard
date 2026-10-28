@@ -230,8 +230,6 @@ function ownerFindings(file, text, row) {
 	return [];
 }
 
-// The engine-rules check's reading: every `-webkit-` name in `sources`
-// against the rows of docs/ipad.md's "Engine-specific code in the tree".
 function engineRuleFindings(ipad, sources) {
 	const webkitName = /-webkit-[a-z]+(?:-[a-z]+)*/g;
 	const namesIn = (text) =>
@@ -267,6 +265,16 @@ function engineRuleFindings(ipad, sources) {
 	}
 	return out;
 }
+
+// What the engine-rules check reads, as sample trees: docs/ipad.md's table
+// with `rows`, and the sources it is held to.
+const ipadTable = (...rows) => `## Engine-specific code in the tree\n\n| Where | What | Why |\n|---|---|---|\n${rows.join("\n")}\n\n## Next\n`;
+const ipadTree = (ipad, sources) => ({ "docs/ipad.md": ipad, ...sources });
+const ipadCss = "apps/frontend/src/a.css";
+const ipadClamp = "| `apps/frontend/src/a.css`, `.x` | `display: -webkit-box` with `-webkit-line-clamp` | why |";
+const ipadBar = "| `apps/frontend/src/a.css`, `::-webkit-scrollbar` beside `scrollbar-width: none` | hiding | unlike -webkit-gone, it stays |";
+const ipadUserAgent = "| `apps/frontend/src/b.ts` | a user-agent branch | a WebKit bug |";
+const ipadCssClean = ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n.y::-webkit-scrollbar { display: none; }";
 
 // The markdown the doc checks read.
 const markdown = (ctx) => ["AGENTS.md", "README.md", "docs", "apps", "skills", "extensions"].flatMap((start) => [...ctx.files(start, new Set([".md"]))]);
@@ -900,7 +908,10 @@ const checks = [
 				if (!text.slice(index, end).some((body) => /\bdetached\(/.test(body))) ctx.report(`${file}:${index + 2}: page control ${name} awaits its body inline (run it through detached(), so a dropped request still reaches its settle)`);
 			});
 		},
-		violations: [{ "apps/backend/src/page_controls.rs": '#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    run_page_control(control, body).await\n}\n' }],
+		violations: [
+			{ "apps/backend/src/page_controls.rs": '#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    run_page_control(control, body).await\n}\n' },
+			{ "apps/backend/src/page_controls.rs": '#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    run_page_control(control, body).await\n}\n\nasync fn helper() {\n    detached(run_page_control(control, body)).await\n}\n' },
+		],
 		clean: [{ "apps/backend/src/page_controls.rs": '#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    detached(run_page_control(control, body))\n        .await\n}\n\nasync fn helper() {\n    run_page_control(control, body).await\n}\n' }],
 	},
 	{
@@ -947,46 +958,31 @@ const checks = [
 			for (const file of ctx.files("apps/frontend/src", new Set([".css", ".ts", ".tsx"]))) sources[file] = ctx.read(file);
 			for (const finding of engineRuleFindings(ctx.read("docs/ipad.md"), sources)) ctx.report(finding);
 		},
-		violations: engineSamples().violations,
-		clean: engineSamples().clean,
-	},
-];
-
-// The engine-rules check's samples: docs/ipad.md and the sources it is held to.
-function engineSamples() {
-	const table = (...rows) => `## Engine-specific code in the tree\n\n| Where | What | Why |\n|---|---|---|\n${rows.join("\n")}\n\n## Next\n`;
-	const a = "apps/frontend/src/a.css";
-	const clamp = "| `apps/frontend/src/a.css`, `.x` | `display: -webkit-box` with `-webkit-line-clamp` | why |";
-	const bar = "| `apps/frontend/src/a.css`, `::-webkit-scrollbar` beside `scrollbar-width: none` | hiding | unlike -webkit-gone, it stays |";
-	const userAgent = "| `apps/frontend/src/b.ts` | a user-agent branch | a WebKit bug |";
-	const cssClean = ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n.y::-webkit-scrollbar { display: none; }";
-	const tree = (ipad, sources) => ({ "docs/ipad.md": ipad, ...sources });
-	return {
-		clean: [tree(table(clamp, bar, userAgent), { [a]: cssClean })],
 		violations: [
 			// A rule with no row (the greedy name).
-			tree(table(clamp, bar, userAgent), { [a]: `${cssClean}\n.x { -webkit-box-orient: vertical; }` }),
+			ipadTree(ipadTable(ipadClamp, ipadBar, ipadUserAgent), { [ipadCss]: `${ipadCssClean}\n.x { -webkit-box-orient: vertical; }` }),
 			// A value with no row.
-			tree(table(bar), { [a]: ".y::-webkit-scrollbar { display: none; }\n.x { display: -webkit-box; }" }),
+			ipadTree(ipadTable(ipadBar), { [ipadCss]: ".y::-webkit-scrollbar { display: none; }\n.x { display: -webkit-box; }" }),
 			// A pseudo-element with no row.
-			tree(table(clamp), { [a]: ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n.y::-webkit-scrollbar { }" }),
+			ipadTree(ipadTable(ipadClamp), { [ipadCss]: ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n.y::-webkit-scrollbar { }" }),
 			// An at-rule with no row.
-			tree(table(clamp), { [a]: ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n@supports (-webkit-appearance: none) { }" }),
+			ipadTree(ipadTable(ipadClamp), { [ipadCss]: ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n@supports (-webkit-appearance: none) { }" }),
 			// A camelCase style key with no row.
-			tree(table(bar), { [a]: ".y::-webkit-scrollbar { }", "apps/frontend/src/c.tsx": "const s = { WebkitLineClamp: 2 };" }),
+			ipadTree(ipadTable(ipadBar), { [ipadCss]: ".y::-webkit-scrollbar { }", "apps/frontend/src/c.tsx": "const s = { WebkitLineClamp: 2 };" }),
 			// A row for a rule that is gone.
-			tree(table(clamp), { [a]: ".x { color: red; }" }),
+			ipadTree(ipadTable(ipadClamp), { [ipadCss]: ".x { color: red; }" }),
 			// A row for a file that is gone.
-			tree(table(clamp), {}),
+			ipadTree(ipadTable(ipadClamp), {}),
 			// A rule listed under another file.
-			tree(table(clamp), { [a]: cssClean, "apps/frontend/src/b.css": ".y { -webkit-line-clamp: 2; }" }),
+			ipadTree(ipadTable(ipadClamp), { [ipadCss]: ipadCssClean, "apps/frontend/src/b.css": ".y { -webkit-line-clamp: 2; }" }),
 			// A row with no file.
-			tree(table("| not a path | `-webkit-x` | why |"), { [a]: cssClean }),
+			ipadTree(ipadTable("| not a path | `-webkit-x` | why |"), { [ipadCss]: ipadCssClean }),
 			// A table that is missing.
-			tree("# no table\n", { [a]: cssClean }),
+			ipadTree("# no table\n", { [ipadCss]: ipadCssClean }),
 		],
-	};
-}
+		clean: [ipadTree(ipadTable(ipadClamp, ipadBar, ipadUserAgent), { [ipadCss]: ipadCssClean })],
+	},
+];
 
 
 const selfTestOnly = process.argv.includes("--self-test");
