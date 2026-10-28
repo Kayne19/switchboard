@@ -400,18 +400,18 @@ export class CallRuntime {
   /**
    * Sends a turn the caller typed. Like a clip, it carries the epoch this page
    * holds now, so a transfer that lands before it arrives drops it rather than
-   * handing it to the new leg. Returns false, having sent nothing, while the
-   * line is down or before the server has announced the epoch; the text is
-   * then still the caller's to resend. The server echoes a taken turn as a
-   * `transcript` frame with the same id.
+   * handing it to the new leg. `text` is a turn the page has read
+   * (`readTypedTurn`), sent as given. Returns false, having sent nothing,
+   * only while the line is down or before the server has announced the
+   * epoch; the text is then still the caller's to resend. The server echoes
+   * a taken turn as a `transcript` frame with the same id.
    */
   sendText(text: string): boolean {
-    const body = text.trim();
-    if (!body || !this.link.ready) return false;
+    if (!this.link.ready) return false;
     const socket = this.link.socket();
     if (!socket) return false;
     try {
-      socket.send(typedTurnMessage({ id: this.newClipId(), epoch: this.identity.epoch, text: body }));
+      socket.send(typedTurnMessage({ id: this.newClipId(), epoch: this.identity.epoch, text }));
       return true;
     } catch {
       return false;

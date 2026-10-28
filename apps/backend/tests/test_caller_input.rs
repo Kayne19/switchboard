@@ -763,3 +763,28 @@ async fn verdict_emitted(events: &mut PageFeed, id: &str) -> Value {
         }
     }
 }
+
+/// The page sends the trimmed turn in `typed-turns.json`, and the service
+/// must take it unchanged. Where the page and `str::trim` read a draft alike
+/// (no U+FEFF, which only the page trims), the service must reach the same
+/// turn from the draft itself.
+#[test]
+fn typed_turn_takes_what_the_page_sends_and_trims_as_it_does() {
+    let corpus: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/apps/frontend/tests/fixtures/typed-turns.json"
+    )))
+    .unwrap();
+    let parse =
+        |text: &str| parse_typed_turn(Some("typed-1"), Some(1), Some(text)).map(|turn| turn.2);
+    for case in corpus["cases"].as_array().unwrap() {
+        let draft = case["draft"].as_str().unwrap();
+        let body = case["body"].as_str();
+        if let Some(body) = body {
+            assert_eq!(parse(body).as_deref(), Some(body), "body {body:?}");
+        }
+        if !draft.contains('\u{feff}') {
+            assert_eq!(parse(draft).as_deref(), body, "draft {draft:?}");
+        }
+    }
+}
