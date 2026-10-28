@@ -623,7 +623,10 @@ def display(action=None, **fields):
                 f"and a display action is at most {_MAX_ACTION_BYTES:,} bytes as JSON (an image's "
                 f"{_MAX_IMAGE_ACTION_BYTES // _MIB} MiB). Send less."
             )
-        if result.status == "refused" and result.reason not in ("not_on_call", "subagent", "caller_away"):
+        # An invalid_leg refusal is about the leg, not the payload: it falls to
+        # _refused, whose sentence already says what to do.
+        leg_refused = data.get("code") == "invalid_leg"
+        if result.status == "refused" and not leg_refused and result.reason not in ("not_on_call", "subagent", "caller_away"):
             return (
                 f"The switchboard rejected it: {result.reason or 'invalid payload'}. "
                 "Adjust the payload and try again."
