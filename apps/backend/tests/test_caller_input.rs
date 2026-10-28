@@ -767,3 +767,47 @@ async fn verdict_emitted(events: &mut PageFeed, id: &str) -> Value {
         }
     }
 }
+
+/// d6-coverage: a clip the speech-to-text sidecar fails on is answered by
+/// its id, in words, and goes no further: nothing is logged or queued.
+#[tokio::test]
+async fn a_clip_the_sidecar_fails_on_is_answered_by_its_id() {
+    let state = state_with_stt(Some("cat >/dev/null; echo broken >&2; exit 3".into()));
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    upload_clip(&state, &mut connection, "sidecar-fails", generation).await;
+    let clip_worker = tokio::spawn(process_clips(state.clone()));
+
+    let frames = frames_until(&mut connection, "error").await;
+    assert_eq!(types_of(&frames), ["error"]);
+    assert_eq!(frames[0]["id"], "sidecar-fails");
+    assert!(
+        frames[0]["message"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("Transcription failed:")),
+        "{}",
+        frames[0]
+    );
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
+    assert_never_queued(&state).await;
+    clip_worker.abort();
+}
+
+/// d6-coverage: a clip that transcribes to nothing (a press with no words)
+/// is answered by its id with "say it again", and goes no further.
+#[tokio::test]
+async fn a_clip_with_no_words_asks_the_caller_to_say_it_again() {
+    let state = state_with_stt(Some("cat >/dev/null; printf '  '".into()));
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    upload_clip(&state, &mut connection, "no-words", generation).await;
+    let clip_worker = tokio::spawn(process_clips(state.clone()));
+
+    let frames = frames_until(&mut connection, "error").await;
+    assert_eq!(types_of(&frames), ["error"]);
+    assert_eq!(frames[0]["id"], "no-words");
+    assert_eq!(frames[0]["message"], "I didn't catch that — say it again.");
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
+    assert_never_queued(&state).await;
+    clip_worker.abort();
+}
