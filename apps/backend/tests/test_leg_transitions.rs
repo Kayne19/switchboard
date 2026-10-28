@@ -1789,7 +1789,7 @@ async fn bring_up_row(kind: &str, exit: &str) -> String {
     match kind {
         "promotion" => {
             board
-                .start_background_part("beta", "beta work")
+                .start_background_part_on("beta", "beta work")
                 .await
                 .expect("beta starts in the background");
             within("beta to settle idle", async {

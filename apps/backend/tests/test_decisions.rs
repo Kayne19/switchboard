@@ -564,7 +564,7 @@ async fn promoting_a_background_resident_ends_its_detached_prompt_before_foregro
     );
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "background work")
+        .start_background_part_on("beta", "background work")
         .await
         .expect("background resident");
     tokio::time::timeout(Duration::from_secs(1), entered.notified())
@@ -749,7 +749,7 @@ async fn a_background_prompt_the_host_refuses_keeps_the_resident() {
     armed.store(true, std::sync::atomic::Ordering::Release);
 
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("background resident");
     let resident = board.background_agents.get("alpha").unwrap().clone();
@@ -775,7 +775,7 @@ async fn a_background_prompt_that_fails_on_the_link_closes_the_resident() {
     armed.store(true, std::sync::atomic::Ordering::Release);
 
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("background resident");
     let resident = board.background_agents.get("alpha").unwrap().clone();
@@ -952,7 +952,7 @@ async fn resident_refusing_once(
     let armed = refuse_once(&mut fake, command, code);
     let log = fake.serve(board.hosts().connect_fake(HOST));
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("background resident");
     let resident = board.background_agents.get("alpha").unwrap().clone();
@@ -979,7 +979,7 @@ async fn failed_background_promotion_adoption_rolls_back_the_candidate() {
     );
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
     let resident = board.background_agents.get("beta").unwrap().clone();
@@ -1046,7 +1046,7 @@ async fn a_promoted_agent_holds_the_session_guard_during_its_foreground_turn() {
     );
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
 
@@ -1084,7 +1084,7 @@ async fn a_failed_promotion_turn_gives_the_session_guard_back() {
     fake.serve(board.hosts().connect_fake(HOST));
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
 
@@ -1124,7 +1124,7 @@ async fn a_promotion_whose_turn_fails_without_detail_reports_the_fallback() {
     fake.serve(board.hosts().connect_fake(HOST));
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
 
@@ -1187,7 +1187,7 @@ async fn a_promotion_and_a_transfer_commit_their_steps_in_one_order() {
 
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
     // Let the resident's own turn settle before recording.
@@ -1275,7 +1275,7 @@ async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
     let creates = log.named("create_session").len();
 
     board
-        .start_background_part("beta", "beta after host close")
+        .start_background_part_on("beta", "beta after host close")
         .await
         .expect("a dead resident is replaced by a fresh session");
     let mut saw_fresh_prompt = false;
@@ -1690,7 +1690,7 @@ async fn a_promoted_agent_is_told_it_is_in_the_foreground() {
     );
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
     while let Some((_, message)) = within("prompt_rx", prompt_rx.recv()).await {
