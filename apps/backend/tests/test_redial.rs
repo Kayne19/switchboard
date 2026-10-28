@@ -76,23 +76,32 @@ async fn model_swap_refuses_unknown_catalog_model_without_replacing_live_spec() 
     assert_eq!(board.coordinator.status().model, "anthropic/current:high");
 }
 
-/// A board on alpha whose host answers `command` with the error `code`,
+/// A board on alpha whose host answers each command as `on_command` says,
 /// and the host's log.
-async fn on_alpha_refusing(
-    command: &'static str,
-    code: &'static str,
+async fn on_alpha_answering(
+    on_command: crate::hosts::Override,
 ) -> (Switchboard, crate::hosts::FakeLog) {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
     let mut host = FakeHostAgent::new(Box::new(|_, _| says("On it.")));
-    host.on_command = Some(Box::new(move |name, _| {
-        (name == command).then(|| Some(Err((code.to_owned(), format!("{code} for the test")))))
-    }));
+    host.on_command = Some(on_command);
     let log = host.serve(board.hosts().connect_fake(HOST));
     let reply = board
         .transfer_to(&transcript("look at alpha"), "alpha")
         .await;
     assert_eq!(reply.route, "alpha", "{reply:?}");
     (board, log)
+}
+
+/// A board on alpha whose host answers `command` with the error `code`,
+/// and the host's log.
+async fn on_alpha_refusing(
+    command: &'static str,
+    code: &'static str,
+) -> (Switchboard, crate::hosts::FakeLog) {
+    on_alpha_answering(Box::new(move |name, _| {
+        (name == command).then(|| Some(Err((code.to_owned(), format!("{code} for the test")))))
+    }))
+    .await
 }
 
 /// Runs a redial the way a page control does: its rescue retires the leg
@@ -226,6 +235,46 @@ async fn a_model_change_that_fails_still_ends_the_session_on_its_host() {
         );
         board.shutdown().await;
     }
+}
+
+/// A refused model change keeps the leg only if the kept session can rejoin
+/// the call; when the host refuses that `join_call` too, the leg is lost.
+#[tokio::test]
+async fn a_refused_model_change_whose_session_cannot_rejoin_the_call_loses_the_leg() {
+    let mut refused_model = false;
+    let (mut board, log) = on_alpha_answering(Box::new(move |name, _| match name {
+        "set_model" => {
+            refused_model = true;
+            Some(Some(Err(("refused".into(), "refused for the test".into()))))
+        }
+        "join_call" if refused_model => Some(Some(Err((
+            "daemon_error".into(),
+            "join refused for the test".into(),
+        )))),
+        _ => None,
+    }))
+    .await;
+    let live = board.agent.clone().expect("alpha is on the line");
+
+    let decided = board.planner.model_change("anthropic/next").await;
+    let reply = redialed_after_its_rescue(&mut board, decided).await;
+
+    assert_eq!(
+        reply.text,
+        "I couldn't bring alpha back up on next on anthropic, thinking medium.\n\njoin refused for the test"
+    );
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert!(
+        reply
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("join refused for the test")),
+        "{reply:?}"
+    );
+    assert!(board.agent.is_none(), "the PBX still holds the lost leg");
+    assert_eq!(until_named(&log, "kill").await, [json!({"session": "s1"})]);
+    assert!(!live.alive());
+    board.shutdown().await;
 }
 
 #[test]
