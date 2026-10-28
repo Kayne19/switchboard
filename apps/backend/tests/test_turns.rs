@@ -1719,3 +1719,90 @@ fn caller_turn_settles_into_a_self_woken_one(state: &AppState, turn_id: &str) {
         json!({"kind":"turn_start","cause":"autonomous","turn_id":turn_id}),
     );
 }
+
+/// d6-coverage: a line headed straight for the turn queue while the steer
+/// of the line before it is still unanswered waits behind that steer
+/// (`LineOrder::queue`). Here the first line is steered into a self-woken
+/// run on a link that never answers, the run ends, and the second line goes
+/// to the queue: it must not reach the queue ahead of the first, which is
+/// queued only when its steer fails.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_queued_line_waits_behind_an_unanswered_steer_ahead_of_it() {
+    let root = scratch_root("queue-behind-steer");
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }));
+    fake.on_command = Some(Box::new(|name, _| (name == "steer").then_some(None)));
+    let (state, host) = state_with_agents_and_jev(&root, fake);
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-ahead"}),
+    );
+    until_autonomous(&state, instance_id).await;
+    let generation = state.0.coordinator.generation();
+
+    timeout(
+        Duration::from_secs(1),
+        dispatch_routed_transcript(&state, "first-line", generation, "and the docs".into()),
+    )
+    .await
+    .expect("the first line does not wait for its steer's answer");
+    timeout(Duration::from_secs(5), async {
+        while host.named("steer").is_empty() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the first steer reached the host");
+    // The run ends; nothing is left to steer, so the next line is queued.
+    alpha_host_event(&state, json!({"kind":"turn_end","turn_id":"auto-ahead"}));
+    timeout(Duration::from_secs(1), async {
+        while state
+            .0
+            .host_turns
+            .holds_self_woken_for_test(instance_id)
+            .await
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the self-woken run ended");
+
+    timeout(
+        Duration::from_secs(1),
+        dispatch_routed_transcript(&state, "second-line", generation, "and the tests".into()),
+    )
+    .await
+    .expect("the second line does not wait on the caller's line");
+    assert_eq!(host.named("steer").len(), 1, "the second line was steered");
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        state.0.turns.queued_for_test(),
+        0,
+        "the second line overtook the unanswered steer ahead of it"
+    );
+
+    state.0.hosts.disconnect_fake("scriptorium");
+    timeout(Duration::from_secs(5), async {
+        while state.0.turns.queued_for_test() < 2 {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("both lines were queued once the steer failed");
+    let mut receiver = state.0.turns.receiver.lock().await;
+    let receiver = receiver.as_mut().expect("no turn worker took the queue");
+    let order: Vec<String> = [receiver.try_recv(), receiver.try_recv()]
+        .into_iter()
+        .map(|queued| queued.expect("a queued line").0)
+        .collect();
+    assert_eq!(
+        order,
+        vec!["first-line".to_owned(), "second-line".to_owned()]
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
