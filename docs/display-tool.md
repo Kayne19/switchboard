@@ -127,7 +127,7 @@ Notes have their own display lifecycle. A chat or spoken response does not updat
 
 ### Code v1 rules
 - `text`: the source, <= 50,000 UTF-16 code units. Each line is drawn with its number.
-- `language` (<= 64): chooses the line-comment marker, case-insensitive: `//` for the C family (`rust`, `typescript`, `go`, `c`, `java`, ...), `#` for `python`, `shell`, `ruby`, `yaml`, `toml` and the like, `--` for `sql`, `lua` and `haskell`. A marker inside a string is not a comment. Source with no `language` is read as C-family; a language the page does not name marks no comment. Keywords, strings, numbers and type names are marked the same way in every language.
+- `language` (<= 64): chooses the line-comment marker, case-insensitive: `//` for the C family (`rust`, `typescript`, `go`, `c`, `java`, ...), `#` for `python`, `shell`, `ruby`, `yaml`, `toml` and the like, `--` for `sql`, `lua` and `haskell`. A marker inside a string is not a comment. In `bash`, `sh`, `shell`, `zsh`, `fish` and `perl`, `#` starts a comment only where a word starts (at the line's start, or after a space, tab, `;`, `|`, `&`, `(`, `<` or `>`), so `$#` and `${#a[@]}` stay code. Source with no `language` is read as C-family; a language the page does not name is drawn as plain text, with nothing marked. In a named language, keywords, strings, numbers and type names are marked the same way.
 - `highlight`: line numbers counted from 1, the first line being `1` (a table's `highlight` counts rows from 0). The page draws those lines with the accent; a number naming no line marks nothing.
 - There is no diff view: a unified diff is drawn as plain source, its `+` and `-` lines unmarked.
 
