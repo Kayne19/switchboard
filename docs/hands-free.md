@@ -21,8 +21,8 @@ The page's one control for it is MODE, in the CHANNEL / MODE stack the scene
 shell draws in every page's bottom-left corner (#180,
 `apps/frontend/src/primitives/ChannelStack.tsx`). It reads `handsFree` from
 the registered voice runtime and switches it by calling `toggleHandsFree()`;
-while listening it names the wake word (`MODE / HANDS-FREE · DAMOCLES`; the page wakes on `Damo` too).
-The page holds no listening state of its own, and the refusals below stay the
+while listening it names the wake word (`MODE / HANDS-FREE · DAMOCLES`; the
+page wakes on `Damo` too). The page holds no listening state of its own, and the refusals below stay the
 runtime's. A switch while the line is down does nothing and says nothing.
 The controller is enabled from the first moment of MODE, so a switch while
 the detectors load or while the controller starts turns hands-free off: a
