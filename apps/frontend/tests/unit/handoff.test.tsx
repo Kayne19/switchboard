@@ -12,36 +12,7 @@ import type { ControllerState, MessageData } from '../../src/controller/types';
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { RuntimeIntegration } from '../../src/integration/runtime';
 import { helloAck, statusMessage, transcriptEntry } from '../fixtures/serverMessages';
-
-class FakeSocket {
-  static latest: FakeSocket | null = null;
-  readyState = 0;
-  binaryType = 'blob';
-  sent: unknown[] = [];
-  onopen: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-
-  constructor(readonly url: string) {
-    FakeSocket.latest = this;
-  }
-
-  send(data: unknown) {
-    this.sent.push(data);
-  }
-
-  close() {
-    this.readyState = 3;
-  }
-
-  screenStates(): Array<Record<string, unknown>> {
-    return this.sent
-      .filter((frame): frame is string => typeof frame === 'string')
-      .map((frame) => JSON.parse(frame) as Record<string, unknown>)
-      .filter((frame) => frame.type === 'screen_state');
-  }
-}
+import { FakeSocket } from './fakeSocket';
 
 const operatorStatus = statusMessage({
   route: 'operator',
@@ -85,18 +56,18 @@ function SceneRecorder() {
 
 async function receive(message: object) {
   await act(async () => {
-    socket.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
+    socket.receive(message);
   });
 }
 
 // The page holds each screen report until the last one is acknowledged;
 // acknowledge until it has nothing newer to send.
 async function settledReport() {
-  for (let sent = -1; sent !== socket.screenStates().length; ) {
-    sent = socket.screenStates().length;
+  for (let sent = -1; sent !== socket.sentOfType('screen_state').length; ) {
+    sent = socket.sentOfType('screen_state').length;
     await receive({ type: 'screen_state_ack' });
   }
-  return socket.screenStates().at(-1);
+  return socket.sentOfType('screen_state').at(-1);
 }
 
 function conversation(): MessageData {
@@ -107,8 +78,7 @@ function conversation(): MessageData {
 // the operator answered, so the page is on the conversation.
 async function callTheOperator() {
   await act(async () => {
-    socket.readyState = 1;
-    socket.onopen?.({} as Event);
+    socket.open();
   });
   await receive(helloAck());
   await receive({ type: 'epoch', generation: 1 });
@@ -137,7 +107,7 @@ async function adoptTheProjectLeg() {
 }
 
 beforeEach(async () => {
-  vi.stubGlobal('WebSocket', FakeSocket);
+  FakeSocket.install();
   // jsdom has no media playback; a new epoch resets the player.
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
@@ -153,7 +123,7 @@ beforeEach(async () => {
       </ControllerProvider>,
     );
   });
-  socket = FakeSocket.latest!;
+  socket = FakeSocket.latest();
 });
 
 afterEach(() => {

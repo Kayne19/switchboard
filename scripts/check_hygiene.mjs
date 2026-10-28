@@ -865,6 +865,37 @@ const checks = [
 		violations: [{ "apps/backend/src/page_controls.rs": '#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    run_page_control(control, body).await\n}\n' }],
 		clean: [{ "apps/backend/src/page_controls.rs": '#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    detached(run_page_control(control, body))\n        .await\n}\n\nasync fn helper() {\n    run_page_control(control, body).await\n}\n' }],
 	},
+	{
+		// A frontend unit test fakes the page's WebSocket with the one FakeSocket
+		// (tests/unit/fakeSocket.ts), installs it with FakeSocket.install(), and
+		// drives it with its open, drop, receive and receiveRaw, not by calling a
+		// socket's handlers (#411). Eight copies had drifted: some recorded
+		// `send`, some did not, some closed at once and some never reported the
+		// close. A MessagePort's `onmessage` is not a socket's, and a send-only
+		// literal passed as a socket (pushToTalk) is a sink, not a fake.
+		name: "one socket fake",
+		run(ctx) {
+			const socketFake = /\bclass\s+\w*Socket\b|\bclass\b[^{]*\bextends\s+WebSocket\b|\b\w*Socket\s*=\s*class\b|stubGlobal\(\s*['"]WebSocket['"]\s*,(?!\s*FakeSocket\b)/;
+			const socketHandler = /\b(?:\w*[sS]ocket\w*|FakeSocket\.latest\(\))(?:\(\)|\[[^\]]*\])?\??\.on(?:message|open|close|error)\?\.\(/;
+			for (const file of ctx.files("apps/frontend/tests/unit", tsFiles)) {
+				if (file === "apps/frontend/tests/unit/fakeSocket.ts") continue;
+				scan(ctx, file, socketFake, "a socket fake of its own: use FakeSocket from tests/unit/fakeSocket.ts (FakeSocket.install())");
+				scan(ctx, file, socketHandler, "a socket's handler called by hand: use FakeSocket's open, drop, receive or receiveRaw");
+			}
+		},
+		violations: [
+			{ "apps/frontend/tests/unit/a.test.ts": "class FakeSocket {}\n" },
+			{ "apps/frontend/tests/unit/a.test.ts": "vi.stubGlobal('WebSocket', Mine);\n" },
+			{ "apps/frontend/tests/unit/a.test.ts": "socket.onmessage?.({ data: '{}' });\n" },
+			{ "apps/frontend/tests/unit/a.test.ts": "FakeSocket.latest().onopen?.(new Event('open'));\n" },
+		],
+		clean: [
+			{
+				"apps/frontend/tests/unit/fakeSocket.ts": "export class FakeSocket {}\nthis.onmessage?.(event);\n",
+				"apps/frontend/tests/unit/a.test.ts": "FakeSocket.install();\nvi.stubGlobal('WebSocket', FakeSocket);\nport.onmessage?.(event);\nFakeSocket.latest().receive({ type: 'x' });\n",
+			},
+		],
+	},
 ];
 
 

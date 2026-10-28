@@ -68,7 +68,7 @@ commit.
   `.only` test, no user-agent checks, bounded test awaits, no page under
   the notch, one runtime ID prefix, stage-relative sizes, one writer per lifecycle
   machine, no new phase fields on a lifecycle owner, one composition a
-  render, one log capture, live paths, routes and settings in the docs); a new rule of that
+  render, one log capture, one socket fake, live paths, routes and settings in the docs); a new rule of that
   kind gets a check there: a named entry in its `checks` table with a sample
   tree it must refuse and one it must pass. The script runs those self-tests
   before every scan, and `node scripts/check_hygiene.mjs --self-test` runs
@@ -210,6 +210,13 @@ commit.
   `tests/fixtures/host-link.json` in the same commit. The real host agent, the
   service's `module_reply` and every fake of either are tested against it
   (`docs/host-link.md`).
+- A frontend unit test fakes the page's WebSocket with the one `FakeSocket`
+  (`apps/frontend/tests/unit/fakeSocket.ts`), installed with
+  `FakeSocket.install()` and driven with its `open`, `drop`, `error`,
+  `receive` and `receiveRaw`. Eight local copies had drifted (some recorded
+  `send`, some did not, some closed at once and some never reported the
+  close). `scripts/check_hygiene.mjs` refuses a socket class of its own and a
+  socket's handler called by hand.
 - Tests never touch the network, ElevenLabs, a whisper model, or the real `pi`
   or `ssh`. Fake executables go through `write_executable_script`; PBX tests
   drive transfers through `Prewarm::settled`, which exercises the production

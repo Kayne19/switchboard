@@ -733,7 +733,7 @@ const rows: Row[] = [
 
 describe("hands-free in the call runtime, phase by event", () => {
   beforeEach(() => {
-    FakeSocket.instances = [];
+    FakeSocket.install();
     vi.useFakeTimers();
     stubHandsFreeBrowser();
   });

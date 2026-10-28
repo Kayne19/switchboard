@@ -95,7 +95,7 @@ async function connectAt(
 // "A timer a test leaves armed").
 beforeEach(() => {
   vi.useFakeTimers();
-  FakeSocket.instances = [];
+  FakeSocket.install();
 });
 
 afterEach(() => {
@@ -114,7 +114,7 @@ describe("CallRuntime speaking state", () => {
       mime: "audio/mpeg",
       format: "mp3",
     });
-    socket.onmessage?.({ data: new TextEncoder().encode("speech").buffer } as MessageEvent);
+    socket.receiveRaw(new TextEncoder().encode("speech").buffer);
     socket.receive({
       type: "audio_done",
       generation: 0,
@@ -173,9 +173,7 @@ describe("CallRuntime blocked audio recovery", () => {
       mime: "audio/mpeg",
       format: "mp3",
     });
-    socket.onmessage?.({
-      data: new TextEncoder().encode("speech").buffer,
-    } as MessageEvent);
+    socket.receiveRaw(new TextEncoder().encode("speech").buffer);
     socket.receive({ type: "audio_done", generation: 0, sequence: 1, done: true });
     await settle();
     expect(playCalls.length, "the first attempt is refused").toBe(1);
@@ -276,7 +274,7 @@ describe("CallRuntime audio levels", () => {
     const { runtime } = makeRuntime();
     const socket = await connectAt(runtime, 0);
     socket.receive({ type: "audio_start", generation: 0, sequence: 1, mime: "audio/mpeg", format: "mp3" });
-    socket.onmessage?.({ data: new TextEncoder().encode("speech").buffer } as MessageEvent);
+    socket.receiveRaw(new TextEncoder().encode("speech").buffer);
     socket.receive({ type: "audio_done", generation: 0, sequence: 1, done: true });
     await settle();
     expect(runtime.currentVoiceLevel).toBeGreaterThan(0);
@@ -302,7 +300,7 @@ describe("CallRuntime connection", () => {
   it("forwards every decoded message and drops malformed frames", async () => {
     const { runtime, messages } = makeRuntime();
     const socket = await connectAt(runtime);
-    socket.onmessage?.({ data: "not json" } as MessageEvent);
+    socket.receiveRaw("not json");
     socket.receive({ type: "display", seq: 4, action: { op: "clear" } });
     expect(messages.map((message) => message.type)).toEqual([
       "hello_ack",
@@ -339,7 +337,7 @@ describe("CallRuntime connection", () => {
     expect(FakeSocket.instances.length, "an answered ping keeps the socket").toBe(1);
 
     vi.advanceTimersByTime(12_000);
-    expect(socket.sentJson().filter((frame) => frame.type === "ping").length).toBe(2);
+    expect(socket.sentOfType("ping").length).toBe(2);
     vi.advanceTimersByTime(8_000);
     await settle();
     expect(latestState().status).toBe("Keepalive missed. Reconnecting...");
@@ -496,7 +494,7 @@ describe("CallRuntime voice clips", () => {
     next.receive({ type: "candidate_cleared", route: "alpha", generation: 4, reason: "adopted" });
     next.receive({ type: "epoch", generation: 4 });
     await settle();
-    const clips = next.sentJson().filter((frame) => frame.type === "clip");
+    const clips = next.sentOfType("clip");
     expect(clips.map((frame) => frame.generation)).toEqual([4]);
     runtime.dispose();
   });
@@ -519,7 +517,7 @@ describe("CallRuntime voice clips", () => {
     next.receive(helloAck());
     next.receive({ type: "epoch", generation: 4 });
     await settle();
-    expect(next.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
+    expect(next.sentOfType("clip")).toEqual([]);
     expect(latestState()).toMatchObject({
       status: "The line changed before 1 clip(s) went out. Please repeat that.",
       statusError: true,
@@ -542,7 +540,7 @@ describe("CallRuntime voice clips", () => {
     next.receive({ type: "candidate_cleared", route: "beta", generation: 5, reason: "adopted" });
     next.receive({ type: "epoch", generation: 5 });
     await settle();
-    expect(next.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
+    expect(next.sentOfType("clip")).toEqual([]);
     runtime.dispose();
   });
 
@@ -559,7 +557,7 @@ describe("CallRuntime voice clips", () => {
     await settle();
     runtime.send();
     await settle();
-    const clipFrames = () => socket.sentJson().filter((frame) => frame.type === "clip");
+    const clipFrames = () => socket.sentOfType("clip");
     expect(clipFrames().map((frame) => frame.generation)).toEqual([3]);
     const id = clipFrames()[0].id;
     socket.receive({ type: "accepted", id });
@@ -621,7 +619,7 @@ describe("CallRuntime voice clips", () => {
     await settle();
     runtime.send();
     await settle();
-    const first = socket.sentJson().filter((frame) => frame.type === "clip");
+    const first = socket.sentOfType("clip");
     expect(first.length).toBe(1);
     socket.receive({ type: "candidate_cleared", route: "alpha", generation: 4, reason: "adopted" });
     socket.receive({ type: "epoch", generation: 4 });
@@ -635,7 +633,7 @@ describe("CallRuntime voice clips", () => {
     next.receive({ type: "candidate_cleared", route: "alpha", generation: 4, reason: "adopted" });
     next.receive({ type: "epoch", generation: 4 });
     await settle();
-    const resent = next.sentJson().filter((frame) => frame.type === "clip");
+    const resent = next.sentOfType("clip");
     expect(resent.map((frame) => [frame.id, frame.generation])).toEqual([[first[0].id, 3]]);
 
     const notice = "The line changed before that got through. Please repeat it.";
@@ -650,7 +648,7 @@ describe("CallRuntime voice clips", () => {
     last.receive(helloAck());
     last.receive({ type: "epoch", generation: 4 });
     await settle();
-    expect(last.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
+    expect(last.sentOfType("clip")).toEqual([]);
     runtime.dispose();
   });
 
@@ -668,7 +666,7 @@ describe("CallRuntime voice clips", () => {
     next.receive({ type: "hello_ack", version: 1 });
     next.receive({ type: "epoch", generation: 4 });
     await settle();
-    expect(next.sentJson().filter((frame) => frame.type === "clip")).toEqual([]);
+    expect(next.sentOfType("clip")).toEqual([]);
     expect(latestState()).toMatchObject({
       status: "The line changed before 1 clip(s) went out. Please repeat that.",
       statusError: true,
@@ -683,7 +681,7 @@ describe("CallRuntime voice clips", () => {
     await settle();
     runtime.send();
     socket.receive({ type: "epoch", generation: 4 });
-    const clips = socket.sentJson().filter((frame) => frame.type === "clip");
+    const clips = socket.sentOfType("clip");
     expect(clips.map((frame) => frame.generation)).toEqual([3]);
     runtime.dispose();
   });
@@ -1068,7 +1066,7 @@ describe("CallRuntime hands-free", () => {
     const socket = await connectAt(runtime, 7);
     expect(handsFree.given().onClip(new Blob(["old"]), "audio/webm", 6)).toBeNull();
     const id = handsFree.given().onClip(new Blob(["now"]), "audio/webm", 7);
-    const clips = socket.sentJson().filter((frame) => frame.type === "clip");
+    const clips = socket.sentOfType("clip");
     expect(clips.map((frame) => frame.generation)).toEqual([7]);
     expect(clips.map((frame) => frame.id)).toEqual([id]);
     runtime.dispose();
