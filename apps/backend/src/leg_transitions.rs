@@ -791,9 +791,9 @@ impl Startup {
     ///
     /// 1. adopt the candidate. It may be adopted already: a candidate is
     ///    promoted on its first sign of life, which usually arrives during
-    ///    its first turn, and the coordinator answers that adoption as this
-    ///    one. Either way it names the leg from here on; the switchboard
-    ///    only swaps the session handles;
+    ///    its first turn, and the coordinator answers this call as that
+    ///    same adoption. Either way it names the leg from here on; the
+    ///    switchboard only swaps the session handles;
     /// 2. end the intro;
     /// 3. on a [`LegChange::NewAgent`] or a [`LegChange::Promotion`], shelve
     ///    the previous foreground and settle the incoming agent, published

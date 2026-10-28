@@ -906,7 +906,7 @@ async fn failed_background_promotion_adoption_rolls_back_the_candidate() {
         .is_some_and(|session| session.same_session(&resident)));
     // A candidate left staged would hold the call in `Starting`, where the
     // coordinator refuses every later prompt.
-    assert!(!board.coordinator.is_candidate());
+    assert!(board.coordinator.candidate_identity().is_none());
     assert_eq!(board.coordinator.route(), "alpha");
     assert_eq!(
         board.agent.as_ref().map(|agent| agent.label().to_owned()),

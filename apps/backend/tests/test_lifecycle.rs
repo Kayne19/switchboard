@@ -266,7 +266,7 @@ fn no_prompt_begins_while_a_page_started_leg_is_starting() {
         coordinator.begin_prompt(&coordinator.current_identity()),
         Err(LifecycleError::CandidateActive)
     );
-    assert!(coordinator.is_candidate());
+    assert!(coordinator.candidate_identity().is_some());
     let adopted = coordinator.adopt_candidate("cand").unwrap();
     assert_eq!(coordinator.current_identity(), adopted);
 }
@@ -351,7 +351,7 @@ fn candidate_failure_rolls_back_private_state_and_side_effects_are_rejected() {
     assert!(coordinator.rollback_startup(startup.generation, "intro failed"));
     assert_eq!(coordinator.status().route, "operator");
     assert!(coordinator.candidate_identity().is_none());
-    assert!(!coordinator.is_candidate());
+    assert!(coordinator.candidate_identity().is_none());
 }
 
 #[test]
@@ -782,28 +782,15 @@ fn activity_is_classified_by_the_leg_it_came_from() {
 
 /// A candidate is adopted twice over: by its own first sign of life, from
 /// the session pump's task, and by `Startup::commit`, from the PBX's. The
-/// one that lands second finds the leg it names already on the line, and
-/// is that same adoption: it moves nothing, sends no notice, and names the
-/// leg. Refusing it made the commit abandon a healthy leg (#449).
+/// one that lands second is the same adoption (the call-line table's
+/// `adopted | adopt_candidate` row), and the commit goes on to end the
+/// intro as it would after one (#449).
 #[test]
 fn an_adoption_that_lands_second_is_the_same_adoption() {
-    let (call, notices) = coordinator_with_notices();
+    let call = coordinator();
     call.begin_candidate(alpha_candidate()).unwrap();
     let adopted = call.adopt_candidate("cand").unwrap();
-    let intro = open_turn(&call).expect("adoption opens the intro turn");
-    notices.lock().unwrap().clear();
-
     assert_eq!(call.adopt_candidate("cand"), Ok(adopted));
-    assert_eq!(phase(&call), "turn running");
-    assert_eq!(open_turn(&call), Some(intro), "the intro turn is kept");
-    assert!(call.startup_in_flight(), "the intro still ends the startup");
-    assert!(notices.lock().unwrap().is_empty(), "the page heard it once");
-
-    // Another leg's token is still no adoption.
-    assert_eq!(
-        call.adopt_candidate("stray"),
-        Err(LifecycleError::NoCandidate)
-    );
     assert!(call.finish_intro());
     assert_eq!(phase(&call), "active");
 }
@@ -1454,8 +1441,14 @@ const TABLE_EVENTS: [(&str, TableEvent); 22] = [
             |line| line.to_string(),
         )
     }),
+    // The startup in flight: the staged candidate, or the adopted leg,
+    // whose own sign of life adopted it before the PBX's commit did.
     ("adopt_candidate", |phase| {
-        shown(phase.call.adopt_candidate(&candidate_token(phase)), |leg| {
+        let call = &phase.call;
+        let startup = call
+            .candidate_identity()
+            .unwrap_or_else(|| call.current_identity());
+        shown(call.adopt_candidate(&startup.token), |leg| {
             format!("{}@{}", leg.token, leg.generation)
         })
     }),
@@ -1796,7 +1789,7 @@ adopted | return_to_operator => () | turn running operator operator@1 turn start
 adopted | begin_candidate => gamma-leg@2 | starting alpha cand@1 turn startup adopted:alpha thinking:medium [gamma@1 staged]
 adopted | thinking from the line => true | turn running alpha cand@1 turn startup adopted:alpha thinking:high* []
 adopted | thinking from the candidate => StaleLeg | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
-adopted | adopt_candidate => NoCandidate | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
+adopted | adopt_candidate => cand@1 | turn running alpha cand@1 turn startup adopted:alpha thinking:medium []
 adopted | finish_intro => true | active alpha cand@1 - adopted:alpha thinking:medium []
 adopted | rollback_startup => true | operator operator operator@1 - thinking: [alpha@1 RolledBack]
 adopted | begin_shutdown => true | shutdown alpha cand-shutdown-2@2 - thinking:medium []
@@ -1818,7 +1811,7 @@ adopted at rest | return_to_operator => () | operator operator operator@1 - star
 adopted at rest | begin_candidate => gamma-leg@2 | starting alpha cand@1 - startup adopted:alpha thinking:medium [gamma@1 staged]
 adopted at rest | thinking from the line => true | active alpha cand@1 - startup adopted:alpha thinking:high* []
 adopted at rest | thinking from the candidate => StaleLeg | active alpha cand@1 - startup adopted:alpha thinking:medium []
-adopted at rest | adopt_candidate => NoCandidate | active alpha cand@1 - startup adopted:alpha thinking:medium []
+adopted at rest | adopt_candidate => cand@1 | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | finish_intro => false | active alpha cand@1 - startup adopted:alpha thinking:medium []
 adopted at rest | rollback_startup => true | operator operator operator@1 - thinking: [alpha@1 RolledBack]
 adopted at rest | begin_shutdown => true | shutdown alpha cand-shutdown-2@2 - thinking:medium []

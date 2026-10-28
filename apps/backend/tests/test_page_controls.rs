@@ -186,7 +186,7 @@ async fn speech_queued_while_a_page_control_starts_a_leg_is_dropped_with_notice_
         queue_a_clip_while_a_page_control_starts_a_leg(&state, "while-connecting").await;
 
     assert!(
-        state.0.coordinator.is_candidate(),
+        state.0.coordinator.candidate_identity().is_some(),
         "a turn must not begin while a leg is starting"
     );
     assert!(!state.0.turns.in_flight_for_test());
@@ -256,7 +256,7 @@ done
     let (mut connection, _snapshot, _watermark) = state.register_connection().await;
     let (control, turn_worker) =
         queue_a_clip_while_a_page_control_starts_a_leg(&state, "while-connecting").await;
-    assert!(state.0.coordinator.is_candidate());
+    assert!(state.0.coordinator.candidate_identity().is_some());
 
     let startup = state.0.coordinator.candidate_identity().unwrap();
     assert!(state

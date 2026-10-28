@@ -523,14 +523,17 @@ through them.
 |---|---|---|---|
 | `Open` | the leg on the line; the turn running on it, if any | the call starts here; `settle`, `finish_intro`, a rollback, `return_to_operator` from `Quiescing` | `begin_candidate`, a rescue, `begin_shutdown` |
 | `Starting` | the leg, which still answers; the staged candidate, private until adopted; the leg's turn (a transfer runs inside the caller's) | `begin_candidate` | `adopt_candidate`; a rollback (to `Open`, the turn kept); a rescue or shutdown, which abandon the candidate and retire its generation |
-| `Adopted` | the adopted leg and its intro (or later) turn; the leg it `replaced` | `adopt_candidate` (a second one naming the adopted leg is answered as the same adoption and moves nothing) | `finish_intro` (to `Open`); a rollback (`replaced` comes back); a rescue; a shutdown; another `begin_candidate` |
+| `Adopted` | the adopted leg and its intro (or later) turn; the leg it `replaced` | `adopt_candidate` | `finish_intro` (to `Open`); a rollback (`replaced` comes back); a rescue; a shutdown; another `begin_candidate` |
 | `Quiescing` | the leg under the rescue's new identity; no turn | a rescue | a settle naming that rescue's generation (`settle`, `settle_at`), `return_to_operator`, `begin_candidate`, a shutdown |
 | `Shutdown` | the leg; no turn, no startup | `begin_shutdown` | nothing |
 
 Entering `Starting` announces the candidate (`candidate`); leaving it
 announces how it ended (`candidate_cleared` with `adopted`,
 `rolled_back` or `rescued`; a shutdown ends it as a rescue does), and a
-rollback of an adopted leg announces `rolled_back` again.
+rollback of an adopted leg announces `rolled_back` again. A candidate is
+adopted from two tasks, its own first sign of life and the PBX's commit,
+and whichever lands second is answered as the same adoption: the line and
+its intro turn are unchanged, and no notice is sent (#449).
 `the_call_line_phase_by_event` in `apps/backend/tests/test_lifecycle.rs`
 pins every phase against every event. A new way to move the call is an
 `Event` and its arms in `Line::next`, never a field beside the line.

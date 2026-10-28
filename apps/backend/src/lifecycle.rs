@@ -568,11 +568,6 @@ impl Coordinator {
         })
     }
 
-    #[cfg(test)]
-    pub fn is_candidate(&self) -> bool {
-        self.linearize(|state| matches!(state.line, Line::Starting { .. }))
-    }
-
     /// Register a resident session that may continue while another agent is
     /// foreground. Its token is still valid for display and request calls, but
     /// not for speech.
