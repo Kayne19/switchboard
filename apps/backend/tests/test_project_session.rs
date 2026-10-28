@@ -1146,6 +1146,34 @@ async fn a_prompt_sent_before_its_session_hears_the_link_close_ends_with_the_ses
     }
 }
 
+/// An abort that cannot go out leaves the session alive, where a command
+/// that cannot go out ends it (#381). Nothing awaits between the disconnect
+/// and the abort, so the pump has not read the link's close yet.
+#[tokio::test(flavor = "current_thread")]
+async fn an_abort_that_cannot_go_out_leaves_the_session_alive() {
+    let hosts = debug_hosts();
+    let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+    let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let launch = debug_launch(&crate::debug::DebugBus::new(), None);
+    let (session, _) = ProjectSession::create(&hosts, launch)
+        .await
+        .expect("the session opens");
+    hosts.disconnect_fake("scriptorium");
+
+    session.interrupt();
+    assert!(
+        session.alive(),
+        "the abort that could not go out ended the session"
+    );
+
+    let sent = within("the command", session.set_thinking("low")).await;
+    assert!(sent.is_err(), "the command found a link");
+    assert!(
+        !session.alive(),
+        "the command that could not go out left the session alive"
+    );
+}
+
 /// Where a project session's turn is when a row of the turn table's event
 /// arrives. The self-woken run the session holds is `auto-1`; a second
 /// self-woken run, which replaced it, is `auto-2`; the caller's turn,
