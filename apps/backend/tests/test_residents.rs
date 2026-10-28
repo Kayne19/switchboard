@@ -30,7 +30,7 @@ async fn direct_dial_reuses_a_background_resident_instead_of_creating_a_duplicat
         "alpha"
     );
     board
-        .start_background_part("beta", "beta work")
+        .start_background_part_on("beta", "beta work")
         .await
         .expect("background resident");
     let resident = board
@@ -97,7 +97,7 @@ async fn background_prompt_transport_failure_evicts_the_resident_and_finishes() 
     fake.serve(board.hosts().connect_fake(HOST));
 
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("the resident launch itself succeeds");
     assert_background_registry_consistent(&board);
@@ -228,7 +228,7 @@ async fn host_loss_evicts_a_background_resident_without_a_later_action() {
     fake.serve(board.hosts().connect_fake(HOST));
 
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("resident launch");
     assert_background_registry_consistent(&board);
@@ -265,7 +265,7 @@ async fn stopped_background_prompt_cancels_without_a_late_idle_notice() {
     }));
     fake.serve(board.hosts().connect_fake(HOST));
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("background resident");
     tokio::time::timeout(Duration::from_secs(1), entered.notified())
@@ -332,7 +332,7 @@ async fn stopped_background_prompt_does_not_publish_idle_after_close() {
     })));
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "long beta work")
+        .start_background_part_on("beta", "long beta work")
         .await
         .unwrap();
     within("started_rx", started_rx)
@@ -588,7 +588,7 @@ async fn board_with_a_resident(
         }),
     );
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("alpha goes to the background");
     let resident = board
@@ -648,13 +648,13 @@ async fn resident_after(
             assert_eq!(board.dial("alpha", "").await.route, "alpha");
         }
         ResidentEvent::MoreWork => {
-            let result = board.start_background_part("alpha", "more work").await;
+            let result = board.start_background_part_on("alpha", "more work").await;
             assert_eq!(result.is_ok(), !busy, "{result:?}");
         }
         ResidentEvent::MoreWorkAfterDeath => {
             resident.close();
             board
-                .start_background_part("alpha", "more work")
+                .start_background_part_on("alpha", "more work")
                 .await
                 .expect("a new resident replaces the dead one");
         }

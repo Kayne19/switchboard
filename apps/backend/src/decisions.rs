@@ -485,29 +485,33 @@ impl Switchboard {
         original: &str,
         parts: Vec<crate::router::DispatchPart>,
     ) -> Reply {
-        let (parts, unknown): (Vec<_>, Vec<_>) = parts
-            .into_iter()
-            .partition(|part| self.registry.get(&part.agent).is_some());
-        for part in &unknown {
-            tracing::warn!(project = %part.agent, "dropping a split part for an unregistered project");
-            self.trace_branch(
-                "refused_unknown_target",
-                format!(
-                    "the routing utility sent a part to {:?}, which is not a registered project; that part was dropped",
-                    part.agent
-                ),
-            );
+        let mut known = Vec::new();
+        for part in parts {
+            match self.registry.get(&part.agent).cloned() {
+                Some(project) => known.push((project, part)),
+                None => {
+                    tracing::warn!(project = %part.agent, "dropping a split part for an unregistered project");
+                    self.trace_branch(
+                        "refused_unknown_target",
+                        format!(
+                            "the routing utility sent a part to {:?}, which is not a registered project; that part was dropped",
+                            part.agent
+                        ),
+                    );
+                }
+            }
         }
+        let parts = known;
         // One utterance fans out to every part's agent.
-        for part in &parts {
+        for (_, part) in &parts {
             self.trace_routed(&part.agent, &part.text, "continue", "utility");
         }
         let current = self.coordinator.route();
         let foreground_index = parts
             .iter()
-            .position(|part| part.agent == current)
+            .position(|(_, part)| part.agent == current)
             .unwrap_or(0);
-        let Some(foreground) = parts.get(foreground_index).cloned() else {
+        let Some((_, foreground)) = parts.get(foreground_index).cloned() else {
             return self
                 .handle_operator_ctx(&TransferContext {
                     exact_caller_transcript: original.to_owned(),
@@ -518,11 +522,11 @@ impl Switchboard {
 
         // Start resident background work before awaiting the foreground turn.
         // A slow foreground model must not serialize unrelated project parts.
-        for (index, part) in parts.iter().enumerate() {
+        for (index, (project, part)) in parts.iter().enumerate() {
             if index == foreground_index || part.agent == foreground.agent {
                 continue;
             }
-            if let Err(error) = self.start_background_part(&part.agent, &part.text).await {
+            if let Err(error) = self.start_background_part(project, &part.text).await {
                 tracing::warn!(project = %part.agent, %error, "background split part failed");
             }
         }
