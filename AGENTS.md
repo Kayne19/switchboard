@@ -69,7 +69,10 @@ commit.
   the notch, one runtime ID prefix, stage-relative sizes, one writer per lifecycle
   machine, no new phase fields on a lifecycle owner, one composition a
   render, one log capture, live paths, routes and settings in the docs); a new rule of that
-  kind gets a check there. Both Playwright configs also set `forbidOnly` on CI, so a focused
+  kind gets a check there: a named entry in its `checks` table with a sample
+  tree it must refuse and one it must pass. The script runs those self-tests
+  before every scan, and `node scripts/check_hygiene.mjs --self-test` runs
+  them alone. Both Playwright configs also set `forbidOnly` on CI, so a focused
   spec fails its browser leg.
 - CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
   `npm run test:browser` (every spec in `apps/frontend/tests/visual` but
