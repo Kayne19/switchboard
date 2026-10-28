@@ -884,8 +884,6 @@ async fn a_promotion_whose_join_the_host_refuses_keeps_the_resident_on_the_call(
         }
     })
     .await;
-    // The request reached the switchboard under the held token, was
-    // answered, and the coordinator knows that token as alpha's.
     assert_eq!(
         (
             calls.lock().unwrap().clone(),

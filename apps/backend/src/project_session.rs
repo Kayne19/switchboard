@@ -256,8 +256,6 @@ impl ProjectInner {
             .unwrap_or_default()
     }
 
-    /// Makes `token` the call token module calls must carry, and returns
-    /// the one they had to carry until now.
     fn swap_token(&self, token: String) -> String {
         let mut current = self.token.lock().unwrap_or_else(PoisonError::into_inner);
         std::mem::replace(&mut *current, token)
@@ -826,7 +824,8 @@ impl ProjectSession {
     }
 
     /// Puts the session on the call with `token`: module calls must carry it
-    /// once the host accepts it, and any carrying an earlier one are refused.
+    /// from now on, and any carrying an earlier one are refused; a join the
+    /// host refuses puts the earlier one back.
     pub async fn join_call(
         &self,
         token: &str,
