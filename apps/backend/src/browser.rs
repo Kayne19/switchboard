@@ -4,8 +4,9 @@
 //! writes.
 use crate::app_state::AppState;
 use crate::caller_input::{
-    cancel_stream_clip, end_stream_clip, handle_audio_frame, is_clip_id, parse_clip_header,
-    parse_typed_turn, route_typed_turn, start_stream_clip, ClipHeader, StreamChunkHeader,
+    cancel_stream_clip, end_stream_clip, handle_audio_frame, parse_clip_header,
+    parse_stream_chunk_header, parse_typed_turn, route_typed_turn, start_stream_clip, ClipHeader,
+    StreamChunkHeader,
 };
 use crate::delivery::{DeliveryConnection, DeliveryFrame, Event};
 use crate::display::{is_display_event, stamp_display_seq, ScreenReport};
@@ -310,28 +311,14 @@ pub(crate) async fn handle_text_frame(
             generation,
             sequence,
         } => {
-            let Some(id) = clip_id.filter(|id| is_clip_id(id)) else {
-                return send_message(
-                    state,
-                    epoch,
-                    ServerMessage::error("Invalid streaming clip id."),
-                )
-                .await;
-            };
-            // A chunk header without a generation is refused like one without
-            // a usable id; the audio frame that follows it then arrives
-            // without a header and is answered as such.
-            let Some(generation) = generation else {
-                return send_message(
-                    state,
-                    epoch,
-                    ServerMessage::error_for(id, "Streaming chunk has no generation."),
-                )
-                .await;
-            };
-            let sequence = sequence.unwrap_or(u64::MAX);
-            *pending_stream_chunk = Some((id, generation, sequence));
-            Ok(())
+            pending_stream_chunk.take();
+            match parse_stream_chunk_header(clip_id, generation, sequence) {
+                Ok(header) => {
+                    *pending_stream_chunk = Some(header);
+                    Ok(())
+                }
+                Err(refusal) => send_message(state, epoch, *refusal).await,
+            }
         }
         ClientMessage::SttEnd {
             clip_id,

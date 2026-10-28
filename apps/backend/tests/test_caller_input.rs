@@ -174,6 +174,116 @@ async fn streaming_commands_require_the_generation() {
     ));
 }
 
+/// Each command that names a clip refuses a bad id and a missing generation in
+/// its own words, which the page shows the caller.
+#[tokio::test]
+async fn each_clip_command_refuses_in_its_own_words() {
+    let long_id = "x".repeat(MAX_CLIP_ID_CHARS + 1);
+    let cases = [
+        (
+            r#"{"type":"clip","id":""}"#.to_owned(),
+            None,
+            "Invalid clip id.",
+        ),
+        (
+            format!(r#"{{"type":"clip","id":"{long_id}","generation":1}}"#),
+            None,
+            "Invalid clip id.",
+        ),
+        (
+            r#"{"type":"clip","id":"c"}"#.to_owned(),
+            Some("c"),
+            "Clip has no generation.",
+        ),
+        (
+            r#"{"type":"stt_start","clip_id":"","generation":1}"#.to_owned(),
+            None,
+            "Invalid streaming clip id.",
+        ),
+        (
+            r#"{"type":"stt_start","clip_id":"c"}"#.to_owned(),
+            Some("c"),
+            "Streaming clip has no generation.",
+        ),
+        (
+            r#"{"type":"stt_chunk","clip_id":"","generation":1,"sequence":0}"#.to_owned(),
+            None,
+            "Invalid streaming clip id.",
+        ),
+        (
+            r#"{"type":"stt_chunk","clip_id":"c","sequence":0}"#.to_owned(),
+            Some("c"),
+            "Streaming chunk has no generation.",
+        ),
+    ];
+    for (frame, id, message) in cases {
+        let state = state_with_stream(None, Some("true".into()));
+        let mut connection = state.0.delivery.register();
+        let mut pending_header = None;
+        let mut pending_chunk = None;
+        handle_text_frame(
+            &state,
+            connection.epoch,
+            &mut pending_header,
+            &mut pending_chunk,
+            &frame,
+        )
+        .await
+        .unwrap();
+        let refused = next_delivery(&mut connection).await;
+        assert_eq!(refused["type"], "error", "{frame}");
+        assert_eq!(refused["message"], message, "{frame}");
+        match id {
+            Some(id) => assert_eq!(refused["id"], id, "{frame}"),
+            None => assert!(refused.get("id").is_none_or(Value::is_null), "{frame}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_refused_chunk_header_clears_the_one_before_it() {
+    let state = state_with_stream(None, Some("true".into()));
+    let mut connection = state.0.delivery.register();
+    let epoch = connection.epoch;
+    let mut pending_header = None;
+    let mut pending_chunk = None;
+
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        r#"{"type":"stt_chunk","clip_id":"clip","generation":1,"sequence":0}"#,
+    )
+    .await
+    .unwrap();
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        r#"{"type":"stt_chunk","clip_id":"clip","sequence":1}"#,
+    )
+    .await
+    .unwrap();
+    let refused = next_delivery(&mut connection).await;
+    assert_eq!(refused["message"], "Streaming chunk has no generation.");
+    assert_eq!(refused["id"], "clip");
+
+    handle_audio_frame(
+        &state,
+        epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        vec![1, 2, 3],
+    )
+    .await
+    .unwrap();
+    let answered = next_delivery(&mut connection).await;
+    assert_eq!(answered["message"], "Audio arrived without a clip header.");
+    assert!(answered.get("id").is_none_or(Value::is_null));
+}
+
 #[test]
 fn clip_headers_carry_a_required_capture_epoch() {
     let header = |value: Value| match crate::protocol::ClientMessage::parse(&value.to_string()) {
@@ -188,7 +298,13 @@ fn clip_headers_carry_a_required_capture_epoch() {
 
     assert_eq!(
         header(json!({"type":"clip", "id":"a", "mime":"audio/webm", "generation":3})),
-        Ok(("a".into(), "audio/webm".into(), 3))
+        Ok(ClipHeader {
+            clip: ClipRef {
+                id: "a".into(),
+                generation: 3
+            },
+            mime: "audio/webm".into()
+        })
     );
     // A clip without the epoch it was recorded under is refused by its id,
     // never stamped on arrival.
@@ -222,7 +338,7 @@ fn clip_headers_carry_a_required_capture_epoch() {
     assert!(!is_clip_id(""));
     let long_mime =
         header(json!({"type":"clip", "id":"a", "mime":"m".repeat(400), "generation":3}));
-    assert_eq!(long_mime.unwrap().1.chars().count(), 100);
+    assert_eq!(long_mime.unwrap().mime.chars().count(), 100);
 }
 
 #[tokio::test]
