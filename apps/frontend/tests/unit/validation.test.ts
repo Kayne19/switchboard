@@ -2,17 +2,10 @@ import { isDeepStrictEqual } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { nonFiniteActions } from '../fixtures/nonFiniteActions';
 import { fixtures } from '../../src/fixtures/scenes';
-import {
-  MAX_IMAGE_ACTION_BYTES,
-  MAX_IMAGE_BYTES,
-  assertControllerAction,
-  base64DecodedLength,
-  decodeBase64Head,
-  imageSignatureMatches,
-  isBlank,
-  normalizeProgressValue,
-  validateControllerAction,
-} from '../../src/controller/validation';
+import { MAX_IMAGE_ACTION_BYTES, assertControllerAction, validateControllerAction } from '../../src/controller/validation';
+import { MAX_IMAGE_BYTES, base64DecodedLength, decodeBase64Head, imageSignatureMatches } from '../../src/controller/validation/image';
+import { isBlank } from '../../src/controller/validation/shared';
+import { normalizeProgressValue } from '../../src/controller/validation/progress';
 
 describe('progress value normalization', () => {
   it('normalizes progress values as percentages clamped to 0-100', () => {

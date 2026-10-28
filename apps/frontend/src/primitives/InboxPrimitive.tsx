@@ -1,6 +1,6 @@
 import { useRef, type RefObject } from 'react';
 import type { InboxData, InboxMessage } from '../controller/types';
-import { parseTimeValue, type TimeValue } from '../controller/validation';
+import { parseTimeValue, type TimeValue } from '../controller/validation/time';
 import { useMeasured } from '../hooks/useMeasured';
 import { countText, type Noun } from './countText';
 import { ListViewport } from './ListViewport';

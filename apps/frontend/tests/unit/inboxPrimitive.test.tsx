@@ -6,7 +6,7 @@
 // decides, and the message a note names.
 import { describe, expect, it } from 'vitest';
 import type { InboxData, InboxMessage } from '../../src/controller/types';
-import { parseTimeValue } from '../../src/controller/validation';
+import { parseTimeValue } from '../../src/controller/validation/time';
 import { fixtures } from '../../src/fixtures/scenes';
 import { InboxPrimitive, ONE_LINE_EMS, inboxCounts, inboxLayout, messageTime } from '../../src/primitives/InboxPrimitive';
 import type { Slot } from '../../src/primitives/slot';

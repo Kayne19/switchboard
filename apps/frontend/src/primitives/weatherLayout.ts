@@ -1,6 +1,6 @@
 import type { WeatherData, WeatherHour } from '../controller/types';
 import { monoAdvance } from '../design/tokens';
-import { parseTimeValue } from '../controller/validation';
+import { parseTimeValue } from '../controller/validation/time';
 import { dayText, timeOfDay, two, weekdayName } from './timeLabels';
 
 // How a forecast is laid out for the box it is drawn in, and how its times

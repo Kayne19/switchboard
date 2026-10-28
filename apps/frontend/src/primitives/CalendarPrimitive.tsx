@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import type { CalendarData } from '../controller/types';
-import { parseTimeValue } from '../controller/validation';
+import { parseTimeValue } from '../controller/validation/time';
 import { useElementSize } from '../hooks/useElementSize';
 import {
   agendaEntries,
