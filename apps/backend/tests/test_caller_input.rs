@@ -684,6 +684,43 @@ async fn an_arriving_clip_is_logged_with_the_mime_the_browser_recorded() {
     assert_eq!(frames.last().unwrap()["id"], "ipad-1");
 }
 
+/// Uploads a clip to a sidecar running `command` and returns the one error
+/// frame that answers it, after checking the clip went no further.
+async fn the_error_that_answers_a_clip(command: &str, id: &str) -> Value {
+    let state = state_with_stt(Some(command.into()));
+    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    upload_clip(&state, &mut connection, id, generation).await;
+    let clip_worker = tokio::spawn(process_clips(state.clone()));
+
+    let frames = frames_until(&mut connection, "error").await;
+    assert_eq!(types_of(&frames), ["error"]);
+    assert_eq!(frames[0]["id"], id);
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
+    assert_never_queued(&state).await;
+    clip_worker.abort();
+    frames[0].clone()
+}
+
+/// A sidecar that exits with an error is answered with its stderr.
+#[tokio::test]
+async fn a_clip_the_sidecar_fails_on_is_answered_by_its_id() {
+    let error =
+        the_error_that_answers_a_clip("cat >/dev/null; echo broken >&2; exit 3", "sidecar-fails")
+            .await;
+    assert_eq!(
+        error["message"],
+        "Transcription failed: STT sidecar exited unsuccessfully: broken"
+    );
+}
+
+/// A press with no words is not routed.
+#[tokio::test]
+async fn a_clip_with_no_words_asks_the_caller_to_say_it_again() {
+    let error = the_error_that_answers_a_clip("cat >/dev/null; printf '  '", "no-words").await;
+    assert_eq!(error["message"], "I didn't catch that — say it again.");
+}
+
 const HEARD_WHILE_CONNECTING: &str = "cat >/dev/null; printf 'and check the logs'";
 
 /// Uploads a complete clip the way the browser does, stamped with the epoch it
