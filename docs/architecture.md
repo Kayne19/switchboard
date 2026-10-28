@@ -86,8 +86,9 @@ browser mic / page controls
           +--> protocol.rs: every message the service sends the browser,
           |       and every command the browser sends it
           |
-          +--> debug.rs: the read-only debug bus, its log copy, and the
-                  debug listener's router (docs/debug-page.md)
+          +--> debug.rs: the read-only debug bus and its log copy;
+          |       debug_record.rs bounds and scrubs each record;
+          |       debug_listener.rs serves the page (docs/debug-page.md)
 
 apps/backend/ ------- the Rust service (src/) and its tests (tests/)
 apps/frontend/ ------ browser: call runtime (socket, capture, playback) and rendering
@@ -497,7 +498,9 @@ removes the real coupling; do not create interfaces for ceremony.
 | `history.rs` | transcript storage shape | deciding when a turn routes |
 | `visual_protocol.rs` | display action validation and normalization | layout |
 | `protocol.rs` | the shape of every message sent to the browser (`ServerMessage`) and every command it sends (`ClientMessage`) | when or to whom a message is sent; what a command does |
-| `debug.rs` | bounded, in-memory observation: the event and log rings, the debug schema (`DebugEvent`), record scrubbing and clipping, and the debug listener's router and WebSocket framing | call control, routing or lifecycle decisions, awaiting on clients or doing I/O while publishing, disk history |
+| `debug.rs` | bounded, in-memory observation: the event and log rings, the debug schema (`DebugEvent`), the bus and its feeds | call control, routing or lifecycle decisions, awaiting on clients or doing I/O while publishing, disk history, how a record is clipped or scrubbed, serving a client |
+| `debug_record.rs` | how a published value becomes a bounded, scrubbed record: `Clip`, its size bounds and the credential scrubbing | the rings, publishing, serving a client |
+| `debug_listener.rs` | the debug listener: the embedded page, the read-only WebSocket behind the origin check, its socket cap, frame bound and send timeout | what a record holds, the rings, call control |
 | `apps/frontend/` | capture, protocol client, playback, UI | server authority or durable state |
 | `apps/host-agent/src/sessions.ts` | the sessions a host agent tracks on its daemon: provenance and the state file, each session's call, and its turn (`Tracked.turn`, written only by `#turnStep`; `docs/host-link.md`, "Session events") | the host link (`link.ts`), running prepare commands |
 | `apps/host-agent/src/daemon_keeper.ts` | the daemon connection and the resync after it: one phase (`disconnected`, `resyncing`, `retrying` the sessions that would not attach, `attached`), written only by `#step` (`docs/host-link.md`, "Snapshots") | what a session reattach does (`sessions.ts`), starting a daemon |

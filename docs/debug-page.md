@@ -12,7 +12,7 @@ recording.
 
 The page is built into the committed `static-debug/` directory as three
 fixed-name files: `index.html`, `debug.js` and `debug.css`. The binary embeds
-them at compile time (`include_str!` in `apps/backend/src/debug.rs`), and only
+them at compile time (`include_str!` in `apps/backend/src/debug_listener.rs`), and only
 the debug listener's router serves them, at `/`, `/debug.js` and `/debug.css`.
 Every other path there is a 404, and it has no call controls. The primary
 listener serves `static/`, which does not hold the debug page, so no path
@@ -185,7 +185,7 @@ A tracing layer copies every log line that passes the service's log filter
 the page. The journal still receives every line unchanged.
 
 Every event and log record is scrubbed before it is kept, in one place
-(`Clip` in `debug.rs`); producers publish raw values. A snapshot's `agents`
+(`Clip` in `debug_record.rs`); producers publish raw values. A snapshot's `agents`
 come from the live projection, not a ring, and go through the same `Clip`
 when the snapshot is serialized. Every string is
 scrubbed: text, JSON strings and keys, log messages, and names and ids
