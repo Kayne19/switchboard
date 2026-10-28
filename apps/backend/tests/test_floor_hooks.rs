@@ -943,3 +943,92 @@ fn assert_serial_audio(frames: &[Value]) {
         "speech was still active at the end of the delivery batch"
     );
 }
+
+/// d6-coverage: a background update with no page to hear it is kept for the
+/// page (`Retry`), not dropped, and takes no place in the speech worker.
+#[tokio::test]
+async fn a_floor_release_with_no_page_keeps_the_update_for_the_page() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let generation = state.0.coordinator.generation();
+    let places = std::iter::from_fn(|| state.0.speech.try_reserve().ok())
+        .collect::<Vec<_>>()
+        .len();
+    let outcome = release_floor(
+        &state,
+        FloorRequest {
+            floor_id: 0,
+            project: "grapes".into(),
+            token: "grapes-token".into(),
+            generation,
+            context: "caller: previous line".into(),
+            message: "unheard update".into(),
+            reason: "finished".into(),
+            held_display: false,
+        },
+        "unheard update".into(),
+    )
+    .await;
+    assert_eq!(outcome, ReleaseOutcome::Retry);
+    assert_eq!(
+        std::iter::from_fn(|| state.0.speech.try_reserve().ok())
+            .collect::<Vec<_>>()
+            .len(),
+        places,
+        "the release kept a speech place"
+    );
+}
+
+/// d6-coverage: the page goes while the release waits for its place in the
+/// speech worker. The place is given back and the update waits for the page
+/// (`Retry`); it is neither spoken to nobody nor dropped.
+#[tokio::test]
+async fn a_floor_release_whose_page_goes_while_it_waits_gives_its_place_back() {
+    let state = state();
+    let (connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let generation = state.0.coordinator.generation();
+    let taken: Vec<_> = std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect();
+    let places = taken.len();
+    assert!(places > 0);
+    let release_state = state.clone();
+    let release = tokio::spawn(async move {
+        release_floor(
+            &release_state,
+            FloorRequest {
+                floor_id: 0,
+                project: "grapes".into(),
+                token: "grapes-token".into(),
+                generation,
+                context: "caller: previous line".into(),
+                message: "late update".into(),
+                reason: "finished".into(),
+                held_display: false,
+            },
+            "late update".into(),
+        )
+        .await
+    });
+    tokio::task::yield_now().await;
+    assert!(!release.is_finished(), "the release waits for a place");
+    state.retire_connection(connection.epoch).await;
+    drop(taken);
+    let outcome = tokio::time::timeout(Duration::from_secs(5), release)
+        .await
+        .expect("the release settles once it has its place")
+        .unwrap();
+    assert_eq!(outcome, ReleaseOutcome::Retry);
+    assert_eq!(
+        std::iter::from_fn(|| state.0.speech.try_reserve().ok())
+            .collect::<Vec<_>>()
+            .len(),
+        places,
+        "the place was not given back"
+    );
+}
