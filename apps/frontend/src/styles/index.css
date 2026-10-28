@@ -236,13 +236,24 @@ button {
 .live-chat-card__history:focus-visible,
 .channel-stack__mode:focus-visible,
 .transcript-toggle:focus-visible,
-.focus-layer__return:focus-visible,
+.return-control:focus-visible,
 .system__select:focus-visible,
 .system__hangup:focus-visible,
-.transcript__return:focus-visible,
 .transcript__send:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
+}
+/* An invisible tap target: on a touch screen with no Esc key it is often the only way out (#276). */
+.return-control {
+  position: relative;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.return-control::before {
+  content: "";
+  position: absolute;
+  inset: calc(50% - 22px) -12px;
 }
 /* A metric in a cluster is a card clipped to its chamfer, which would clip
    an outline away whole; its edge is already a line (its ground round its
@@ -784,12 +795,6 @@ button {
   height: 6cqh;
   color: rgba(var(--paper-rgb), 0.48);
   border-bottom: 1px solid rgba(var(--orange-rgb), 0.34);
-}
-.transcript__header button {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
 }
 .transcript__body {
   height: 67cqh;
@@ -5270,27 +5275,6 @@ button {
   justify-content: space-between;
   color: rgba(var(--paper-rgb), 0.48);
 }
-.focus-layer__header button {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-/* RETURN is the way out of focus and of the history, and on a touch screen,
-   with no Esc key, the only one but a tap on the focus layer's thin margin.
-   Its words are a micro line, 12-15px tall: it takes a tap 44px tall round
-   them, and 12px past each end, drawn nowhere, so the words and the ring
-   stay where they were (#276). */
-.focus-layer__return,
-.transcript__return {
-  position: relative;
-}
-.focus-layer__return::before,
-.transcript__return::before {
-  content: "";
-  position: absolute;
-  inset: calc(50% - 22px) -12px;
-}
 /* A primitive fills the focus panel as it fills any box; timers, a
    forecast, a figure and a calendar keep a margin inside it (a to-do
    list's and an inbox's are with their rules). */
@@ -5454,12 +5438,6 @@ button {
   min-height: 44px;
   color: rgba(var(--paper-rgb), 0.48);
   border-bottom: 1px solid rgba(var(--orange-rgb), 0.5);
-}
-.system__header button {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
 }
 .system__line,
 .system__row {

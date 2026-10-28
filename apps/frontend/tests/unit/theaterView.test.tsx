@@ -39,7 +39,7 @@ describe('the theater view', () => {
 
   it('leaves for auto on EXIT, and the report says so', () => {
     renderScene([...fixtures.code, theater]);
-    const exit = lastScene().querySelector<HTMLButtonElement>('.theater__exit')!;
+    const exit = lastScene().querySelector<HTMLButtonElement>('.theater__header .return-control')!;
     expect(exit.textContent).toContain('EXIT');
     act(() => exit.click());
     expect(controllerState().workspace.requestedView).toBe('auto');
