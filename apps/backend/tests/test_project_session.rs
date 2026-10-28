@@ -1736,9 +1736,9 @@ Replaced           | SessionCloses           | end autonomous auto-2            
 Replaced           | PromptStarts            | start input t-in                                              | busy | autonomous | running «»                            | -
 
 # A prompt sent into the held run as a `follow_up`: the run swallows its frames, but the run's end reaches
-# the prompt too, which waits for it (#512).
-CallerInRun        | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
-CallerInRun        | StartsSelfWokenAdmitted | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
+# the prompt too, which waits for it (#512). A start that replaces the run ends the prompt too (#524).
+CallerInRun        | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | returned «»                           | auto-1: run words
+CallerInRun        | StartsSelfWokenAdmitted | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | returned «»                           | auto-1: run words
 CallerInRun        | StartsInput             | start input t-2                                               | busy | autonomous | running «»                            | -
 CallerInRun        | RunText                 | -                                                             | busy | autonomous | running «more run words»              | -
 CallerInRun        | SecondText              | -                                                             | busy | autonomous | running «»                            | -
@@ -1747,7 +1747,7 @@ CallerInRun        | RunEnds                 | end autonomous auto-1 «run words
 CallerInRun        | SecondEnds              | -                                                             | busy | autonomous | running «»                            | -
 CallerInRun        | CallerEnds              | -                                                             | busy | autonomous | running «»                            | -
 CallerInRun        | SnapshotIdle            | end autonomous auto-1 «run words»                             | -    | -          | returned «last words»                 | auto-1: run words; -: last words
-CallerInRun        | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | running «»                            | auto-1: run words
+CallerInRun        | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | returned «»                           | auto-1: run words
 CallerInRun        | SessionCloses           | end autonomous auto-1                                         | -    | gone       | failed «the project session ended» «» | auto-1: run words
 CallerInRun        | PromptCancelled         | -                                                             | busy | autonomous | -                                     | -
 ";
@@ -1762,6 +1762,21 @@ async fn a_prompt_sent_into_a_held_run_returns_with_the_runs_words() {
     rig.reach(TurnAt::CallerInRun).await;
     rig.apply(TurnHappens::RunText).await;
     rig.apply(TurnHappens::RunEnds).await;
+    let seen = rig.seen().await;
+    assert_eq!(seen[3], "returned «more run words»", "{seen:?}");
+    rig.session.close();
+}
+
+/// A prompt sent into a held run as a `follow_up` waits for that run's
+/// `turn_end`. When another turn replaces the run first, that end never
+/// reached the service, so the replacement ends the prompt with the words
+/// it collected (#524).
+#[tokio::test]
+async fn a_prompt_sent_into_a_replaced_run_returns_with_its_words() {
+    let mut rig = TurnRig::new().await;
+    rig.reach(TurnAt::CallerInRun).await;
+    rig.apply(TurnHappens::RunText).await;
+    rig.apply(TurnHappens::StartsSelfWoken).await;
     let seen = rig.seen().await;
     assert_eq!(seen[3], "returned «more run words»", "{seen:?}");
     rig.session.close();
