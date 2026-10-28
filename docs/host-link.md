@@ -770,7 +770,10 @@ session's call state. It relays `display` and `view` in every mode, and the
 service decides those: it holds a background display (`accepted`, with
 `held: true` in the result) and refuses a background `view` with a target.
 A refusal reaches the module with its code as `reason` (`caller_away`); the
-service's explanation stays in `result.detail`.
+service's explanation stays in `result.detail`. A refusal for the leg
+(`invalid_leg`) is the inverse: the explanation is the `reason` and the code
+is `result.code`. The skill's `display` line reads the code and does not ask
+for a new payload.
 
 A delivered reply's own `reason` is null, so the module reads why a
 delivered `display` is not on screen from `result.reason`. That is the code

@@ -415,6 +415,20 @@ class CallsTest(ModuleTestCase):
         self.assertEqual(result.reason, "metric value must be a string")
         self.assertIn("rejected it: metric value must be a string", line)
 
+    def test_a_display_refused_for_its_leg_does_not_ask_for_a_new_payload(self):
+        sentences = (
+            "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
+            "the caller's screen is not live until this transfer completes: draw it again on your next turn",
+            "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead",
+        )
+        mode = {}
+        self.host(reply=lambda request: mode["reply"])
+        for sentence in sentences:
+            with self.subTest(sentence=sentence):
+                mode["reply"] = {"status": "refused", "reason": sentence, "result": {"delivered": False, "code": "invalid_leg", "detail": sentence}}
+                _, line = self.run_call(switchboard.display, op="clear")
+                self.assertEqual(line, f"switchboard.display: The switchboard refused that display: {sentence}.")
+
     def test_a_request_too_large_for_the_host_agent_names_the_caps(self):
         # The host agent answers a line past its cap `too_large` unread. The
         # line used to read "The switchboard rejected it: too_large. Adjust
