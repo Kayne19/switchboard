@@ -51,13 +51,15 @@ matters). Say it is on screen only after "On screen.".
 - `speak(text)`: say `text` out loud. Your written output goes to a screen
   they may not be watching, so anything they must hear goes through `speak`.
   Use plain spoken words. Code, paths, lists and tables go on the screen.
-  A line that runs past the speech deadline is cut off there: its result is
-  `delivered` with reason `cut_short`, and the caller heard only the start.
-  Do not repeat the whole line. If the rest matters, say it in a shorter one.
   One line is voiced up to 700 characters (`SWITCHBOARD_MAX_SPOKEN_CHARS`).
   A longer line is cut there, at a sentence end when one is near, and the
   caller hears "there's more on screen". Their screen shows the whole line,
   but they may not look, so keep what they must hear inside the cap.
+  That cut is by length and is decided before anything is said. The speech
+  deadline is a different cut, by time: a line that runs past it is cut off
+  there, its result is `delivered` with reason `cut_short`, and the caller
+  heard only the start. Do not repeat the whole line. If the rest matters,
+  say it in a shorter one.
 - `request_to_speak(message, reason)`: while the caller is on other work,
   queue what they should hear. `reason` is `finished`, `needs_decision` or
   `problem`. `message` is the real content, said the way you would say it: the

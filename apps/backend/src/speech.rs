@@ -463,6 +463,10 @@ impl std::fmt::Display for Stopped {
     }
 }
 
+/// How much of a spoken line a page took. A `speak` the deadline cut answers
+/// `cut_short`, which tells the agent to say less next time; a reply's
+/// utterances share one deadline, so a cut reply stops there and counts as not
+/// spoken for the turn (`final_response_audio_closed`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Played {
     Whole,
@@ -621,7 +625,10 @@ async fn drain_speech_stream(
         audio.start(sequence, generation, state.0.coordinator.generation())
     };
     let mut bytes = 0usize;
-    while let Some(chunk) = stream.next().await {
+    let played = loop {
+        let Some(chunk) = stream.next().await else {
+            break Played::Whole;
+        };
         // The call has moved on without a rescue: a hand-off (a transfer's
         // adoption). What the old leg is already saying finishes, and the
         // new leg's audio waits behind it in the audio order; an utterance
@@ -633,49 +640,51 @@ async fn drain_speech_stream(
             utterance.abandon(&state).await;
             return SpeechOutcome::Stopped(Stopped::Superseded);
         }
-        let chunk = match chunk {
-            Ok(chunk) => chunk,
-            Err(crate::audio::AudioError::Deadline) if bytes > 0 => {
-                utterance.abandon(&state).await;
-                return match went_out(&state, generation, sequence, receipt, deadline).await {
-                    WentOut::Heard => SpeechOutcome::Spoken {
-                        bytes,
-                        played: Played::CutShort,
-                    },
-                    WentOut::Unheard => SpeechOutcome::Failed(crate::audio::AudioError::Deadline),
-                    WentOut::HandedOffUnheard => SpeechOutcome::Stopped(Stopped::Superseded),
-                };
+        match chunk {
+            Ok(chunk) => {
+                bytes = bytes.saturating_add(chunk.len());
+                for part in chunk.chunks(32 * 1024) {
+                    let mut audio = state.0.audio.lock().await;
+                    let line = state.0.coordinator.generation();
+                    audio.append(sequence, generation, part.to_vec(), line);
+                }
             }
+            Err(crate::audio::AudioError::Deadline) if bytes > 0 => break Played::CutShort,
             Err(error) => {
                 utterance.abandon(&state).await;
                 return SpeechOutcome::Failed(error);
             }
-        };
-        bytes = bytes.saturating_add(chunk.len());
-        for part in chunk.chunks(32 * 1024) {
-            let mut audio = state.0.audio.lock().await;
-            let line = state.0.coordinator.generation();
-            audio.append(sequence, generation, part.to_vec(), line);
+        }
+    };
+    // The slot closes before `went_out` runs: it waits for the slot to leave
+    // the queue, and an open slot would hold it until the deadline.
+    match played {
+        Played::CutShort => utterance.abandon(&state).await,
+        Played::Whole => {
+            finish_audio(&state, sequence, generation).await;
+            // A request id is useful only after the complete body has been
+            // consumed. The epoch/model/generation checks reject a late
+            // drain after a reset.
+            state.0.commit_continuity_ordered(
+                generation,
+                &utterance.model,
+                utterance.epoch,
+                sequence,
+                request_id,
+                utterance.text,
+            );
         }
     }
-    finish_audio(&state, sequence, generation).await;
-    // A request id is useful only after the complete body has been consumed.
-    // The epoch/model/generation checks reject a late drain after a reset.
-    state.0.commit_continuity_ordered(
-        generation,
-        &utterance.model,
-        utterance.epoch,
-        sequence,
-        request_id,
-        utterance.text,
-    );
-    match went_out(&state, generation, sequence, receipt, deadline).await {
-        WentOut::Heard => SpeechOutcome::Spoken {
-            bytes,
-            played: Played::Whole,
-        },
-        WentOut::Unheard => SpeechOutcome::NotDelivered { bytes },
-        WentOut::HandedOffUnheard => SpeechOutcome::Stopped(Stopped::Superseded),
+    match (
+        went_out(&state, generation, sequence, receipt, deadline).await,
+        played,
+    ) {
+        (WentOut::Heard, played) => SpeechOutcome::Spoken { bytes, played },
+        (WentOut::Unheard, Played::CutShort) => {
+            SpeechOutcome::Failed(crate::audio::AudioError::Deadline)
+        }
+        (WentOut::Unheard, Played::Whole) => SpeechOutcome::NotDelivered { bytes },
+        (WentOut::HandedOffUnheard, _) => SpeechOutcome::Stopped(Stopped::Superseded),
     }
 }
 
@@ -689,6 +698,14 @@ enum WentOut {
 /// its own leg, so it is not said (#437).
 fn left_unheard(state: &AppState, generation: u64, receipt: &SlotReceipt) -> bool {
     generation != state.0.coordinator.generation() && !receipt.taken()
+}
+
+fn heard_or_not(receipt: &SlotReceipt) -> WentOut {
+    if receipt.taken() {
+        WentOut::Heard
+    } else {
+        WentOut::Unheard
+    }
 }
 
 /// Waits for a closed slot to leave the queue behind the slots ahead of it,
@@ -713,17 +730,13 @@ async fn went_out(
             return WentOut::HandedOffUnheard;
         }
         if receipt.gone() {
-            return if receipt.taken() {
-                WentOut::Heard
-            } else {
-                WentOut::Unheard
-            };
+            return heard_or_not(&receipt);
         }
         if expired.is_elapsed() {
             if state.0.audio.lock().await.silence(sequence) {
                 return WentOut::Unheard;
             }
-            continue;
+            return heard_or_not(&receipt);
         }
         tokio::select! {
             () = receipt.changed() => {}

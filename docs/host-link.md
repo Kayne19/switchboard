@@ -620,10 +620,11 @@ agent's clock, decide. A delivered reply's `reason` is taken from its result
 as a refused or failed reply's is (its `reason`, else its `detail`), and is
 `null` when the result has neither: `cut_short` for a `speak` the speech
 deadline cut after its start went out (`m7`; the caller heard only the
-start), or why the caller's screen has not confirmed a `display`. Any
-other `accepted` reply's `reason` is `null`, but a `display` answered
-`accepted` without being rendered (held in the background, or no browser
-connected) takes its reason from its result as well. A call that cannot
+start), or why the caller's screen has not confirmed a `display`. An
+`accepted` reply's `reason` is `null`, and a held background `display` is
+one: `held: true` and `caller_away` are in its result only. The exception
+is a `display` with no browser connected, which is answered `accepted` with
+the reason from its result, because its body has no `accepted` key. A call that cannot
 go out because the link's socket is already closing gets `failed` at once.
 
 Each wait on a `speak` has one owner, and each is longer than the one it

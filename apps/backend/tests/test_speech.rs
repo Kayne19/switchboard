@@ -1422,6 +1422,10 @@ async fn a_line_the_deadline_cuts_while_held_never_plays() {
         shown.iter().any(|frame| frame["type"] == "error"),
         "{shown:?}"
     );
+    assert!(
+        shown.iter().all(|frame| frame["type"] != "spoken"),
+        "{shown:?}"
+    );
     assert_eq!(
         audio_sent(&mut connection),
         [

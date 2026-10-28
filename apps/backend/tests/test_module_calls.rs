@@ -512,7 +512,8 @@ async fn speak_that_fails_to_synthesize_is_answered_with_the_workers_reason() {
     assert_eq!(body["reason"], body["detail"]);
 }
 
-/// #233
+/// A `speak` the speech deadline cuts after the caller heard its start is
+/// delivered, with the reason `cut_short`.
 #[tokio::test]
 async fn a_speak_the_deadline_cuts_after_its_audio_played_is_answered_cut_short() {
     let config = crate::Config::for_tests(&[]);
@@ -1463,6 +1464,33 @@ async fn a_background_refusal_reaches_the_module_as_its_bare_reason() {
             "{call}: {reply}"
         );
     }
+}
+
+/// A held display is `accepted`, so its module reply carries no top-level
+/// reason; why it is held stays in the result (`docs/host-link.md`).
+#[tokio::test]
+async fn a_held_display_is_accepted_with_its_reason_in_the_result() {
+    let state = state();
+    let (_connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("alpha", "background-token");
+    let reply = module_call(
+        &state,
+        AgentCall {
+            call: "display".into(),
+            token: "background-token".into(),
+            turn_id: None,
+            cause: None,
+            args: diagram_show(),
+        },
+    )
+    .await;
+    assert_eq!(reply["status"], "accepted", "{reply}");
+    assert_eq!(reply["reason"], Value::Null, "{reply}");
+    assert_eq!(reply["result"]["held"], true, "{reply}");
+    assert_eq!(reply["result"]["reason"], "caller_away", "{reply}");
 }
 
 #[tokio::test]
