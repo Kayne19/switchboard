@@ -139,8 +139,10 @@ export class HostLink {
 	#epoch: number | null = null;
 	#seq = 0;
 	#buffers = new Map<string, SessionBuffer>();
-	/** Events published while a snapshot of the same session is being taken;
-	 * they go out after it. */
+	/** One entry per in-flight snapshot, holding the events published while it
+	 * is taken; they go out after it. The entry is the snapshot's claim to
+	 * send: a welcome revokes every claim and snapshots those handles itself,
+	 * and a snapshot whose entry is gone sends nothing. */
 	#heldBehindSnapshot = new Map<string, Buffered[]>();
 	#missed = 0;
 	#heartbeat: ReturnType<typeof setInterval> | null = null;
@@ -207,19 +209,25 @@ export class HostLink {
 	 * example). The snapshot's cursor is taken before the session is
 	 * described, and an event published while it is being described is sent
 	 * after it: the service replaces what it knows with a snapshot, so an
-	 * event sent before one but not reflected in it would be lost.
+	 * event sent before one but not reflected in it would be lost. A welcome
+	 * drops a snapshot still being described and takes its own of that
+	 * session, so a snapshot never goes out on a link newer than the one it
+	 * began on.
 	 */
 	async sendSnapshot(handle: string): Promise<void> {
 		if (this.#heldBehindSnapshot.has(handle)) return;
 		const cursor = this.#buffers.get(handle)?.events.at(-1)?.seq ?? this.#seq;
-		this.#heldBehindSnapshot.set(handle, []);
+		const held: Buffered[] = [];
+		this.#heldBehindSnapshot.set(handle, held);
 		let info: Record<string, unknown> | null = null;
 		try {
 			info = await this.#o.describe(handle);
 		} finally {
-			const held = this.#heldBehindSnapshot.get(handle) ?? [];
-			this.#heldBehindSnapshot.delete(handle);
-			if (this.#epoch !== null) {
+			// A welcome revoked this claim and took its own snapshot of the
+			// session, so this one sends nothing.
+			const owned = this.#heldBehindSnapshot.get(handle) === held;
+			if (owned) this.#heldBehindSnapshot.delete(handle);
+			if (owned && this.#epoch !== null) {
 				if (info) this.#send({ type: "snapshot", session: handle, cursor: formatCursor(this.bootId, cursor), info });
 				for (const b of held) this.#send({ type: "event", session: handle, cursor: formatCursor(this.bootId, b.seq), event: b.event });
 			}
@@ -409,26 +417,28 @@ export class HostLink {
 			return;
 		}
 		this.#epoch = epoch;
+		const disowned = new Set(this.#heldBehindSnapshot.keys());
+		this.#heldBehindSnapshot.clear();
 		this.#attempt = 0;
 		this.#missed = 0;
 		this.#heartbeat = setInterval(() => this.#beat(ws), this.#o.heartbeatMs);
 		this.#status({ state: "linked", epoch });
 		const cursors = (message.cursors ?? {}) as Record<string, unknown>;
 		const tracked = new Set(this.#o.sessions());
-		await Promise.all(this.#catchUp(cursors, tracked));
+		await Promise.all(this.#catchUp(cursors, tracked, disowned));
 		if (this.#ws !== ws) return;
 		// Buffers of sessions no longer tracked are not needed after a sync.
 		for (const handle of [...this.#buffers.keys()]) if (!tracked.has(handle)) this.#buffers.delete(handle);
 		this.#send({ type: "synced", epoch });
 	}
 
-	#catchUp(cursors: Record<string, unknown>, tracked: Set<string>): Promise<void>[] {
+	#catchUp(cursors: Record<string, unknown>, tracked: Set<string>, disowned: Set<string>): Promise<void>[] {
 		const snapshots: Promise<void>[] = [];
 		for (const handle of new Set([...tracked, ...Object.keys(cursors)])) {
 			const cursor = parseCursor(cursors[handle]);
 			const buffer = this.#buffers.get(handle);
 			const canReplay = cursor !== null && buffer !== undefined && cursor.bootId === this.bootId && cursor.seq >= buffer.evictedThrough;
-			if (canReplay) {
+			if (canReplay && !(disowned.has(handle) && tracked.has(handle))) {
 				for (const b of buffer.events) {
 					if (b.seq > cursor.seq) this.#send({ type: "event", session: handle, cursor: formatCursor(this.bootId, b.seq), event: b.event, replayed: true });
 				}
