@@ -834,6 +834,42 @@ visible and then polls until the newest report carries the generation,
 `has_visual` and the object id it expects. That is the shape the same spec
 already uses for every later drawing in it.
 
+## A test that reads the scene that is leaving
+
+A scene change does not take the old scene away at once. The stage keeps
+the scene that is leaving in the document through its exit, about 400 ms
+and longer on a loaded runner, and marks it inert from the frame it starts
+to leave (`apps/frontend/src/components/Scenes.tsx`). Until the exit ends
+the stage holds two scenes, or three, and the leaving one usually comes
+first. So `document.querySelector('.content-grid > .content-main')`
+returns the leaving scene's column. `openScene` is a scene change too: the
+fixture loads after the page's first render, so the idle scene is leaving
+for the first 400 ms or so.
+
+At 390x844, from the architecture fixture to a short plan, the leaving
+column is 488 px and the plan's is 498 px from its first frame; the rails
+under them differ by those 10 px. A spec that read once, 600 ms in,
+measured the leaving column whenever the exit outlasted the wait:
+progress.spec found the panel 4.9 px off its column's centre (#341), and
+composition.spec found the aux row 9.8 px past the column (CI, WebKit at
+390x844). #391 took the switch from one column to the other for a page
+relayout. There is none: the plan's column never moves.
+
+The hazard is a one-shot `document.querySelector` read, in the page, of a
+part the leaving scene can also hold: a column, an aux row, a rail, a
+heading. A strict Playwright locator (`toBeVisible`, `locator.evaluate`)
+fails at once on two matches instead of reading the wrong one, and a count
+assertion retries until the exit ends. A read of an object only the new
+scene shows finds that one.
+
+The rule: a spec reads a scene's parts from `CURRENT_SCENE`
+(`apps/frontend/tests/visual/helpers.ts`), the scene that is not inert, and
+scopes the wait in front of that read the same way. It does not wait the
+exit out. A read anchored on an element takes the scene that holds it,
+`element.closest('.scene')`. Behind a modal (focus, the history) every
+scene is inert and `CURRENT_SCENE` matches nothing; a spec that reads
+the scene there selects it by its kind (`[data-scene="..."]`).
+
 ## A test that reads what the page is sent
 
 A backend test reads what the browser is sent from the delivery queue, the

@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { DisplayFixtureServer } from '../integration/display-fixture-server.mjs';
-import { openScene, runActions } from './helpers';
+import { CURRENT_SCENE, openScene, runActions } from './helpers';
 
 // On a portrait stage the rail stands under the main column: Damocles at
 // the size it has in every scene, beside the note read whole. Kayne
@@ -25,9 +25,9 @@ const LARGE = ['architecture', 'topology', 'pipeline', 'trace', 'handoff', 'plan
 async function rail(page: Page) {
   await expect(page.locator('.content-rail')).toBeVisible();
   await page.waitForTimeout(700);
-  return page.evaluate(() => {
+  return page.locator(CURRENT_SCENE).evaluate((scene) => {
     const box = (selector: string) => {
-      const element = document.querySelector(selector);
+      const element = scene.querySelector(selector);
       if (!element) return null;
       const { top, bottom, width, height } = element.getBoundingClientRect();
       return { top, bottom, width, height };
@@ -66,27 +66,27 @@ for (const size of PORTRAIT) {
 // card inside the rail and in view in the column.
 async function note(page: Page) {
   await page.waitForTimeout(700);
-  return page.evaluate(() => {
+  return page.locator(CURRENT_SCENE).evaluate((scene) => {
     const box = (element: Element) => {
       const { top, bottom } = element.getBoundingClientRect();
       return { top, bottom };
     };
-    const column = document.querySelector('.content-rail__details')!;
-    const card = document.querySelector('.content-rail .rail-note')!;
-    const text = document.querySelector<HTMLElement>('.content-rail .annotation-card__text')!;
+    const column = scene.querySelector('.content-rail__details')!;
+    const card = scene.querySelector('.content-rail .rail-note')!;
+    const text = scene.querySelector<HTMLElement>('.content-rail .annotation-card__text')!;
     return {
       textWhole: text.scrollHeight <= text.clientHeight + 1,
       card: box(card),
       column: box(column),
-      rail: box(document.querySelector('.content-rail')!),
-      main: box(document.querySelector('.content-grid > .content-main')!),
-      grid: box(document.querySelector('.content-grid')!),
+      rail: box(scene.querySelector('.content-rail')!),
+      main: box(scene.querySelector('.content-grid > .content-main')!),
+      grid: box(scene.querySelector('.content-grid')!),
       leads: card.classList.contains('rail-note--leads'),
       // Nothing is drawn over an edge the column continues past (#177).
-      rims: document.querySelectorAll('.content-rail [class*="scroll-rim"]').length,
+      rims: scene.querySelectorAll('.content-rail [class*="scroll-rim"]').length,
       // The activity panel's slot where it stands in the column's flow (not set aside).
       slot: (() => {
-        const slot = document.querySelector('.content-rail__details > .tool-activity-slot:not(.tool-activity-slot--away)');
+        const slot = scene.querySelector('.content-rail__details > .tool-activity-slot:not(.tool-activity-slot--away)');
         return slot && slot.getBoundingClientRect().height > 0 ? box(slot) : null;
       })(),
     };

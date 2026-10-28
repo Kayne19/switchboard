@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { FRAME_GEOMETRIES, GEOMETRIES, frameCrossings, openScene, runActions } from './helpers';
+import { CURRENT_SCENE, FRAME_GEOMETRIES, GEOMETRIES, frameCrossings, openScene, runActions } from './helpers';
 
 // The calendar in a real browser, at each geometry the visual suite uses:
 // what jsdom cannot see because it draws no boxes. No golden is compared;
@@ -306,18 +306,18 @@ for (const geometry of FRAME_GEOMETRIES) {
         // The same calendar, sent again beside a code primary.
         const week = await page.evaluate(() => window.SwitchboardController!.state().agentObjects.week.data);
         await runActions(page, [{ op: 'show', id: 'week', type: 'calendar', role: 'secondary', data: week }, codePrimary]);
-        await expect(page.locator('.composed-aux-object [data-testid="calendar"]')).toBeVisible();
+        await expect(page.locator(`${CURRENT_SCENE} .composed-aux-object [data-testid="calendar"]`)).toBeVisible();
         await page.waitForTimeout(400);
-        expect(await page.evaluate(frameCrossings, CALENDAR), 'aux').toEqual([]);
+        expect(await page.evaluate(frameCrossings, `${CURRENT_SCENE} ${CALENDAR}`), 'aux').toEqual([]);
         // However small its cell, the calendar shows the NOTE badge of the event the rail's note names, whole.
-        const auxBadge = '.composed-aux-object [data-testid="calendar"] .note-badge';
+        const auxBadge = `${CURRENT_SCENE} .composed-aux-object [data-testid="calendar"] .note-badge`;
         expect(await page.locator(auxBadge).count(), 'aux badge drawn').toBeGreaterThan(0);
         expect(await page.evaluate(partsCut, auxBadge), 'aux badge').toEqual([]);
         if (scene !== 'today') {
           // Alone in the aux row, the calendar asks it for its whole share (two fifths of the column): an inset the row
           // is not asked for shrank a calendar that fills its box, a step at a time, to the cell's floor.
-          const share = await page.evaluate(() => {
-            const height = (selector: string) => document.querySelector(selector)!.getBoundingClientRect().height;
+          const share = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+            const height = (selector: string) => scene.querySelector(selector)!.getBoundingClientRect().height;
             return height('.composed-aux') / height('.composed-main');
           });
           expect(share).toBeGreaterThan(0.39);

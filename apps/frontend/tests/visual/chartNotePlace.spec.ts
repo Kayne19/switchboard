@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openScene, runActions } from './helpers';
+import { CURRENT_SCENE, openScene, runActions } from './helpers';
 
 // A note a chart has no clear place for stays readable beside the chart:
 // where the rail stands under the charts (a portrait stage) it lies in a
@@ -50,13 +50,13 @@ for (const size of [{ width: 390, height: 844 }, { width: 820, height: 1180 }]) 
     await expect(page.locator('.chart-note[data-note="uptime-note"]')).toHaveCount(0);
     // The bar it names stays marked.
     await expect(page.locator('.chart-callout[data-index="2"][data-series="THIS MONTH"]')).toHaveCount(1);
-    const geometry = await page.evaluate(() => {
+    const geometry = await page.locator(CURRENT_SCENE).evaluate((scene) => {
       const card = (selector: string) => {
-        const element = document.querySelector<HTMLElement>(selector)!;
+        const element = scene.querySelector<HTMLElement>(selector)!;
         const { left, top, right, bottom } = element.getBoundingClientRect();
         return { left, top, right, bottom };
       };
-      const text = document.querySelector<HTMLElement>('.chart-note-band .annotation-card__text')!;
+      const text = scene.querySelector<HTMLElement>('.chart-note-band .annotation-card__text')!;
       return {
         band: card('.chart-note-band'),
         chart: card('.chart-object'),
@@ -84,13 +84,13 @@ for (const scene of ['training', 'comparison']) {
   test(`on a phone on its side the ${scene} note is read whole, on the chart or leading the rail`, async ({ page }) => {
     await page.setViewportSize({ width: 844, height: 390 });
     await show(page, scene);
-    const geometry = await page.evaluate(() => {
+    const geometry = await page.locator(CURRENT_SCENE).evaluate((scene) => {
       const whole = (element: HTMLElement | null) => {
         const text = element?.querySelector<HTMLElement>('.annotation-card__text');
         return text ? text.scrollHeight <= text.clientHeight + 1 && text.clientHeight > 0 : null;
       };
-      const cards = [...document.querySelectorAll<HTMLElement>('.chart-note:not(.chart-note--away)')].map(whole);
-      const details = document.querySelector<HTMLElement>('.content-rail__details')!;
+      const cards = [...scene.querySelectorAll<HTMLElement>('.chart-note:not(.chart-note--away)')].map(whole);
+      const details = scene.querySelector<HTMLElement>('.content-rail__details')!;
       const note = details.querySelector<HTMLElement>('.rail-note');
       const column = details.getBoundingClientRect();
       const noteBox = note?.getBoundingClientRect();
@@ -121,14 +121,14 @@ test('a card on the chart keeps clear of the value printed for the note in the b
     data: { tag: 'OBSERVATION / BACKEND', segments: [{ text: 'The backend suite is the other long pole, and it grew by two seconds.' }], anchor: { target: 'durations', x: 0, series: 'PREVIOUS RUN' } },
   }]);
   await expect(page.locator('.chart-note-band')).toHaveCount(1);
-  const geometry = await page.evaluate(() => {
+  const geometry = await page.locator(CURRENT_SCENE).evaluate((scene) => {
     const box = (element: Element) => {
       const { left, top, right, bottom } = element.getBoundingClientRect();
       return { left, top, right, bottom };
     };
     return {
-      cards: [...document.querySelectorAll('.chart-note:not(.chart-note--away)')].map(box),
-      values: [...document.querySelectorAll('.chart-object .chart-callout__value')].map(box),
+      cards: [...scene.querySelectorAll('.chart-note:not(.chart-note--away)')].map(box),
+      values: [...scene.querySelectorAll('.chart-object .chart-callout__value')].map(box),
     };
   });
   // Both notes' points print their values: the one on the chart and the one in the band.
@@ -147,11 +147,11 @@ test('a compare pair on a portrait phone keeps its second chart in view, the not
   await expect(page.locator('.chart-object')).toHaveCount(2);
   // A band would push the compare chart out of the scrolling row.
   await expect(page.locator('.chart-note-band')).toHaveCount(0);
-  const geometry = await page.evaluate(() => {
-    const row = document.querySelector('.training-charts')!.getBoundingClientRect();
-    const compare = document.querySelectorAll('.chart-object')[1].getBoundingClientRect();
-    const note = document.querySelector('.content-rail .rail-note')?.getBoundingClientRect() ?? null;
-    const details = document.querySelector('.content-rail__details')!.getBoundingClientRect();
+  const geometry = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+    const row = scene.querySelector('.training-charts')!.getBoundingClientRect();
+    const compare = scene.querySelectorAll('.chart-object')[1].getBoundingClientRect();
+    const note = scene.querySelector('.content-rail .rail-note')?.getBoundingClientRect() ?? null;
+    const details = scene.querySelector('.content-rail__details')!.getBoundingClientRect();
     return { row: { top: row.top, bottom: row.bottom }, compareTop: compare.top, note: note && { top: note.top, bottom: note.bottom }, details: { top: details.top, bottom: details.bottom } };
   });
   expect(geometry.compareTop).toBeLessThan(geometry.row.bottom - 40);

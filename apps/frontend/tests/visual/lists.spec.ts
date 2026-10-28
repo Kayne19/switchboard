@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { openScene, runActions } from './helpers';
+import { CURRENT_SCENE, openScene, runActions } from './helpers';
 
 // To-do list and inbox layout the unit tests cannot see: jsdom draws no
 // boxes. These hold the rules docs/visual-channel.md gives the two lists
@@ -171,10 +171,10 @@ for (const viewport of [geometries[0], geometries[2]]) {
       { op: 'show', id: 'todo', type: 'tasks', role: 'secondary', data: tasks },
       noteOn('todo', 'pack'),
     ]);
-    await expect(page.locator('.composed-aux [data-item="pack"] .note-badge')).toBeVisible();
+    await expect(page.locator(`${CURRENT_SCENE} .composed-aux [data-item="pack"] .note-badge`)).toBeVisible();
     await settle(page);
-    const box = await page.evaluate(() => {
-      const cell = document.querySelector<HTMLElement>('.composed-aux [data-testid="tasks"]')!;
+    const box = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+      const cell = scene.querySelector<HTMLElement>('.composed-aux [data-testid="tasks"]')!;
       const scroll = cell.querySelector<HTMLElement>('.list-viewport__scroll')!.getBoundingClientRect();
       const row = cell.querySelector<HTMLElement>('[data-item="pack"]')!.getBoundingClientRect();
       return { rowTop: row.top, rowBottom: row.bottom, top: scroll.top, bottom: scroll.bottom };
@@ -208,8 +208,8 @@ for (const viewport of geometries) {
     await openScene(page, 'today');
     await expect(page.locator('.composed-aux [data-testid="inbox"]')).toBeVisible();
     await settle(page);
-    const cut = await page.evaluate(() =>
-      [...document.querySelectorAll<HTMLElement>('.composed-aux :is(.inbox-primitive__counts, .tasks-primitive__counts)')].flatMap((counts) => {
+    const cut = await page.locator(CURRENT_SCENE).evaluate((scene) =>
+      [...scene.querySelectorAll<HTMLElement>('.composed-aux :is(.inbox-primitive__counts, .tasks-primitive__counts)')].flatMap((counts) => {
         const list = counts.closest<HTMLElement>('[data-testid]')!.getBoundingClientRect();
         const range = document.createRange();
         range.selectNodeContents(counts);
