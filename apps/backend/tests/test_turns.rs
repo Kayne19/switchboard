@@ -2,7 +2,7 @@ use super::*;
 use crate::app_state::AppState;
 use crate::app_state::{
     assert_lifecycle_consistent, debug_events, next_event_of, scratch_root, state, state_on,
-    state_with_agents, state_with_agents_options, until_debug,
+    state_with_agents, state_with_agents_options, state_with_jev, until_debug,
 };
 use crate::audio::{Speaker, TestTtsGate};
 use crate::browser::PageFeed;
@@ -11,7 +11,7 @@ use crate::caller_input::assert_dropped_with_notice;
 use crate::delivery::Event;
 use crate::host_turns::{autonomous_turn, handle_project_turn};
 use crate::hosts::{FakeHostAgent, Step};
-use crate::jev::fake_jev_client;
+use crate::jev::{fake_jev_client, test_client};
 use crate::module_calls::{diagram_show, module_call, request_to_speak};
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::{Switchboard, OPERATOR};
@@ -55,7 +55,7 @@ async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
 #[tokio::test]
 async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
     let (client, requests, _responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
 
@@ -117,7 +117,7 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
 #[tokio::test]
 async fn steer_rechecks_generation_under_the_active_session_guard() {
     let (client, _requests, responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let mut events = PageFeed::open(&state);
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
@@ -181,7 +181,7 @@ async fn an_utterance_steers_a_turn_that_holds_the_pbx_lock() {
     // wait on it, or the utterance is routed only after the turn ends and is
     // queued instead of steered.
     let (client, _requests, _responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let mut events = PageFeed::open(&state);
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
@@ -320,7 +320,7 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
         "cwd": "/srv/alpha",
     }))
     .unwrap()]);
-    let state = state_with_jev(client, registry);
+    let state = sh_state_with_jev(client, registry);
     let host = state.0.switchboard.lock().await.hosts();
     let listed = std::sync::Arc::new(tokio::sync::Notify::new());
     let listed_for_host = listed.clone();
@@ -359,7 +359,7 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
 #[tokio::test]
 async fn routing_after_a_new_leg_sees_the_screen_the_gate_marked_stale() {
     let (client, _, _) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let (connection, _snapshot, _watermark) = state.register_connection().await;
     crate::browser::handle_text_frame(
         &state,
@@ -401,7 +401,7 @@ async fn takeover_desk_listing_does_not_hold_the_pbx_lock() {
         "cwd": "/srv/alpha",
     }))
     .unwrap()]);
-    let state = state_with_jev(client, registry);
+    let state = sh_state_with_jev(client, registry);
     let host = state.0.switchboard.lock().await.hosts();
     let listed = std::sync::Arc::new(tokio::sync::Notify::new());
     let listed_for_host = listed.clone();
@@ -1178,7 +1178,7 @@ async fn process_turns_settles_foreground_idle_once() {
 async fn a_routed_utterance_is_traced_from_jev_to_its_turn() {
     use crate::debug::DebugEvent;
     let (client, _requests, _responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let generation = state.0.coordinator.generation();
 
     dispatch_routed_transcript(&state, "clip-7", generation, "hello".into()).await;
@@ -1270,19 +1270,13 @@ async fn a_routed_utterance_is_traced_from_jev_to_its_turn() {
 #[tokio::test]
 async fn an_unavailable_jev_is_traced_as_the_fallback_rule() {
     use crate::debug::DebugEvent;
-    let client = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder(|_| async {
+    let client = test_client(|_| async {
         Err(crate::jev::JevError::Http {
             status: 503,
             body: "down".into(),
         })
     });
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
 
     route_transcript(&state, "clip-8", "hello").await;
 
@@ -1302,7 +1296,7 @@ async fn an_unavailable_jev_is_traced_as_the_fallback_rule() {
 #[tokio::test]
 async fn a_stale_routed_utterance_ends_its_trace() {
     let (client, _requests, _responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let stamped = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
 
@@ -1657,15 +1651,9 @@ async fn assert_turn_at_rest(state: &AppState, id: &str) {
     assert!(state.0.coordinator.finish_operation(&probe));
 }
 
-fn state_with_jev(client: crate::jev::JevClient, registry: Registry) -> AppState {
+fn sh_state_with_jev(client: crate::jev::JevClient, registry: Registry) -> AppState {
     let config = crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", "/bin/sh")]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("test catalog"),
-    );
-    let board = Switchboard::new_with_jev(&config, registry, std::sync::Arc::new(prewarm), client);
-    state_on(board)
+    state_with_jev(&config, registry, client)
 }
 
 /// A pi stand-in that answers every prompt with `reply`.
