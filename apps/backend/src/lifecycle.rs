@@ -538,8 +538,8 @@ impl Coordinator {
 
     /// The caller is back on the operator: the project, its model, session,
     /// thinking, and catalog are gone with its leg, and so is its token. The
-    /// line takes the operator's identity at the same generation, in the
-    /// phase it is in: a quiet is ended by its rescue's settle, not by this.
+    /// line takes the operator's identity at the same generation, in
+    /// whatever phase it is in.
     pub fn return_to_operator(&self) {
         self.step(Event::ReturnToOperator)
             .expect("a return to the operator is admitted in every phase");

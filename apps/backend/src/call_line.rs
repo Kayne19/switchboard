@@ -514,12 +514,9 @@ impl Line {
                 }
                 _ => unchanged(),
             },
-            // The phase is kept. A turn still running (the operator is being
-            // told why the caller came back) stays open until it ends, a
-            // staged candidate stays staged (it is not on the line yet), and
-            // a quiet stays a quiet: the return carries no generation, so it
-            // cannot tell whose quiet it landed in, and only the rescue's own
-            // settle ends it (#462).
+            // The phase is kept: a running turn stays open, a staged
+            // candidate stays staged, and only the rescue's own settle ends
+            // a quiet (#462).
             Event::ReturnToOperator => Ok((self.with_leg(leg.returned()), None)),
             Event::BeginCandidate(mut candidate) => {
                 match self {

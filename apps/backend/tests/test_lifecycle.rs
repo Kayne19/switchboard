@@ -508,6 +508,7 @@ fn return_to_operator_clears_the_leg_from_every_phase() {
     assert!(call.settle(rescued));
     assert_eq!(phase(&call), "operator");
     assert_on_the_operator(&call);
+    assert!(call.begin_prompt(&call.current_identity()).is_ok());
 
     // Mid-turn: the operator is being told why the caller came back, and the
     // turn settles the phase when it ends.
@@ -540,34 +541,6 @@ fn return_to_operator_clears_the_leg_from_every_phase() {
     call.return_to_operator();
     assert_eq!(phase(&call), "shutdown");
     assert_on_the_operator(&call);
-}
-
-/// A return to the operator can land while a rescue's quiet is running:
-/// the agent's host closed its session, or a failure exit reached the PBX
-/// before the rescue's abort did. It carries no generation, so it cannot
-/// tell whose quiet it is in. It clears the leg and leaves the quiet to the
-/// rescue that began it, which admits turns again when it settles (#462).
-#[test]
-fn a_return_to_the_operator_leaves_the_quiet_to_the_rescue_that_began_it() {
-    let call = coordinator();
-    on_alpha(&call);
-    let rescued = call.begin_rescue("page control");
-    let generation = call.generation();
-
-    call.return_to_operator();
-    assert_eq!(phase(&call), "quiescing");
-    assert_on_the_operator(&call);
-    assert_eq!(call.generation(), generation);
-    assert_eq!(
-        call.begin_prompt(&call.current_identity()),
-        Err(LifecycleError::WrongPhase),
-        "the quiet still holds turns"
-    );
-
-    assert!(call.settle(rescued));
-    assert_eq!(phase(&call), "operator");
-    assert_on_the_operator(&call);
-    assert!(call.begin_prompt(&call.current_identity()).is_ok());
 }
 
 #[test]

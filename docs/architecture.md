@@ -524,7 +524,7 @@ through them.
 | `Open` | the leg on the line; the turn running on it, if any | the call starts here; `settle`, `finish_intro`, a rollback | `begin_candidate`, a rescue, `begin_shutdown` |
 | `Starting` | the leg, which still answers; the staged candidate, private until adopted; the leg's turn (a transfer runs inside the caller's) | `begin_candidate` | `adopt_candidate`; a rollback (to `Open`, the turn kept); a rescue or shutdown, which abandon the candidate and retire its generation |
 | `Adopted` | the adopted leg and its intro (or later) turn; the leg it `replaced` | `adopt_candidate` | `finish_intro` (to `Open`); a rollback (`replaced` comes back); a rescue; a shutdown; another `begin_candidate` |
-| `Quiescing` | the leg under the rescue's new identity; no turn | a rescue | a settle naming that rescue's generation (`settle`, `settle_at`), `begin_candidate`, a shutdown. `return_to_operator` clears the leg and stays: the quiet is the rescue's to end |
+| `Quiescing` | the leg at the rescue's generation (under its retired identity, or the operator's after a return); no turn | a rescue | a settle naming that rescue's generation (`settle`, `settle_at`), `begin_candidate`, a shutdown |
 | `Shutdown` | the leg; no turn, no startup | `begin_shutdown` | nothing |
 
 Entering `Starting` announces the candidate (`candidate`); leaving it

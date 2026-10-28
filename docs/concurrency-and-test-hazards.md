@@ -361,11 +361,14 @@ and settling there would admit turns mid-dial (#461). The settle is one call-lin
 at that generation. A newer rescue that lands after a control's PBX step, or
 between a delivery's generation check and its settle (a rescue does not take
 `operation_transition`), keeps its quiet: an older control's settle, or a
-status publication, no longer ends it (#369). Nor does a return to the
-operator (`drop_agent`: the agent's host closed its session, or a failure
-exit reached the PBX before the rescue's abort did). It carries no
-generation, so it clears the leg and leaves the line `Quiescing` for the
-rescue to settle (#462).
+status publication, no longer ends it (#369). A return to the operator
+(`drop_agent`) keeps the phase, as a thinking event does: the line takes the
+operator's identity in whatever phase it is in, and a quiet stays its
+rescue's to settle (#462). That settle has to be reached without the
+control's request: hyper drops a handler's future when the client goes
+away while the response is pending (a reload, a suspended tab), so each
+page control's body runs on its own task (`page_controls::detached`) and
+the handler only waits for it.
 
 ### A swap is decided before its rescue
 
