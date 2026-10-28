@@ -543,7 +543,7 @@ async fn a_speak_the_deadline_cuts_after_its_audio_played_is_answered_cut_short(
         crate::audio::SttAdapter::from_command(None),
         crate::audio::SttStreamAdapter::from_command(None),
     );
-    let (mut page, _snapshot, _watermark) = state.register_connection().await;
+    let (mut page, _) = state.register_connection().await;
     start_speech_worker_for_test(&state);
     let reply = module_call(
         &state,
@@ -1184,7 +1184,7 @@ async fn display_reports_rejection_from_the_browser() {
 #[tokio::test]
 async fn a_display_the_page_rejects_is_delivered_with_the_pages_reason() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let epoch = connection.epoch;
     let reply = tokio::spawn({
         let state = state.clone();
@@ -1482,7 +1482,7 @@ async fn a_background_refusal_reaches_the_module_as_its_bare_reason() {
 #[tokio::test]
 async fn a_held_display_is_accepted_with_its_reason_in_the_result() {
     let state = state();
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator

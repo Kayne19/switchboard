@@ -1278,7 +1278,7 @@ async fn body_read_to_its_end(state: &AppState, text: &str) {
 #[tokio::test]
 async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
     let state = speaking_state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let ahead = state.0.audio.lock().await.reserve(generation);
     let reserved = reserve_speech(
@@ -1329,7 +1329,7 @@ async fn speech_held_behind_an_open_slot_is_answered_as_spoken() {
 #[tokio::test]
 async fn a_line_still_held_at_its_deadline_never_plays() {
     let state = speaking_state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let ahead = state.0.audio.lock().await.reserve(generation);
     let reserved = reserve_speech(
@@ -1389,7 +1389,7 @@ async fn a_line_the_deadline_cuts_while_held_never_plays() {
         SttStreamAdapter::from_command(None),
     );
     start_speech_worker_for_test(&state);
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let ahead = state.0.audio.lock().await.reserve(generation);
     let reserved = reserve_speech(
