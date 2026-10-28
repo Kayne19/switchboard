@@ -200,7 +200,7 @@ button {
   transform: translateX(-50%);
 }
 
-.focusable-content {
+.expandable-surface {
   position: relative;
   display: block;
   width: 100%;
@@ -213,12 +213,12 @@ button {
   text-align: inherit;
   cursor: zoom-in;
 }
-/* The surface's own button (FocusableSurface): a tab stop with a name and
+/* The surface's own button (ExpandableSurface): a tab stop with a name and
    nothing drawn of it but the page's ring, over the surface. It stands out
    of the surface's flow, over all of it, so focus brings the whole surface
    and its ring into view as it did the surface itself; it takes no tap, so
    a tap, and a screen reader's touch, reach what the surface holds. */
-.focusable-content__expand {
+.expandable-surface__expand {
   position: absolute;
   inset: 0;
   margin: 0;
@@ -285,13 +285,13 @@ button {
    own, a source's, would cover its outline); a calendar's paged days over
    their rims and the hours' own; a list's or a drawing's scroll over its
    rims and its pinned head, on the port or view it scrolls in. */
-.focusable-content__expand:focus-visible,
+.expandable-surface__expand:focus-visible,
 .calendar-pages:focus-visible,
 .list-viewport__scroll:focus-visible,
 .drawing-viewport__scroll:focus-visible {
   outline: none;
 }
-.focusable-content:has(> .focusable-content__expand:focus-visible)::after,
+.expandable-surface:has(> .expandable-surface__expand:focus-visible)::after,
 .calendar-pages:focus-visible::after,
 .list-viewport__port:has(> .list-viewport__scroll:focus-visible)::after,
 .drawing-viewport__view:has(> .drawing-viewport__scroll:focus-visible)::after {
@@ -1195,7 +1195,9 @@ button {
   min-height: 0;
   background: #000;
 }
-.chart-object > .focusable-content {
+.chart-object > .expandable-surface {
+  /* Keeps the landscape chart out of the framed grid. */
+  display: block;
   position: relative;
   z-index: 1;
   flex: 1 1 0;
@@ -1671,8 +1673,8 @@ button {
 .composed-aux-object--chart {
   min-height: max(var(--aux-visual-floor), calc(153px + 2 * clamp(12px, 1.4cqw, 22px)));
 }
-.composed-primary-object > .focusable-content,
-.composed-aux-object > .focusable-content {
+.composed-primary-object > .expandable-surface,
+.composed-aux-object > .expandable-surface {
   position: relative;
   z-index: 1;
   width: 100%;
@@ -1680,7 +1682,7 @@ button {
   min-height: 0;
   padding: clamp(16px, 2cqw, 32px);
 }
-.composed-aux-object > .focusable-content {
+.composed-aux-object > .expandable-surface {
   padding: clamp(12px, 1.4cqw, 22px);
 }
 .composed-main--metric-primary {
@@ -1701,7 +1703,7 @@ button {
 .composed-primary-object--cluster {
   width: 100%;
 }
-.composed-primary-object--metric > .focusable-content {
+.composed-primary-object--metric > .expandable-surface {
   height: auto;
   padding: clamp(12px, 1.4cqw, 22px);
 }
@@ -2055,7 +2057,7 @@ button {
 }
 
 /* Diagram */
-.diagram-object .focusable-content {
+.diagram-object .expandable-surface {
   --slot-pad: clamp(18px, 2.2cqw, 38px);
   position: relative;
   z-index: 1;
@@ -2348,8 +2350,8 @@ button {
    the list scrolls inside the frame like any list. */
 /* Timers and a forecast in the panel frame clear both of its steps with
    their own padding (frame.spec.ts). */
-.timer-object .focusable-content,
-.weather-object .focusable-content {
+.timer-object .expandable-surface,
+.weather-object .expandable-surface {
   position: relative;
   z-index: 1;
   padding: clamp(26px, 4.2cqh, 48px) clamp(22px, 2.6cqw, 42px) clamp(18px, 3cqh, 34px);
@@ -3768,9 +3770,9 @@ button {
 
 /* The panel frame is drawn behind the content, so a list's rows and a
    figure sit inside its outline, clear of its cut corners. */
-.tasks-object .focusable-content,
-.inbox-object .focusable-content,
-.image-object .focusable-content {
+.tasks-object .expandable-surface,
+.inbox-object .expandable-surface,
+.image-object .expandable-surface {
   --slot-top: clamp(22px, 3.6cqh, 42px);
   --slot-bottom: clamp(16px, 2.6cqh, 30px);
   position: relative;
@@ -4340,7 +4342,7 @@ button {
    last day) is cut. Today's column or cell and the now line are orange.
    The heights the layout reckons with (CalendarPrimitive.tsx: DAY_ROW_PX,
    LANE_PX, LINE_PX, MONTH_*) are set inline or match these sizes. */
-.calendar-object .focusable-content {
+.calendar-object .expandable-surface {
   position: relative;
   z-index: 1;
   padding: 0 clamp(18px, 2.2cqw, 38px);
@@ -4357,18 +4359,13 @@ button {
    assumed: a calendar's grid, a list's last rows and a figure's caption ran
    over the lower step. Timers and a forecast keep their own padding, which
    clears both steps (frame.spec.ts). */
-.calendar-object > .focusable-content,
-.tasks-object > .focusable-content,
-.inbox-object > .focusable-content,
-.image-object > .focusable-content {
+/* A surface may replace the track list with `--framed-rows`; what it holds stays in row 2. */
+.expandable-surface--framed {
   display: grid;
-  grid-template-rows: max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px));
+  grid-template-rows: var(--framed-rows, max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px)));
 }
 /* What the surface holds, not its own button, which stands over all of it. */
-.calendar-object > .focusable-content > :not(.focusable-content__expand),
-.tasks-object > .focusable-content > :not(.focusable-content__expand),
-.inbox-object > .focusable-content > :not(.focusable-content__expand),
-.image-object > .focusable-content > :not(.focusable-content__expand) {
+.expandable-surface--framed > :not(.expandable-surface__expand) {
   grid-row: 2;
   min-height: 0;
 }
@@ -4381,7 +4378,7 @@ button {
    row has a step under the panel's share of 40cqh; one taller than that is
    held by a floor (the row's least, 210 px at most, or a visual's, 200 px),
    whose step is under 9 px, within the 12 px the clamp keeps. */
-.composed-aux-object--calendar > .focusable-content {
+.composed-aux-object--calendar > .expandable-surface {
   padding-block: max(clamp(12px, 1.4cqw, 22px), calc(var(--panel-step-share) * 40cqh + 4px));
 }
 .calendar {
@@ -5379,7 +5376,7 @@ button {
   display: flex;
   flex-direction: column;
 }
-.composed-primary-object--progress > .focusable-content {
+.composed-primary-object--progress > .expandable-surface {
   flex: 0 1 auto;
   height: auto;
   min-height: 0;
@@ -5874,17 +5871,12 @@ button {
   .training-charts--compare .chart-object {
     min-height: 38cqh;
   }
-  /* The plot's foot stands above the panel's lower step, with the panel's
-     gap: on a tall portrait slot the step outgrows the 8 px, and the first
-     tick sat on it. */
-  .chart-object > .focusable-content {
+  /* The plot's foot row stays at or above the panel's lower step, so the
+     first tick clears it. */
+  .chart-object > .expandable-surface {
     display: grid;
-    grid-template-rows: minmax(0, 1fr) max(8px, var(--panel-inset));
-    padding: 14px 8px 0;
-  }
-  .chart-object > .focusable-content > :not(.focusable-content__expand) {
-    grid-row: 1;
-    min-height: 0;
+    --framed-rows: 14px minmax(0, 1fr) max(8px, var(--panel-inset));
+    padding: 0 8px;
   }
   .chart-notes {
     --note-width: min(78%, 460px);
@@ -5963,7 +5955,7 @@ button {
     top: clamp(10px, 1.4cqh, 16px);
   }
 
-  .diagram-object .focusable-content {
+  .diagram-object .expandable-surface {
     --slot-pad: 14px;
   }
   .document-viewport__inner {

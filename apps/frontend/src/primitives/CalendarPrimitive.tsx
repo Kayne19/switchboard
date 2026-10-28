@@ -541,7 +541,7 @@ function PagedDays({ paged, before, after, shown, onTurn, children }: { paged: b
       // a pointer (drawingScroll `scrollMove`, across): an arrow, Space or a
       // page key a page of days, Home and End to the first and the last.
       // Each is handled, even with no more days that way, so it reaches
-      // nothing else (FocusableSurface's rule: Space never expands the
+      // nothing else (ExpandableSurface's rule: Space never expands the
       // calendar here); a key the hours took already is left to them.
       tabIndex={0}
       role="group"

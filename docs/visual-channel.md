@@ -160,7 +160,7 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   pointing out; several lines to one node are one name. A tap on a name
   or on the map does not expand the object, as a tap on the drawing does;
   the control marks the tap handled and lets it go on, so the page still
-  hears it as the gesture that lets it play audio (`FocusableSurface`: no
+  hears it as the gesture that lets it play audio (`ExpandableSurface`: no
   control inside it stops an event).
 - **A map shows the whole.** A drawing that scrolls 1.6 views or more
   carries a small map: every node and line, the view boxed in orange. A

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NoteData } from '../../src/controller/types';
 import { pipelineDiagram, topologyDiagram, traceDiagram } from '../../src/fixtures/scenes';
 import { DiagramPrimitive } from '../../src/primitives/DiagramPrimitive';
-import { FocusableSurface } from '../../src/primitives/FocusableSurface';
+import { ExpandableSurface } from '../../src/primitives/ExpandableSurface';
 import { RAIL } from '../../src/primitives/drawingScroll';
 import { SequencePrimitive } from '../../src/primitives/SequencePrimitive';
 import { mount, rerender, stubResizeObserver, unmountAll } from './sceneHarness';
@@ -151,9 +151,9 @@ describe('a scrolled graph at rest', () => {
     document.addEventListener('click', listen);
     try {
       render(
-        <FocusableSurface onActivate={() => activated.push('expand')} ariaLabel="Expand diagram">
+        <ExpandableSurface onActivate={() => activated.push('expand')} ariaLabel="Expand diagram">
           <DiagramPrimitive data={topologyDiagram} id="topology" note={gateNote} />
-        </FocusableSurface>,
+        </ExpandableSurface>,
       );
       const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
       const map = host.querySelector<HTMLElement>('.drawing-viewport__map')!;

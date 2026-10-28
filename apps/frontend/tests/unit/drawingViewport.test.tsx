@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DrawingViewport } from '../../src/primitives/DrawingViewport';
-import { FocusableSurface } from '../../src/primitives/FocusableSurface';
+import { ExpandableSurface } from '../../src/primitives/ExpandableSurface';
 import type { DrawingFit } from '../../src/primitives/drawingFit';
 import { RAIL, type DrawingMap } from '../../src/primitives/drawingScroll';
 import { mount, rerender } from './sceneHarness';
@@ -91,11 +91,11 @@ describe('a drawing viewport', () => {
     } as typeof HTMLElement.prototype.scrollTo;
     try {
       render(
-        <FocusableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
+        <ExpandableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
           <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
             <rect width="10" height="10" />
           </DrawingViewport>
-        </FocusableSurface>,
+        </ExpandableSurface>,
       );
       const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
       expect(scroller.getAttribute('tabindex')).toBe('0');
@@ -163,11 +163,11 @@ describe('a drawing viewport', () => {
   it('leaves a key with Ctrl, Alt or Meta held to the browser and the surface alike', () => {
     const expanded: string[] = [];
     render(
-      <FocusableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
+      <ExpandableSurface onActivate={() => expanded.push('expand')} ariaLabel="Expand">
         <DrawingViewport drawing={drawing} fit={scrollsDown} map={rows} ariaLabel="d">
           <rect width="10" height="10" />
         </DrawingViewport>
-      </FocusableSurface>,
+      </ExpandableSurface>,
     );
     const scroller = host.querySelector<HTMLDivElement>('.drawing-viewport__scroll')!;
     for (const modifier of ['ctrlKey', 'altKey', 'metaKey']) {
