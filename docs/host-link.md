@@ -547,7 +547,11 @@ above), and after it reconnects to a replaced daemon. Its cursor is taken
 before the session is described, and an event published while it is being
 described is sent after it: the snapshot is the baseline for everything up
 to its cursor, so an event sent before it but not reflected in it would be
-lost (#164). After a host-agent
+lost (#164). A snapshot still being described when a welcome arrives is
+dropped, and the welcome takes its own snapshot of that session even when
+its cursor could replay: the dropped one may carry state no event does, and
+it would otherwise go out after `synced`, repeating an event after an older
+cursor. After a host-agent
 restart it rebuilds each tracked session from the daemon: sessions the
 daemon still has are reattached (a busy one gets an open turn, settled by
 `wait_for_idle`); sessions it no longer has get `session_closed`. The

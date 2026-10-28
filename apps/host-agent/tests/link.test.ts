@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DaemonCommandError } from "../src/daemon_port.ts";
-import { HOST_LINK_PROTOCOL, HostLink, type HostLinkOptions, type HostLinkStatus, parseCursor, type SocketLike } from "../src/link.ts";
+import { HOST_LINK_PROTOCOL, formatCursor, HostLink, type HostLinkOptions, type HostLinkStatus, parseCursor, type SocketLike } from "../src/link.ts";
 import { CommandError } from "../src/sessions.ts";
 import { command, FakeService, type Message } from "./fake_service.ts";
 
@@ -327,6 +327,125 @@ test("reconnect: an event published while the welcome sync describes another ses
 			["snapshot", "event"],
 		);
 		assert.equal(a1[1].cursor, during);
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
+
+// The service's frames for one session, in the order the socket carried them.
+function frames(received: Message[], session: string): string[] {
+	return received.filter((m) => m.session === session).map((m) => `${m.type}:${parseCursor(m.cursor)?.seq}`);
+}
+
+test("reconnect: a snapshot still being described when its link drops is dropped, and the welcome takes its own", async () => {
+	const service = await FakeService.start();
+	let release: (() => void) | null = null;
+	const held = new Promise<void>((r) => (release = r));
+	let describes = 0;
+	const { link } = makeLink(service, {
+		sessions: () => ["a0"],
+		heartbeatMs: 1000,
+		describe: async (h) => {
+			describes++;
+			if (describes === 1) await held;
+			return { session: h, busy: false };
+		},
+	});
+	try {
+		link.publish("a0", { kind: "text", text: "before" });
+		let welcomes = 0;
+		service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: HOST_LINK_PROTOCOL, cursors: welcomes++ === 0 ? {} : { a0: formatCursor(link.bootId, 0) } });
+		link.start();
+		const l0 = await service.link(0);
+		await until(() => describes === 1);
+		link.publish("a0", { kind: "turn_end", turn_id: "t1" });
+		l0.socket.terminate();
+		const l1 = await service.link(1);
+		await l1.next((m) => m.type === "synced");
+		(release as unknown as () => void)();
+		await new Promise((r) => setImmediate(r));
+		link.publish("a0", { kind: "text", text: "marker" });
+		await until(() => l1.received.some((m) => m.type === "event" && m.session === "a0" && parseCursor(m.cursor)?.seq === 3));
+		assert.deepEqual(frames(l1.received, "a0"), ["snapshot:2", "event:3"]);
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
+
+test("reconnect: a keeper's snapshot still being described when its link drops reaches the next link as a snapshot before synced", async () => {
+	const service = await FakeService.start();
+	let release: (() => void) | null = null;
+	const held = new Promise<void>((r) => (release = r));
+	let describes = 0;
+	const { link } = makeLink(service, {
+		sessions: () => ["a0"],
+		heartbeatMs: 1000,
+		describe: async (h) => {
+			describes++;
+			if (describes === 2) await held;
+			return { session: h, model: describes === 1 ? "before-daemon-replace" : "after-daemon-replace" };
+		},
+	});
+	try {
+		let welcomes = 0;
+		service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: HOST_LINK_PROTOCOL, cursors: welcomes++ === 0 ? {} : { a0: formatCursor(link.bootId, 1) } });
+		link.start();
+		const l0 = await service.link(0);
+		await l0.next((m) => m.type === "synced");
+		link.publish("a0", { kind: "text", text: "before" });
+		void link.sendSnapshot("a0");
+		await until(() => describes === 2);
+		l0.socket.terminate();
+		const l1 = await service.link(1);
+		await until(() => l1.received.some((m) => m.type === "synced"));
+		const beforeSynced = l1.received.slice(0, l1.received.findIndex((m) => m.type === "synced"));
+		const snapshot = beforeSynced.find((m) => m.type === "snapshot" && m.session === "a0");
+		assert.equal((snapshot?.info as Message | undefined)?.model, "after-daemon-replace");
+		(release as unknown as () => void)();
+		await new Promise((r) => setImmediate(r));
+		link.publish("a0", { kind: "text", text: "marker" });
+		await until(() => l1.received.some((m) => m.type === "event" && m.session === "a0" && parseCursor(m.cursor)?.seq === 2));
+		assert.deepEqual(frames(l1.received, "a0"), ["snapshot:1", "event:2"]);
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
+
+test("reconnect: a session closed while its snapshot was being described replays its own close, not a synthetic one", async () => {
+	const service = await FakeService.start();
+	let release: (() => void) | null = null;
+	const held = new Promise<void>((r) => (release = r));
+	let tracked = ["a0"];
+	let describes = 0;
+	const { link } = makeLink(service, {
+		sessions: () => tracked,
+		heartbeatMs: 1000,
+		describe: async (h) => {
+			describes++;
+			if (describes === 2) await held;
+			return { session: h };
+		},
+	});
+	try {
+		let welcomes = 0;
+		service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: HOST_LINK_PROTOCOL, cursors: welcomes++ === 0 ? {} : { a0: formatCursor(link.bootId, 1) } });
+		link.start();
+		const l0 = await service.link(0);
+		await until(() => l0.received.some((m) => m.type === "synced"));
+		link.publish("a0", { kind: "text", text: "before" });
+		void link.sendSnapshot("a0");
+		await until(() => describes === 2);
+		link.publish("a0", { kind: "session_closed", reason: "exited" });
+		tracked = [];
+		l0.socket.terminate();
+		const l1 = await service.link(1);
+		await until(() => l1.received.some((m) => m.type === "synced"));
+		const closes = l1.received.filter((m) => m.session === "a0" && m.type === "event").map((m) => (m.event as Message).reason);
+		assert.deepEqual(closes, ["exited"]);
+		(release as unknown as () => void)();
 	} finally {
 		link.stop();
 		await service.close();
