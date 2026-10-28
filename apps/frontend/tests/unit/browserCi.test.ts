@@ -56,6 +56,15 @@ describe('the CI browser job', () => {
     expect(browser).toContain('playwright install --with-deps ${{ matrix.browser }}');
   });
 
+  // The Azure mirror trickles WebKit's libraries in some regions (#561). This
+  // case goes with the step, when actions/runner-images#14823 is fixed.
+  it('takes the Azure mirror out of apt before any apt step', () => {
+    const browser = job('browser');
+    const dropped = browser.indexOf("sed -i '/azure\\.archive\\.ubuntu\\.com/d' /etc/apt/apt-mirrors.txt");
+    expect(dropped).not.toBe(-1);
+    for (const step of ['playwright install', 'apt-get']) expect(browser.indexOf(step), step).toBeGreaterThan(dropped);
+  });
+
   // The iPad is a first-class target, and every iPad browser is WebKit
   // (docs/ipad.md): the specs and the production build run in it too.
   it('runs every leg in Chromium and in WebKit, one engine per leg', () => {
