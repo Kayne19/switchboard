@@ -743,6 +743,45 @@ test about the page clock uses vitest's fake timers
 the fake time with `vi.getMockedSystemTime()` or `new Date()`, since the gate
 refuses `Date.now` whatever clock it reads.
 
+## A timer a test leaves armed
+
+A playback whose clip is meant to be sounding arms a stall watch
+(`ProgressWatch`, 3 s by default) on the real clock. `audioPlayback.test.ts`
+runs in node, and each of its tests stubs what a browser has
+(`requestAnimationFrame`, `MediaSource`, object URLs) for itself; `afterEach`
+removes the stubs. Eighteen of its tests ran on the real clock, ended with a
+clip sounding or opening, and never disposed the playback, so the watch
+outlived the test.
+
+Vitest runs each file in a worker of its own and ends the worker with the
+file, so a watch still armed when the file ends never fires. Unloaded, the
+file's tests take a second or two. On a loaded machine they can run past 3 s,
+and then a watch an early test left fires during a later test in the same
+file, after the early test's stubs are gone. In one `npm test` run such a
+watch reached the level meter's `cancelAnimationFrame` and threw. Every test
+passed, and the uncaught error failed the run.
+
+Every test in the file now runs on vitest's fake clock, and `afterEach` drops
+whatever timers are left with `vi.useRealTimers()`, so none can fire in a
+later test. Before that, `afterEach` disposes every playback the test made
+through `playbackForTest` (`AudioPlayback.dispose` cancels every timer a
+playback holds) and fails the test if a timer is still armed.
+
+`callRuntime.test.ts` had the same shape on its failure path: each test
+disposes its runtime after its expects, so a failing expect skipped the
+dispose and left the playback's watch armed, and the same `ReferenceError`
+followed. Its `beforeEach` now puts every test on the fake clock too.
+
+The rule: a unit test whose code under test arms timers runs on the fake
+clock, and ends what it started (a playback, a runtime) before its stubs go.
+`audioPlayback.test.ts` and `callRuntime.test.ts` follow it. In the other
+node unit files no passing test leaves a real timer armed after its teardown.
+`pushToTalk.test.ts` runs on the real clock and stays there: `PushToTalk`
+arms no timer (its level meter runs on `requestAnimationFrame`, which the
+tests stub with one that schedules nothing), and the file's only timer is its
+own `settle`, a `setTimeout(0)` every caller awaits, so a failing expect
+cannot leave one armed.
+
 ## A test await with no deadline
 
 Many backend tests wait on a channel the code under test feeds: a floor
