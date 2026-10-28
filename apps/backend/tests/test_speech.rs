@@ -1,6 +1,5 @@
 use super::*;
 use crate::app_state::{begin_alpha_candidate, debug_events, state, AppState};
-use crate::audio::{Speaker, SttAdapter, SttStreamAdapter, TestTtsGate, TtsContinuity};
 use crate::browser::frame_json;
 use crate::browser::PageFeed;
 use crate::caller_input::route_final_transcript;
@@ -10,6 +9,8 @@ use crate::module_calls::agent_call_json;
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::{Switchboard, OPERATOR};
 use crate::registry::Registry;
+use crate::stt::{SttAdapter, SttStreamAdapter};
+use crate::tts::{Speaker, TestTtsGate, TtsContinuity};
 use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};

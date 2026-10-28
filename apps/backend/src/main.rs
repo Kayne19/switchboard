@@ -1,6 +1,5 @@
 mod api;
 mod app_state;
-mod audio;
 mod browser;
 mod call_line;
 mod caller_input;
@@ -37,6 +36,8 @@ mod router;
 mod routing_view;
 mod session_turn;
 mod speech;
+mod stt;
+mod tts;
 mod turns;
 mod visual_protocol;
 
@@ -93,7 +94,7 @@ pub struct Config {
     /// released with an announcement.
     pub floor_quiet_threshold_ms: u64,
     /// The ElevenLabs settings (`ELEVENLABS_*`) the speaker uses.
-    pub tts: audio::TtsSettings,
+    pub tts: tts::TtsSettings,
     /// Environment values loaded from the deployment env file and inherited
     /// process environment. The operator's process receives them.
     pub environment: HashMap<String, String>,
@@ -199,7 +200,7 @@ impl Config {
                 10_000,
                 &MILLIS,
             ),
-            tts: audio::TtsSettings {
+            tts: tts::TtsSettings {
                 api_key: get(values, "ELEVENLABS_API_KEY", ""),
                 voice_id: get(values, "ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
                 model_id: get(values, "ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"),
@@ -582,13 +583,13 @@ async fn main() {
     let state = app_state::AppState::new_with_debug(
         board,
         history::TranscriptLog::new(config.history_limit),
-        audio::Speaker::new(
+        tts::Speaker::new(
             config.max_spoken_chars,
             config.speech_deadline(),
             config.tts.clone(),
         ),
-        audio::SttAdapter::from_command(config.stt_command.clone()),
-        audio::SttStreamAdapter::from_command(config.stt_stream_command.clone()),
+        stt::SttAdapter::from_command(config.stt_command.clone()),
+        stt::SttStreamAdapter::from_command(config.stt_stream_command.clone()),
         debug_bus.clone(),
     );
     app_state::spawn_workers(state.clone());

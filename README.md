@@ -364,7 +364,8 @@ container, and the post-deploy checklist.
 | `apps/backend/src/session_turn.rs` | a project session's turn: which prompt or self-woken run its frames belong to |
 | `apps/backend/src/models.rs` | model catalogs and spoken model/thinking resolution |
 | `apps/backend/src/registry.rs` | the project registry and spoken-name resolution |
-| `apps/backend/src/audio.rs` | speech-to-text sidecar, ElevenLabs, and reply-length shaping |
+| `apps/backend/src/stt.rs` | the speech-to-text sidecars: complete-clip `SttAdapter` and the long-lived stream worker |
+| `apps/backend/src/tts.rs` | the ElevenLabs client, the `Speaker`, and reply-length shaping |
 | `apps/backend/src/visual_protocol.rs` | validation of display actions |
 | `apps/backend/src/protocol.rs` | every WebSocket message the service sends the browser, and every command the browser sends it; its browser half is `apps/frontend/src/protocol.ts` |
 | `apps/backend/src/history.rs` | the transcript kept for page reloads |

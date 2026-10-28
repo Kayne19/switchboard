@@ -54,7 +54,7 @@ fn env_file_parser_keeps_audio_secrets_available() {
 fn elevenlabs_settings_are_parsed_once_with_their_defaults() {
     assert_eq!(
         Config::for_tests(&[]).tts,
-        audio::TtsSettings {
+        tts::TtsSettings {
             api_key: String::new(),
             voice_id: "21m00Tcm4TlvDq8ikWAM".into(),
             model_id: "eleven_multilingual_v2".into(),
@@ -75,7 +75,7 @@ fn elevenlabs_settings_are_parsed_once_with_their_defaults() {
     ]);
     assert_eq!(
         config.tts,
-        audio::TtsSettings {
+        tts::TtsSettings {
             api_key: "key".into(),
             voice_id: "voice".into(),
             model_id: "model".into(),

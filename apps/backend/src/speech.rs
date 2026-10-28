@@ -6,11 +6,11 @@ use crate::app_state::AppState;
 use crate::app_state::{
     clear_active_operation, emit_message, publish_status, spawn_registered_operation, AppInner,
 };
-use crate::audio::TtsContinuity;
 use crate::debug::DebugEvent;
 use crate::delivery::SlotReceipt;
 use crate::history::AGENT;
 use crate::protocol::ServerMessage;
+use crate::tts::TtsContinuity;
 use futures_util::StreamExt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -485,7 +485,7 @@ enum SpeechOutcome {
     /// A rescue or a hand-off stopped it.
     Stopped(Stopped),
     /// The provider or the speech task failed.
-    Failed(crate::audio::AudioError),
+    Failed(crate::tts::TtsError),
 }
 
 /// The outcome of a speech task that did not return: a rescue aborted it,
@@ -494,7 +494,7 @@ fn joined(error: tokio::task::JoinError) -> SpeechOutcome {
     if error.is_cancelled() {
         SpeechOutcome::Stopped(Stopped::Cancelled)
     } else {
-        SpeechOutcome::Failed(crate::audio::AudioError::Tts(format!(
+        SpeechOutcome::Failed(crate::tts::TtsError::Tts(format!(
             "speech worker failed: {error}"
         )))
     }
@@ -584,7 +584,7 @@ async fn admit_speech(
     deadline: std::time::Instant,
     continuity: TtsContinuity,
     span: tracing::Span,
-) -> Result<crate::audio::TtsChunkStream, SpeechOutcome> {
+) -> Result<crate::tts::TtsChunkStream, SpeechOutcome> {
     let admission_state = state.clone();
     let text = utterance.text.clone();
     let admission = async move {
@@ -614,7 +614,7 @@ async fn admit_speech(
 /// emit only once it is closed.
 async fn drain_speech_stream(
     state: AppState,
-    mut stream: crate::audio::TtsChunkStream,
+    mut stream: crate::tts::TtsChunkStream,
     utterance: Utterance,
     deadline: std::time::Instant,
 ) -> SpeechOutcome {
@@ -649,7 +649,7 @@ async fn drain_speech_stream(
                     audio.append(sequence, generation, part.to_vec(), line);
                 }
             }
-            Err(crate::audio::AudioError::Deadline) if bytes > 0 => break Played::CutShort,
+            Err(crate::tts::TtsError::Deadline) if bytes > 0 => break Played::CutShort,
             Err(error) => {
                 utterance.abandon(&state).await;
                 return SpeechOutcome::Failed(error);
@@ -681,7 +681,7 @@ async fn drain_speech_stream(
     ) {
         (WentOut::Heard, played) => SpeechOutcome::Spoken { bytes, played },
         (WentOut::Unheard, Played::CutShort) => {
-            SpeechOutcome::Failed(crate::audio::AudioError::Deadline)
+            SpeechOutcome::Failed(crate::tts::TtsError::Deadline)
         }
         (WentOut::Unheard, Played::Whole) => SpeechOutcome::NotDelivered { bytes },
         (WentOut::HandedOffUnheard, _) => SpeechOutcome::Stopped(Stopped::Superseded),

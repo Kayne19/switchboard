@@ -3,7 +3,6 @@
 //! the PBX and the coordinator), the workers it starts, shutdown, the event
 //! fan-out, the operation registry rescues abort, and the projection of
 //! resident agents.
-use crate::audio::{Speaker, SttAdapter, SttStreamAdapter};
 use crate::caller_input::{process_clips, process_stream_results, ClipState};
 use crate::debug::{DebugBus, DebugEvent};
 use crate::delivery::{AudioQueue, DeliveryState, Event};
@@ -34,6 +33,8 @@ use crate::registry::Registry;
 #[cfg(test)]
 use crate::speech::start_speech_worker_for_test;
 use crate::speech::{ensure_speech_worker, SpeechContinuity, SpeechGroup, SpeechQueue};
+use crate::stt::{SttAdapter, SttStreamAdapter};
+use crate::tts::Speaker;
 use crate::turns::{process_turns, TurnState};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
