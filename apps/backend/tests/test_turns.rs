@@ -235,7 +235,7 @@ async fn an_utterance_steers_a_turn_that_holds_the_pbx_lock() {
 #[tokio::test]
 async fn a_turn_dropped_by_a_rescue_before_it_is_registered_is_dropped_with_notice() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     // Hold the registry a turn joins when it is spawned, so a rescue can land
     // after the turn passed its stamp check and before it is registered.
     let registry = state.0.active_operations.lock().await;
@@ -282,7 +282,7 @@ async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
         registry,
         std::sync::Arc::new(prewarm),
     ));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     state.0.turns.routed_decisions.lock().await.insert(
         "down".into(),
@@ -360,7 +360,7 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
 async fn routing_after_a_new_leg_sees_the_screen_the_gate_marked_stale() {
     let (client, _, _) = fake_jev_client();
     let state = state_with_jev(client, Registry::new(vec![]));
-    let (connection, _snapshot, _watermark) = state.register_connection().await;
+    let (connection, _) = state.register_connection().await;
     crate::browser::handle_text_frame(
         &state,
         connection.epoch,
@@ -1072,7 +1072,7 @@ async fn process_turns_settles_foreground_idle_once() {
             .await;
         assert_eq!(reply.route, "alpha");
     }
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     let mut events = PageFeed::open(&state);
     while events.try_recv().is_ok() {}
     let id = "settled-idle-once";

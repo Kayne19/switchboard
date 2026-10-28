@@ -337,7 +337,7 @@ async fn hangup_from(
 async fn a_cross_site_hangup_is_refused_and_leaves_the_leg_on_the_line() {
     let root = scratch_root("api-cross-site-hangup");
     let state = state_with_agents(&root);
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state.0.switchboard.lock().await.handle("hello").await;
     let operator = state
         .0

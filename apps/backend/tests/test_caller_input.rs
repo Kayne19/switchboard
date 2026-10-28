@@ -281,7 +281,7 @@ async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
 #[tokio::test]
 async fn speech_queued_while_a_leg_starts_is_dropped_with_notice_once_the_leg_is_adopted() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     // The operator turn that asked for the transfer stays in flight until the
     // incoming leg's intro turn ends, and that leg is busy with the intro.
@@ -329,7 +329,7 @@ async fn speech_queued_while_a_leg_starts_is_dropped_with_notice_once_the_leg_is
 #[tokio::test]
 async fn speech_transcribed_before_adoption_but_acted_on_after_is_dropped_with_notice() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     begin_alpha_candidate(&state, "alpha-leg");
     upload_clip(&state, &mut connection, "while-connecting", old).await;
@@ -363,7 +363,7 @@ async fn speech_transcribed_before_adoption_but_acted_on_after_is_dropped_with_n
 async fn speech_inside_the_sidecar_when_the_leg_is_adopted_is_dropped_with_notice() {
     let (mut stt, command) = GatedStt::new("and check the logs");
     let state = state_with_stt(Some(command));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     begin_alpha_candidate(&state, "alpha-leg");
     upload_clip(&state, &mut connection, "while-connecting", old).await;
@@ -390,7 +390,7 @@ async fn speech_inside_the_sidecar_when_the_leg_is_adopted_is_dropped_with_notic
 #[tokio::test]
 async fn speech_arriving_after_adoption_under_the_old_stamp_is_dropped_with_notice() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     begin_alpha_candidate(&state, "alpha-leg");
     assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
@@ -423,7 +423,7 @@ async fn a_clip_keeps_the_first_stamp_the_server_saw_for_its_id() {
     // a retransmission under the same id is taken as the clip the server
     // already has, stamp included, and is not transcribed again.
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     upload_clip(&state, &mut connection, "sent-once", 3).await;
     upload_clip(&state, &mut connection, "sent-once", 4).await;
 
@@ -451,7 +451,7 @@ async fn a_clip_keeps_the_first_stamp_the_server_saw_for_its_id() {
 #[tokio::test]
 async fn a_clip_resent_after_its_verdict_was_missed_is_answered_with_it() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     upload_clip(&state, &mut connection, "missed", generation).await;
 
@@ -463,7 +463,7 @@ async fn a_clip_resent_after_its_verdict_was_missed_is_answered_with_it() {
     assert_eq!(verdict["type"], "transcript");
 
     // The tab is back and sends the clip it never heard about.
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     resend_clip(&state, &connection, "missed", generation).await;
     let frames = frames_until(&mut connection, "transcript").await;
     assert_eq!(
@@ -482,7 +482,7 @@ async fn a_clip_resent_after_its_verdict_was_missed_is_answered_with_it() {
 #[tokio::test]
 async fn a_stale_clip_resent_after_a_reconnect_is_told_it_was_dropped() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     upload_clip(&state, &mut connection, "stale", old).await;
     state.0.delivery.retire(connection.epoch);
@@ -492,7 +492,7 @@ async fn a_stale_clip_resent_after_a_reconnect_is_told_it_was_dropped() {
     let clip_worker = tokio::spawn(process_clips(state.clone()));
     verdict_emitted(&mut events, "stale").await;
 
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     resend_clip(&state, &connection, "stale", old).await;
     let frames = frames_until(&mut connection, "error").await;
     assert_eq!(types_of(&frames), ["error"]);
