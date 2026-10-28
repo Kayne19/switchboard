@@ -747,3 +747,39 @@ test("rediscovery restores service-created and taken-over provenance", async () 
 	assert.equal(listed[0]?.provenance, "taken_over");
 	assert.equal(listed[0]?.project, "homelab");
 });
+
+// d6-coverage: the host-link `steer` command, as the service sends it
+// ({session, message}), reaches the daemon as a steer of the running turn and
+// is answered with that turn's id; one without a message is refused.
+test("the steer command steers the running turn and names it", async () => {
+	const { daemon, manager, events } = setup();
+	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	await manager.handle("prompt", { session: s, message: "hello" });
+	const turnId = events.find((e) => e.event.kind === "turn_start")?.event.turn_id;
+	const sent = (await manager.handle("steer", { session: s, message: "and the docs" })) as SentInput;
+	assert.equal(sent.sent_as, "steer");
+	assert.equal(sent.turn_id, turnId);
+	const steer = daemon.calls.find((c) => c.op === "steer");
+	assert.deepEqual(steer?.args.slice(1), ["and the docs"]);
+	await assert.rejects(manager.handle("steer", { session: s }));
+	assert.equal(daemon.calls.filter((c) => c.op === "steer").length, 1);
+});
+
+// d6-coverage: a model call whose automatic retries give up reaches the
+// service as an `error` event (the turn's failure the caller is told about);
+// a retry that succeeds says nothing.
+test("an auto-retry that gives up is forwarded as an error; one that succeeds is not", async () => {
+	const { daemon, manager, events } = setup();
+	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	daemon.emit(s, { type: "auto_retry_end", success: true });
+	daemon.emit(s, { type: "auto_retry_end", success: false, finalError: "overloaded" });
+	daemon.emit(s, { type: "auto_retry_end", success: false });
+	await flush();
+	assert.deepEqual(
+		events.map((e) => e.event),
+		[
+			{ kind: "error", message: "overloaded" },
+			{ kind: "error", message: "retries exhausted" },
+		],
+	);
+});

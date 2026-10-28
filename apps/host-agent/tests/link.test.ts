@@ -487,3 +487,25 @@ test("reconnect: a session closed while the link was down reaches the service", 
 		await service.close();
 	}
 });
+
+// d6-coverage: a module call waiting on the service when the link drops is
+// answered `failed` at once, so the agent's `speak` returns instead of
+// waiting out its deadline.
+test("a module call pending when the link drops fails at once", async () => {
+	const service = await FakeService.start();
+	const { link } = makeLink(service);
+	try {
+		link.start();
+		const l = await service.link(0);
+		await l.next((m) => m.type === "synced");
+		const pending = link.relayModuleCall("a1", "tok", "speak", { text: "hi" }, 30_000);
+		await l.next((m) => m.type === "module_call");
+		const started = performance.now();
+		l.socket.terminate();
+		assert.deepEqual(await pending, { status: "failed", reason: "failed" });
+		assert.ok(performance.now() - started < 5_000, "the call waited out its deadline");
+	} finally {
+		link.stop();
+		await service.close();
+	}
+});
