@@ -740,6 +740,49 @@ async fn a_caller_prompt_that_fails_ends_the_leg() {
     }
 }
 
+/// A project turn that fails with no words ends the leg like a failed prompt
+/// does: the caller is back on the operator and the session is killed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_project_turn_that_fails_without_words_ends_the_leg() {
+    let failing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fails = Arc::clone(&failing);
+    let (mut board, log) = on_alpha(
+        &[],
+        Box::new(move |_, _| {
+            if fails.load(std::sync::atomic::Ordering::Acquire) {
+                vec![Step::Event(
+                    serde_json::json!({"kind": "error", "message": "retries exhausted"}),
+                )]
+            } else {
+                says("ready")
+            }
+        }),
+    )
+    .await;
+    let alpha = board.agent.clone().expect("alpha is on the line");
+    failing.store(true, std::sync::atomic::Ordering::Release);
+
+    let reply = board.handle_agent_ctx(&transcript("continue work")).await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert_eq!(
+        reply.text,
+        "alpha stopped responding, so I closed it.\n\nretries exhausted"
+    );
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("retries exhausted"),
+        "{reply:?}"
+    );
+    assert_eq!(
+        crate::pbx::until_named(&log, "kill").await,
+        [serde_json::json!({"session": "s1"})]
+    );
+    assert!(!alpha.alive());
+    board.shutdown().await;
+}
+
 /// A background prompt the host refuses fails alone (#423): the resident
 /// stays, and is published idle.
 #[cfg(unix)]
@@ -1482,6 +1525,50 @@ async fn a_stop_asked_before_a_hangup_is_not_confirmed_after_it() {
 }
 
 #[cfg(unix)]
+/// An operator that cannot start leaves the caller with a routing error and
+/// no spoken line.
+#[tokio::test]
+async fn an_operator_that_cannot_start_answers_that_routing_is_unavailable() {
+    let mut board = board_on(
+        vec![project("alpha", "")],
+        &[("SWITCHBOARD_PI_BINARY", "/nonexistent/switchboard-test-pi")],
+        two_model_catalog(),
+    );
+
+    let reply = board
+        .handle_decision(
+            "what's going on",
+            &decision(crate::router::Action::General, None, None),
+        )
+        .await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("routing_unavailable"),
+        "{reply:?}"
+    );
+    assert!(reply.text.is_empty(), "{reply:?}");
+    board.shutdown().await;
+}
+
+/// A stop answers at once when no agent is on the line and none is named.
+#[tokio::test]
+async fn a_stop_with_nothing_on_the_line_says_nothing_is_running() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+
+    let reply = board
+        .handle_decision(
+            "stop it",
+            &decision(crate::router::Action::Stop, None, None),
+        )
+        .await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert_eq!(reply.text, "Nothing is running to stop.");
+    board.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_operator_gets_the_call_state_once_per_utterance() {
     let root = scratch_dir("operator-call-state");
@@ -1548,6 +1635,41 @@ async fn a_route_to_an_unregistered_project_keeps_the_caller_on_the_line() {
     assert_eq!(reply.error.as_deref(), Some("unknown project \"ghost\""));
     assert_eq!(board.coordinator.route(), "alpha");
     assert_eq!(log.named("create_session").len(), creates);
+    board.shutdown().await;
+}
+
+/// An answer that names a background resident brings it forward with the
+/// caller's words, and the agent that was on the line goes to the background.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_answer_naming_a_background_resident_brings_it_forward_with_the_words() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let log = serve(&board, Box::new(|_, _| says("handled")));
+    board.transfer_to(&transcript("alpha"), "alpha").await;
+    board
+        .start_background_part("beta", "beta part")
+        .await
+        .expect("beta resident");
+    let creates = log.named("create_session").len();
+
+    let answer = decision(crate::router::Action::AnswerWaiting, Some("beta"), None);
+    let reply = board.handle_decision("yes, ship the fix", &answer).await;
+
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    assert!(
+        log.named("prompt")
+            .iter()
+            .any(|args| args["session"] == "s2"
+                && args["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("yes, ship the fix")),
+        "beta never heard the answer: {:?}",
+        log.named("prompt")
+    );
+    assert_eq!(log.named("create_session").len(), creates, "no new session");
+    assert!(board.background_agents.contains_key("alpha"));
+    assert!(!board.background_agents.contains_key("beta"));
     board.shutdown().await;
 }
 
