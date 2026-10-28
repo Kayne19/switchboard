@@ -1,21 +1,24 @@
 #!/usr/bin/env node
-// Fails when one of the repo's structural invariants is broken. Each check
-// below is a rule in AGENTS.md ("Working here") that a grep can enforce; the
-// reasons are there. Prints file:line per finding. Run by `npm test`, so CI
-// enforces it.
+// Fails when one of the repo's structural invariants is broken, one a grep can
+// enforce. AGENTS.md ("Working here") and the docs give the reasons. Prints
+// file:line per finding. Run by `npm test`, so CI enforces it.
 //
-// A check is a named entry in `checks`: `run(ctx, config)` reads the tree
-// through `ctx` and reports findings with `ctx.report`. `config` is the
-// check's own table (`config` for the real tree, `sampleConfig` for its
-// samples). Each check carries `violations` it must report on and `clean`
-// trees it must pass, small in-memory trees (a path to its text), so a later
-// edit to a pattern that makes the check pass everything fails the gate
+// A check is a named entry in `checks`, or in a sibling hygiene module whose
+// array is spread into it. `run(ctx, config)` reads the tree through `ctx`
+// and reports findings with `ctx.report`. `config` is the check's own table
+// (`config` for the real tree, `sampleConfig` for its samples). Each check
+// carries `violations` it must report on and `clean` trees it must pass,
+// small in-memory trees (a path to its text), so a later edit to a pattern
+// that makes the check pass everything fails the gate
 // (#357). The self-tests run before the scan of the real tree; `--self-test`
 // runs them alone. The summary line is printed from the names, so a check
 // cannot run unlisted.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { engineChecks } from "./hygiene_engine.mjs";
+import { lifecycleChecks } from "./hygiene_lifecycle.mjs";
+import { lines, scan } from "./hygiene_tree.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const skipped = new Set(["node_modules", "dist", "target", ".git", "static", "static-debug", "test-results"]);
@@ -60,222 +63,6 @@ function sampleTree(tree, report) {
 	};
 }
 
-const lines = (ctx, file) => ctx.read(file).split("\n");
-function scan(ctx, file, pattern, finding) {
-	lines(ctx, file).forEach((line, index) => {
-		if (pattern.test(line)) ctx.report(`${file}:${index + 1}: ${finding}`);
-	});
-}
-
-// A declaration's members: the lines one brace inside `class Name`,
-// `struct Name` or `interface Name`, comments and string contents removed.
-// Undefined when the declaration is not there or does not close.
-function members(text, name) {
-	const start = text.findIndex((line) => new RegExp(`^\\s*(?:export\\s+)?(?:pub(?:\\([^)]*\\))?\\s+)?(?:class|struct|interface)\\s+${name}\\b`).test(line));
-	if (start < 0) return undefined;
-	const result = [];
-	let depth = 0;
-	let parens = 0;
-	let opened = false;
-	// A field whose type is an object literal spans lines
-	// (`private barrier: {` .. `} | null = null;`): its lines are one member.
-	let spanning = undefined;
-	for (let index = start; index < text.length; index++) {
-		const code = text[index]
-			.replace(/^\s*(?:\/\/|\/?\*).*$/, "")
-			.replace(/\/\/.*$/, "")
-			.replace(/"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '""');
-		if (spanning) spanning.code += ` ${code.trim()}`;
-		// A parameter of a method or constructor is not a member; a
-		// constructor's parameter property (`private x: T`) is.
-		else if (opened && depth === 1 && (parens === 0 || /^\s*(?:private|protected|public)\b/.test(code))) {
-			result.push({ line: index + 1, code });
-			if (/^[^(]*?[\w#]\??!?\s*:[^(]*\{\s*$/.test(code)) spanning = result[result.length - 1];
-		}
-		for (const char of code) {
-			if (char === "{") {
-				depth++;
-				opened = true;
-			} else if (char === "}") depth--;
-			else if (char === "(") parens++;
-			else if (char === ")") parens--;
-		}
-		if (spanning && depth <= 1) spanning = undefined;
-		if (opened && depth === 0) return result;
-	}
-	return undefined;
-}
-
-// A member that says which phase some work is in: a mutable field (not
-// `readonly`; every field of a Rust struct) that is a flag, a nullable or
-// optional slot, an atomic, a timer or task handle, or a token, generation,
-// epoch or attempt counter.
-const phaseField = (code) => {
-	const field = code.match(/^\s*(?:(?:private|protected|public|static|declare|override|pub(?:\([^)]*\))?)\s+)*(#?[A-Za-z_]\w*)(\??)!?\s*([:=].*)$/);
-	if (!field || /^\s*(?:(?:private|protected|public|static|declare|override)\s+)*readonly\b/.test(code)) return false;
-	const [, name, optional, rest] = field;
-	return (
-		optional === "?" ||
-		/(?:token|generation|epoch|attempt)/i.test(name) ||
-		/\bbool(?:ean)?\b|\|\s*(?:null|undefined)\b|\b(?:null|undefined)\s*\||^=\s*(?:true|false|null|undefined)\b|\bOption<|\bAtomic\w+|\b\w*Timer\b|\bTimeout\b|setTimeout|setInterval|\bJoinHandle\b|\bAbortHandle\b|\bAbortController\b/.test(rest)
-	);
-};
-
-const machines = [
-	// debug-feed (#416): `transition` writes the phase; `leave` closes the socket and clears the timer.
-	{ file: "apps/frontend/src/debug/connection.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.close\(\)/, /clearTimeout\(/] },
-	// mic-ptt (#434): `transition` writes the phase; `stopTracks` is the one place tracks stop.
-	{ file: "apps/frontend/src/runtime/pushToTalk.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/] },
-	// playback (#435): `enter` is the one writer of who holds the element.
-	{ file: "apps/frontend/src/runtime/audioPlayback.ts", writer: /\bthis\.holder\s*=(?!=)/, max: 1, once: [] },
-	// pi-process (#419): `transition` writes the process state. `release` runs on entry
-	// to Closed and from a close that finds it Closed, so it is not a `once`.
-	{ file: "apps/backend/src/pi_client.rs", writer: /\*state\s*=\s*to\b/, max: 1, once: [] },
-	// session-end (#423): `end` is the one writer of a project session's end of life.
-	{ file: "apps/backend/src/project_session.rs", writer: /\*lifecycle\s*=(?!=)/, max: 1, once: [] },
-	// floor-front (#421): `serve` takes the phase `step` gives; `leave` is the one teardown.
-	{ file: "apps/backend/src/floor.rs", writer: /\bphase\s*=\s*next\b/, max: 1, once: [/\bself\.leave\(/] },
-	// host-session (#404): the turn record is written only in `#turnStep`, on its three arms;
-	// its held failed call only in `#swapHeldFailedCall`, which `#turnStep` calls.
-	{ file: "apps/host-agent/src/sessions.ts", writer: /\bt\.turn\s*=(?!=)/, max: 3, once: [/\.heldFailedCall\s*=(?!=)/] },
-	// daemon-resync (#418): `#step` is the one writer of the keeper's phase.
-	{ file: "apps/host-agent/src/daemon_keeper.ts", writer: /\bthis\.#phase\s*=(?!=)/, max: 1, once: [] },
-	// call-line (#437): `CallLifecycle::step` writes the line; `step_locked` sends every candidate notice.
-	{ file: "apps/backend/src/lifecycle.rs", writer: /\bself\.line\s*=(?!=)/, max: 1, once: [/\bself\.notify_candidate\(/] },
-	// session-turn (#439): `step` is the one writer of a project session's turn phase.
-	{ file: "apps/backend/src/session_turn.rs", writer: /\bself\.phase\s*=(?!=)/, max: 1, once: [] },
-	// leg-startup: a bring-up is a `Startup`, not a machine. It moves the call line only
-	// through the coordinator: `begin_startup` stages, `commit` adopts and ends the
-	// intro, and the rollback is written in `abandon` and in `Drop`, nowhere else.
-	{ file: "apps/backend/src/leg_transitions.rs", writer: /\.rollback_startup\(/, max: 2, once: [/\.begin_candidate\(/, /\.adopt_candidate\(/, /\.finish_intro\(/] },
-	// mic-hf (#366), mic-glue: `transition` writes the state (phase, detectors, follow-up);
-	// `releaseGraph` is the one place tracks stop, and `publish` the one call of `onState`.
-	{ file: "apps/frontend/src/hands_free.ts", writer: /\bthis\.#?state\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/, /\.onState\(/] },
-	// screen-reports: `transition` writes the report line; `leave` clears the ack deadline.
-	{ file: "apps/frontend/src/app/screenReporter.ts", writer: /\bthis\.state\s*=(?!=)/, max: 1, once: [/clearTimeout\(/] },
-	// host-turns: `hold_self_woken` holds the admitted self-woken run; `release_self_woken` is its one end.
-	{ file: "apps/backend/src/host_turns.rs", writer: /\bself_woken\.lock\(\)\.await\s*=(?!=)/, max: 1, once: [/\.take_if\(/] },
-	// session-guard (#359): the active-session guard is derived, not a machine. `name_leg_on_line`
-	// is its one writer and the one place the PBX locks it; a rescue's `take` is the only other change.
-	{ file: "apps/backend/src/pbx.rs", writer: /\*guard\s*=(?!=)/, max: 1, once: [/\.active_session\.lock\(\)/] },
-	// page-control (#369): a page control is a fixed sequence, not a machine. Its quiet begins in
-	// `Admitted::rescue` or `rescue_for` and ends in `PageControl::settle`, with the rescue's token or,
-	// for a failed operation, its generation. After the rescue no step reads the current generation:
-	// `control_generation` reads it, and the superseded delivery logs it, nowhere else.
-	{ file: "apps/backend/src/page_controls.rs", writer: /\bcoordinator\.generation\(\)/, max: 2, once: [/\.begin_rescue_at\(/, /\.begin_rescue_of\(/, /\bcoordinator\.settle\(/, /\.settle_at\(/] },
-	// modal-focus (#396): `transition` writes a dialog's focus phase; `leave` cancels the give-back's frame.
-	{ file: "apps/frontend/src/hooks/useModalFocus.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/cancelAnimationFrame\(/] },
-	// pinned-scroll (#415): `send` is the one writer of the scroll state; the effect's cleanup is the one disconnect.
-	{ file: "apps/frontend/src/hooks/usePinnedScroll.ts", writer: /\bstate\.current\s*=(?!=)/, max: 1, once: [/\.disconnect\(\)/] },
-	// browser-link: `transition` writes the call socket's link; `leave` clears its timer, and
-	// `close` is the one place a socket is closed (on leaving its phase, or after a failed send).
-	{ file: "apps/frontend/src/runtime/callLink.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.close\(\)/, /clearTimeout\(/] },
-	// call-identity: the page's call identity is a value, not a machine. `followIdentity` is the one
-	// writer, and `follow` (callIdentity.ts) the one place it moves.
-	{ file: "apps/frontend/src/runtime/callRuntime.ts", writer: /\bthis\.identity\s*=(?!=)/, max: 1, once: [/\bfollow\(this\.identity,/] },
-	// status-source (#354): the status line's errors are keyed by their source, not a machine.
-	// `say` is the one writer of the newest status and the one place an error is set.
-	{ file: "apps/frontend/src/runtime/statusLine.ts", writer: /\bthis\.said\s*=(?!=)/, max: 1, once: [/\.errors\.set\(/] },
-	// operator-utility (#386): a local process slot, not a machine. `LocalProcess::ensure` is the
-	// one place the operator or the utility is started; `close` is the one place a slot is emptied.
-	{ file: "apps/backend/src/operator.rs", writer: /\bself\.session\s*=(?!=)/, max: 1, once: [/\.session\.take\(\)/] },
-	// residents (#239, #388): one `Resident` per project, not a machine. `admit` is the one way in
-	// (the token and the entry), `take_out` the one removal (the entry and the token), which
-	// `retire` and a refused admission call; `retire` is the one exit, its `Leaving` the reason.
-	{ file: "apps/backend/src/residents.rs", writer: /\bresidents\.remove\(/, max: 1, once: [/\bresidents\.insert\(/, /\.register_background\(/, /\.remove_background\(/] },
-	// residents: `AgentProjection::apply` is the one writer of an agent's phase, which `AgentPhase::on` moves.
-	{ file: "apps/backend/src/app_state.rs", writer: /\bphases\.insert\(/, max: 1, once: [/\bAgentPhase::on\(/] },
-];
-
-function machineFindings(file, text, machine) {
-	const out = [];
-	const where = (pattern) => text.flatMap((line, index) => (pattern.test(line) ? [index + 1] : []));
-	const writers = where(machine.writer);
-	if (writers.length !== machine.max) out.push(`${file}: state written on ${writers.length} line(s) (${writers.join(", ")}), want ${machine.max}: one transition function (doctrine 2a)`);
-	for (const pattern of machine.once) {
-		const hits = where(pattern);
-		if (hits.length !== 1) out.push(`${file}: ${pattern} on ${hits.length} line(s) (${hits.join(", ")}), want 1: teardown hangs on the phase exit (doctrine 2a)`);
-	}
-	return out;
-}
-
-const owners = [
-	{ file: "apps/frontend/src/hands_free.ts", owner: "HandsFreeController", fields: 0 },
-	{ file: "apps/frontend/src/hands_free_machine.ts", owner: "Capture", fields: 1 },
-	{ file: "apps/frontend/src/runtime/pushToTalk.ts", owner: "PushToTalk", fields: 0 },
-	{ file: "apps/frontend/src/runtime/callRuntime.ts", owner: "CallRuntime", fields: 5 },
-	{ file: "apps/frontend/src/runtime/callLink.ts", owner: "CallLink", fields: 0 },
-	{ file: "apps/frontend/src/runtime/audioPlayback.ts", owner: "AudioPlayback", fields: 2 },
-	{ file: "apps/frontend/src/debug/connection.ts", owner: "SocketFeed", fields: 0 },
-	{ file: "apps/frontend/src/app/screenReporter.ts", owner: "ScreenReporter", fields: 0 },
-	{ file: "apps/frontend/src/hooks/useModalFocus.ts", owner: "ModalFocus", fields: 0 },
-	{ file: "apps/backend/src/lifecycle.rs", owner: "CallLifecycle", fields: 1 },
-	{ file: "apps/backend/src/pi_client.rs", owner: "SessionInner", fields: 6 },
-	{ file: "apps/backend/src/project_session.rs", owner: "ProjectInner", fields: 7 },
-	{ file: "apps/backend/src/floor.rs", owner: "FloorState", fields: 1 },
-	{ file: "apps/backend/src/leg_transitions.rs", owner: "Startup", fields: 1 },
-	{ file: "apps/backend/src/turns.rs", owner: "TurnState", fields: 3 },
-	{ file: "apps/backend/src/host_turns.rs", owner: "HostTurns", fields: 1 },
-	{ file: "apps/host-agent/src/sessions.ts", owner: "Tracked", fields: 5 },
-	{ file: "apps/backend/src/residents.rs", owner: "Resident", fields: 1 },
-	{ file: "apps/backend/src/residents.rs", owner: "BackgroundRegistry", fields: 1 },
-];
-
-function ownerFindings(file, text, row) {
-	const body = members(text, row.owner);
-	if (!body) return [`${file}: could not read ${row.owner} (the check needs updating)`];
-	const lines = body.filter((member) => phaseField(member.code)).map((member) => member.line);
-	if (lines.length > row.fields) return [`${file}: ${row.owner} has ${lines.length} phase fields (lines ${lines.join(", ")}), the table allows ${row.fields}: extract the machine first (doctrine 2a)`];
-	if (lines.length < row.fields) return [`${file}: ${row.owner} has ${lines.length} phase fields, fewer than the table's ${row.fields}: lower the number in "no new lifecycle flags"`];
-	return [];
-}
-
-function engineRuleFindings(ipad, sources) {
-	const webkitName = /-webkit-[a-z]+(?:-[a-z]+)*/g;
-	const namesIn = (text) =>
-		new Set(
-			text
-				.replace(/\bWebkit([A-Z]\w*)/g, (_, rest) => `-webkit-${rest.replace(/(?<=.)[A-Z]/g, (letter) => `-${letter}`).toLowerCase()}`)
-				.match(webkitName) ?? [],
-		);
-	const stale = "docs/ipad.md: no rows in the Engine-specific code table (the check needs updating)";
-	const out = [];
-	const table = ipad.split("## Engine-specific code in the tree")[1]?.split(/\n## /)[0] ?? "";
-	const lines = table.split("\n");
-	const rule = lines.findIndex((line) => /^\|[\s:|-]+\|$/.test(line));
-	const rows = rule < 0 ? [] : lines.slice(rule + 1).filter((line) => line.startsWith("|"));
-	if (rows.length === 0) return [stale];
-	const listed = new Map();
-	for (const row of rows) {
-		const [where = "", what = ""] = row.split("|").slice(1);
-		const file = where.match(/^\s*`([^`]+)`/)?.[1];
-		if (!file) {
-			out.push(`docs/ipad.md: a row of the Engine-specific code table starts with no file: ${row.slice(0, 60)}`);
-			continue;
-		}
-		const names = namesIn(`${where} ${what}`);
-		listed.set(file, new Set([...(listed.get(file) ?? []), ...names]));
-		if (names.size > 0 && !(file in sources)) out.push(`docs/ipad.md: lists ${[...names].join(", ")} in ${file}, which is not a stylesheet or script in apps/frontend/src`);
-	}
-	for (const [file, text] of Object.entries(sources)) {
-		const claimed = listed.get(file) ?? new Set();
-		const used = namesIn(text);
-		for (const name of used) if (!claimed.has(name)) out.push(`${file}: uses ${name}, which docs/ipad.md "Engine-specific code in the tree" does not list for it`);
-		for (const name of claimed) if (!used.has(name)) out.push(`docs/ipad.md: lists ${name} in ${file}, which does not use it`);
-	}
-	return out;
-}
-
-// What the engine-rules check reads, as sample trees: docs/ipad.md's table
-// with `rows`, and the sources it is held to.
-const ipadTable = (...rows) => `## Engine-specific code in the tree\n\n| Where | What | Why |\n|---|---|---|\n${rows.join("\n")}\n\n## Next\n`;
-const ipadTree = (ipad, sources) => ({ "docs/ipad.md": ipad, ...sources });
-const ipadCss = "apps/frontend/src/a.css";
-const ipadClamp = "| `apps/frontend/src/a.css`, `.x` | `display: -webkit-box` with `-webkit-line-clamp` | why |";
-const ipadBar = "| `apps/frontend/src/a.css`, `::-webkit-scrollbar` beside `scrollbar-width: none` | hiding | unlike -webkit-gone, it stays |";
-const ipadUserAgent = "| `apps/frontend/src/b.ts` | a user-agent branch | a WebKit bug |";
-const ipadCssClean = ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n.y::-webkit-scrollbar { display: none; }";
-
 // The markdown the doc checks read.
 const markdown = (ctx) => ["AGENTS.md", "README.md", "docs", "apps", "skills", "extensions"].flatMap((start) => [...ctx.files(start, new Set([".md"]))]);
 
@@ -309,44 +96,11 @@ function capsTree(change = {}) {
 	};
 }
 
-const ownerSample = [
-	"export class Owner {",
-	"\tprivate readonly options: Options;",
-	"\tprivate readonly done: boolean;",
-	"\tprivate stream: MediaStream | null = null; // a slot",
-	"\tprivate count = 0;",
-	"\tprivate runtimeToken = 0;",
-	"\tconstructor(",
-	"\t\tprivate readonly url: string,",
-	"\t\tschedule?: Schedule,",
-	"\t\tfinished: boolean,",
-	"\t) {}",
-	"\tstart(): void {",
-	"\t\tconst starting: boolean = true;",
-	'\t\tthis.handlers = { stopped: false, label: "}" };',
-	"\t}",
-	"}",
-	"pub(crate) struct Inner {",
-	"    label: String,",
-	"    /// busy: bool, in a comment",
-	"    busy: AtomicBool,",
-	"    pub(crate) child: Mutex<Option<Child>>,",
-	"}",
-].join("\n");
-
-const ownerTree = (text) => ({ "sample.ts": text, "sample.rs": text });
-
-const machineSample = { file: "sample.ts", writer: /\bthis\.#?phase\s*=(?!=)/, max: 1, once: [/\.getTracks\(\)/] };
-const transition = "class M {\n\tprivate phase: Phase = idle;\n\tdispatch(event) {\n\t\tconst next = step(this.phase, event);\n\t\tif (this.phase === next) return;\n\t\tthis.phase = next;\n\t}\n";
-
-function observerFiles() {
-	return {
-		"apps/frontend/src/hooks/useMeasured.ts": "new ResizeObserver(cb); flushSync(fn);\n",
-		"apps/frontend/src/hooks/usePinnedScroll.ts": "new MutationObserver(cb);\n",
-		"apps/frontend/src/components/ChartNotes.tsx": "new ResizeObserver(cb);\n",
-		"apps/frontend/src/debug/SwitchboardView.tsx": "new ResizeObserver(cb);\n",
-	};
-}
+const observerSample = {
+	"apps/frontend/src/hooks/useMeasured.ts": "new ResizeObserver(cb); flushSync(fn);\n",
+	"apps/frontend/src/pinned.ts": "new MutationObserver(cb);\n",
+	"apps/frontend/src/notes.tsx": "new ResizeObserver(cb);\n",
+};
 
 const checks = [
 	{
@@ -449,7 +203,7 @@ const checks = [
 		run(ctx) {
 			for (const file of markdown(ctx)) {
 				lines(ctx, file).forEach((line, index) => {
-					for (const m of line.matchAll(/(?<![\w/.-])((?:apps|docs|skills|extensions|scripts|static|static-debug)\/[\w./-]*)/g)) {
+					for (const m of line.matchAll(/(?<![\w/.-])((?:apps|docs|skills|extensions|scripts|static|static-debug)\/[\w./*-]*)/g)) {
 						const target = m[1].replace(/[.,;:)]+$/, "").replace(/\/$/, "");
 						if (target.includes("*") || target.includes("<") || !target.includes("/")) continue;
 						if (!ctx.exists(target)) ctx.report(`${file}:${index + 1}: names ${target}, which does not exist`);
@@ -458,7 +212,7 @@ const checks = [
 			}
 		},
 		violations: [{ "docs/a.md": "see `docs/gone.md`\n" }],
-		clean: [{ "docs/a.md": "see `docs/a.md` and tests/ and docs/*.md\n" }],
+		clean: [{ "docs/a.md": "see `docs/a.md` and tests/ and docs/*.md and scripts/h_*.mjs\n" }],
 	},
 	{
 		// Every HTTP route a doc names in a code span, with its method
@@ -646,28 +400,7 @@ const checks = [
 		violations: [{ "apps/frontend/tests/a.spec.ts": "test.only('a', () => {});\n" }, { "apps/host-agent/tests/a.test.ts": "describe.serial.only('a', () => {});\n" }],
 		clean: [{ "apps/frontend/tests/a.spec.ts": "test('only the one', () => {});\n" }],
 	},
-	{
-		// One implementation for both engines (docs/ipad.md): no user-agent
-		// check and no CSS that asks which engine it is in. A user-agent branch
-		// that cannot be avoided is listed in docs/ipad.md, "Engine-specific
-		// code in the tree"; one in a file that table does not name is refused.
-		name: "no engine checks",
-		run(ctx) {
-			const ipad = ctx.read("docs/ipad.md");
-			for (const file of ctx.files("apps/frontend/src", new Set([".ts", ".tsx", ".js", ".mjs"]))) {
-				if (ipad.includes(`\`${file}\``)) continue;
-				scan(ctx, file, /\bnavigator\s*\.\s*(?:userAgent|userAgentData|vendor|platform)\b/, "a user-agent check (docs/ipad.md: detect the feature, or list the branch there)");
-			}
-			for (const file of ctx.files("apps/frontend/src", new Set([".css", ".ts", ".tsx"]))) {
-				scan(ctx, file, /@(?:supports|media)\b[^{]*-(?:webkit|apple)-/, "CSS that asks for the engine (docs/ipad.md: no WebKit-only CSS)");
-			}
-		},
-		violations: [
-			{ "docs/ipad.md": "", "apps/frontend/src/a.ts": "if (navigator.userAgent.includes('x')) {}\n" },
-			{ "docs/ipad.md": "", "apps/frontend/src/a.css": "@supports (-webkit-touch-callout: none) {\n}\n" },
-		],
-		clean: [{ "docs/ipad.md": "| `apps/frontend/src/a.ts` | UA | bug |", "apps/frontend/src/a.ts": "navigator.userAgent;\n", "apps/frontend/src/b.css": ".a { color: red; }\n" }],
-	},
+	...engineChecks,
 	{
 		// A backend test waits on a channel, a Notify, a watch, a stream, a
 		// oneshot or a task's JoinHandle through within()
@@ -775,52 +508,7 @@ const checks = [
 		],
 		clean: [{ "apps/frontend/src/styles/index.css": ".stage {\n  height: 100vh;\n  height: 100dvh;\n}\n.box {\n  height: 50cqh;\n}\n" }],
 	},
-	{
-		// A lifecycle that has become a machine has one writer
-		// (AGENTS.md; doctrine 2a): its state is assigned on one line of its
-		// file, inside the transition function, and each teardown primitive
-		// named in `once` occurs on one line, the phase exit. A row whose
-		// pattern matches nothing fails too, so a rename cannot retire it.
-		// Each machine's pull request adds its row.
-		name: "one writer per machine",
-		config: { machines },
-		sampleConfig: { machines: [machineSample] },
-		run(ctx, { machines: rows }) {
-			for (const machine of rows) for (const finding of machineFindings(machine.file, lines(ctx, machine.file), machine)) ctx.report(finding);
-		},
-		violations: [
-			{ "sample.ts": `${transition}\tstop() { this.phase = idle; stream.getTracks(); }\n}` },
-			{ "sample.ts": `${transition}\texit() { stream.getTracks(); }\n\tstop() { stream.getTracks(); }\n}` },
-			{ "sample.ts": "class M {\n\tprivate state = idle;\n}" },
-		],
-		clean: [{ "sample.ts": `${transition}\texit() { stream.getTracks(); }\n}` }],
-	},
-	{
-		// The lifecycle owners that are not machines yet do not grow
-		// phase fields (AGENTS.md; doctrine 2a). `fields` is the count on
-		// master when the check landed, and the check wants it exactly: one
-		// more is the flag rule 2a says to extract the machine before adding,
-		// and one fewer lowers the number here, so it cannot creep back. When
-		// an owner becomes a machine, it takes a row in the machines table and
-		// keeps its row here at what is left beside the machine, 0 included: a
-		// flag added next to a machine is the same mistake.
-		name: "no new lifecycle flags",
-		config: { owners },
-		sampleConfig: { owners: [{ file: "sample.ts", owner: "Owner", fields: 2 }, { file: "sample.rs", owner: "Inner", fields: 2 }] },
-		run(ctx, { owners: rows }) {
-			for (const row of rows) for (const finding of ownerFindings(row.file, lines(ctx, row.file), row)) ctx.report(finding);
-		},
-		violations: [
-			ownerTree(ownerSample.replace("\tprivate count = 0;", "\tprivate starting = false;")),
-			ownerTree(ownerSample.replace("    label: String,", "    task: Option<JoinHandle<()>>,")),
-			ownerTree(ownerSample.replace("\tprivate count = 0;", "\tprivate barrier: {\n\t\tid: string;\n\t} | null = null;")),
-			ownerTree(ownerSample.replace("\tprivate count = 0;", "\tprivate pending: string | undefined;")),
-			ownerTree(ownerSample.replace("\tprivate count = 0;", "\tprivate attempt = 0;")),
-			ownerTree(ownerSample.replace("\tprivate runtimeToken = 0;", "")),
-			ownerTree(ownerSample.replace("export class Owner {", "export class Renamed {")),
-		],
-		clean: [ownerTree(ownerSample)],
-	},
+	...lifecycleChecks,
 	{
 		// The composition is built once a render, by SceneRenderer, and handed
 		// to the scenes (#380). A scene that builds its own is free to pick its
@@ -848,17 +536,24 @@ const checks = [
 		// why it is not such a value, and a name that observes nothing fails,
 		// so the list cannot outlive its reason.
 		name: "one hook for a measured value",
-		run(ctx) {
-			const measured = "apps/frontend/src/hooks/useMeasured.ts";
-			const observers = new Map([
-				[measured, "the hook"],
+		config: {
+			observers: new Map([
 				["apps/frontend/src/hooks/usePinnedScroll.ts", "a scroll pinned to its newest line, not a value drawn"],
 				["apps/frontend/src/components/ChartNotes.tsx", "the notes' placement pass: its reads set the cards' widths to measure them, and it rests after a resize"],
 				["apps/frontend/src/debug/SwitchboardView.tsx", "the debug page's geometry, measured once a frame"],
-			]);
+			]),
+		},
+		sampleConfig: {
+			observers: new Map([
+				["apps/frontend/src/pinned.ts", "a made-up scroll"],
+				["apps/frontend/src/notes.tsx", "a made-up placement pass"],
+			]),
+		},
+		run(ctx, { observers }) {
+			const measured = "apps/frontend/src/hooks/useMeasured.ts";
 			const observer = /\bnew (?:Resize|Mutation)Observer\b/;
 			for (const file of ctx.files("apps/frontend/src", tsFiles)) {
-				if (!observers.has(file)) scan(ctx, file, observer, "a layout observer outside useMeasured: read the value through it (AGENTS.md)");
+				if (file !== measured && !observers.has(file)) scan(ctx, file, observer, "a layout observer outside useMeasured: read the value through it (AGENTS.md)");
 				if (file !== measured) scan(ctx, file, /\bflushSync\b/, "flushSync outside useMeasured: a measured value is committed by the hook (AGENTS.md)");
 			}
 			for (const name of observers.keys()) {
@@ -866,11 +561,11 @@ const checks = [
 			}
 		},
 		violations: [
-			{ ...observerFiles(), "apps/frontend/src/a.tsx": "const o = new ResizeObserver(cb);\n" },
-			{ ...observerFiles(), "apps/frontend/src/a.tsx": "flushSync(() => set(1));\n" },
-			{ ...observerFiles(), "apps/frontend/src/hooks/usePinnedScroll.ts": "const x = 1;\n" },
+			{ ...observerSample, "apps/frontend/src/a.tsx": "const o = new ResizeObserver(cb);\n" },
+			{ ...observerSample, "apps/frontend/src/a.tsx": "flushSync(() => set(1));\n" },
+			{ ...observerSample, "apps/frontend/src/pinned.ts": "const x = 1;\n" },
 		],
-		clean: [observerFiles()],
+		clean: [observerSample],
 	},
 	{
 		// A backend test captures logs with debug::capture_logs, never with a
@@ -945,45 +640,7 @@ const checks = [
 			},
 		],
 	},
-	{
-		// Every `-webkit-` name in apps/frontend/src is listed in the "Engine-specific
-		// code in the tree" table of docs/ipad.md, against the file that uses it,
-		// and every `-webkit-` name a row's Where or What cell lists is used by the
-		// file the row names. A rule added without its row, or a row kept after its
-		// rule went, leaves the table naming the wrong set. A camelCase style key
-		// (`WebkitLineClamp`) counts as its kebab-case name.
-		name: "engine rules listed",
-		run(ctx) {
-			const sources = {};
-			for (const file of ctx.files("apps/frontend/src", new Set([".css", ".ts", ".tsx"]))) sources[file] = ctx.read(file);
-			for (const finding of engineRuleFindings(ctx.read("docs/ipad.md"), sources)) ctx.report(finding);
-		},
-		violations: [
-			// A rule with no row (the greedy name).
-			ipadTree(ipadTable(ipadClamp, ipadBar, ipadUserAgent), { [ipadCss]: `${ipadCssClean}\n.x { -webkit-box-orient: vertical; }` }),
-			// A value with no row.
-			ipadTree(ipadTable(ipadBar), { [ipadCss]: ".y::-webkit-scrollbar { display: none; }\n.x { display: -webkit-box; }" }),
-			// A pseudo-element with no row.
-			ipadTree(ipadTable(ipadClamp), { [ipadCss]: ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n.y::-webkit-scrollbar { }" }),
-			// An at-rule with no row.
-			ipadTree(ipadTable(ipadClamp), { [ipadCss]: ".x { display: -webkit-box; -webkit-line-clamp: 2; }\n@supports (-webkit-appearance: none) { }" }),
-			// A camelCase style key with no row.
-			ipadTree(ipadTable(ipadBar), { [ipadCss]: ".y::-webkit-scrollbar { }", "apps/frontend/src/c.tsx": "const s = { WebkitLineClamp: 2 };" }),
-			// A row for a rule that is gone.
-			ipadTree(ipadTable(ipadClamp), { [ipadCss]: ".x { color: red; }" }),
-			// A row for a file that is gone.
-			ipadTree(ipadTable(ipadClamp), {}),
-			// A rule listed under another file.
-			ipadTree(ipadTable(ipadClamp), { [ipadCss]: ipadCssClean, "apps/frontend/src/b.css": ".y { -webkit-line-clamp: 2; }" }),
-			// A row with no file.
-			ipadTree(ipadTable("| not a path | `-webkit-x` | why |"), { [ipadCss]: ipadCssClean }),
-			// A table that is missing.
-			ipadTree("# no table\n", { [ipadCss]: ipadCssClean }),
-		],
-		clean: [ipadTree(ipadTable(ipadClamp, ipadBar, ipadUserAgent), { [ipadCss]: ipadCssClean })],
-	},
 ];
-
 
 const selfTestOnly = process.argv.includes("--self-test");
 const failures = [];
