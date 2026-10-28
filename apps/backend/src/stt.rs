@@ -1,4 +1,5 @@
-//! Transitional speech adapters.
+//! The speech-to-text sidecars: the complete-clip `SttAdapter` and the
+//! long-lived stream worker behind `SttStreamAdapter`.
 //!
 //! STT intentionally is not a Rust Whisper implementation: `SttAdapter` runs
 //! the command in `SWITCHBOARD_STT_COMMAND`, writes WebM bytes to its stdin,

@@ -1,4 +1,5 @@
-//! The ElevenLabs text-to-speech client.
+//! The ElevenLabs text-to-speech client, the `Speaker` request policy, and
+//! reply-length shaping.
 
 use futures_util::{Stream, StreamExt};
 use reqwest::StatusCode;
