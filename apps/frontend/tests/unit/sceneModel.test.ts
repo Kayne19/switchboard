@@ -138,14 +138,7 @@ describe('the view a screen-state report names is the one the page draws', () =>
     system: { empty: ['system', 'system'], chart: ['system', 'system'] },
     theater: { empty: ['idle', 'auto'], chart: ['theater', 'theater'] },
   };
-  // The older names the service and the page still take for the five.
-  const aliases: Record<string, keyof typeof table> = {
-    overview: 'auto', grid: 'auto', split: 'auto',
-    stage: 'visual', bay2: 'visual',
-    transcript: 'comms', bay3: 'comms',
-    magi: 'system', routing: 'system', bay1: 'system',
-  };
-  const requests = [...Object.keys(table).map((view) => [view, view] as const), ...Object.entries(aliases)];
+  const requests = Object.keys(table).map((view) => [view, view] as const);
 
   for (const [request, view] of requests) {
     for (const stage of Object.keys(stages) as Array<keyof typeof stages>) {

@@ -89,7 +89,7 @@ test("production adapter maps backend traffic into semantic scenes", async ({
       "+new shell",
     );
 
-    fixtureServer.broadcast({ type: "view", target: "comms", reason: "" });
+    fixtureServer.broadcast({ type: "view", target: "comms" });
     await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
     await expect(page.locator(".transcript-toggle")).toBeVisible();
   } finally {

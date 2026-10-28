@@ -328,6 +328,26 @@ async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
 }
 
 #[tokio::test]
+async fn view_takes_only_the_five_names_and_no_reason() {
+    let state = state();
+    for old_name in ["stage", "bay2", "transcript", "routing", "magi", "overview"] {
+        let (code, body) = agent_call_json(&state, "/view", json!({"target": old_name})).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{old_name}");
+        assert_eq!(
+            body["detail"],
+            "invalid target: expected one of visual, comms, system, theater, auto"
+        );
+    }
+    let (code, _) = agent_call_json(
+        &state,
+        "/view",
+        json!({"target": "comms", "reason": "the caller asked"}),
+    )
+    .await;
+    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
 async fn speak_rejects_blank_text_without_logging_it() {
     let state = state();
     let (code, body) = agent_call_json(&state, "/speak", json!({"text":"   "})).await;
@@ -876,8 +896,7 @@ async fn display_projection_generation_race() {
 
     let valid_view = json!({
         "token": "operator",
-        "target": "visual",
-        "reason": "inspect"
+        "target": "visual"
     });
     let (code, _) = agent_call_json(&state, "/view", valid_view).await;
     assert_eq!(code, StatusCode::OK);
@@ -911,8 +930,7 @@ async fn display_projection_generation_race() {
     // Stale token on /view must also be rejected with 409 CONFLICT!
     let stale_view = json!({
         "token": "operator",
-        "target": "theater",
-        "reason": "late"
+        "target": "theater"
     });
     let (code, resp) = agent_call_json(&state, "/view", stale_view).await;
     assert_eq!(code, StatusCode::CONFLICT);

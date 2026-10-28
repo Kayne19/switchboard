@@ -340,8 +340,8 @@ describe('screen reports: phase x event', () => {
       // The agent's `view` moves the screen and moves it back within one
       // round trip; `view` frames carry no seq, so the report comes back to
       // the one on the wire.
-      await receive({ type: 'view', target: 'comms', reason: '' });
-      await receive({ type: 'view', target: 'auto', reason: '' });
+      await receive({ type: 'view', target: 'comms' });
+      await receive({ type: 'view', target: 'auto' });
       await receive(ack);
       // The page shows what `onTheWire` says, so nothing more goes.
       expect(onTheWire?.view).toBe('auto');

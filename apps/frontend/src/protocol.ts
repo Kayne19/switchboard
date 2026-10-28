@@ -248,7 +248,6 @@ export interface DisplayMessage {
 export interface ViewMessage {
 	type: "view";
 	target: string;
-	reason: string;
 }
 
 /// The page's `screen_state` report was applied.
@@ -447,7 +446,7 @@ const MESSAGE_FIELDS: { [Type in MessageType]: MessageFields<Type> } = {
 		success: boolean,
 	},
 	display: { action: present, seq: optional(number) },
-	view: { target: string, reason: string },
+	view: { target: string },
 	screen_state_ack: {},
 	agents_state: {
 		agents: list(object<AgentState>({

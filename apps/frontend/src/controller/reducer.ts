@@ -9,35 +9,6 @@ import type {
 } from './types';
 import { RUNTIME_ID_PREFIX, RUNTIME_LINE_ERROR_ID } from './types';
 
-export function normalizeViewTarget(target: string | null | undefined): string | null {
-  if (!target) return null;
-  const t = target.trim().toLowerCase();
-  switch (t) {
-    case 'auto':
-    case 'overview':
-    case 'grid':
-    case 'split':
-      return 'auto';
-    case 'system':
-    case 'magi':
-    case 'routing':
-    case 'bay1':
-      return 'system';
-    case 'visual':
-    case 'stage':
-    case 'bay2':
-      return 'visual';
-    case 'comms':
-    case 'transcript':
-    case 'bay3':
-      return 'comms';
-    case 'theater':
-      return 'theater';
-    default:
-      return t;
-  }
-}
-
 /**
  * The view the page draws for the one asked for: `effectiveView`. The
  * scene is drawn in it (`sceneKind`) and the screen-state report names it
@@ -448,7 +419,7 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
       if (state.workspace.callerPinned) {
         return state;
       }
-      const requested = normalizeViewTarget(action.view);
+      const requested = action.view || null;
       const workspace: WorkspaceState = {
         ...state.workspace,
         requestedView: requested,
@@ -457,7 +428,7 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
       return { ...state, workspace, revision };
     }
     case 'pin_view': {
-      const requested = normalizeViewTarget(action.view);
+      const requested = action.view || null;
       const callerPinned = requested !== 'auto' && requested !== null;
       const workspace: WorkspaceState = {
         ...state.workspace,

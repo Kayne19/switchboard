@@ -264,9 +264,8 @@ export function RuntimeIntegration() {
           break;
         }
         case "agents_state":
-          // Agent state is consumed by the station surfaces. The call runtime
-          // only transports it; it must never turn background status into
-          // caller speech.
+          // No page surface reads agent state yet. The call runtime must
+          // never turn background status into caller speech.
           break;
       }
     };

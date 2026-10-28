@@ -101,7 +101,7 @@ test.describe("call runtime", () => {
         )
         .toBe(true);
 
-      fixtureServer.broadcast({ type: "view", target: "comms", reason: "" });
+      fixtureServer.broadcast({ type: "view", target: "comms" });
       await expect(page.locator('[data-scene="conversation"]')).toBeVisible();
 
       // A report already in flight under generation 1 may land as retired;

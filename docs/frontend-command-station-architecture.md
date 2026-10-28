@@ -92,10 +92,8 @@ The workspace has five canonical views:
 | `system` | Prioritize route, model, thinking, and session controls |
 | `theater` | Present the current visual with minimal surrounding chrome |
 
-An agent names one of these five (the skill module refuses any other). The
-page and the service still read older names (`stage`, `bay2`, `transcript`,
-`routing`, `magi`, `overview` and others) as one of the five, but no agent
-can send them.
+An agent names one of these five. The skill module and the service refuse any
+other name, and the page reads no others.
 
 ### What the page draws
 
