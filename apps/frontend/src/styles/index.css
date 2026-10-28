@@ -5413,12 +5413,10 @@ button {
   align-items: center;
   padding-top: max(6cqh, 34px);
   padding-inline: 4cqw;
-  --scene-foot: calc(7.3cqh + 44px);
 }
 .scene--theater .transcript-reveal,
 .scene--system .transcript-reveal {
   height: var(--scene-foot);
-}
 }
 /* Held to the room between the header and the corner stack at every
    aspect, over the focus box's own sizes (a noted chart in portrait is
