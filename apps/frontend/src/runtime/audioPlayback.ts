@@ -305,8 +305,6 @@ export class AudioPlayback {
             return;
           case "attaching":
           case "opening":
-            // Nothing appended yet: the tap only unlocks the element, and
-            // the silence watch is the first append's to arm (#563).
             Promise.resolve(this.player.play()).catch(() => undefined);
             return;
           default:
