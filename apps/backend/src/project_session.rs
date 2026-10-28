@@ -800,7 +800,8 @@ impl ProjectSession {
 
     /// Queues command `name` for this session on the host link now, ahead
     /// of anything queued after it; `HostCommand::reply` waits for the
-    /// host's answer.
+    /// host's answer. A command that cannot be queued ends the session
+    /// (`LifecycleEvent::CommandFailed`).
     async fn send(&self, name: &str, mut args: Value) -> Result<HostCommand, PiSessionError> {
         if !self.alive() {
             return Err(PiSessionError("the project session has ended".into()));
@@ -885,7 +886,12 @@ impl ProjectSession {
 
     /// Aborts the running turn, if any; the session stays. The abort is
     /// queued now, ahead of anything sent after it; nothing waits for the
-    /// host.
+    /// host. It goes neither through `send` nor through
+    /// `HostCommand::reply`, where a failure ends the session: an abort
+    /// that cannot go out, or whose answer is lost, late or a failure, is
+    /// only logged, since its callers keep the session after it (a
+    /// resident taken for the line, a rescue that keeps the session), and
+    /// a link that is gone ends the session on its own (#381).
     pub fn interrupt(&self) {
         if !self.alive() {
             return;
@@ -1290,7 +1296,10 @@ struct HostCommand {
 }
 
 impl HostCommand {
-    /// Waits, at most `SESSION_COMMAND_WAIT`, for the host's answer.
+    /// Waits, at most `SESSION_COMMAND_WAIT`, for the host's answer. An
+    /// answer that is lost, late, or a failure other than a refusal ends the
+    /// session (`LifecycleEvent::CommandFailed`); a refusal fails the
+    /// command alone (#423).
     async fn reply(self) -> Result<crate::hosts::CommandReply, PiSessionError> {
         match self.sent.reply(SESSION_COMMAND_WAIT).await {
             Ok(reply) => Ok(reply),
