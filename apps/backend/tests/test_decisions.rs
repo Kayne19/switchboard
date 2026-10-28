@@ -2012,3 +2012,160 @@ async fn a_caller_turn_never_goes_to_another_projects_session() {
     );
     board.shutdown().await;
 }
+
+/// d6-coverage: the caller answers a background agent that is waiting to
+/// speak (Jev's `answer_waiting` with a target). The answer goes to that
+/// agent, which comes forward with the caller's words; the agent that was on
+/// the line goes to the background.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_answer_to_a_waiting_agent_brings_that_agent_forward_with_the_words() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel();
+    let log = serve(
+        &board,
+        Box::new(move |session, message| {
+            let _ = prompt_tx.send((session.to_owned(), message.to_owned()));
+            says("handled")
+        }),
+    );
+    board.transfer_to(&transcript("alpha"), "alpha").await;
+    board
+        .dispatch_parts(
+            "both",
+            vec![
+                crate::router::DispatchPart {
+                    agent: "alpha".into(),
+                    text: "alpha part".into(),
+                },
+                crate::router::DispatchPart {
+                    agent: "beta".into(),
+                    text: "beta part".into(),
+                },
+            ],
+        )
+        .await;
+    while let Some((session, message)) = within("prompt_rx", prompt_rx.recv()).await {
+        if session == "s2" && message.contains("beta part") {
+            break;
+        }
+    }
+    assert!(board.background_agents.contains_key("beta"));
+    let creates = log.named("create_session").len();
+
+    let answer = decision(crate::router::Action::AnswerWaiting, Some("beta"), None);
+    let reply = board.handle_decision("yes, ship the fix", &answer).await;
+
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    assert!(
+        log.named("prompt")
+            .iter()
+            .any(|args| args["session"] == "s2"
+                && args["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("yes, ship the fix")),
+        "beta never heard the answer: {:?}",
+        log.named("prompt")
+    );
+    assert_eq!(log.named("create_session").len(), creates, "no new session");
+    assert!(board.background_agents.contains_key("alpha"));
+    assert!(!board.background_agents.contains_key("beta"));
+    board.shutdown().await;
+}
+
+/// d6-coverage: a project turn whose model call fails and says nothing (the
+/// host reports `error`, then `turn_end`) ends the leg: the caller is back on
+/// the operator and told the agent stopped responding, and the session is
+/// killed on its host.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_project_turn_that_fails_without_words_returns_the_caller_to_the_operator() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let failing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fails = Arc::clone(&failing);
+    let log = serve(
+        &board,
+        Box::new(move |_, _| {
+            if fails.load(std::sync::atomic::Ordering::Acquire) {
+                vec![Step::Event(
+                    serde_json::json!({"kind": "error", "message": "retries exhausted"}),
+                )]
+            } else {
+                says("ready")
+            }
+        }),
+    );
+    board.transfer_to(&transcript("start alpha"), "alpha").await;
+    let alpha = board.agent.clone().expect("alpha is on the line");
+    failing.store(true, std::sync::atomic::Ordering::Release);
+
+    let reply = board.handle_agent_ctx(&transcript("continue work")).await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert!(
+        reply
+            .text
+            .starts_with("alpha stopped responding, so I closed it."),
+        "{reply:?}"
+    );
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert_eq!(
+        crate::pbx::until_named(&log, "kill").await,
+        [serde_json::json!({"session": "s1"})]
+    );
+    assert!(!alpha.alive());
+    board.shutdown().await;
+}
+
+/// d6-coverage: an operator whose process cannot start answers the caller's
+/// line as routing being unavailable (the page shows it as a line error),
+/// and the caller stays on the operator route.
+#[tokio::test]
+async fn an_operator_that_cannot_start_answers_that_routing_is_unavailable() {
+    let mut board = board_on(
+        vec![project("alpha", "Alpha")],
+        &[("SWITCHBOARD_PI_BINARY", "/nonexistent/switchboard-test-pi")],
+        two_model_catalog(),
+    );
+
+    let reply = board
+        .handle_decision(
+            "what's going on",
+            &decision(crate::router::Action::General, None, None),
+        )
+        .await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("routing_unavailable"),
+        "{reply:?}"
+    );
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    board.shutdown().await;
+}
+
+/// d6-coverage: a stop with nothing on the line and no target is answered
+/// at once, without asking the caller to confirm, and nothing is ended.
+#[tokio::test]
+async fn a_stop_with_nothing_running_says_so() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+    let log = serve(&board, Box::new(|_, _| says("ready")));
+
+    let reply = board
+        .handle_decision(
+            "stop it",
+            &decision(crate::router::Action::Stop, None, None),
+        )
+        .await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert_eq!(reply.text, "Nothing is running to stop.");
+    assert!(
+        log.names().is_empty(),
+        "the host was sent {:?}",
+        log.names()
+    );
+    board.shutdown().await;
+}
