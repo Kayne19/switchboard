@@ -1179,6 +1179,8 @@ pub(crate) struct FakeRecord {
     pub(crate) commands: Vec<Value>,
     /// Every module reply the service sent.
     pub(crate) module_replies: Vec<Value>,
+    /// Every frame the fake host agent sent, in order.
+    pub(crate) frames: Vec<Value>,
 }
 
 #[cfg(test)]
@@ -1199,9 +1201,27 @@ impl FakeLog {
             .map(|command| command["args"].clone())
             .collect()
     }
+    pub(crate) fn frames(&self) -> Vec<Value> {
+        self.0.lock().unwrap().frames.clone()
+    }
     pub(crate) fn module_replies(&self) -> Vec<Value> {
         self.0.lock().unwrap().module_replies.clone()
     }
+}
+
+/// The frames and replies every peer of the host link is held to
+/// (`tests/fixtures/host-link.json`).
+#[cfg(test)]
+pub(crate) fn host_link_fixture() -> Value {
+    serde_json::from_str(include_str!("../../../tests/fixtures/host-link.json"))
+        .expect("the host link fixture is JSON")
+}
+
+/// Sends `frame` as the fake host agent and records it in `log`.
+#[cfg(test)]
+fn put(link: &FakeLink, log: &FakeLog, frame: Value) {
+    log.0.lock().unwrap().frames.push(frame.clone());
+    link.send(frame);
 }
 
 /// An in-process host agent on a `FakeLink`: it creates sessions, remembers
@@ -1272,7 +1292,11 @@ impl FakeHostAgent {
             let session = args["session"].as_str().unwrap_or_default().to_owned();
             let mut event = |link: &FakeLink, session: &str, event: Value| {
                 cursor += 1;
-                link.send(json!({"type": "event", "session": session, "cursor": format!("boot:{cursor}"), "event": event}));
+                put(
+                    link,
+                    &log,
+                    json!({"type": "event", "session": session, "cursor": format!("boot:{cursor}"), "event": event}),
+                );
             };
             let answer = self
                 .on_command
@@ -1347,6 +1371,7 @@ impl FakeHostAgent {
                     "steer" => Ok(json!({"sent_as": "steer", "turn_id": format!("turn-{turns}")})),
                     "abort" => Ok(json!({"aborted": true})),
                     "kill" => Ok(json!({"killed": true})),
+                    "detach" => Ok(json!({"detached": true})),
                     _ => Ok(json!({})),
                 },
             };
@@ -1359,17 +1384,46 @@ impl FakeHostAgent {
             // A follow_up went into the turn already open: a real host opens
             // none for it.
             let follow_up = frame["result"]["sent_as"] == "follow_up";
-            link.send(frame);
+            // The real host announces each of these before it answers.
+            let mut opened_turn = None;
+            if ok {
+                match name.as_str() {
+                    "prompt" if !follow_up => {
+                        turns += 1;
+                        let turn_id = format!("turn-{turns}");
+                        event(
+                            &link,
+                            &session,
+                            json!({"kind": "turn_start", "cause": "input", "turn_id": turn_id}),
+                        );
+                        opened_turn = Some(turn_id);
+                    }
+                    "set_model" | "set_thinking" => {
+                        let mut state = frame["result"].clone();
+                        state["kind"] = json!("state");
+                        event(&link, &session, state);
+                    }
+                    "kill" => event(
+                        &link,
+                        &session,
+                        json!({"kind": "session_closed", "reason": "killed"}),
+                    ),
+                    "detach" => event(
+                        &link,
+                        &session,
+                        json!({"kind": "session_closed", "reason": "detached"}),
+                    ),
+                    _ => {}
+                }
+            }
+            put(&link, &log, frame);
             if !ok {
                 continue;
             }
             match name.as_str() {
-                "prompt" if !follow_up => {
-                    turns += 1;
-                    let turn_id = format!("turn-{turns}");
-                    let start = json!({"kind": "turn_start", "cause": "input", "turn_id": turn_id});
+                "prompt" if opened_turn.is_some() => {
+                    let turn_id = opened_turn.unwrap_or_default();
                     let end = json!({"kind": "turn_end", "turn_id": turn_id});
-                    event(&link, &session, start);
                     let message = args["message"].as_str().unwrap_or_default().to_owned();
                     let mut settles = true;
                     for step in (self.on_prompt)(&session, &message) {
@@ -1403,7 +1457,11 @@ impl FakeHostAgent {
                                             .unwrap()
                                             .commands
                                             .push(json!({"id": frame["id"], "name": wanted, "args": frame["args"]}));
-                                        link.send(json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": {"sent_as": wanted, "turn_id": turn_id}}));
+                                        put(
+                                            &link,
+                                            &log,
+                                            json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": {"sent_as": wanted, "turn_id": turn_id}}),
+                                        );
                                         break;
                                     }
                                     stash.push_back(frame);
@@ -1419,7 +1477,11 @@ impl FakeHostAgent {
                         };
                         calls += 1;
                         let call_id = format!("m{calls}");
-                        link.send(json!({"type": "module_call", "id": call_id, "session": session, "token": token, "turn_id": turn_id, "cause": "input", "call": call, "args": call_args}));
+                        put(
+                            &link,
+                            &log,
+                            json!({"type": "module_call", "id": call_id, "session": session, "token": token, "turn_id": turn_id, "cause": "input", "call": call, "args": call_args}),
+                        );
                         // The cell that made the call waits for its answer.
                         loop {
                             let Some(frame) = link.recv().await else {
@@ -1435,20 +1497,6 @@ impl FakeHostAgent {
                     if settles {
                         event(&link, &session, end);
                     }
-                }
-                "set_model" | "set_thinking" => {
-                    event(
-                        &link,
-                        &session,
-                        json!({"kind": "state", "model": null, "thinking": args["level"]}),
-                    );
-                }
-                "kill" => {
-                    event(
-                        &link,
-                        &session,
-                        json!({"kind": "session_closed", "reason": "killed"}),
-                    );
                 }
                 "abort" => {
                     if let Some(end) = held_until_abort.remove(&session) {

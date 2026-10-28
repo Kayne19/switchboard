@@ -185,7 +185,7 @@ test("reconnect with cursor: buffered events after the service's cursor are repl
 	const service = await FakeService.start();
 	const { link } = makeLink(service, { sessions: () => ["a1"] });
 	let welcomeCursors: Record<string, string> = {};
-	service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: 1, cursors: welcomeCursors });
+	service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: HOST_LINK_PROTOCOL, cursors: welcomeCursors });
 	try {
 		link.start();
 		const l0 = await service.link(0);
@@ -284,7 +284,7 @@ test("reconnect: an event published while the welcome sync describes another ses
 	});
 	try {
 		link.publish("b1", { kind: "text", text: "missed while down" });
-		service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: 2, cursors: { b1: `${link.bootId}:0` } });
+		service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: HOST_LINK_PROTOCOL, cursors: { b1: `${link.bootId}:0` } });
 		link.start();
 		const l = await service.link(0);
 		await until(() => describing);
@@ -462,7 +462,7 @@ test("reconnect: a cursor from another boot or beyond the buffer gets a fresh sn
 			l.send({
 				type: "welcome",
 				epoch: ++service.epoch,
-				protocol: 1,
+				protocol: HOST_LINK_PROTOCOL,
 				// a1: our boot, but the buffer no longer reaches back to seq 1; a2: another boot
 				cursors: { a1: `${link.bootId}:1`, a2: "previous-boot:6" },
 			});
@@ -552,7 +552,7 @@ test("a module call that cannot go out fails at once, not at its deadline", asyn
 		link.start();
 		socket.readyState = 1;
 		socket.emit("open");
-		socket.emit("message", { data: JSON.stringify({ type: "welcome", epoch: 1, protocol: 1, cursors: {} }) });
+		socket.emit("message", { data: JSON.stringify({ type: "welcome", epoch: 1, protocol: HOST_LINK_PROTOCOL, cursors: {} }) });
 		await until(() => socket.sent.some((m) => m.type === "synced"));
 		socket.readyState = 2;
 		const reply = link.relayModuleCall("a1", "tok", "display", { action: { op: "clear" } }, 5_000);
@@ -642,7 +642,7 @@ test("reconnect: a session closed while the link was down reaches the service", 
 	let tracked = ["a1", "a2"];
 	const { link } = makeLink(service, { sessions: () => tracked });
 	let cursors: Record<string, string> = {};
-	service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: 1, cursors });
+	service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: HOST_LINK_PROTOCOL, cursors });
 	try {
 		link.start();
 		const l0 = await service.link(0);

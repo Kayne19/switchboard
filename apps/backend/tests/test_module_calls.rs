@@ -1641,3 +1641,22 @@ const LEG_GONE: &str =
     "this leg is no longer on the call: stop retrying, nothing you send reaches the caller";
 
 const SELF_WOKEN: &str = "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead";
+
+// The host link fixture's module replies are what `module_reply` makes of the
+// service's answer; the skill's fake host agent serves the same replies.
+#[tokio::test]
+async fn module_reply_makes_the_host_link_fixtures_replies() {
+    let fixture = crate::hosts::host_link_fixture();
+    let entries = fixture["module_replies"].as_array().unwrap();
+    assert!(!entries.is_empty(), "the fixture lists module replies");
+    for entry in entries {
+        let status = StatusCode::from_u16(entry["http_status"].as_u64().unwrap() as u16).unwrap();
+        let response = (status, axum::Json(entry["body"].clone())).into_response();
+        assert_eq!(
+            module_reply(entry["call"].as_str().unwrap(), response).await,
+            entry["reply"],
+            "{}",
+            entry["name"]
+        );
+    }
+}

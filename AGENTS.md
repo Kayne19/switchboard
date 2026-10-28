@@ -206,6 +206,10 @@ commit.
   wrong phase or an end missed on one exit, and each fix had added a flag.
   `scripts/check_hygiene.mjs` holds each machine to one writer and holds
   the owners that are not machines yet to the phase fields they have.
+- A change to a host-link frame, event order or module reply updates
+  `tests/fixtures/host-link.json` in the same commit. The real host agent, the
+  service's `module_reply` and every fake of either are tested against it
+  (`docs/host-link.md`).
 - Tests never touch the network, ElevenLabs, a whisper model, or the real `pi`
   or `ssh`. Fake executables go through `write_executable_script`; PBX tests
   drive transfers through `Prewarm::settled`, which exercises the production

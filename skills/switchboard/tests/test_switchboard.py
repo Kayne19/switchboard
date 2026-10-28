@@ -21,6 +21,9 @@ import switchboard  # noqa: E402
 
 SESSION_ID = "0199aa00-test-session"
 TOKEN = "call-token-1"
+# The service's reply to a call that was delivered (tests/fixtures/host-link.json).
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "tests", "fixtures", "host-link.json"), encoding="utf-8") as _fixture:
+    DELIVERED = next(entry["reply"] for entry in json.load(_fixture)["module_replies"] if entry["name"] == "speak delivered")
 
 
 class FakeHostAgent:
@@ -34,7 +37,7 @@ class FakeHostAgent:
         self.path = os.path.join(home, ".cache", "switchboard", "host-agent.sock")
         os.makedirs(os.path.dirname(self.path), mode=0o700)
         self.on_call = on_call
-        self.reply = reply or (lambda request: {"status": "delivered", "reason": None})
+        self.reply = reply or (lambda request: DELIVERED)
         self.requests = []
         self.connections = 0
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
