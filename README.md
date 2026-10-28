@@ -368,7 +368,9 @@ container, and the post-deploy checklist.
 | `apps/backend/src/visual_protocol.rs` | validation of display actions |
 | `apps/backend/src/protocol.rs` | every WebSocket message the service sends the browser, and every command the browser sends it; its browser half is `apps/frontend/src/protocol.ts` |
 | `apps/backend/src/history.rs` | the transcript kept for page reloads |
-| `apps/backend/src/debug.rs` | the optional read-only debug page: bounded event and log rings, the debug listener and its WebSocket (`docs/debug-page.md`) |
+| `apps/backend/src/debug.rs` | the optional read-only debug page's bus: bounded event and log rings (`docs/debug-page.md`) |
+| `apps/backend/src/debug_record.rs` | how a debug record is bounded and scrubbed before it is kept |
+| `apps/backend/src/debug_listener.rs` | the debug listener and its WebSocket |
 | `apps/backend/tests/` | Rust tests, one file per source module |
 | `apps/frontend/src/` | V17.2 React presentation and its call runtime |
 | `apps/frontend/src/runtime/` | the browser's side of a call: backend WebSocket, push-to-talk, playback, hands-free wiring |

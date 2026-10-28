@@ -175,9 +175,9 @@ async fn the_primary_listener_never_serves_the_debug_page() {
         "debug assets must not live under the primary static root"
     );
     let debug_assets = [
-        crate::debug::INDEX_HTML.as_bytes(),
-        crate::debug::DEBUG_JS.as_bytes(),
-        crate::debug::DEBUG_CSS.as_bytes(),
+        crate::debug_listener::INDEX_HTML.as_bytes(),
+        crate::debug_listener::DEBUG_JS.as_bytes(),
+        crate::debug_listener::DEBUG_CSS.as_bytes(),
     ];
     for path in [
         "/debug",
@@ -207,15 +207,19 @@ async fn the_primary_listener_never_serves_the_debug_page() {
 async fn the_debug_listener_serves_only_the_embedded_page() {
     let state = state();
     for (path, body, content_type) in [
-        ("/", crate::debug::INDEX_HTML, "text/html; charset=utf-8"),
+        (
+            "/",
+            crate::debug_listener::INDEX_HTML,
+            "text/html; charset=utf-8",
+        ),
         (
             "/debug.js",
-            crate::debug::DEBUG_JS,
+            crate::debug_listener::DEBUG_JS,
             "text/javascript; charset=utf-8",
         ),
         (
             "/debug.css",
-            crate::debug::DEBUG_CSS,
+            crate::debug_listener::DEBUG_CSS,
             "text/css; charset=utf-8",
         ),
     ] {

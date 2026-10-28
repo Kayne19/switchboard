@@ -49,7 +49,7 @@ impl AppState {
     /// only the embedded debug page and its WebSocket.
     pub fn debug_router(&self) -> Router {
         let state = self.clone();
-        crate::debug::router(
+        crate::debug_listener::router(
             self.0.debug.clone(),
             move || state.0.projection.snapshot(),
             self.0.shutdown.subscribe(),

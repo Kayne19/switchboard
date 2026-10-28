@@ -5,6 +5,8 @@ mod browser;
 mod call_line;
 mod caller_input;
 mod debug;
+mod debug_listener;
+mod debug_record;
 mod decisions;
 mod delivery;
 mod display;
