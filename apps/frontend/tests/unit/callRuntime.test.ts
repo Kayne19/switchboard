@@ -1098,3 +1098,48 @@ describe("CallRuntime hands-free", () => {
     runtime.dispose();
   });
 });
+
+// d6-coverage: what the status line says when the server answers a line
+// with `queued`, and when the outbox can hold no more speech.
+describe("CallRuntime queued lines and a full outbox", () => {
+  it("says whether a line joined the running turn or waits, and how many wait", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime);
+    socket.receive({ type: "queued", id: "clip-1", waiting: 0, steered: true });
+    await settle();
+    expect(latestState()).toMatchObject({
+      status: "Added that to the turn already in progress.",
+      statusError: false,
+    });
+    socket.receive({ type: "queued", id: "clip-2", waiting: 1, steered: false });
+    await settle();
+    expect(latestState().status).toBe("Got it — you're next, once this turn finishes.");
+    socket.receive({ type: "queued", id: "clip-3", waiting: 3, steered: false });
+    await settle();
+    expect(latestState().status).toBe("Got it — 3 waiting their turn.");
+    runtime.dispose();
+  });
+
+  it("refuses a recording the outbox cannot hold, and says so as an error", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime);
+    // Sixteen clips the server never answers: each stays in the outbox.
+    for (let index = 0; index < 16; index += 1) {
+      runtime.talk();
+      await settle();
+      runtime.send();
+      await settle();
+    }
+    expect(latestState().statusError).toBe(false);
+    runtime.talk();
+    await settle();
+    runtime.send();
+    await settle();
+    expect(latestState()).toMatchObject({
+      status: "Too many unsent voice clips; reconnect before recording again.",
+      statusError: true,
+    });
+    expect(socket.sentJson().filter((frame) => frame.type === "clip")).toHaveLength(16);
+    runtime.dispose();
+  });
+});
