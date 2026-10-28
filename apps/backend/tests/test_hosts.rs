@@ -199,6 +199,77 @@ async fn until_frame(agent: &mut HostAgent, want: impl Fn(&Value) -> bool) -> Va
     }
 }
 
+/// The frames and replies every peer of the host link is held to
+/// (`tests/fixtures/host-link.json`).
+fn host_link_fixture() -> Value {
+    serde_json::from_str(include_str!("../../../tests/fixtures/host-link.json"))
+        .expect("the host link fixture is JSON")
+}
+
+/// Writes `$turn` where `turn` is, the way the fixture names a turn id.
+fn name_the_turn(value: &mut Value, turn: &Value) {
+    match value {
+        Value::String(_) if turn.is_string() && value == turn => *value = json!("$turn"),
+        Value::Array(items) => items.iter_mut().for_each(|item| name_the_turn(item, turn)),
+        Value::Object(fields) => fields
+            .values_mut()
+            .for_each(|item| name_the_turn(item, turn)),
+        _ => {}
+    }
+}
+
+#[tokio::test]
+async fn the_fake_host_agent_sends_what_the_host_link_fixture_lists_in_its_order() {
+    let fixture = host_link_fixture();
+    for (name, expected) in fixture["commands"].as_object().unwrap() {
+        let hosts = Hosts::new(tokens(), slow());
+        let log =
+            FakeHostAgent::new(Box::new(|_, _| vec![])).serve(hosts.connect_fake("scriptorium"));
+        let wait = Duration::from_secs(5);
+        let created = within(
+            "create_session",
+            hosts.command(
+            "scriptorium",
+            "create_session",
+            json!({"project": "homelab", "config": {"cwd": "/w", "provider": "anthropic", "model": "claude-x", "thinking": "medium"}}),
+            wait,
+            ),
+        )
+        .await
+        .expect("create_session is answered");
+        let session = created.result["session"].clone();
+        let before = log.frames().len();
+        let mut args = expected["args"].clone();
+        args["session"] = session;
+        within(
+            "a fixture command",
+            hosts.command("scriptorium", name, args, wait),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{name} is answered: {error:?}"));
+        let sent = log.frames();
+        let mut seen: Vec<Value> = Vec::new();
+        for mut frame in sent[before..].iter().cloned() {
+            let reply = frame["type"] == "reply";
+            for key in ["session", "cursor", "id", "epoch"] {
+                frame.as_object_mut().unwrap().remove(key);
+            }
+            seen.push(frame);
+            if reply {
+                break;
+            }
+        }
+        let turn = seen
+            .iter()
+            .find(|frame| frame["type"] == "reply")
+            .map(|frame| frame["result"]["turn_id"].clone())
+            .unwrap_or(Value::Null);
+        let mut seen = Value::Array(seen);
+        name_the_turn(&mut seen, &turn);
+        assert_eq!(seen, expected["frames"], "{name}");
+    }
+}
+
 #[tokio::test]
 async fn hosts_welcome_a_host_with_its_token_and_report_it_on_healthz() {
     let served = Served::start(slow()).await;
@@ -216,10 +287,7 @@ async fn hosts_welcome_a_host_with_its_token_and_report_it_on_healthz() {
     let (mut agent, welcome) = served
         .hello("scriptorium", TOKEN, json!(HOST_LINK_PROTOCOL))
         .await;
-    assert_eq!(
-        welcome,
-        json!({"type":"welcome","epoch":1,"protocol":2,"cursors":{}})
-    );
+    assert_eq!(welcome, host_link_fixture()["welcome"]);
     send(&mut agent, json!({"type":"synced","epoch":1})).await;
     let host = served
         .until_host("scriptorium", |host| host["synced"] == true)
