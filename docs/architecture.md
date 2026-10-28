@@ -86,8 +86,9 @@ browser mic / page controls
           +--> protocol.rs: every message the service sends the browser,
           |       and every command the browser sends it
           |
-          +--> debug.rs: the read-only debug bus, its log copy, and the
-                  debug listener's router (docs/debug-page.md)
+          +--> debug.rs: the read-only debug bus and its log copy;
+          |       debug_record.rs bounds and scrubs each record;
+          |       debug_listener.rs serves the page (docs/debug-page.md)
 
 apps/backend/ ------- the Rust service (src/) and its tests (tests/)
 apps/frontend/ ------ browser: call runtime (socket, capture, playback) and rendering
@@ -497,7 +498,9 @@ removes the real coupling; do not create interfaces for ceremony.
 | `history.rs` | transcript storage shape | deciding when a turn routes |
 | `visual_protocol.rs` | display action validation and normalization | layout |
 | `protocol.rs` | the shape of every message sent to the browser (`ServerMessage`) and every command it sends (`ClientMessage`) | when or to whom a message is sent; what a command does |
-| `debug.rs` | bounded, in-memory observation: the event and log rings, the debug schema (`DebugEvent`), record scrubbing and clipping, and the debug listener's router and WebSocket framing | call control, routing or lifecycle decisions, awaiting on clients or doing I/O while publishing, disk history |
+| `debug.rs` | bounded, in-memory observation: the event and log rings, the debug schema (`DebugEvent`), the bus and its feeds | call control, routing or lifecycle decisions, awaiting on clients or doing I/O while publishing, disk history, how a record is clipped or scrubbed, serving a client |
+| `debug_record.rs` | how a published value becomes a bounded, scrubbed record: `Clip`, its size bounds and the credential scrubbing | the rings, publishing, serving a client |
+| `debug_listener.rs` | the debug listener: the embedded page, the read-only WebSocket behind the origin check, its socket cap, frame bound and send timeout | what a record holds, the rings, call control |
 | `apps/frontend/` | capture, protocol client, playback, UI | server authority or durable state |
 | `apps/host-agent/src/sessions.ts` | the sessions a host agent tracks on its daemon: provenance and the state file, each session's call, and its turn (`Tracked.turn`, written only by `#turnStep`; `docs/host-link.md`, "Session events") | the host link (`link.ts`), running prepare commands |
 | `apps/host-agent/src/daemon_keeper.ts` | the daemon connection and the resync after it: one phase (`disconnected`, `resyncing`, `retrying` the sessions that would not attach, `attached`), written only by `#step` (`docs/host-link.md`, "Snapshots") | what a session reattach does (`sessions.ts`), starting a daemon |
@@ -521,16 +524,19 @@ through them.
 
 | phase | carries | entered by | left by |
 |---|---|---|---|
-| `Open` | the leg on the line; the turn running on it, if any | the call starts here; `settle`, `finish_intro`, a rollback, `return_to_operator` from `Quiescing` | `begin_candidate`, a rescue, `begin_shutdown` |
+| `Open` | the leg on the line; the turn running on it, if any | the call starts here; `settle`, `finish_intro`, a rollback | `begin_candidate`, a rescue, `begin_shutdown` |
 | `Starting` | the leg, which still answers; the staged candidate, private until adopted; the leg's turn (a transfer runs inside the caller's) | `begin_candidate` | `adopt_candidate`; a rollback (to `Open`, the turn kept); a rescue or shutdown, which abandon the candidate and retire its generation |
 | `Adopted` | the adopted leg and its intro (or later) turn; the leg it `replaced` | `adopt_candidate` | `finish_intro` (to `Open`); a rollback (`replaced` comes back); a rescue; a shutdown; another `begin_candidate` |
-| `Quiescing` | the leg under the rescue's new identity; no turn | a rescue | a settle naming that rescue's generation (`settle`, `settle_at`), `return_to_operator`, `begin_candidate`, a shutdown |
+| `Quiescing` | the leg at the rescue's generation (under its retired identity, or the operator's after a return); no turn | a rescue | a settle naming that rescue's generation (`settle`, `settle_at`), `begin_candidate`, a shutdown |
 | `Shutdown` | the leg; no turn, no startup | `begin_shutdown` | nothing |
 
 Entering `Starting` announces the candidate (`candidate`); leaving it
 announces how it ended (`candidate_cleared` with `adopted`,
 `rolled_back` or `rescued`; a shutdown ends it as a rescue does), and a
-rollback of an adopted leg announces `rolled_back` again.
+rollback of an adopted leg announces `rolled_back` again. A candidate is
+adopted from two tasks, its own first sign of life and the PBX's commit,
+and whichever lands second is answered as the same adoption: the line and
+its intro turn are unchanged, and no notice is sent (#449).
 `the_call_line_phase_by_event` in `apps/backend/tests/test_lifecycle.rs`
 pins every phase against every event. A new way to move the call is an
 `Event` and its arms in `Line::next`, never a field beside the line.
@@ -614,11 +620,15 @@ changes to the legs.
 machine: each step consumes the control and returns the next, and the
 coordinator's rescue token (`lifecycle::Rescued`) is the only generation a
 step after the rescue gets, so none can read the current one again
-(#263, #369).
+(#263, #369). A control's body runs on its own task
+(`page_controls::detached`), and the handler only waits for it: hyper
+drops a handler's future when the client goes away while the response is
+pending, and the body still reaches its settle (#462).
 
 | step | holds | on failure |
 |---|---|---|
 | `PageControl::admit` | `Admitted`: the generation the page held, which is the call's | 400 with none, 409 for one the call has left: "refused" (a picker), "ignored" (a hangup) |
+| `detached` | the body's task, from the rescue to the settle | the body panicked: 500 "the control did not finish" (`did_not_finish`); a panic outside a registered operation leaves its quiet until the next control |
 | `Admitted::decide` (a redial only) | the decision, registered at the admitted generation; running work is left alone | as `run`, at the admitted generation, but a failure settles nothing; an answer that needs no redial (a refusal, a setting on the operator) is delivered there, nothing is rescued, and nothing is settled: a quiet on the line is another control's to end (#461) |
 | `Admitted::rescue` (`begin_rescue_at`), `rescue_for` (`begin_rescue_of`, a redial) | `Rescued`: the token, after the leg's work is released | nothing rescued: 409 ("cancelled", "ignored", "superseded") |
 | `Rescued::run` (the dial, the redial) | the operation, registered at the token's generation | 409 "cancelled" if a newer rescue retired it (that one settles); 500 and a settle if it failed |

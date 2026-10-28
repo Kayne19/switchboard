@@ -174,6 +174,116 @@ async fn streaming_commands_require_the_generation() {
     ));
 }
 
+/// Each command that names a clip refuses a bad id and a missing generation in
+/// its own words, which the page shows the caller.
+#[tokio::test]
+async fn each_clip_command_refuses_in_its_own_words() {
+    let long_id = "x".repeat(MAX_CLIP_ID_CHARS + 1);
+    let cases = [
+        (
+            r#"{"type":"clip","id":""}"#.to_owned(),
+            None,
+            "Invalid clip id.",
+        ),
+        (
+            format!(r#"{{"type":"clip","id":"{long_id}","generation":1}}"#),
+            None,
+            "Invalid clip id.",
+        ),
+        (
+            r#"{"type":"clip","id":"c"}"#.to_owned(),
+            Some("c"),
+            "Clip has no generation.",
+        ),
+        (
+            r#"{"type":"stt_start","clip_id":"","generation":1}"#.to_owned(),
+            None,
+            "Invalid streaming clip id.",
+        ),
+        (
+            r#"{"type":"stt_start","clip_id":"c"}"#.to_owned(),
+            Some("c"),
+            "Streaming clip has no generation.",
+        ),
+        (
+            r#"{"type":"stt_chunk","clip_id":"","generation":1,"sequence":0}"#.to_owned(),
+            None,
+            "Invalid streaming clip id.",
+        ),
+        (
+            r#"{"type":"stt_chunk","clip_id":"c","sequence":0}"#.to_owned(),
+            Some("c"),
+            "Streaming chunk has no generation.",
+        ),
+    ];
+    for (frame, id, message) in cases {
+        let state = state_with_stream(None, Some("true".into()));
+        let mut connection = state.0.delivery.register();
+        let mut pending_header = None;
+        let mut pending_chunk = None;
+        handle_text_frame(
+            &state,
+            connection.epoch,
+            &mut pending_header,
+            &mut pending_chunk,
+            &frame,
+        )
+        .await
+        .unwrap();
+        let refused = next_delivery(&mut connection).await;
+        assert_eq!(refused["type"], "error", "{frame}");
+        assert_eq!(refused["message"], message, "{frame}");
+        match id {
+            Some(id) => assert_eq!(refused["id"], id, "{frame}"),
+            None => assert!(refused.get("id").is_none_or(Value::is_null), "{frame}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_refused_chunk_header_clears_the_one_before_it() {
+    let state = state_with_stream(None, Some("true".into()));
+    let mut connection = state.0.delivery.register();
+    let epoch = connection.epoch;
+    let mut pending_header = None;
+    let mut pending_chunk = None;
+
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        r#"{"type":"stt_chunk","clip_id":"clip","generation":1,"sequence":0}"#,
+    )
+    .await
+    .unwrap();
+    handle_text_frame(
+        &state,
+        epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        r#"{"type":"stt_chunk","clip_id":"clip","sequence":1}"#,
+    )
+    .await
+    .unwrap();
+    let refused = next_delivery(&mut connection).await;
+    assert_eq!(refused["message"], "Streaming chunk has no generation.");
+    assert_eq!(refused["id"], "clip");
+
+    handle_audio_frame(
+        &state,
+        epoch,
+        &mut pending_header,
+        &mut pending_chunk,
+        vec![1, 2, 3],
+    )
+    .await
+    .unwrap();
+    let answered = next_delivery(&mut connection).await;
+    assert_eq!(answered["message"], "Audio arrived without a clip header.");
+    assert!(answered.get("id").is_none_or(Value::is_null));
+}
+
 #[test]
 fn clip_headers_carry_a_required_capture_epoch() {
     let header = |value: Value| match crate::protocol::ClientMessage::parse(&value.to_string()) {
@@ -188,7 +298,13 @@ fn clip_headers_carry_a_required_capture_epoch() {
 
     assert_eq!(
         header(json!({"type":"clip", "id":"a", "mime":"audio/webm", "generation":3})),
-        Ok(("a".into(), "audio/webm".into(), 3))
+        Ok(ClipHeader {
+            clip: ClipRef {
+                id: "a".into(),
+                generation: 3
+            },
+            mime: "audio/webm".into()
+        })
     );
     // A clip without the epoch it was recorded under is refused by its id,
     // never stamped on arrival.
@@ -222,7 +338,7 @@ fn clip_headers_carry_a_required_capture_epoch() {
     assert!(!is_clip_id(""));
     let long_mime =
         header(json!({"type":"clip", "id":"a", "mime":"m".repeat(400), "generation":3}));
-    assert_eq!(long_mime.unwrap().1.chars().count(), 100);
+    assert_eq!(long_mime.unwrap().mime.chars().count(), 100);
 }
 
 #[tokio::test]
@@ -281,7 +397,7 @@ async fn clip_accepted_before_a_page_rescue_is_dropped_after_transcription() {
 #[tokio::test]
 async fn speech_queued_while_a_leg_starts_is_dropped_with_notice_once_the_leg_is_adopted() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     // The operator turn that asked for the transfer stays in flight until the
     // incoming leg's intro turn ends, and that leg is busy with the intro.
@@ -329,7 +445,7 @@ async fn speech_queued_while_a_leg_starts_is_dropped_with_notice_once_the_leg_is
 #[tokio::test]
 async fn speech_transcribed_before_adoption_but_acted_on_after_is_dropped_with_notice() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     begin_alpha_candidate(&state, "alpha-leg");
     upload_clip(&state, &mut connection, "while-connecting", old).await;
@@ -363,7 +479,7 @@ async fn speech_transcribed_before_adoption_but_acted_on_after_is_dropped_with_n
 async fn speech_inside_the_sidecar_when_the_leg_is_adopted_is_dropped_with_notice() {
     let (mut stt, command) = GatedStt::new("and check the logs");
     let state = state_with_stt(Some(command));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     begin_alpha_candidate(&state, "alpha-leg");
     upload_clip(&state, &mut connection, "while-connecting", old).await;
@@ -390,7 +506,7 @@ async fn speech_inside_the_sidecar_when_the_leg_is_adopted_is_dropped_with_notic
 #[tokio::test]
 async fn speech_arriving_after_adoption_under_the_old_stamp_is_dropped_with_notice() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     begin_alpha_candidate(&state, "alpha-leg");
     assert!(state.0.leg_announcer.promote_candidate("alpha-leg").await);
@@ -423,7 +539,7 @@ async fn a_clip_keeps_the_first_stamp_the_server_saw_for_its_id() {
     // a retransmission under the same id is taken as the clip the server
     // already has, stamp included, and is not transcribed again.
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     upload_clip(&state, &mut connection, "sent-once", 3).await;
     upload_clip(&state, &mut connection, "sent-once", 4).await;
 
@@ -451,7 +567,7 @@ async fn a_clip_keeps_the_first_stamp_the_server_saw_for_its_id() {
 #[tokio::test]
 async fn a_clip_resent_after_its_verdict_was_missed_is_answered_with_it() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     upload_clip(&state, &mut connection, "missed", generation).await;
 
@@ -463,7 +579,7 @@ async fn a_clip_resent_after_its_verdict_was_missed_is_answered_with_it() {
     assert_eq!(verdict["type"], "transcript");
 
     // The tab is back and sends the clip it never heard about.
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     resend_clip(&state, &connection, "missed", generation).await;
     let frames = frames_until(&mut connection, "transcript").await;
     assert_eq!(
@@ -482,7 +598,7 @@ async fn a_clip_resent_after_its_verdict_was_missed_is_answered_with_it() {
 #[tokio::test]
 async fn a_stale_clip_resent_after_a_reconnect_is_told_it_was_dropped() {
     let state = state_with_stt(Some(HEARD_WHILE_CONNECTING.into()));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let old = state.0.coordinator.generation();
     upload_clip(&state, &mut connection, "stale", old).await;
     state.0.delivery.retire(connection.epoch);
@@ -492,7 +608,7 @@ async fn a_stale_clip_resent_after_a_reconnect_is_told_it_was_dropped() {
     let clip_worker = tokio::spawn(process_clips(state.clone()));
     verdict_emitted(&mut events, "stale").await;
 
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     resend_clip(&state, &connection, "stale", old).await;
     let frames = frames_until(&mut connection, "error").await;
     assert_eq!(types_of(&frames), ["error"]);
@@ -566,6 +682,43 @@ async fn an_arriving_clip_is_logged_with_the_mime_the_browser_recorded() {
     assert_eq!(arrived, vec![(json!("ipad-1"), json!("audio/mp4"))]);
     let frames = frames_until(&mut connection, "accepted").await;
     assert_eq!(frames.last().unwrap()["id"], "ipad-1");
+}
+
+/// Uploads a clip to a sidecar running `command` and returns the one error
+/// frame that answers it, after checking the clip went no further.
+async fn the_error_that_answers_a_clip(command: &str, id: &str) -> Value {
+    let state = state_with_stt(Some(command.into()));
+    let (mut connection, _) = state.register_connection().await;
+    let generation = state.0.coordinator.generation();
+    upload_clip(&state, &mut connection, id, generation).await;
+    let clip_worker = tokio::spawn(process_clips(state.clone()));
+
+    let frames = frames_until(&mut connection, "error").await;
+    assert_eq!(types_of(&frames), ["error"]);
+    assert_eq!(frames[0]["id"], id);
+    assert!(state.0.transcript_log.lock().await.entries().is_empty());
+    assert_never_queued(&state).await;
+    clip_worker.abort();
+    frames[0].clone()
+}
+
+/// A sidecar that exits with an error is answered with its stderr.
+#[tokio::test]
+async fn a_clip_the_sidecar_fails_on_is_answered_by_its_id() {
+    let error =
+        the_error_that_answers_a_clip("cat >/dev/null; echo broken >&2; exit 3", "sidecar-fails")
+            .await;
+    assert_eq!(
+        error["message"],
+        "Transcription failed: STT sidecar exited unsuccessfully: broken"
+    );
+}
+
+/// A press with no words is not routed.
+#[tokio::test]
+async fn a_clip_with_no_words_asks_the_caller_to_say_it_again() {
+    let error = the_error_that_answers_a_clip("cat >/dev/null; printf '  '", "no-words").await;
+    assert_eq!(error["message"], "I didn't catch that — say it again.");
 }
 
 const HEARD_WHILE_CONNECTING: &str = "cat >/dev/null; printf 'and check the logs'";
@@ -760,6 +913,31 @@ async fn verdict_emitted(events: &mut PageFeed, id: &str) -> Value {
             if value["id"] == id && matches!(value["type"].as_str(), Some("transcript" | "error")) {
                 return value;
             }
+        }
+    }
+}
+
+/// The page sends the trimmed turn in `typed-turns.json`, and the service
+/// must take it unchanged. Where the page and `str::trim` read a draft alike
+/// (no U+FEFF, which only the page trims), the service must reach the same
+/// turn from the draft itself.
+#[test]
+fn typed_turn_takes_what_the_page_sends_and_trims_as_it_does() {
+    let corpus: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/apps/frontend/tests/fixtures/typed-turns.json"
+    )))
+    .unwrap();
+    let parse =
+        |text: &str| parse_typed_turn(Some("typed-1"), Some(1), Some(text)).map(|turn| turn.2);
+    for case in corpus["cases"].as_array().unwrap() {
+        let draft = case["draft"].as_str().unwrap();
+        let body = case["body"].as_str();
+        if let Some(body) = body {
+            assert_eq!(parse(body).as_deref(), Some(body), "body {body:?}");
+        }
+        if !draft.contains('\u{feff}') {
+            assert_eq!(parse(draft).as_deref(), body, "draft {draft:?}");
         }
     }
 }

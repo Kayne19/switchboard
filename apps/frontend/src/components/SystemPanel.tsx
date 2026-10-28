@@ -1,6 +1,7 @@
 import type { ChangeEvent } from 'react';
 import type { LineControls } from '../controller/context';
 import type { SelectOption } from '../runtime/lineStatus';
+import { ReturnControl } from '../primitives/ReturnControl';
 
 /**
  * The system view's panel (#277): the line the caller is on and the
@@ -18,7 +19,7 @@ export function SystemPanel({ line, onExit }: { line: LineControls | undefined; 
     <section className="system" aria-label="Line controls">
       <div className="system__header tech micro">
         <span>SYSTEM / LINE</span>
-        <button className="focus-layer__return system__exit" type="button" onClick={onExit}>EXIT / ESC</button>
+        <ReturnControl label="EXIT / ESC" onClose={onExit} />
       </div>
       {line ? <LineBody line={line} /> : <div className="system__none tech micro">NO CALL / NOTHING TO SWITCH</div>}
     </section>

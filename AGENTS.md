@@ -68,8 +68,12 @@ commit.
   `.only` test, no user-agent checks, bounded test awaits, no page under
   the notch, one runtime ID prefix, stage-relative sizes, one writer per lifecycle
   machine, no new phase fields on a lifecycle owner, one composition a
-  render, one log capture, live paths, routes and settings in the docs); a new rule of that
-  kind gets a check there. Both Playwright configs also set `forbidOnly` on CI, so a focused
+  render, one log capture, one socket fake, detached page controls, every
+  `-webkit-` name in `docs/ipad.md`, live paths, routes and settings in the docs); a new rule of that
+  kind gets a check there: a named entry in its `checks` table with a sample
+  tree it must refuse and one it must pass. The script runs those self-tests
+  before every scan, and `node scripts/check_hygiene.mjs --self-test` runs
+  them alone. Both Playwright configs also set `forbidOnly` on CI, so a focused
   spec fails its browser leg.
 - CI's `browser` job runs the Playwright specs in Chromium and in WebKit:
   `npm run test:browser` (every spec in `apps/frontend/tests/visual` but
@@ -106,8 +110,9 @@ commit.
   says in its pull request what it does on WebKit. One implementation
   serves both engines: no user-agent checks and no WebKit-only CSS. A
   user-agent branch that cannot be avoided names the WebKit bug it works
-  around in a comment and is listed in `docs/ipad.md`, which also holds the
-  device checklist to run before a pin bump.
+  around in a comment and is listed in `docs/ipad.md`, as is each prefixed
+  `-webkit-` rule in the CSS; the same file holds the device checklist to run
+  before a pin bump.
 - A `static/` or `static-debug/` merge conflict is resolved by rebuilding from the merged source
   (`npm ci && npm run build`), never by picking a side (see #37).
 - `master` requires a passing CI `test` check on an up-to-date head. If
@@ -203,6 +208,17 @@ commit.
   wrong phase or an end missed on one exit, and each fix had added a flag.
   `scripts/check_hygiene.mjs` holds each machine to one writer and holds
   the owners that are not machines yet to the phase fields they have.
+- A change to a host-link frame, event order or module reply updates
+  `tests/fixtures/host-link.json` in the same commit. The real host agent, the
+  service's `module_reply` and every fake of either are tested against it
+  (`docs/host-link.md`).
+- A frontend unit test fakes the page's WebSocket with the one `FakeSocket`
+  (`apps/frontend/tests/unit/fakeSocket.ts`), installed with
+  `FakeSocket.install()` and driven with its `open`, `drop`, `error`,
+  `receive` and `receiveRaw`. Eight local copies had drifted (some recorded
+  `send`, some did not, some closed at once and some never reported the
+  close). `scripts/check_hygiene.mjs` refuses a socket class of its own and a
+  socket's handler called by hand.
 - Tests never touch the network, ElevenLabs, a whisper model, or the real `pi`
   or `ssh`. Fake executables go through `write_executable_script`; PBX tests
   drive transfers through `Prewarm::settled`, which exercises the production

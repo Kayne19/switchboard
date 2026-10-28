@@ -15,29 +15,7 @@ import { IDLE_TEXT } from '../../src/runtime/callRuntime';
 import { SceneRenderer } from '../../src/components/SceneRenderer';
 import { helloAck, statusMessage, transcriptEntry } from '../fixtures/serverMessages';
 import { stubResizeObserver } from './sceneHarness';
-
-class FakeSocket {
-  static latest: FakeSocket | null = null;
-  readyState = 0;
-  binaryType = 'blob';
-  sent: unknown[] = [];
-  onopen: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-
-  constructor(readonly url: string) {
-    FakeSocket.latest = this;
-  }
-
-  send(data: unknown) {
-    this.sent.push(data);
-  }
-
-  close() {
-    this.readyState = 3;
-  }
-}
+import { FakeSocket } from './fakeSocket';
 
 // The page lays out by what it measures: the rail beside a visual, the room
 // the line's error takes.
@@ -60,7 +38,7 @@ function StateRecorder() {
 
 async function receive(message: object) {
   await act(async () => {
-    socket.onmessage?.({ data: JSON.stringify(message) } as MessageEvent);
+    socket.receive(message);
   });
 }
 
@@ -81,7 +59,7 @@ async function tapDamocles() {
 }
 
 beforeEach(async () => {
-  vi.stubGlobal('WebSocket', FakeSocket);
+  FakeSocket.install();
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, 'play').mockImplementation(() => Promise.resolve());
@@ -98,10 +76,9 @@ beforeEach(async () => {
       </ControllerProvider>,
     );
   });
-  socket = FakeSocket.latest!;
+  socket = FakeSocket.latest();
   await act(async () => {
-    socket.readyState = 1;
-    socket.onopen?.({} as Event);
+    socket.open();
   });
   await receive(helloAck());
   await receive({ type: 'epoch', generation: 1 });

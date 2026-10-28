@@ -256,6 +256,11 @@ impl ProjectInner {
             .unwrap_or_default()
     }
 
+    fn swap_token(&self, token: String) -> String {
+        let mut current = self.token.lock().unwrap_or_else(PoisonError::into_inner);
+        std::mem::replace(&mut *current, token)
+    }
+
     /// Moves the session's turn on `event` (`TurnState::step`) under its
     /// lock, and returns what is left to do. A prompt's start and end leave
     /// nothing.
@@ -800,7 +805,8 @@ impl ProjectSession {
 
     /// Queues command `name` for this session on the host link now, ahead
     /// of anything queued after it; `HostCommand::reply` waits for the
-    /// host's answer.
+    /// host's answer. A command that cannot be queued ends the session
+    /// (`LifecycleEvent::CommandFailed`).
     async fn send(&self, name: &str, mut args: Value) -> Result<HostCommand, PiSessionError> {
         if !self.alive() {
             return Err(PiSessionError("the project session has ended".into()));
@@ -819,7 +825,8 @@ impl ProjectSession {
     }
 
     /// Puts the session on the call with `token`: module calls must carry it
-    /// from now on, and any carrying an earlier one are refused.
+    /// from now on, and any carrying an earlier one are refused; a join the
+    /// host refuses puts the earlier one back.
     pub async fn join_call(
         &self,
         token: &str,
@@ -832,6 +839,12 @@ impl ProjectSession {
 
     /// Puts the session on the call in an explicit delivery mode. Background
     /// sessions stay live but the host agent refuses their speech.
+    ///
+    /// The new token is taken before the host answers: a module call the
+    /// host sends right after accepting the join can be read ahead of the
+    /// reply, and must pass. A join the host refuses keeps the token the
+    /// host still holds (#555); a join that fails any other way ends the
+    /// session, so the restore there is moot.
     pub async fn join_call_mode(
         &self,
         token: &str,
@@ -839,15 +852,17 @@ impl ProjectSession {
         speech_deadline_ms: u64,
         mode: &str,
     ) -> Result<(), PiSessionError> {
-        if let Ok(mut current) = self.inner.token.lock() {
-            *current = token.to_owned();
+        let previous = self.inner.swap_token(token.to_owned());
+        let joined = self
+            .command(
+                "join_call",
+                json!({"token": token, "persona": persona, "speech_deadline_ms": speech_deadline_ms, "mode": mode}),
+            )
+            .await;
+        if joined.is_err() {
+            self.inner.swap_token(previous);
         }
-        self.command(
-            "join_call",
-            json!({"token": token, "persona": persona, "speech_deadline_ms": speech_deadline_ms, "mode": mode}),
-        )
-        .await
-        .map(|_| ())
+        joined.map(|_| ())
     }
 
     /// Changes delivery mode without replacing the resident session.
@@ -885,7 +900,12 @@ impl ProjectSession {
 
     /// Aborts the running turn, if any; the session stays. The abort is
     /// queued now, ahead of anything sent after it; nothing waits for the
-    /// host.
+    /// host. It goes neither through `send` nor through
+    /// `HostCommand::reply`, where a failure ends the session: an abort
+    /// that cannot go out, or whose answer is lost, late or a failure, is
+    /// only logged, since its callers keep the session after it (a
+    /// resident taken for the line, a rescue that keeps the session), and
+    /// a link that is gone ends the session on its own (#381).
     pub fn interrupt(&self) {
         if !self.alive() {
             return;
@@ -1082,6 +1102,17 @@ impl ProjectSession {
                     break;
                 }
                 TurnFrame::Event { seq, event } => (seq, event),
+                TurnFrame::RunReplaced {
+                    seq,
+                    turn_id: replaced,
+                } => {
+                    if seq < from || replaced.as_deref() != Some(turn_id) {
+                        continue;
+                    }
+                    tracing::info!(%label, turn_id, "the run the prompt went into was replaced without its turn_end");
+                    settled_turn = replaced;
+                    break;
+                }
             };
             if seq < from && event["kind"] != "session_closed" {
                 continue;
@@ -1279,7 +1310,10 @@ struct HostCommand {
 }
 
 impl HostCommand {
-    /// Waits, at most `SESSION_COMMAND_WAIT`, for the host's answer.
+    /// Waits, at most `SESSION_COMMAND_WAIT`, for the host's answer. An
+    /// answer that is lost, late, or a failure other than a refusal ends the
+    /// session (`LifecycleEvent::CommandFailed`); a refusal fails the
+    /// command alone (#423).
     async fn reply(self) -> Result<crate::hosts::CommandReply, PiSessionError> {
         match self.sent.reply(SESSION_COMMAND_WAIT).await {
             Ok(reply) => Ok(reply),

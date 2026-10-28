@@ -40,7 +40,7 @@ for (const geometry of CASES) {
         const boxes = await page.evaluate(() => {
           const stage = document.querySelector('.stage')!.getBoundingClientRect();
           const content = document.querySelector('.focus-layer__content')!.getBoundingClientRect();
-          const back = document.querySelector('.focus-layer__return')!.getBoundingClientRect();
+          const back = document.querySelector('.focus-layer .return-control')!.getBoundingClientRect();
           return { stage: { top: stage.top, bottom: stage.bottom }, content: { top: content.top, bottom: content.bottom }, back: { top: back.top, bottom: back.bottom } };
         });
         expect(boxes.content.bottom, 'the box ends inside the visible stage').toBeLessThanOrEqual(boxes.stage.bottom + 0.5);

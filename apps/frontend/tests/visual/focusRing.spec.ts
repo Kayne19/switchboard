@@ -96,7 +96,7 @@ test('the history drawer\'s controls draw the page\'s ring, uncut', async ({ pag
     await page.getByRole('textbox', { name: 'Conversation input' }).fill('typed');
     const { reached, faults } = await tabThrough(page, 'history', '.transcript');
     expect(faults).toEqual([]);
-    expect(reached.join(' | ')).toContain('transcript__return');
+    expect(reached.join(' | ')).toContain('return-control');
     expect(reached.join(' | ')).toContain('transcript__send');
   } finally {
     await server.stop();

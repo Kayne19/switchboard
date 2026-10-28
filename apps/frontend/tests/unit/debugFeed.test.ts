@@ -1,30 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BACKOFF_RESET_AFTER_MS, backoffDelay, debugSocketUrl, SocketFeed, type FeedStatus } from '../../src/debug/connection';
 import type { DebugFrame } from '../../src/debug/protocol';
-
-class FakeSocket {
-  onopen: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  closed = false;
-  close() {
-    this.closed = true;
-  }
-  open() {
-    this.onopen?.(new Event('open'));
-  }
-  send(data: string) {
-    this.onmessage?.({ data } as MessageEvent);
-  }
-  drop() {
-    this.onclose?.({} as CloseEvent);
-  }
-}
+import { FakeSocket } from './fakeSocket';
 
 describe('debug feed connection', () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    FakeSocket.install();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it('backs off exponentially up to a cap', () => {
     expect([0, 1, 2, 3, 4, 5, 6, 9].map(backoffDelay)).toEqual([500, 1000, 2000, 4000, 8000, 10000, 10000, 10000]);
@@ -33,7 +20,6 @@ describe('debug feed connection', () => {
   });
 
   it('batches parsed frames, reports rejects, and reconnects after a drop', () => {
-    const sockets: FakeSocket[] = [];
     const batches: DebugFrame[][] = [];
     const rejected: string[] = [];
     const statuses: FeedStatus[] = [];
@@ -41,19 +27,15 @@ describe('debug feed connection', () => {
     const feed = new SocketFeed(
       'ws://test/ws',
       { frames: (frames) => batches.push(frames), rejected: (error) => rejected.push(error), status: (status) => statuses.push(status) },
-      () => {
-        const socket = new FakeSocket();
-        sockets.push(socket);
-        return socket;
-      },
+      (url) => new FakeSocket(url),
       (callback) => ticks.push(callback),
     );
     feed.start();
-    sockets[0].open();
-    sockets[0].send(JSON.stringify({ type: 'log', seq: 1, timestamp_ms: 1, level: 'INFO', target: 't', message: 'a', fields: {} }));
-    sockets[0].send(JSON.stringify({ type: 'log', seq: 2, timestamp_ms: 1, level: 'INFO', target: 't', message: 'b', fields: {} }));
-    sockets[0].send('{"type":"bogus"}');
-    sockets[0].send(JSON.stringify({ type: 'event', seq: 3, timestamp_ms: 1, kind: 'host_link', host: 'h', connected: 'yes' }));
+    FakeSocket.instances[0].open();
+    FakeSocket.instances[0].receive({ type: 'log', seq: 1, timestamp_ms: 1, level: 'INFO', target: 't', message: 'a', fields: {} });
+    FakeSocket.instances[0].receive({ type: 'log', seq: 2, timestamp_ms: 1, level: 'INFO', target: 't', message: 'b', fields: {} });
+    FakeSocket.instances[0].receive({ type: 'bogus' });
+    FakeSocket.instances[0].receive({ type: 'event', seq: 3, timestamp_ms: 1, kind: 'host_link', host: 'h', connected: 'yes' });
     expect(batches).toHaveLength(0);
     expect(ticks).toHaveLength(1);
     ticks[0]();
@@ -62,70 +44,65 @@ describe('debug feed connection', () => {
     // The malformed numbered event is passed on as a skip; the reducer counts it.
     expect(batches[0][2]).toEqual({ type: 'skipped', seq: 3, error: 'host_link.connected is not boolean' });
     expect(rejected).toEqual(['unknown frame type "bogus"']);
-    sockets[0].drop();
+    FakeSocket.instances[0].drop();
     expect(statuses).toEqual(['connecting', 'live', 'reconnecting']);
     vi.advanceTimersByTime(499);
-    expect(sockets).toHaveLength(1);
+    expect(FakeSocket.instances).toHaveLength(1);
     vi.advanceTimersByTime(1);
-    expect(sockets).toHaveLength(2);
+    expect(FakeSocket.instances).toHaveLength(2);
     feed.resync();
-    expect(sockets[1].closed).toBe(true);
-    expect(sockets).toHaveLength(3);
+    expect(FakeSocket.instances[1].readyState).toBe(3);
+    expect(FakeSocket.instances).toHaveLength(3);
     feed.stop();
-    expect(sockets[2].closed).toBe(true);
-    sockets[2].drop();
+    expect(FakeSocket.instances[2].readyState).toBe(3);
+    FakeSocket.instances[2].drop();
     vi.advanceTimersByTime(20_000);
-    expect(sockets).toHaveLength(3);
+    expect(FakeSocket.instances).toHaveLength(3);
   });
 
   it('keeps backing off while sockets open and close, until one has held its snapshot a while', () => {
     // The listener closes a client that lags or cannot take a frame in time;
     // each of those closes comes after a successful open. Resetting the
     // backoff on open made every such retry wait only the base delay.
-    const sockets: FakeSocket[] = [];
     const rejected: string[] = [];
     const feed = new SocketFeed(
       'ws://test/ws',
       { frames: () => {}, rejected: (error) => rejected.push(error), status: () => {} },
-      () => {
-        const socket = new FakeSocket();
-        sockets.push(socket);
-        return socket;
-      },
+      (url) => new FakeSocket(url),
       (callback) => callback(),
     );
-    const snapshot = JSON.stringify({
+    const snapshot = {
       type: 'snapshot',
       last_seq: 0,
       events: [],
       logs: [],
       agents: [],
       config: { jev_for_current_agent_lower: 0.3, jev_for_current_agent_upper: 0.7, jev_action_threshold: 0.6 },
-    });
-    /** The time from `sockets[index]` closing to the next socket opening. */
+    };
+    /** The time from `FakeSocket.instances[index]` closing to the next socket opening. */
     const retryDelay = (index: number): number => {
-      sockets[index].drop();
+      FakeSocket.instances[index].drop();
       let waited = 0;
-      while (sockets.length === index + 1) {
+      while (FakeSocket.instances.length === index + 1) {
         vi.advanceTimersByTime(100);
         waited += 100;
       }
       return waited;
     };
     feed.start();
-    sockets[0].open();
+    FakeSocket.instances[0].open();
     expect(retryDelay(0)).toBe(500);
-    sockets[1].open();
+    FakeSocket.instances[1].open();
     expect(retryDelay(1)).toBe(1000);
     // A snapshot alone does not reset it: the socket may still be dropped
     // before it can take the next frame.
-    sockets[2].open();
-    sockets[2].send(snapshot);
+    FakeSocket.instances[2].open();
+    FakeSocket.instances[2].receive(snapshot);
     vi.advanceTimersByTime(5_000);
     expect(retryDelay(2)).toBe(2000);
     // A socket that got its snapshot and stayed open resets it.
-    sockets[3].open();
-    sockets[3].send(snapshot);
+    FakeSocket.instances[3].open();
+    FakeSocket.instances[3].receive(snapshot);
     vi.advanceTimersByTime(10_000);
     expect(retryDelay(3)).toBe(500);
     expect(rejected).toEqual([]);
@@ -143,8 +120,14 @@ describe('debug feed connection', () => {
  * reset to 0 shows.
  */
 describe('debug feed lifecycle: phase x event', () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    FakeSocket.install();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   type Phase = 'stopped' | 'connecting' | 'open' | 'settling' | 'live' | 'waiting';
   type Event = 'start' | 'stop' | 'resync' | 'opened' | 'snapshot' | 'frame' | 'closed' | 'held' | 'retry-due';
@@ -166,18 +149,17 @@ describe('debug feed lifecycle: phase x event', () => {
   }
 
   const SETTLING_HELD_MS = 5_000;
-  const snapshot = JSON.stringify({
+  const snapshot = {
     type: 'snapshot',
     last_seq: 0,
     events: [],
     logs: [],
     agents: [],
     config: { jev_for_current_agent_lower: 0.3, jev_for_current_agent_upper: 0.7, jev_action_threshold: 0.6 },
-  });
-  const logFrame = JSON.stringify({ type: 'log', seq: 1, timestamp_ms: 1, level: 'INFO', target: 't', message: 'a', fields: {} });
+  };
+  const logFrame = { type: 'log', seq: 1, timestamp_ms: 1, level: 'INFO', target: 't', message: 'a', fields: {} };
 
   function harness() {
-    const sockets: FakeSocket[] = [];
     const statuses: string[] = [];
     const frames: DebugFrame[] = [];
     const feed = new SocketFeed(
@@ -187,14 +169,10 @@ describe('debug feed lifecycle: phase x event', () => {
         rejected: (error) => statuses.push(`rejected: ${error}`),
         status: (status, detail) => statuses.push(detail ? `${status}: ${detail}` : status),
       },
-      () => {
-        const socket = new FakeSocket();
-        sockets.push(socket);
-        return socket;
-      },
+      (url) => new FakeSocket(url),
       (callback) => callback(),
     );
-    return { feed, sockets, statuses, frames, latest: () => sockets[sockets.length - 1] };
+    return { feed, statuses, frames };
   }
   type Harness = ReturnType<typeof harness>;
 
@@ -203,14 +181,14 @@ describe('debug feed lifecycle: phase x event', () => {
     const h = harness();
     if (phase === 'stopped') return h;
     h.feed.start();
-    h.latest().drop();
+    FakeSocket.latest().drop();
     vi.advanceTimersByTime(backoffDelay(0));
-    h.latest().drop();
+    FakeSocket.latest().drop();
     vi.advanceTimersByTime(backoffDelay(1));
     // connecting, attempt 2
-    if (phase === 'waiting') h.latest().drop();
-    if (phase === 'open' || phase === 'settling' || phase === 'live') h.latest().open();
-    if (phase === 'settling' || phase === 'live') h.latest().send(snapshot);
+    if (phase === 'waiting') FakeSocket.latest().drop();
+    if (phase === 'open' || phase === 'settling' || phase === 'live') FakeSocket.latest().open();
+    if (phase === 'settling' || phase === 'live') FakeSocket.latest().receive(snapshot);
     if (phase === 'settling') vi.advanceTimersByTime(SETTLING_HELD_MS);
     if (phase === 'live') vi.advanceTimersByTime(BACKOFF_RESET_AFTER_MS);
     h.statuses.length = 0;
@@ -226,13 +204,13 @@ describe('debug feed lifecycle: phase x event', () => {
       case 'resync':
         return h.feed.resync();
       case 'opened':
-        return h.latest().open();
+        return FakeSocket.latest().open();
       case 'snapshot':
-        return h.latest().send(snapshot);
+        return FakeSocket.latest().receive(snapshot);
       case 'frame':
-        return h.latest().send(logFrame);
+        return FakeSocket.latest().receive(logFrame);
       case 'closed':
-        return h.latest().drop();
+        return FakeSocket.latest().drop();
       case 'held':
         return void vi.advanceTimersByTime(BACKOFF_RESET_AFTER_MS - SETTLING_HELD_MS);
       case 'retry-due':
@@ -241,11 +219,11 @@ describe('debug feed lifecycle: phase x event', () => {
   }
 
   /** How long after the current socket drops the next one opens. */
-  function retryDelay(h: Harness): number {
-    const count = h.sockets.length;
-    h.latest().drop();
+  function retryDelay(): number {
+    const count = FakeSocket.instances.length;
+    FakeSocket.latest().drop();
     let waited = 0;
-    while (h.sockets.length === count && waited < 60_000) {
+    while (FakeSocket.instances.length === count && waited < 60_000) {
       vi.advanceTimersByTime(100);
       waited += 100;
     }
@@ -253,7 +231,7 @@ describe('debug feed lifecycle: phase x event', () => {
   }
 
   function expectPhase(h: Harness, then: Then): void {
-    const count = h.sockets.length;
+    const count = FakeSocket.instances.length;
     // Only settling (the hold) and waiting (the retry) hold a timer. `live`
     // is not counted: there a later snapshot may arm a hold that resets an
     // attempt already at 0.
@@ -261,36 +239,36 @@ describe('debug feed lifecycle: phase x event', () => {
     switch (then.phase) {
       case 'stopped':
         h.statuses.length = 0;
-        h.latest()?.drop();
+        FakeSocket.instances.at(-1)?.drop();
         vi.advanceTimersByTime(60_000);
         h.feed.resync();
-        expect(h.sockets).toHaveLength(count);
+        expect(FakeSocket.instances).toHaveLength(count);
         expect(h.statuses).toEqual([]);
         return;
       case 'connecting':
       case 'open':
-        expect(h.latest().closed).toBe(false);
-        expect(retryDelay(h)).toBe(backoffDelay(then.attempt));
+        expect(FakeSocket.latest().readyState).not.toBe(3);
+        expect(retryDelay()).toBe(backoffDelay(then.attempt));
         return;
       case 'settling':
         // Not reset before the snapshot has been held long enough ...
         vi.advanceTimersByTime(then.settlesIn - 1);
-        expect(h.sockets).toHaveLength(count);
+        expect(FakeSocket.instances).toHaveLength(count);
         // ... and reset once it has.
         vi.advanceTimersByTime(1);
-        expect(retryDelay(h)).toBe(backoffDelay(0));
+        expect(retryDelay()).toBe(backoffDelay(0));
         return;
       case 'live':
-        expect(retryDelay(h)).toBe(backoffDelay(0));
+        expect(retryDelay()).toBe(backoffDelay(0));
         return;
       case 'waiting':
         h.statuses.length = 0;
         vi.advanceTimersByTime(then.retryIn - 1);
-        expect(h.sockets).toHaveLength(count);
+        expect(FakeSocket.instances).toHaveLength(count);
         vi.advanceTimersByTime(1);
-        expect(h.sockets).toHaveLength(count + 1);
+        expect(FakeSocket.instances).toHaveLength(count + 1);
         expect(h.statuses).toEqual(['reconnecting']);
-        expect(retryDelay(h)).toBe(backoffDelay(then.attempt));
+        expect(retryDelay()).toBe(backoffDelay(then.attempt));
         return;
     }
   }
@@ -373,32 +351,32 @@ describe('debug feed lifecycle: phase x event', () => {
 
   it.each(rows.map((row) => [`${row.from} + ${row.event} -> ${row.then.phase}`, row] as const))('%s', (_name, row) => {
     const h = reach(row.from);
-    const socket = row.from === 'stopped' || row.from === 'waiting' ? undefined : h.latest();
-    const count = h.sockets.length;
+    const socket = row.from === 'stopped' || row.from === 'waiting' ? undefined : FakeSocket.latest();
+    const count = FakeSocket.instances.length;
     apply(h, row.event);
     expect(h.statuses).toEqual(row.statuses);
-    if (row.closes !== undefined) expect(socket?.closed).toBe(row.closes);
-    expect(h.sockets).toHaveLength(count + row.opens);
+    if (row.closes !== undefined) expect(socket?.readyState === 3).toBe(row.closes);
+    expect(FakeSocket.instances).toHaveLength(count + row.opens);
     expectPhase(h, row.then);
   });
 
   it('ignores every event from a socket it has let go of', () => {
     for (const leave of ['resync', 'stop'] as const) {
       const h = reach('open');
-      const old = h.latest();
+      const old = FakeSocket.latest();
       h.feed[leave]();
-      const count = h.sockets.length;
+      const count = FakeSocket.instances.length;
       h.statuses.length = 0;
       h.frames.length = 0;
       old.open();
-      old.send(snapshot);
-      old.send(logFrame);
-      old.send('{"type":"bogus"}');
+      old.receive(snapshot);
+      old.receive(logFrame);
+      old.receive({ type: 'bogus' });
       old.drop();
       vi.advanceTimersByTime(60_000);
       expect(h.statuses).toEqual([]);
       expect(h.frames).toEqual([]);
-      expect(h.sockets).toHaveLength(count);
+      expect(FakeSocket.instances).toHaveLength(count);
     }
   });
 
@@ -407,7 +385,7 @@ describe('debug feed lifecycle: phase x event', () => {
     h.feed.stop();
     h.feed.start();
     expect(h.statuses).toEqual(['connecting']);
-    expect(retryDelay(h)).toBe(backoffDelay(0));
+    expect(retryDelay()).toBe(backoffDelay(0));
   });
 
   it('waits and retries when the socket cannot be made', () => {
@@ -416,10 +394,10 @@ describe('debug feed lifecycle: phase x event', () => {
     const feed = new SocketFeed(
       'ws://test/ws',
       { frames: () => {}, rejected: () => {}, status: (status, detail) => statuses.push(detail ? `${status}: ${detail}` : status) },
-      () => {
+      (url) => {
         calls += 1;
         if (calls === 1) throw new Error('boom');
-        return new FakeSocket();
+        return new FakeSocket(url);
       },
       (callback) => callback(),
     );

@@ -1,0 +1,49 @@
+{
+  "description": "What the page sends for a typed draft (`body`, or null when it refuses a blank one). The page trims Unicode White_Space as the service's str::trim does, and U+FEFF as well, so the body has nothing left for the service to trim: the service takes it unchanged. The service runs the cases whose draft has no U+FEFF through its own trim too, and must agree. A lone surrogate cannot be written here, as serde_json refuses a string holding one: the page's refusal of it is tested in transcriptComposer.test.tsx and the service's in test_protocol.rs.",
+  "cases": [
+    {
+      "draft": "hi",
+      "body": "hi"
+    },
+    {
+      "draft": "  hi  ",
+      "body": "hi"
+    },
+    {
+      "draft": "\u0085",
+      "body": null
+    },
+    {
+      "draft": "\u0085hi\u0085",
+      "body": "hi"
+    },
+    {
+      "draft": "\u00a0\u3000hi\u2028\u2029",
+      "body": "hi"
+    },
+    {
+      "draft": "\ufeffhi",
+      "body": "hi"
+    },
+    {
+      "draft": "hi\ufeff",
+      "body": "hi"
+    },
+    {
+      "draft": "\ufeff",
+      "body": null
+    },
+    {
+      "draft": "\ufeff\u0085 \ufeff",
+      "body": null
+    },
+    {
+      "draft": "a \u0085 b",
+      "body": "a \u0085 b"
+    },
+    {
+      "draft": "\t\n\u000b\f\r\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u1680\u202f\u205f\u3000hi\u00a0\u2028\u2029 ",
+      "body": "hi"
+    }
+  ]
+}

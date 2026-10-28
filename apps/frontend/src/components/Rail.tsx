@@ -17,7 +17,7 @@ import { LiveChatCard } from '../primitives/LiveChatCard';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
-import { FocusableSurface } from '../primitives/FocusableSurface';
+import { ExpandableSurface } from '../primitives/ExpandableSurface';
 import { ToolActivity } from '../primitives/ToolActivity';
 import { SurfaceBoundary } from './SurfaceBoundary';
 import { liveChatMessage, ObjectSurface } from './sceneContent';
@@ -81,9 +81,9 @@ function RailProgress({ progressList, onFocus }: { progressList: Array<SceneObje
       {progressList.map((progress) => (
         <ObjectMotion key={progress.id} objectId={progress.id} className="rail-progress">
           <ObjectSurface object={progress}>
-            <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+            <ExpandableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
               <ProgressPrimitive data={progress.data} slot="rail" />
-            </FocusableSurface>
+            </ExpandableSurface>
           </ObjectSurface>
         </ObjectMotion>
       ))}

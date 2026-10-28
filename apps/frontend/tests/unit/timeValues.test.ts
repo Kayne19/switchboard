@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareTimeValues, parseTimeValue, type TimeValue } from '../../src/controller/validation';
+import { compareTimeValues, parseTimeValue, type TimeValue } from '../../src/controller/validation/time';
 import { weekdayOf } from '../../src/primitives/timeLabels';
 
 // The page's one time parser (docs/display-tool.md, "Time values"). The

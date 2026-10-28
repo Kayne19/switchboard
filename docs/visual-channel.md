@@ -160,7 +160,7 @@ rather than with a scroll bar (`primitives/drawingScroll.ts` decides,
   pointing out; several lines to one node are one name. A tap on a name
   or on the map does not expand the object, as a tap on the drawing does;
   the control marks the tap handled and lets it go on, so the page still
-  hears it as the gesture that lets it play audio (`FocusableSurface`: no
+  hears it as the gesture that lets it play audio (`ExpandableSurface`: no
   control inside it stops an event).
 - **A map shows the whole.** A drawing that scrolls 1.6 views or more
   carries a small map: every node and line, the view boxed in orange. A
@@ -807,7 +807,7 @@ gate's lock around each call.
 | Field | What it is |
 |---|---|
 | `projection` | the stage (`DisplayProjection`): objects, order, focus, speech |
-| `watermark` | the delivery `seq` of the newest display applied to the stage |
+| `watermark` | the delivery `seq` of the newest display applied to the stage, or none before any |
 | `screen` | the caller's screen as the page last reported it (`ScreenReport`), or stale |
 | `scene_leg` | the leg (`SceneLeg`: route and generation) the stage was last reset for |
 | `confirmations` | a `tokio::sync::watch<ConfirmState>`: what the page confirmed and rejected in the current generation |
@@ -990,7 +990,7 @@ rules"); the reasons are these.
   browser's decoder reads, never parsed as a document, so it adds no script
   surface. SVG is refused for exactly that reason: it is markup and can carry
   script. `format` cannot smuggle it in, because both validators
-  (`validation.ts`, `visual_protocol.rs`) decode the head of `bytes` and check
+  (`validation/image.ts`, `visual_protocol.rs`) decode the head of `bytes` and check
   it starts with the signature `format` names.
 - **The page builds the source.** The `img` source is
   `data:image/<format>;base64,<bytes>`, built by `ImagePrimitive` from the two

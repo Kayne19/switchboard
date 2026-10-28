@@ -17,7 +17,7 @@ function boxes() {
     const rect = document.querySelector(selector)!.getBoundingClientRect();
     return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
   };
-  const exit = document.querySelector<HTMLElement>('.theater__exit')!.getBoundingClientRect();
+  const exit = document.querySelector<HTMLElement>('.theater__header .return-control')!.getBoundingClientRect();
   const hit = document.elementFromPoint(exit.left + exit.width / 2, exit.top + exit.height / 2);
   // What the box draws, overflow and all: every part in it with a size,
   // each cut to the boxes that clip it on the way up (a scroller's hidden
@@ -51,7 +51,7 @@ function boxes() {
     header: box('.theater__header'),
     stack: box('.channel-stack'),
     presence: box('.theater__presence [data-testid="damocles-presence"]'),
-    exitHit: Boolean(hit?.closest('.theater__exit')),
+    exitHit: Boolean(hit?.closest('.theater__header .return-control')),
   };
 }
 
@@ -120,9 +120,9 @@ test('Esc and EXIT leave the theater for auto, and the report says so', async ({
     await expect(page.locator('.stage')).toHaveAttribute('data-scene-kind', 'training');
     await expect.poll(() => reportedView(server)).toBe('auto');
 
-    server.broadcast({ type: 'view', target: 'theater', reason: '' });
+    server.broadcast({ type: 'view', target: 'theater' });
     await expect(page.locator('.stage')).toHaveAttribute('data-view', 'theater');
-    await page.locator('.theater__exit').click();
+    await page.locator('.theater__header .return-control').click();
     await expect(page.locator('.stage')).toHaveAttribute('data-view', 'auto');
     await expect.poll(() => reportedView(server)).toBe('auto');
   } finally {

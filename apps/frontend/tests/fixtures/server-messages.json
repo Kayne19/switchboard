@@ -396,8 +396,7 @@
       "name": "view",
       "message": {
         "type": "view",
-        "target": "visual",
-        "reason": "the diagram is ready"
+        "target": "visual"
       }
     },
     {

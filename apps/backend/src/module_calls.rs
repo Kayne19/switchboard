@@ -29,8 +29,7 @@ use serde_json::{json, Value};
 /// (`_SPEAK_REASONS`).
 const SPEAK_REASONS: [&str; 3] = ["finished", "needs_decision", "problem"];
 /// The views `view` names when it refuses a target, in the skill module's
-/// order (`_VIEW_TARGETS`). The page also takes older names for them; this
-/// is the set an agent is told.
+/// order (`_VIEW_TARGETS`). These are the only names the service takes.
 const VIEW_TARGETS: [&str; 5] = ["visual", "comms", "system", "theater", "auto"];
 
 async fn promote_candidate_for_token(state: &AppState, token: &str) {
@@ -579,8 +578,6 @@ async fn display(
 struct ViewRequest {
     #[serde(default)]
     target: String,
-    #[serde(default)]
-    reason: String,
 }
 
 #[tracing::instrument(name = "module_call", skip_all, fields(call = "view"))]
@@ -603,12 +600,12 @@ async fn view(
         }
     };
     // An empty target asks what the caller can see; anything else asks the
-    // page to change it. The agent's stated reason is not logged.
+    // page to change it.
     tracing::info!(
         requested = %req.target.chars().take(64).collect::<String>(),
         "an agent asked about the caller's view"
     );
-    let target = req.target.trim().to_ascii_lowercase();
+    let target = req.target;
     // A background agent may ask what the caller sees, not change it: its
     // displays are held until the caller brings it forward, and the screen
     // belongs to whoever the caller is with.
@@ -661,24 +658,7 @@ async fn view(
         return Json(json!({"delivered": true, "screen": screen})).into_response();
     }
 
-    if !matches!(
-        target.as_str(),
-        "auto"
-            | "stage"
-            | "bay2"
-            | "visual"
-            | "comms"
-            | "transcript"
-            | "bay3"
-            | "system"
-            | "magi"
-            | "routing"
-            | "bay1"
-            | "overview"
-            | "grid"
-            | "split"
-            | "theater"
-    ) {
+    if !VIEW_TARGETS.contains(&target.as_str()) {
         tracing::info!("refused: not a view the page has");
         return (
             axum::http::StatusCode::BAD_REQUEST,
@@ -691,13 +671,7 @@ async fn view(
     }
 
     drop(gate);
-    let delivered = emit_message(
-        &state,
-        ServerMessage::View {
-            target,
-            reason: req.reason,
-        },
-    );
+    let delivered = emit_message(&state, ServerMessage::View { target });
     if delivered {
         tracing::info!(
             generation = permit_generation,

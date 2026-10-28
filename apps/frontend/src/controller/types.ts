@@ -1,3 +1,5 @@
+import type { ViewName } from '../protocol';
+
 export type Semantic = 'red' | 'orange' | 'green' | 'cyan' | 'amber' | 'paper' | 'muted';
 
 export interface RichSegment {
@@ -218,7 +220,7 @@ export interface ImageData {
 // ---- Personal-assistant types ----------------------------------------------
 //
 // Times are written three ways (docs/display-tool.md, "Time values"), each a
-// string on the wire that `parseTimeValue` in validation.ts reads, the one
+// string on the wire that `parseTimeValue` in validation/time.ts reads, the one
 // time parser the page has. A calendar, a to-do list, a forecast and an
 // inbox are drawn from the times the agent sends, with no page clock and no
 // zone maths: "today" and "now" are data. Only a timer runs on the page
@@ -558,7 +560,7 @@ export interface ToolRunState {
 
 export interface WorkspaceState {
   /** The view last asked for, by the agent or by the caller's pin. */
-  requestedView: string | null;
+  requestedView: ViewName | null;
   /** The view the page draws for it, and the one its screen-state report names (`computeEffectiveView`). */
   effectiveView: string;
   callerPinned: boolean;
@@ -636,8 +638,8 @@ export type RuntimeAction =
   /** One call of `tool` ended. */
   | { op: 'runtime_activity_end'; tool: string; at?: number }
   | { op: 'epoch_reset' }
-  | { op: 'set_view'; view: string | null }
-  | { op: 'pin_view'; view: string }
+  | { op: 'set_view'; view: ViewName | null }
+  | { op: 'pin_view'; view: ViewName }
   | { op: 'unpin_view' }
   | { op: 'auto_view' }
   | { op: 'set_stale'; stale: boolean }

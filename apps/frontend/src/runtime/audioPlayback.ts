@@ -125,7 +125,10 @@ type ReplayPhase =
 type StreamPhase =
   /** Its source is being set on the element. */
   | { kind: "attaching" }
-  /** Attached: waiting for the source to open and the first bytes. */
+  /**
+   * Attached, nothing appended yet. A tap only unlocks the element; the
+   * first append plays it (#563).
+   */
   | { kind: "opening"; watch: ProgressWatch }
   | { kind: "playing"; watch: ProgressWatch }
   /** Something outside the page paused it: the next tap or append plays it. */
@@ -289,11 +292,25 @@ export class AudioPlayback {
           this.attemptPlay(holder.clip);
         return;
       }
-      case "stream":
+      case "stream": {
         // A stream that still holds the element keeps it, whether or not it
         // is sounding: the replays behind it wait for its end.
-        this.playStream(holder.clip);
-        return;
+        const clip = holder.clip;
+        switch (holder.phase.kind) {
+          case "paused":
+          case "blocked":
+            this.playStream(clip);
+            return;
+          case "playing":
+            return;
+          case "attaching":
+          case "opening":
+            Promise.resolve(this.player.play()).catch(() => undefined);
+            return;
+          default:
+            return unreachable(holder.phase);
+        }
+      }
       default:
         unreachable(holder);
     }

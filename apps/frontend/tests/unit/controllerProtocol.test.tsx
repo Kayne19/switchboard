@@ -8,22 +8,9 @@ import App from '../../src/App';
 import { ControllerProvider } from '../../src/controller/context';
 import { validateControllerAction } from '../../src/controller/validation';
 import { mount, stubResizeObserver, unmountAll } from './sceneHarness';
+import { FakeSocket } from './fakeSocket';
 
 stubResizeObserver();
-
-class FakeSocket {
-  readyState = 0;
-  binaryType = 'blob';
-  onopen: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  constructor(readonly url: string) {}
-  send() {}
-  close() {
-    this.readyState = 3;
-  }
-}
 
 // The smallest action of each operation the page's reducer knows.
 const ONE_OF_EACH: Record<string, Record<string, unknown>> = {
@@ -37,7 +24,7 @@ const ONE_OF_EACH: Record<string, Record<string, unknown>> = {
 
 describe('window.SwitchboardController.protocol', () => {
   beforeEach(() => {
-    vi.stubGlobal('WebSocket', FakeSocket);
+    FakeSocket.install();
   });
 
   afterEach(() => {

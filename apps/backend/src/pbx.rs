@@ -604,6 +604,21 @@ impl Switchboard {
             .unwrap_or_else(|| panic!("{id} is not registered"));
         self.transfer_ctx(context, &project, "", "").await
     }
+
+    /// A background part for the registered project `id`, the way a split
+    /// starts one.
+    pub(crate) async fn start_background_part_on(
+        &mut self,
+        id: &str,
+        text: &str,
+    ) -> Result<(), String> {
+        let project = self
+            .registry
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{id} is not registered"));
+        self.start_background_part(&project, text).await
+    }
 }
 
 /// A switchboard with the caller on alpha, whose host agent runs `on_prompt`.

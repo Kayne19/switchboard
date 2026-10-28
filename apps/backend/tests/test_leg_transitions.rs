@@ -289,7 +289,7 @@ async fn a_transfer_to_a_host_that_is_not_connected_is_refused_with_the_reason()
         "{}",
         reply.text
     );
-    assert!(!board.coordinator.is_candidate());
+    assert!(board.coordinator.candidate_identity().is_none());
     assert!(board
         .operator_note
         .as_deref()
@@ -393,6 +393,79 @@ async fn the_route_follows_adoption_while_the_intro_turn_is_still_running() {
     board.lock().await.shutdown().await;
 }
 
+/// A rescue that lands while the candidate starts, before any sign of life
+/// adopted it, ends its startup. The commit then finds no candidate to
+/// adopt and abandons the bring-up: the rescued session is closed, not
+/// kept as the PBX's agent with no guard naming it (#449).
+#[tokio::test]
+async fn a_rescue_during_the_candidates_first_turn_abandons_the_bring_up() {
+    use crate::lifecycle::ActivityDisposition;
+    use crate::pi_client::Activity;
+
+    let mut board = board_with(vec![project("alpha", "")], true);
+    serve(
+        &board,
+        Box::new(|_, _| {
+            vec![
+                Step::Event(json!({"kind": "tool_start", "tool": "ipython", "call_id": "t1"})),
+                Step::WaitFor("steer"),
+                Step::Event(json!({"kind": "text", "text": "Alpha here."})),
+            ]
+        }),
+    );
+    // The candidate's first sign of life meets a rescue instead of an
+    // adoption: a hangup from the page while the leg starts.
+    let coordinator = board.coordinator();
+    let (rescued_tx, mut rescued) = tokio::sync::mpsc::unbounded_channel();
+    let rescuing = coordinator.clone();
+    board.set_activity_callback(Some(Arc::new(move |activity: Activity| {
+        let coordinator = rescuing.clone();
+        let rescued = rescued_tx.clone();
+        Box::pin(async move {
+            if coordinator.classify_activity(&activity.leg) == ActivityDisposition::Promote {
+                let _ = rescued.send(coordinator.begin_rescue("hangup mid-startup"));
+            }
+        })
+    })));
+    let control = board.session_control();
+    let board = Arc::new(Mutex::new(board));
+    let turn_board = Arc::clone(&board);
+    let turn = tokio::spawn(async move {
+        turn_board
+            .lock()
+            .await
+            .transfer_to(&transcript("put me through"), "alpha")
+            .await
+    });
+
+    within("rescued", rescued.recv())
+        .await
+        .expect("the incoming leg shows life and is rescued");
+    assert_eq!(coordinator.candidate_identity(), None);
+    let steer = control
+        .lock()
+        .await
+        .as_ref()
+        .expect("the incoming leg is still the live session")
+        .queue_steer("go on", None)
+        .await
+        .unwrap();
+    within("steer answer", steer.sent()).await.unwrap();
+    let reply = within("turn", turn).await.unwrap();
+
+    assert!(
+        reply.error.is_some(),
+        "the bring-up is abandoned: {reply:?}"
+    );
+    let mut board = board.lock().await;
+    assert!(
+        board.agent.is_none(),
+        "the rescued session is not kept as the PBX's agent"
+    );
+    assert!(control.lock().await.is_none(), "nothing is on the guard");
+    board.shutdown().await;
+}
+
 // ---------------------------------------------------------------------------
 // A transfer that cannot bring its leg up, and a hangup (#56). A failed
 // transfer leaves the caller on the operator with a note saying why and rolls
@@ -480,7 +553,7 @@ async fn assert_back_on_the_operator(
         "the operator must be the live session again, so a steer or a rescue reaches it"
     );
 
-    assert!(!coordinator.is_candidate());
+    assert!(coordinator.candidate_identity().is_none());
     assert_eq!(coordinator.candidate_identity(), None);
     assert_eq!(coordinator.generation(), generation);
     assert_eq!(coordinator.status().route, OPERATOR);
@@ -759,7 +832,7 @@ async fn failed_transfer_adoption_returns_to_the_operator_and_cleans_up() {
     assert!(reply.error.is_some(), "adoption must fail: {reply:?}");
     assert_eq!(reply.route, OPERATOR);
     assert!(board.agent.is_none());
-    assert!(!board.coordinator.is_candidate());
+    assert!(board.coordinator.candidate_identity().is_none());
     assert!(!board
         .coordinator
         .status()
@@ -1218,7 +1291,7 @@ async fn takeover_refuses_a_live_service_created_agent_before_attach() {
     assert_eq!(reply.route, OPERATOR);
     assert!(reply.text.contains("service-created"));
     assert!(!log.names().contains(&"attach".into()));
-    assert!(!board.coordinator.is_candidate());
+    assert!(board.coordinator.candidate_identity().is_none());
 }
 
 #[tokio::test]
@@ -1431,7 +1504,7 @@ async fn takeover_attach_failure_rolls_back_without_killing_the_desk_session() {
     let reply = board.handle_decision("take over alpha", &decision).await;
     assert_eq!(reply.route, OPERATOR);
     assert!(reply.text.contains("desk disappeared"));
-    assert!(!board.coordinator.is_candidate());
+    assert!(board.coordinator.candidate_identity().is_none());
     assert!(!log.names().contains(&"kill".into()));
     board.shutdown().await;
     let _ = std::fs::remove_dir_all(root);
@@ -1716,7 +1789,7 @@ async fn bring_up_row(kind: &str, exit: &str) -> String {
     match kind {
         "promotion" => {
             board
-                .start_background_part("beta", "beta work")
+                .start_background_part_on("beta", "beta work")
                 .await
                 .expect("beta starts in the background");
             within("beta to settle idle", async {

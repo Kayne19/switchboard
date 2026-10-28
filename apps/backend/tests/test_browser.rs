@@ -1,9 +1,10 @@
 use super::*;
 use crate::app_state::AppState;
-use crate::app_state::{begin_alpha_candidate, emit, next_event_of, state, state_on};
+use crate::app_state::{begin_alpha_candidate, emit, next_event_of, state, state_with_jev};
 use crate::caller_input::MAX_TYPED_TURN_CHARS;
 use crate::delivery::{DeliveryFrame, Event, DELIVERY_QUEUE};
 use crate::history::CALLER;
+use crate::jev::{answer_for, routing_answers, test_client};
 use crate::module_calls::{agent_call_json, diagram_show, post_display_in_task};
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::OPERATOR;
@@ -53,39 +54,18 @@ async fn typed_turn_is_logged_echoed_and_queued_like_a_transcript() {
 /// order the caller typed them.
 #[tokio::test]
 async fn typed_turns_reach_the_agent_in_the_order_they_were_sent() {
-    let jev = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder(|request| async move {
+    let jev = test_client(|request| async move {
         // Jev is slow on the first line and quick on the second.
         if request.state["caller_just_said"] == "run the tests" {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
-        Ok(serde_json::from_value(json!({"model":"jev-test","answers":{
-            "action": {"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},
-            "for_current_agent": {"type":"noul","noul":0.0},
-            "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
-            "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
-            "multi_target": {"type":"noul","noul":0.0}
-        }}))
-        .expect("fixture response"))
+        answer_for(&request, routing_answers("continue"))
     });
-    let config = crate::Config::for_tests(&[]);
-    let registry = crate::registry::Registry::new(vec![]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("test catalog"),
-    );
-    let state = state_on(crate::pbx::Switchboard::new_with_jev(
-        &config,
-        registry,
-        std::sync::Arc::new(prewarm),
+    let state = state_with_jev(
+        &crate::Config::for_tests(&[]),
+        crate::registry::Registry::new(vec![]),
         jev,
-    ));
+    );
     let connection = state.0.delivery.register();
     let generation = state.0.coordinator.generation();
     let mut turns = state.0.turns.take_receiver().await;
@@ -186,12 +166,16 @@ async fn display_projection_snapshot_watermark() {
     }
 
     // 2. Connect a WebSocket client
-    let (mut connection, snapshot_actions, watermark) = state.register_connection().await;
+    let (mut connection, snapshot) = state.register_connection().await;
 
     // Snapshot contains obj-1 and obj-2
-    assert_eq!(snapshot_actions.len(), 2);
-    assert_eq!(snapshot_actions[0]["id"], "obj-1");
-    assert_eq!(snapshot_actions[1]["id"], "obj-2");
+    assert_eq!(snapshot.len(), 2);
+    assert_eq!(snapshot[0]["action"]["id"], "obj-1");
+    assert_eq!(snapshot[1]["action"]["id"], "obj-2");
+    let watermark = snapshot[1]["seq"]
+        .as_u64()
+        .expect("two displays were applied");
+    assert_eq!(snapshot[0]["seq"], watermark);
 
     // 3. Publish a fresh display action with sequence > watermark. A browser
     // is connected, so /display now waits for a render confirmation; ack it
@@ -253,7 +237,7 @@ async fn display_projection_snapshot_watermark() {
 #[tokio::test]
 async fn display_projection_screen_state_retirement() {
     let state = state();
-    let (conn1, _, _) = state.register_connection().await;
+    let (conn1, _) = state.register_connection().await;
     let epoch1 = conn1.epoch;
 
     let mut pending_header = None;
@@ -337,7 +321,7 @@ async fn display_projection_screen_state_retirement() {
     assert_eq!(resp["screen"]["connected"], false);
 
     // 5. Connect connection 2 (epoch 2)
-    let (conn2, _, _) = state.register_connection().await;
+    let (conn2, _) = state.register_connection().await;
     let epoch2 = conn2.epoch;
 
     // Report with stale generation must be ignored!
@@ -406,8 +390,8 @@ async fn display_projection_screen_state_retirement() {
 #[tokio::test]
 async fn the_tab_left_open_is_active_again_when_the_newest_closes() {
     let state = state();
-    let (mut desktop, _, _) = state.register_connection().await;
-    let (ipad, _, _) = state.register_connection().await;
+    let (mut desktop, _) = state.register_connection().await;
+    let (ipad, _) = state.register_connection().await;
     state.retire_connection(ipad.epoch).await;
     while desktop.receiver.try_recv().is_ok() {}
 
@@ -458,7 +442,9 @@ async fn a_connection_gets_epoch_status_history_and_scene_before_any_live_event(
     show["token"] = json!(state.0.coordinator.current_identity().token);
     let (code, _) = agent_call_json(&state, "/display", show).await;
     assert_eq!(code, StatusCode::OK);
-    let watermark = state.0.display_gate.lock().await.reconnect_snapshot().1;
+    let watermark = state.0.display_gate.lock().await.reconnect_snapshot()[0]["seq"]
+        .as_u64()
+        .expect("a display was applied");
 
     // Hold the transcript so the connection is registered but cannot finish
     // reading its snapshot, and publish a live event in that window.
@@ -480,8 +466,25 @@ async fn a_connection_gets_epoch_status_history_and_scene_before_any_live_event(
     assert_eq!(frames[3]["action"]["id"], "d1");
     assert_eq!(
         frames[3]["seq"], watermark,
-        "a replayed display carries the watermark, so the live stream's older displays are skipped"
+        "a replayed display carries the sequence of the newest display applied"
     );
+}
+
+#[tokio::test]
+async fn a_connected_page_receives_the_process_first_display_at_sequence_zero() {
+    let state = state();
+    let served = Served::start(&state).await;
+    let mut browser = served.connect().await;
+    json_until(&mut browser, "history").await;
+    assert_eq!(state.0.delivery.next_sequence(), 0);
+
+    let seq = a_display_sent(&state).await;
+    assert_eq!(seq, 0);
+
+    let frames = json_until(&mut browser, "display").await;
+    let display = frames.last().unwrap();
+    assert_eq!(display["action"]["id"], "m1");
+    assert_eq!(display["seq"], 0);
 }
 
 #[tokio::test]
@@ -778,7 +781,7 @@ async fn a_clip_header_without_a_generation_is_refused_and_its_audio_is_not_take
 #[tokio::test]
 async fn a_screen_state_report_without_a_generation_is_ignored() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state.0.coordinator.begin_rescue("test rescue");
     let seq = a_display_sent(&state).await;
     let screen_before = state.0.display_gate.lock().await.screen().clone();

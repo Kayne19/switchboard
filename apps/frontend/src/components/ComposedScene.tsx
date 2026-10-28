@@ -9,7 +9,7 @@ import type {
 import { besideVisuals, nameFields } from '../app/sceneModel';
 import { MetricsPrimitive } from '../primitives/MetricsPrimitive';
 import { ObjectMotion } from '../primitives/ObjectMotion';
-import { FocusableSurface } from '../primitives/FocusableSurface';
+import { ExpandableSurface } from '../primitives/ExpandableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { renderObject } from './renderObject';
 import { SurfaceBoundary } from './SurfaceBoundary';
@@ -76,7 +76,7 @@ export function composedContent({ state, composition: comp, onFocus }: SceneProp
         <TechFrame variant="panel" />
         {primaryMetrics.length > 1 ? (
           <SurfaceBoundary surfaceId="primary-metric-cluster" resetKey={state.agentObjects}>
-            <div className="focusable-content">
+            <div className="expandable-surface">
               <MetricsPrimitive
                 metrics={primaryMetrics}
                 slot="primary"
@@ -86,7 +86,7 @@ export function composedContent({ state, composition: comp, onFocus }: SceneProp
           </SurfaceBoundary>
         ) : (
           <ObjectSurface object={primary}>
-            <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+            <ExpandableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
               {isMetricPrimary ? (
                 <MetricsPrimitive
                   metrics={primaryMetrics.length > 0 ? primaryMetrics : [primary as SceneObject<MetricData>]}
@@ -97,7 +97,7 @@ export function composedContent({ state, composition: comp, onFocus }: SceneProp
                 // A progress or a note: sceneKind gives every visual primary a scene of its own.
                 renderObject(primary, 'primary', { onStage: state.agentObjects, notes: [...(note ? [note] : []), ...moreNotes.map((object) => object.data)] })
               )}
-            </FocusableSurface>
+            </ExpandableSurface>
           </ObjectSurface>
         )}
       </ObjectMotion>

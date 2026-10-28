@@ -80,6 +80,9 @@ export interface CandidateMessage {
 /// How a candidate leg ended.
 export type CandidateEnd = "adopted" | "rolled_back" | "rescued";
 
+/// The views an agent can ask the page for (`VIEW_TARGETS` in the service).
+export type ViewName = "auto" | "visual" | "comms" | "system" | "theater";
+
 /// The candidate leg on `route` ended, and `reason` says how. Only an adopted
 /// candidate's clips are carried to its epoch. A connection's snapshot starts
 /// with an `adopted` one when the leg on the line was adopted at the current
@@ -247,8 +250,7 @@ export interface DisplayMessage {
 /// The agent asked for a view of the workspace.
 export interface ViewMessage {
 	type: "view";
-	target: string;
-	reason: string;
+	target: ViewName;
 }
 
 /// The page's `screen_state` report was applied.
@@ -447,7 +449,7 @@ const MESSAGE_FIELDS: { [Type in MessageType]: MessageFields<Type> } = {
 		success: boolean,
 	},
 	display: { action: present, seq: optional(number) },
-	view: { target: string, reason: string },
+	view: { target: oneOf<ViewName>("auto", "visual", "comms", "system", "theater") },
 	screen_state_ack: {},
 	agents_state: {
 		agents: list(object<AgentState>({
@@ -580,6 +582,39 @@ export function clipHeader(clip: {
 /// service's `MAX_TYPED_TURN_CHARS` (`apps/backend/src/caller_input.rs`),
 /// which `scripts/check_hygiene.mjs` holds this to.
 export const MAX_TYPED_TURN_CHARS = 16 * 1024;
+
+/// What the page makes of a typed draft: the turn to send, or why the service
+/// would refuse it. The checks run in this order, so a draft is refused for
+/// the first reason that applies.
+export type TypedTurn =
+	| { ok: true; body: string }
+	| { ok: false; why: "blank" | "broken" }
+	| { ok: false; why: "too_long"; codePoints: number };
+
+// The service trims with Rust's `str::trim` (Unicode White_Space) and refuses
+// a frame holding a lone surrogate, whose `JSON.stringify` escape serde_json
+// rejects: the whole frame is dropped, with no id to answer by. The page
+// trims the union of that set and U+FEFF, which JS `trim` also removes, so
+// what it sends has nothing left for the service to trim. The cases both
+// sides run are in `tests/fixtures/typed-turns.json`.
+//
+// A scan, not a regex: `[\p{White_Space}]+$` backtracks quadratically over a
+// long whitespace run in the middle of a paste (1.5 s at 50,000 characters).
+const blank = (unit: string) => unit === "\u0085" || unit.trim() === "";
+
+export function readTypedTurn(draft: string): TypedTurn {
+	let start = 0;
+	let end = draft.length;
+	while (start < end && blank(draft[start])) start += 1;
+	while (end > start && blank(draft[end - 1])) end -= 1;
+	const body = draft.slice(start, end);
+	if (!body) return { ok: false, why: "blank" };
+	if (/\p{Cs}/u.test(body)) return { ok: false, why: "broken" };
+	const codePoints = [...body].length;
+	if (codePoints > MAX_TYPED_TURN_CHARS)
+		return { ok: false, why: "too_long", codePoints };
+	return { ok: true, body };
+}
 
 /// A turn the caller typed instead of spoke.
 ///

@@ -78,6 +78,14 @@ every session name the host agent ever minted, so a restart keeps both:
 A WebSocket at the service's `/host`. Every frame is one JSON text message
 with a `type`.
 
+The frames below are held to one fixture, `tests/fixtures/host-link.json`:
+the welcome, the order of a command's events and its reply for `prompt`,
+`set_model`, `kill` and `detach`, and the module replies the service makes.
+The real host agent and the service's `module_reply` are tested against it,
+and the Rust fake host agent, the host agent's fake service and the skill's
+fake host agent are built from it, so a fake cannot drift from the peer it
+stands for.
+
 ### Identifiers
 
 - `session` is the daemon's live handle (`activeSessionId`). Every command
@@ -459,7 +467,7 @@ lock.
 | caller and self-woken | the prompt returns or is cancelled | self-woken | |
 | idle | `turn_start`, `autonomous` or `unknown` | self-woken | start reported; the answer is not used |
 | caller, caller settled | `turn_start`, `autonomous` or `unknown` | admitted: caller and self-woken; refused: unchanged | start reported; refused, it goes to the prompt |
-| self-woken, caller and self-woken | `turn_start`, `autonomous` or `unknown`, of another turn | unchanged, the new run held in the old one's place | the old run's final text published; its end reported with the new start, taken together |
+| self-woken, caller and self-woken | `turn_start`, `autonomous` or `unknown`, of another turn | unchanged, the new run held in the old one's place | the old run's final text published; its end reported with the new start, taken together; the prompt is told the old run was replaced, which ends it if the prompt went into the old run as a `follow_up` (#524) |
 | any | `turn_start`, `input` | unchanged | start reported |
 | self-woken, caller and self-woken | `text` of the run | unchanged | the run keeps it; it goes to the prompt too, which keeps it only if the prompt went into the run as a `follow_up` (its reply names the run) |
 | self-woken, caller and self-woken | `turn_end` of the run | idle, caller settled | final text published; end reported with it (the application closes the run's operation, or, for a run it never held, settles the caller's operation bound to it); goes to the prompt, which it ends if the prompt went into the run as a `follow_up` (its reply names the run) |
@@ -483,7 +491,13 @@ replaces the held one, the pump reports the new start with the old run's
 end (`ProjectTurn::replaces`). The application takes both under one gate
 (`handle_project_turn`), so the operation passes from the old run to the
 new one before a caller turn waiting behind the old run can take it, and
-the new run's module calls are accepted.
+the new run's module calls are accepted. A prompt sent into the old run as
+a `follow_up` waits for that run's `turn_end`. The host sends one for every
+turn it settles, so a replacement means the service never received it: the
+end was in a replay the host could not make, or the host agent restarted
+and rebuilt the turn under a new id. The replacement therefore tells the
+prompt (`TurnFrame::RunReplaced`), and the prompt returns with the words it
+collected under the old run (#524).
 
 The session's end of life (below) is a state of its own: `session_closed`
 moves both. The table test `a_project_session_turn_moves_by_its_table`
@@ -547,7 +561,11 @@ above), and after it reconnects to a replaced daemon. Its cursor is taken
 before the session is described, and an event published while it is being
 described is sent after it: the snapshot is the baseline for everything up
 to its cursor, so an event sent before it but not reflected in it would be
-lost (#164). After a host-agent
+lost (#164). A snapshot still being described when a welcome arrives is
+dropped, and the welcome takes its own snapshot of that session even when
+its cursor could replay: the dropped one may carry state no event does, and
+it would otherwise go out after `synced`, repeating an event after an older
+cursor. After a host-agent
 restart it rebuilds each tracked session from the daemon: sessions the
 daemon still has are reattached (a busy one gets an open turn, settled by
 `wait_for_idle`); sessions it no longer has get `session_closed`. The
@@ -780,7 +798,10 @@ session's call state. It relays `display` and `view` in every mode, and the
 service decides those: it holds a background display (`accepted`, with
 `held: true` in the result) and refuses a background `view` with a target.
 A refusal reaches the module with its code as `reason` (`caller_away`); the
-service's explanation stays in `result.detail`.
+service's explanation stays in `result.detail`. A refusal for the leg
+(`invalid_leg`) is the inverse: the explanation is the `reason` and the code
+is `result.code`. The skill's `display` line reads the code and does not ask
+for a new payload.
 
 A delivered `display` reply carries the same reason at the top level and in
 `result.reason`, and the module reads why it is not on screen from the

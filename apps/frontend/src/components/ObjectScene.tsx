@@ -11,7 +11,7 @@ import { besideVisuals, cast, objectsOfType } from '../app/sceneModel';
 import { calendarFrame } from '../primitives/CalendarPrimitive';
 import { countText } from '../primitives/countText';
 import { ObjectMotion } from '../primitives/ObjectMotion';
-import { FocusableSurface } from '../primitives/FocusableSurface';
+import { ExpandableSurface } from '../primitives/ExpandableSurface';
 import { TechFrame, type FrameVariant } from '../primitives/TechFrame';
 import { mayCarryCallout } from './DiagramObject';
 import { renderObject } from './renderObject';
@@ -30,7 +30,7 @@ export function objectContent({ state, composition, onFocus }: SceneProps): Scen
   const note = annotationForScene(state, noteObject, liveChatMessage(state));
   // The other notes on stage follow it in the rail: the page shows them all.
   const moreNotes = noteObjects.filter((object) => object.id !== noteObject?.id);
-  const { outline, ...words } = frame;
+  const { outline, framed, ...words } = frame;
   return {
     ...words,
     // What the shell places around the main slot: the aux row under it
@@ -46,17 +46,20 @@ export function objectContent({ state, composition, onFocus }: SceneProps): Scen
       <ObjectMotion objectId={primary.id} className={`content-main ${primary.type}-object`}>
         {outline ? <TechFrame variant={outline} /> : null}
         <ObjectSurface object={primary}>
-          <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+          <ExpandableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`} framed={framed}>
             {renderObject(primary, 'primary', { onStage: state.agentObjects, notes: [...(note ? [note] : []), ...moreNotes.map((object) => object.data)] })}
-          </FocusableSurface>
+          </ExpandableSurface>
         </ObjectSurface>
       </ObjectMotion>
     ),
   };
 }
 
-/** What the scene's frame says about a primary that fills the main slot, and the frame drawn round the slot where its primitive draws none of its own. */
-type SceneFrame = Pick<SceneContent, 'title' | 'subtitle' | 'context' | 'caption'> & { outline?: FrameVariant };
+/**
+ * What the scene's frame says about a primary that fills the main slot, and the frame drawn round the slot where its primitive draws none of its own.
+ * `framed`: it fills the panel frame to its inner box, so its surface lays out in the frame's rows.
+ */
+type SceneFrame = Pick<SceneContent, 'title' | 'subtitle' | 'context' | 'caption'> & { outline?: FrameVariant; framed?: true };
 
 // The frame's words for each type that fills the main slot: the agent's
 // own where it sent them, else what the object is. The object itself is
@@ -111,6 +114,7 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         context: data.context ?? 'FIGURE',
         caption: sceneCaption(primary, `FIGURE / ${data.format.toUpperCase()}`),
         outline: 'panel',
+        framed: true,
       };
     }
     case 'calendar': {
@@ -119,6 +123,7 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         ...calendarFrame(data),
         caption: sceneCaption(primary, `CALENDAR / ${data.view.toUpperCase()}`),
         outline: 'panel',
+        framed: true,
       };
     }
     case 'tasks': {
@@ -131,6 +136,7 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         context: data.context ?? 'TASKS',
         caption: sceneCaption(primary, 'TASKS / TO DO'),
         outline: 'panel',
+        framed: true,
       };
     }
     case 'inbox': {
@@ -141,6 +147,7 @@ function sceneFrame(primary: SceneObject): SceneFrame | null {
         context: data.context ?? 'INBOX',
         caption: sceneCaption(primary, 'INBOX / AS SENT'),
         outline: 'panel',
+        framed: true,
       };
     }
     case 'timer': {

@@ -361,7 +361,14 @@ and settling there would admit turns mid-dial (#461). The settle is one call-lin
 at that generation. A newer rescue that lands after a control's PBX step, or
 between a delivery's generation check and its settle (a rescue does not take
 `operation_transition`), keeps its quiet: an older control's settle, or a
-status publication, no longer ends it (#369).
+status publication, no longer ends it (#369). A return to the operator
+(`drop_agent`) keeps the phase, as a thinking event does: the line takes the
+operator's identity in whatever phase it is in, and a quiet stays its
+rescue's to settle (#462). That settle has to be reached without the
+control's request: hyper drops a handler's future when the client goes
+away while the response is pending (a reload, a suspended tab), so each
+page control's body runs on its own task (`page_controls::detached`) and
+the handler only waits for it.
 
 ### A swap is decided before its rescue
 
@@ -654,11 +661,12 @@ fails 10 runs in 10 when run alone. Under load, each round ran four full test
 binaries at once, two built from master and two built with the fix, so both
 saw the same load. The 1-minute load average at the start of a round was 30
 to 82, except for two rounds at 13 and 26. Master's binary failed 10 of 260
-runs, each one in this test. None of the 260 fix runs failed this test. Only
-60 of them ran the code that landed, at 51107365. The other 200 ran two
-earlier builds of the same capture, one from before review and a pilot build
-that also held two more repro tests. Two of the 260 fix runs failed in
-another test, once each, and neither test is touched by this change.
+full runs, each one in this test. None of the 260 fix runs failed this test.
+That is a count of this test failing, not of failed runs: the fix runs
+failed two other tests, once each, and neither test is touched by this
+change. Only 60 of the 260 fix runs ran the code that landed, at 51107365.
+The other 200 ran two earlier builds of the same capture, one from before
+review and a pilot build that also held two more repro tests.
 
 `debug::capture_logs(&bus)` (`apps/backend/src/debug.rs`) is the fix. Its
 first call installs the test binary's only subscriber, as the global default:

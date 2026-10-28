@@ -1,6 +1,6 @@
 import type { Timer } from '../controller/types';
 import { monoAdvance } from '../design/tokens';
-import { parseTimeValue, type TimeValue } from '../controller/validation';
+import { parseTimeValue, type TimeValue } from '../controller/validation/time';
 import { timeOfDay, two } from './timeLabels';
 
 // What a timer reads at a moment of the page clock, and how a set of timers

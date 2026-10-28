@@ -9,8 +9,21 @@ use serde_json::Value;
 
 /// What reaches a turn while it is being collected.
 pub(crate) enum TurnFrame {
-    Event { seq: u64, event: Value },
-    Snapshot { seq: u64, info: Value },
+    Event {
+        seq: u64,
+        event: Value,
+    },
+    Snapshot {
+        seq: u64,
+        info: Value,
+    },
+    /// The held run `turn_id` was replaced by another turn at frame `seq`,
+    /// and the service never received its `turn_end`: a prompt sent into
+    /// it ends here (`docs/host-link.md`, "A project session's turn").
+    RunReplaced {
+        seq: u64,
+        turn_id: Option<String>,
+    },
 }
 
 pub(crate) type Collector = tokio::sync::mpsc::UnboundedSender<TurnFrame>;
@@ -222,23 +235,30 @@ impl TurnPhase {
     }
 
     /// The held run ends, settled, and the run `start` opens is held in its
-    /// place. A phase that holds no run is left as it is.
-    fn replacing(self, start: TurnBoundary) -> (Self, Vec<TurnEffect>) {
+    /// place. A phase that holds no run is left as it is. `seq` is the
+    /// replacing frame's. A prompt sent into the held run is told, since
+    /// its `turn_end` is not coming (#524).
+    fn replacing(self, start: TurnBoundary, seq: u64) -> (Self, Vec<TurnEffect>) {
         let run = SelfWokenRun::new(&start);
-        let replaced = |held: SelfWokenRun| TurnEffect::RunReplaced {
+        let (next, held) = match self {
+            Self::SelfWoken { run: held } => (Self::SelfWoken { run }, held),
+            Self::CallerAndSelfWoken { prompt, run: held } => {
+                (Self::CallerAndSelfWoken { prompt, run }, held)
+            }
+            other @ (Self::Idle | Self::Caller { .. } | Self::CallerSettled { .. }) => {
+                return (other, Vec::new());
+            }
+        };
+        let replaced = TurnFrame::RunReplaced {
+            seq,
+            turn_id: held.turn_id.clone(),
+        };
+        let mut effects = vec![TurnEffect::RunReplaced {
             ended: held.end(RunEnding::Settled { last_text: "" }),
             started: start,
-        };
-        match self {
-            Self::SelfWoken { run: held } => (Self::SelfWoken { run }, vec![replaced(held)]),
-            Self::CallerAndSelfWoken { prompt, run: held } => (
-                Self::CallerAndSelfWoken { prompt, run },
-                vec![replaced(held)],
-            ),
-            other @ (Self::Idle | Self::Caller { .. } | Self::CallerSettled { .. }) => {
-                (other, Vec::new())
-            }
-        }
+        }];
+        effects.extend(next.forward(replaced));
+        (next, effects)
     }
 }
 
@@ -454,7 +474,7 @@ impl TurnState {
                         (phase, Vec::new())
                     }
                     TurnPhase::SelfWoken { .. } | TurnPhase::CallerAndSelfWoken { .. } => {
-                        phase.replacing(start)
+                        phase.replacing(start, seq)
                     }
                 }
             }
@@ -551,7 +571,7 @@ impl TurnState {
         if info["turn_open"] == true && phase.run().is_some_and(|run| !run.owns(turn_id.as_deref()))
         {
             let start = open();
-            return phase.replacing(start);
+            return phase.replacing(start, seq);
         }
         // An open turn nobody holds or collects is a self-woken run.
         if info["turn_open"] == true && matches!(phase, TurnPhase::Idle) {

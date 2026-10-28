@@ -48,7 +48,7 @@ for (const geometry of geometries) {
           const object = content.querySelector(':scope > :not(.focus-layer__header):not(.focus-layer__note)');
           return {
             view: { width: window.innerWidth, height: window.innerHeight },
-            button: box(document.querySelector('.focus-layer__header button')),
+            button: box(document.querySelector('.focus-layer .return-control')),
             content: box(content),
             panel: box(document.querySelector('.focus-layer__note')),
             object: object ? box(object) : null,

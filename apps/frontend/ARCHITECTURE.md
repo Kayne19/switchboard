@@ -210,7 +210,7 @@ box: its rows are in `tests/unit/calloutPlacement.test.tsx`.
 Before, each reader observed the layout itself and chose its own commit
 policy; the ones that left a report to React's schedule drew it a frame
 late, and on a loaded WebKit half a second late (#333, #392).
-`scripts/check_hygiene.mjs` (check 22) refuses a layout observer or a
+`scripts/check_hygiene.mjs` (the "one hook for a measured value" check) refuses a layout observer or a
 `flushSync` outside the hook, except where it names why: the scroll pin
 (`usePinnedScroll`), the chart notes' placement pass, and the debug page.
 

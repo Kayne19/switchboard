@@ -88,7 +88,7 @@ async fn browser_screen_state_is_available_to_the_agent_view_tool() {
 #[tokio::test]
 async fn view_reports_requested_diagram_as_unconfirmed_until_the_browser_acks() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let epoch = connection.epoch;
 
     let handle = post_display_in_task(&state, diagram_show()).await;
@@ -266,12 +266,26 @@ async fn a_refused_reason_or_target_lists_the_names_it_takes() {
             json!({"detail": "invalid reason: expected one of finished, needs_decision, problem"})
         );
     }
-    let (code, body) = agent_call_json(&state, "/view", json!({"target": "screen"})).await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body,
-        json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"})
-    );
+    // Target matching is exact: old aliases, other case and padding are refused.
+    for target in [
+        "screen",
+        "stage",
+        "bay2",
+        "transcript",
+        "routing",
+        "magi",
+        "overview",
+        "Comms",
+        " comms ",
+    ] {
+        let (code, body) = agent_call_json(&state, "/view", json!({"target": target})).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{target:?}");
+        assert_eq!(
+            body,
+            json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"}),
+            "{target:?}"
+        );
+    }
 }
 
 // A background agent's request is shown on the debug page as it is on the
@@ -302,13 +316,12 @@ async fn a_request_to_speak_reaches_the_debug_bus() {
 
 #[tokio::test]
 async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
-    let (code, body) =
-        agent_call_json(&state(), "/view", json!({"target":"","colour":"red"})).await;
-    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(
-        body["detail"].as_str().unwrap().contains("colour"),
-        "{body}"
-    );
+    for field in ["colour", "reason"] {
+        let (code, body) =
+            agent_call_json(&state(), "/view", json!({"target": "", field: "red"})).await;
+        assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(body["detail"].as_str().unwrap().contains(field), "{body}");
+    }
     let reply = module_call(
         &state(),
         AgentCall {
@@ -458,7 +471,7 @@ async fn speak_is_refused_as_busy_when_the_speech_queue_is_full() {
     // Every place in the queue is reserved and never sent, so the worker
     // has nothing to drain and every place stays taken.
     let state = state();
-    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     let _taken: Vec<_> = std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect();
     let answer = timeout(
         Duration::from_secs(1),
@@ -480,7 +493,7 @@ async fn speak_is_refused_as_busy_when_the_speech_queue_is_full() {
 #[tokio::test]
 async fn speak_with_no_audio_slot_is_answered_as_undelivered() {
     let state = state();
-    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     {
         let mut audio = state.0.audio.lock().await;
@@ -501,7 +514,7 @@ async fn speak_with_no_audio_slot_is_answered_as_undelivered() {
 async fn speak_that_fails_to_synthesize_is_answered_with_the_workers_reason() {
     // Every synthesis fails in-process (`Speaker::offline`).
     let state = state();
-    let (_connection, _snapshot, _watermark) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     let (code, body) =
         module_call_json(&state, "speak", "operator", None, json!({"text":"Hello."})).await;
     assert_eq!(code, StatusCode::BAD_GATEWAY);
@@ -941,8 +954,7 @@ async fn display_projection_generation_race() {
 
     let valid_view = json!({
         "token": "operator",
-        "target": "visual",
-        "reason": "inspect"
+        "target": "visual"
     });
     let (code, _) = agent_call_json(&state, "/view", valid_view).await;
     assert_eq!(code, StatusCode::OK);
@@ -976,8 +988,7 @@ async fn display_projection_generation_race() {
     // Stale token on /view must also be rejected with 409 CONFLICT!
     let stale_view = json!({
         "token": "operator",
-        "target": "theater",
-        "reason": "late"
+        "target": "theater"
     });
     let (code, resp) = agent_call_json(&state, "/view", stale_view).await;
     assert_eq!(code, StatusCode::CONFLICT);
@@ -1005,7 +1016,7 @@ async fn display_projection_generation_race() {
 #[tokio::test]
 async fn display_reports_rendered_only_after_the_browser_confirms() {
     let state = state();
-    let (mut connection, _snapshot, _wm) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let epoch = connection.epoch;
 
     let handle = post_display_in_task(&state, diagram_show()).await;
@@ -1048,7 +1059,7 @@ async fn display_reports_rendered_only_after_the_browser_confirms() {
 #[tokio::test]
 async fn an_applied_seq_this_process_has_not_sent_confirms_nothing() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let (_, last) = state
         .0
@@ -1085,7 +1096,7 @@ async fn an_applied_seq_this_process_has_not_sent_confirms_nothing() {
 #[tokio::test]
 async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let (_, last) = state
         .0
@@ -1123,7 +1134,7 @@ async fn a_rejection_of_a_seq_this_process_has_not_sent_rejects_nothing() {
 #[tokio::test]
 async fn display_reports_unconfirmed_when_the_browser_stays_silent() {
     let state = state();
-    let (connection, _s, _w) = state.register_connection().await;
+    let (connection, _) = state.register_connection().await;
     let _ = connection.receiver; // keep the connection alive, never ack
     let (code, body) = agent_call_json(&state, "/display", diagram_show()).await;
     assert_eq!(code, StatusCode::OK);
@@ -1134,7 +1145,7 @@ async fn display_reports_unconfirmed_when_the_browser_stays_silent() {
 #[tokio::test]
 async fn display_reports_rejection_from_the_browser() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let epoch = connection.epoch;
     let handle = post_display_in_task(&state, diagram_show()).await;
     let DeliveryFrame::Event { sequence, .. } =
@@ -1224,7 +1235,7 @@ async fn a_display_the_page_rejects_is_delivered_with_the_pages_reason() {
 #[tokio::test]
 async fn display_reports_a_rejection_that_a_later_report_followed() {
     let state = state();
-    let (mut connection, _s, _w) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let epoch = connection.epoch;
     let handle = post_display_in_task(&state, diagram_show()).await;
     let sequence = frames_until(&mut connection, "display")
@@ -1268,7 +1279,7 @@ async fn display_reports_a_rejection_that_a_later_report_followed() {
 #[tokio::test]
 async fn display_reports_new_leg_when_a_transfer_overtakes_the_confirmation() {
     let state = state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let waiting = {
         let state = state.clone();
         tokio::spawn(async move {
@@ -1397,7 +1408,7 @@ async fn a_module_call_carrying_a_retired_token_is_refused() {
 #[tokio::test]
 async fn background_view_reports_but_does_not_change_the_screen() {
     let state = state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -1435,7 +1446,7 @@ async fn a_background_refusal_reaches_the_module_as_its_bare_reason() {
     // The module and SKILL.md branch on `caller_away`; the sentence that
     // explains it stays in the result (#234).
     let state = state();
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -1496,7 +1507,7 @@ async fn a_held_display_is_accepted_with_its_reason_in_the_result() {
 #[tokio::test]
 async fn background_speak_is_refused_and_held_display_is_released_on_promotion() {
     let state = state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -1551,7 +1562,7 @@ async fn background_speak_is_refused_and_held_display_is_released_on_promotion()
 #[tokio::test]
 async fn every_background_display_is_held_and_replayed_on_promotion() {
     let state = state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -1784,3 +1795,22 @@ const LEG_GONE: &str =
     "this leg is no longer on the call: stop retrying, nothing you send reaches the caller";
 
 const SELF_WOKEN: &str = "no switchboard turn is running for this leg; this self-woken call has no delivery authority, so put the result in the written reply instead";
+
+// The host link fixture's module replies are what `module_reply` makes of the
+// service's answer; the skill's fake host agent serves the same replies.
+#[tokio::test]
+async fn module_reply_makes_the_host_link_fixtures_replies() {
+    let fixture = crate::hosts::host_link_fixture();
+    let entries = fixture["module_replies"].as_array().unwrap();
+    assert!(!entries.is_empty(), "the fixture lists module replies");
+    for entry in entries {
+        let status = StatusCode::from_u16(entry["http_status"].as_u64().unwrap() as u16).unwrap();
+        let response = (status, axum::Json(entry["body"].clone())).into_response();
+        assert_eq!(
+            module_reply(entry["call"].as_str().unwrap(), response).await,
+            entry["reply"],
+            "{}",
+            entry["name"]
+        );
+    }
+}

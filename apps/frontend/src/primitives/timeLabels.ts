@@ -1,4 +1,4 @@
-import { parseTimeValue, type TimeValue } from '../controller/validation';
+import { parseTimeValue, type TimeValue } from '../controller/validation/time';
 
 // How the page writes a date or a time of day: the one namer of days,
 // months and clocks, for every view that shows a time (docs/display-tool.md,

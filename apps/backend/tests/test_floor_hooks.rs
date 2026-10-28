@@ -1,5 +1,7 @@
 use super::*;
-use crate::app_state::{assert_lifecycle_consistent, debug_events, state, state_on, until_debug};
+use crate::app_state::{
+    assert_lifecycle_consistent, debug_events, state, state_with_jev, until_debug,
+};
 use crate::app_state::{spawn_workers, AppState};
 use crate::audio::{Speaker, SttAdapter, SttStreamAdapter};
 use crate::browser::frames_until;
@@ -8,10 +10,11 @@ use crate::delivery::DeliveryConnection;
 use crate::floor::{FloorRequest, ReleaseOutcome};
 use crate::history::TranscriptLog;
 use crate::hosts::{FakeHostAgent, Step};
-use crate::jev::fake_jev_client;
+use crate::jev::{answer_for, fake_jev_client, routing_answers, test_client};
 use crate::module_calls::request_to_speak;
 use crate::pbx::Switchboard;
 use crate::registry::{Project, Registry};
+use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use tokio::time::{timeout, Duration};
@@ -29,17 +32,7 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
         "cwd": "/srv/alpha",
     }))
     .unwrap()]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("test catalog"),
-    );
-    let state = state_on(Switchboard::new_with_jev(
-        &config,
-        registry,
-        std::sync::Arc::new(prewarm),
-        client,
-    ));
+    let state = state_with_jev(&config, registry, client);
     let host = state.0.switchboard.lock().await.hosts();
     let listed = std::sync::Arc::new(tokio::sync::Notify::new());
     let listed_for_host = listed.clone();
@@ -52,7 +45,7 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
         None
     }));
     fake.serve(host.connect_fake("scriptorium"));
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -119,18 +112,8 @@ async fn floor_update_queued_with_utility(
         ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
     ]);
     let registry = Registry::new(vec![]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("test catalog"),
-    );
-    let state = state_on(Switchboard::new_with_jev(
-        &config,
-        registry,
-        std::sync::Arc::new(prewarm),
-        client,
-    ));
-    let (connection, _, _) = state.register_connection().await;
+    let state = state_with_jev(&config, registry, client);
+    let (connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -241,13 +224,7 @@ done
     let gate_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let gate_wait = foreground_release.clone();
     let gate_count = gate_calls.clone();
-    let jev = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder(move |request| {
+    let jev = test_client(move |request| {
         let gate_wait = gate_wait.clone();
         let gate_count = gate_count.clone();
         async move {
@@ -257,21 +234,9 @@ done
                 // unbounded: the fake holds the gate until the test opens it.
                 gate_wait.notified().await;
             }
-            let answers = if request.questions.contains_key("good_moment") {
-                serde_json::json!({
-                    "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
-                })
-            } else {
-                serde_json::json!({
-                    "action": {"type":"choice","choice":"general","probabilities":{"general":1.0},"confidence":1.0},
-                    "for_current_agent": {"type":"noul","noul":0.0},
-                    "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
-                    "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
-                    "multi_target": {"type":"noul","noul":1.0}
-                })
-            };
-            Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
-                .expect("fixture response"))
+            let mut routing = routing_answers("general");
+            routing["multi_target"] = serde_json::json!({"type":"noul","noul":1.0});
+            answer_for(&request, routing)
         }
     });
     let config = crate::Config::for_tests(&[
@@ -333,7 +298,7 @@ done
         }
     }))
     .serve(state.0.hosts.connect_fake("test-host"));
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     spawn_workers(state.clone());
     let foreground_reply = state
         .0
@@ -432,46 +397,14 @@ esac
 done
 "##;
     crate::pi_client::write_executable_script(&utility, script);
-    let jev = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder(|request| async move {
-        let answers = if request.questions.contains_key("good_moment") {
-            serde_json::json!({
-                "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
-            })
-        } else {
-            serde_json::json!({
-                "action": {"type":"choice","choice":"general","probabilities":{"general":1.0},"confidence":1.0},
-                "for_current_agent": {"type":"noul","noul":0.0},
-                "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
-                "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
-                "multi_target": {"type":"noul","noul":0.0}
-            })
-        };
-        Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
-            .expect("fixture response"))
-    });
+    let jev =
+        test_client(|request| async move { answer_for(&request, routing_answers("general")) });
     let config = crate::Config::for_tests(&[
         ("SWITCHBOARD_PI_BINARY", &utility.to_string_lossy()),
         ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
     ]);
-    let registry = Registry::new(vec![]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("test catalog"),
-    );
-    let state = state_on(Switchboard::new_with_jev(
-        &config,
-        registry,
-        std::sync::Arc::new(prewarm),
-        jev,
-    ));
-    let (_connection, _, _) = state.register_connection().await;
+    let state = state_with_jev(&config, Registry::new(vec![]), jev);
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -765,13 +698,7 @@ async fn an_older_residents_dropped_request_keeps_a_newer_residents_mark() {
 async fn an_agent_whose_newer_request_still_waits_stays_waiting_after_its_first_is_spoken() {
     let gate_open = std::sync::Arc::new(tokio::sync::Notify::new());
     let gates = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let jev = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder({
+    let jev = test_client({
         let gate_open = gate_open.clone();
         let gates = gates.clone();
         move |_request| {
@@ -807,7 +734,7 @@ async fn an_agent_whose_newer_request_still_waits_stays_waiting_after_its_first_
         SttStreamAdapter::from_command(None),
     );
     crate::speech::start_speech_worker_for_test(&state);
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -852,7 +779,7 @@ async fn an_agent_whose_newer_request_still_waits_stays_waiting_after_its_first_
 #[tokio::test]
 async fn stale_floor_request_is_dropped_before_audio_reservation() {
     let state = state();
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
@@ -861,16 +788,7 @@ async fn stale_floor_request_is_dropped_before_audio_reservation() {
     state.0.coordinator.begin_rescue("new foreground leg");
     let outcome = release_floor(
         &state,
-        FloorRequest {
-            floor_id: 0,
-            project: "grapes".into(),
-            token: "grapes-token".into(),
-            generation,
-            context: "caller: previous line".into(),
-            message: "stale update".into(),
-            reason: "finished".into(),
-            held_display: false,
-        },
+        grapes_release(generation, "stale update"),
         "stale update".into(),
     )
     .await;
@@ -884,43 +802,114 @@ async fn stale_floor_request_is_dropped_before_audio_reservation() {
 #[tokio::test]
 async fn a_floor_release_that_waited_for_its_place_drops_a_leg_change_at_once() {
     let state = state();
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     state
         .0
         .coordinator
         .register_background("grapes", "grapes-token");
     let generation = state.0.coordinator.generation();
-    // Every place in the worker's queue is taken, so the release must wait.
-    let taken: Vec<_> = std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect();
+    let taken = take_every_speech_place(&state);
     assert!(!taken.is_empty());
+    let release = spawn_waiting_release(&state, generation, "late update").await;
+    // The leg changes while it waits; then the queue has room.
+    state.0.coordinator.begin_rescue("new foreground leg");
+    drop(taken);
+    let outcome = within("release", release).await.unwrap();
+    assert_eq!(outcome, ReleaseOutcome::Drop);
+}
+
+fn grapes_release(generation: u64, message: &str) -> FloorRequest {
+    FloorRequest {
+        floor_id: 0,
+        project: "grapes".into(),
+        token: "grapes-token".into(),
+        generation,
+        context: "caller: previous line".into(),
+        message: message.into(),
+        reason: "finished".into(),
+        held_display: false,
+    }
+}
+
+/// Holds every place in the speech worker's queue until the result drops.
+fn take_every_speech_place(state: &AppState) -> Vec<impl Sized + '_> {
+    // The collect holds each permit; without it the iterator frees them as it goes.
+    std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect()
+}
+
+/// Starts a release that finds the worker's queue full and waits for a place.
+async fn spawn_waiting_release(
+    state: &AppState,
+    generation: u64,
+    message: &'static str,
+) -> tokio::task::JoinHandle<ReleaseOutcome> {
     let release_state = state.clone();
     let release = tokio::spawn(async move {
         release_floor(
             &release_state,
-            FloorRequest {
-                floor_id: 0,
-                project: "grapes".into(),
-                token: "grapes-token".into(),
-                generation,
-                context: "caller: previous line".into(),
-                message: "late update".into(),
-                reason: "finished".into(),
-                held_display: false,
-            },
-            "late update".into(),
+            grapes_release(generation, message),
+            message.into(),
         )
         .await
     });
     tokio::task::yield_now().await;
     assert!(!release.is_finished(), "the release waits for a place");
-    // The leg changes while it waits; then the queue has room.
-    state.0.coordinator.begin_rescue("new foreground leg");
+    release
+}
+
+/// A background update with no page to hear it waits for the page (`Retry`)
+/// and reserves no audio slot, even with the worker's queue full.
+#[tokio::test]
+async fn a_floor_release_with_no_page_keeps_the_update_for_the_page() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let generation = state.0.coordinator.generation();
+    let _taken = take_every_speech_place(&state);
+
+    let outcome = within(
+        "release",
+        release_floor(
+            &state,
+            grapes_release(generation, "unheard update"),
+            "unheard update".into(),
+        ),
+    )
+    .await;
+
+    assert_eq!(outcome, ReleaseOutcome::Retry);
+    assert!(
+        state.0.audio.lock().await.slots.is_empty(),
+        "the release kept an audio slot"
+    );
+}
+
+/// The page goes while the release waits for its place. The update waits for
+/// the page, neither spoken to an empty room nor dropped, and its audio slot
+/// is closed.
+#[tokio::test]
+async fn a_floor_release_whose_page_goes_while_it_waits_closes_its_audio_slot() {
+    let state = state();
+    let (connection, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let generation = state.0.coordinator.generation();
+    let taken = take_every_speech_place(&state);
+    let release = spawn_waiting_release(&state, generation, "late update").await;
+
+    state.retire_connection(connection.epoch).await;
     drop(taken);
-    let outcome = tokio::time::timeout(Duration::from_secs(5), release)
-        .await
-        .expect("the release settles once it has its place")
-        .unwrap();
-    assert_eq!(outcome, ReleaseOutcome::Drop);
+
+    let outcome = within("release", release).await.unwrap();
+    assert_eq!(outcome, ReleaseOutcome::Retry);
+    assert!(
+        state.0.audio.lock().await.slots.is_empty(),
+        "the audio slot was left open"
+    );
 }
 
 #[tokio::test]
@@ -940,7 +929,7 @@ async fn a_clipped_floor_line_shows_the_caller_its_whole_text() {
         SttStreamAdapter::from_command(None),
     );
     crate::speech::start_speech_worker_for_test(&state);
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     state
         .0
         .coordinator

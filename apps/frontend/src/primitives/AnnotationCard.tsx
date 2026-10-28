@@ -1,5 +1,5 @@
 import type { NoteData } from '../controller/types';
-import { FocusableSurface } from './FocusableSurface';
+import { ExpandableSurface } from './ExpandableSurface';
 import { NoteBadge } from './NoteMarker';
 import { RichText } from './RichText';
 
@@ -30,7 +30,7 @@ interface AnnotationCardProps {
 
 // The card is not itself a control: its text is a scroll region, and a scroll
 // region cannot live inside a button. The body activates through
-// FocusableSurface instead, and the history control sits beside it in the
+// ExpandableSurface instead, and the history control sits beside it in the
 // header rather than inside it.
 export function AnnotationCard({ data, onFocus, onOpenHistory, named }: AnnotationCardProps) {
   const text = <div className="annotation-card__text"><RichText segments={data.segments} /></div>;
@@ -60,13 +60,13 @@ export function AnnotationCard({ data, onFocus, onOpenHistory, named }: Annotati
         ) : null}
       </div>
       {activate ? (
-        <FocusableSurface
+        <ExpandableSurface
           className={`annotation-card__body${onFocus ? '' : ' annotation-card__body--history'}`}
           onActivate={activate}
           ariaLabel={onFocus ? 'Expand explanation' : 'Open conversation history'}
         >
           {text}
-        </FocusableSurface>
+        </ExpandableSurface>
       ) : (
         <div className="annotation-card__body">{text}</div>
       )}

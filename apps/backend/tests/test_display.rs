@@ -390,7 +390,7 @@ fn confirm_state_keeps_the_newest_rejections_until_the_generation_moves() {
 struct Seen {
     leg: Option<(String, u64)>,
     objects: Vec<String>,
-    watermark: u64,
+    watermark: Option<u64>,
     view: String,
     stale: bool,
     confirmed: (u64, Option<u64>),
@@ -456,7 +456,7 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
     let mut want = Seen {
         leg: None,
         objects: vec![],
-        watermark: 0,
+        watermark: None,
         view: "auto".into(),
         stale: false,
         confirmed: (0, None),
@@ -470,13 +470,13 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
     );
 
     // No leg announced yet: the operator's stage at generation 0.
-    let (mut first, _, _) = state.register_connection().await;
+    let (mut first, _) = state.register_connection().await;
     want.stale = true;
     assert_eq!(seen(&state).await, want, "a page connects");
 
     let (call, seq) = show_metric(&state, &mut first, OPERATOR, "m1").await;
     want.objects = vec!["m1".into()];
-    want.watermark = seq;
+    want.watermark = Some(seq);
     assert_eq!(seen(&state).await, want, "a display is applied");
 
     report(
@@ -506,7 +506,7 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
         assert_eq!(seen(&state).await, want, "ignored: {ignored}");
     }
 
-    let (mut second, _, _) = state.register_connection().await;
+    let (mut second, _) = state.register_connection().await;
     want.stale = true;
     assert_eq!(seen(&state).await, want, "a second page connects");
 
@@ -561,7 +561,7 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
     .await;
     assert_rendered(call).await;
     want.objects = vec!["m2".into()];
-    want.watermark = seq;
+    want.watermark = Some(seq);
     want.view = "visual".into();
     want.stale = false;
     want.confirmed = (0, Some(seq));
@@ -577,7 +577,7 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
     // until the next one is announced (Kayne's decision, 2026-10-11).
     let (waiting, seq) = show_metric(&state, &mut second, OPERATOR, "m3").await;
     want.objects = vec!["m2".into(), "m3".into()];
-    want.watermark = seq;
+    want.watermark = Some(seq);
     assert_eq!(seen(&state).await, want, "a display waits on the page");
     cancel_active_operations(&state).await;
     let rescued = state.0.coordinator.generation();
@@ -632,7 +632,7 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
     let alpha = state.0.coordinator.generation();
     want.leg = Some(("alpha".into(), alpha));
     want.objects = vec!["h1".into()];
-    want.watermark = replayed.last().unwrap()["seq"].as_u64().unwrap();
+    want.watermark = Some(replayed.last().unwrap()["seq"].as_u64().unwrap());
     want.stale = true;
     want.confirmed = (alpha, None);
     assert_eq!(seen(&state).await, want, "a transfer's leg is announced");
@@ -643,7 +643,7 @@ async fn the_gate_moves_through_its_phases_one_event_at_a_time() {
         want,
         "the active page retires, already stale"
     );
-    let (third, _, _) = state.register_connection().await;
+    let (third, _) = state.register_connection().await;
     report(
         &state,
         third.epoch,

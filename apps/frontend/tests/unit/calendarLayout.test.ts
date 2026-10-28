@@ -5,7 +5,7 @@
 // out, and the agenda's days. Nothing reads the page clock.
 import { describe, expect, it } from 'vitest';
 import type { CalendarData, CalendarEvent } from '../../src/controller/types';
-import { parseTimeValue } from '../../src/controller/validation';
+import { parseTimeValue } from '../../src/controller/validation/time';
 import {
   agendaEntries,
   agendaLead,

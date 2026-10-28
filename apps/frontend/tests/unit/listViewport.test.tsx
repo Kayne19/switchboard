@@ -5,7 +5,7 @@
 // here.
 import { act } from 'react';
 import { describe, expect, it } from 'vitest';
-import { FocusableSurface } from '../../src/primitives/FocusableSurface';
+import { ExpandableSurface } from '../../src/primitives/ExpandableSurface';
 import { drawnScale } from '../../src/hooks/useMeasured';
 import { keyStop } from '../../src/primitives/drawingScroll';
 import { keyScrollLeft, keyScrollTop, leadScrollTop, ListViewport } from '../../src/primitives/ListViewport';
@@ -49,9 +49,9 @@ let surfaceClicks = 0;
 function render(children: React.ReactNode, props: { lead?: string } = {}) {
   surfaceClicks = 0;
   host = mount(
-    <FocusableSurface onActivate={() => (surfaceClicks += 1)} ariaLabel="Expand tasks">
+    <ExpandableSurface onActivate={() => (surfaceClicks += 1)} ariaLabel="Expand tasks">
       <ListViewport {...props}>{children}</ListViewport>
-    </FocusableSurface>,
+    </ExpandableSurface>,
   );
   return host.querySelector<HTMLElement>('.list-viewport__scroll')!;
 }
@@ -184,9 +184,9 @@ describe('ListViewport', () => {
     layOut(scroll, 0);
     const again = (lead: string) =>
       rerender(page(),
-        <FocusableSurface onActivate={() => (surfaceClicks += 1)} ariaLabel="Expand tasks">
+        <ExpandableSurface onActivate={() => (surfaceClicks += 1)} ariaLabel="Expand tasks">
           <ListViewport lead={lead}>{rows(10)}</ListViewport>
-        </FocusableSurface>,
+        </ExpandableSurface>,
       );
     again('t8');
     // Row 8 (240-270) would rest a quarter view down, at 215; the list's

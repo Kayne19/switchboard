@@ -57,7 +57,7 @@ export async function openTheater(page: Page, server: DisplayFixtureServer, scen
   await expect.poll(() => server.frames.some((frame) => frame.type === 'hello')).toBe(true);
   for (const action of fixtures[scene]) server.broadcast({ type: 'display', action });
   await expect(page.locator('.stage')).not.toHaveAttribute('data-scene-kind', 'idle');
-  server.broadcast({ type: 'view', target: 'theater', reason: '' });
+  server.broadcast({ type: 'view', target: 'theater' });
   await expect(page.locator('.stage')).toHaveAttribute('data-view', 'theater');
   await expect(page.locator('[data-scene="theater"]')).toBeVisible();
 }
@@ -86,7 +86,7 @@ export async function openSystem(page: Page, server: DisplayFixtureServer, scene
     projects: ['switchboard', 'homelab', 'llm-wiki'],
   }));
   for (const action of fixtures[scene]) server.broadcast({ type: 'display', action });
-  server.broadcast({ type: 'view', target: 'system', reason: '' });
+  server.broadcast({ type: 'view', target: 'system' });
   await expect(page.locator('.stage')).toHaveAttribute('data-view', 'system');
   await expect(page.locator('[data-scene="system"] select[name="route"]')).toHaveValue('switchboard');
 }

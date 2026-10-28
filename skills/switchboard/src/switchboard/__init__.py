@@ -84,7 +84,7 @@ _ONE_OF = {
 # ---- image ------------------------------------------------------------------
 
 # The service and the page take at most this many raw image bytes
-# (MAX_IMAGE_BYTES in visual_protocol.rs and validation.ts);
+# (MAX_IMAGE_BYTES in visual_protocol.rs and validation/image.ts);
 # scripts/check_hygiene.mjs keeps the numbers equal.
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 
@@ -461,7 +461,7 @@ def _check_display_action(action):
 
 
 # The most seconds a paused timer may have left: the instants a timer takes
-# span 1970 to 2199 (MAX_TIMER_REMAINING_S in validation.ts and
+# span 1970 to 2199 (MAX_TIMER_REMAINING_S in validation/timer.ts and
 # visual_protocol.rs). The corpus pins it here too: its case at the cap is
 # accepted and its case a second past it refused (DisplayCorpusTests).
 _MAX_TIMER_REMAINING_S = 7_258_118_400
@@ -625,7 +625,10 @@ def display(action=None, **fields):
                 f"and a display action is at most {_MAX_ACTION_BYTES:,} bytes as JSON (an image's "
                 f"{_MAX_IMAGE_ACTION_BYTES // _MIB} MiB). Send less."
             )
-        if result.status == "refused" and result.reason not in ("not_on_call", "subagent", "caller_away"):
+        # An invalid_leg refusal is about the leg, not the payload: it falls to
+        # _refused, whose sentence already says what to do.
+        leg_refused = data.get("code") == "invalid_leg"
+        if result.status == "refused" and not leg_refused and result.reason not in ("not_on_call", "subagent", "caller_away"):
             return (
                 f"The switchboard rejected it: {result.reason or 'invalid payload'}. "
                 "Adjust the payload and try again."
