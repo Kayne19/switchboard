@@ -4,7 +4,7 @@ import type { MessageData } from '../controller/types';
 import { useModalFocus } from '../hooks/useModalFocus';
 import { usePinnedScroll } from '../hooks/usePinnedScroll';
 import { RichText } from '../primitives/RichText';
-import { MAX_TYPED_TURN_CHARS } from '../protocol';
+import { MAX_TYPED_TURN_CHARS, readTypedTurn } from '../protocol';
 
 type TranscriptLine = NonNullable<MessageData['transcript']>[number];
 
@@ -107,11 +107,14 @@ function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => b
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const body = draft.trim();
-    if (!onSend || !body) return;
-    const codePoints = [...body].length;
-    if (codePoints > MAX_TYPED_TURN_CHARS) {
-      setNotSent(`NOT SENT / TOO LONG / ${codePoints} OF ${MAX_TYPED_TURN_CHARS} CHARACTERS`);
+    const turn = readTypedTurn(draft);
+    if (!onSend || (!turn.ok && turn.why === 'blank')) return;
+    if (!turn.ok) {
+      setNotSent(
+        turn.why === 'too_long'
+          ? `NOT SENT / TOO LONG / ${turn.codePoints} OF ${MAX_TYPED_TURN_CHARS} CHARACTERS`
+          : 'NOT SENT / BROKEN CHARACTER',
+      );
       return;
     }
     // SEND turns disabled with the draft gone. Focus on it then went to the
@@ -120,7 +123,7 @@ function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => b
     // and a tap that did not focus SEND (iPadOS Safari's) brings up no
     // touch keyboard the caller had put away.
     const fromSend = sendButton.current !== null && document.activeElement === sendButton.current;
-    if (onSend(body)) {
+    if (onSend(turn.body)) {
       setDraft('');
       setNotSent(null);
       if (fromSend) inputRef.current?.focus({ preventScroll: true });
@@ -128,6 +131,11 @@ function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => b
       setNotSent('NOT SENT / LINE DOWN');
     }
   };
+
+  const blankDraft = (() => {
+    const turn = readTypedTurn(draft);
+    return !turn.ok && turn.why === 'blank';
+  })();
 
   return (
     <form className="transcript__composer" onSubmit={submit}>
@@ -145,7 +153,7 @@ function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => b
         enterKeyHint="send"
         disabled={!onSend}
       />
-      <button ref={sendButton} className="transcript__send tech micro" type="submit" disabled={!onSend || !draft.trim()}>
+      <button ref={sendButton} className="transcript__send tech micro" type="submit" disabled={!onSend || blankDraft}>
         SEND
       </button>
       {notSent ? (

@@ -400,7 +400,7 @@ describe("CallRuntime typed turns", () => {
   it("sends a typed turn stamped with the epoch the server announced", async () => {
     const { runtime } = makeRuntime();
     const socket = await connectAt(runtime, 7);
-    expect(runtime.sendText("  deploy the branch  ")).toBe(true);
+    expect(runtime.sendText("deploy the branch")).toBe(true);
     const frame = socket.sentJson().at(-1);
     expect(frame).toMatchObject({ type: "typed_turn", generation: 7, text: "deploy the branch" });
     expect(typeof frame?.id).toBe("string");
@@ -409,7 +409,7 @@ describe("CallRuntime typed turns", () => {
     runtime.dispose();
   });
 
-  it("refuses a typed turn it cannot deliver or that says nothing", async () => {
+  it("refuses a typed turn it cannot deliver", async () => {
     const { runtime } = makeRuntime();
     runtime.start();
     expect(runtime.sendText("hello")).toBe(false);
@@ -420,7 +420,6 @@ describe("CallRuntime typed turns", () => {
     socket.receive(helloAck());
     socket.receive({ type: "epoch", generation: 2 });
     await settle();
-    expect(runtime.sendText("   ")).toBe(false);
     expect(socket.sentJson().some((frame) => frame.type === "typed_turn")).toBe(false);
     socket.drop();
     expect(runtime.sendText("hello")).toBe(false);

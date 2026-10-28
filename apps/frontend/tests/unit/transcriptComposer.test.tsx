@@ -64,4 +64,38 @@ describe('the history composer and the typed-turn cap', () => {
       status: `NOT SENT / TOO LONG / ${CAP + 2} OF ${CAP} CHARACTERS`,
     });
   });
+
+  it('keeps a draft holding a lone surrogate and says why: the service would refuse the whole frame', () => {
+    const { onSend, field, send, status } = composer();
+    const text = 'hello \ud83d';
+    type(field, text);
+    act(() => send.click());
+    expect({ sent: onSend.mock.calls.length, kept: field.value === text, status: status() }).toEqual({
+      sent: 0,
+      kept: true,
+      status: 'NOT SENT / BROKEN CHARACTER',
+    });
+  });
+
+  it('offers no SEND for a draft of only U+0085, which the service trims to nothing', () => {
+    const { onSend, field, send } = composer();
+    type(field, '\u0085');
+    const disabled = send.disabled;
+    act(() => send.click());
+    expect({ disabled, sent: onSend.mock.calls.length }).toEqual({ disabled: true, sent: 0 });
+  });
+
+  it('sends a turn at the cap that ends in U+0085, which the service trims away', () => {
+    const { onSend, field, send, status } = composer();
+    type(field, 'x'.repeat(CAP) + '\u0085');
+    act(() => send.click());
+    expect({ sent: onSend.mock.calls.map(([sent]) => sent === 'x'.repeat(CAP)), status: status() }).toEqual({ sent: [true], status: null });
+  });
+
+  it('sends a draft the service trims differently from the page without a stray U+0085', () => {
+    const { onSend, field, send } = composer();
+    type(field, '\u0085hi\u0085');
+    act(() => send.click());
+    expect(onSend.mock.calls).toEqual([['hi']]);
+  });
 });
