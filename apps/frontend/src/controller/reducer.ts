@@ -7,6 +7,7 @@ import type {
   ToolRunState,
   WorkspaceState,
 } from './types';
+import type { ViewName } from '../protocol';
 import { RUNTIME_ID_PREFIX, RUNTIME_LINE_ERROR_ID } from './types';
 
 /**
@@ -15,9 +16,9 @@ import { RUNTIME_ID_PREFIX, RUNTIME_LINE_ERROR_ID } from './types';
  * (`deriveScreenState`), so the report never names a view the page does not
  * draw (#277). A view the page cannot draw now is drawn as `auto`:
  * `visual` or `theater` with nothing on stage. `comms` and `system` are
- * drawn whatever is on stage; any other name is `auto`.
+ * drawn whatever is on stage.
  */
-function computeEffectiveView(requested: string | null, hasVisual: boolean): string {
+function computeEffectiveView(requested: ViewName | null, hasVisual: boolean): string {
   switch (requested) {
     case 'comms':
       return 'comms';
@@ -27,7 +28,8 @@ function computeEffectiveView(requested: string | null, hasVisual: boolean): str
       return hasVisual ? 'visual' : 'auto';
     case 'theater':
       return hasVisual ? 'theater' : 'auto';
-    default:
+    case 'auto':
+    case null:
       return 'auto';
   }
 }
@@ -419,7 +421,7 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
       if (state.workspace.callerPinned) {
         return state;
       }
-      const requested = action.view || null;
+      const requested = action.view;
       const workspace: WorkspaceState = {
         ...state.workspace,
         requestedView: requested,
@@ -428,8 +430,8 @@ export function controllerReducer(state: ControllerState, action: ControllerActi
       return { ...state, workspace, revision };
     }
     case 'pin_view': {
-      const requested = action.view || null;
-      const callerPinned = requested !== 'auto' && requested !== null;
+      const requested = action.view;
+      const callerPinned = requested !== 'auto';
       const workspace: WorkspaceState = {
         ...state.workspace,
         requestedView: requested,

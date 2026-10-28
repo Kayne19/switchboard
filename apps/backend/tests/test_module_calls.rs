@@ -266,12 +266,27 @@ async fn a_refused_reason_or_target_lists_the_names_it_takes() {
             json!({"detail": "invalid reason: expected one of finished, needs_decision, problem"})
         );
     }
-    let (code, body) = agent_call_json(&state, "/view", json!({"target": "screen"})).await;
-    assert_eq!(code, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body,
-        json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"})
-    );
+    // The names the page once took for the five, and the five as sent in
+    // another case or padded, are all refused: the target is compared as sent.
+    for target in [
+        "screen",
+        "stage",
+        "bay2",
+        "transcript",
+        "routing",
+        "magi",
+        "overview",
+        "Comms",
+        " comms ",
+    ] {
+        let (code, body) = agent_call_json(&state, "/view", json!({"target": target})).await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{target:?}");
+        assert_eq!(
+            body,
+            json!({"delivered": false, "detail": "invalid target: expected one of visual, comms, system, theater, auto"}),
+            "{target:?}"
+        );
+    }
 }
 
 // A background agent's request is shown on the debug page as it is on the
@@ -302,13 +317,13 @@ async fn a_request_to_speak_reaches_the_debug_bus() {
 
 #[tokio::test]
 async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
-    let (code, body) =
-        agent_call_json(&state(), "/view", json!({"target":"","colour":"red"})).await;
-    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(
-        body["detail"].as_str().unwrap().contains("colour"),
-        "{body}"
-    );
+    // `reason` was a field of `view` until the page stopped reading it.
+    for field in ["colour", "reason"] {
+        let (code, body) =
+            agent_call_json(&state(), "/view", json!({"target": "", field: "red"})).await;
+        assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(body["detail"].as_str().unwrap().contains(field), "{body}");
+    }
     let reply = module_call(
         &state(),
         AgentCall {
@@ -325,26 +340,6 @@ async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
         reply["reason"].as_str().unwrap().contains("colour"),
         "{reply}"
     );
-}
-
-#[tokio::test]
-async fn view_takes_only_the_five_names_and_no_reason() {
-    let state = state();
-    for old_name in ["stage", "bay2", "transcript", "routing", "magi", "overview"] {
-        let (code, body) = agent_call_json(&state, "/view", json!({"target": old_name})).await;
-        assert_eq!(code, StatusCode::BAD_REQUEST, "{old_name}");
-        assert_eq!(
-            body["detail"],
-            "invalid target: expected one of visual, comms, system, theater, auto"
-        );
-    }
-    let (code, _) = agent_call_json(
-        &state,
-        "/view",
-        json!({"target": "comms", "reason": "the caller asked"}),
-    )
-    .await;
-    assert_eq!(code, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]

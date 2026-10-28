@@ -597,7 +597,7 @@ async fn view(
         requested = %req.target.chars().take(64).collect::<String>(),
         "an agent asked about the caller's view"
     );
-    let target = req.target.trim().to_ascii_lowercase();
+    let target = req.target;
     // A background agent may ask what the caller sees, not change it: its
     // displays are held until the caller brings it forward, and the screen
     // belongs to whoever the caller is with.

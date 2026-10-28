@@ -264,7 +264,7 @@ export function RuntimeIntegration() {
           break;
         }
         case "agents_state":
-          // No page surface reads agent state yet. The call runtime must
+          // No page surface reads agent state. The call runtime must
           // never turn background status into caller speech.
           break;
       }
