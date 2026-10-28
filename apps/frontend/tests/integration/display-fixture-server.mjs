@@ -38,7 +38,7 @@ export class DisplayFixtureServer {
           req.on('data', chunk => body += chunk);
           req.on('end', () => {
             const data = JSON.parse(body);
-            this.broadcast({ type: 'view', target: data.view, reason: data.reason ?? '' });
+            this.broadcast({ type: 'view', target: data.view });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: true }));
           });

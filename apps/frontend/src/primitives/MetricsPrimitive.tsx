@@ -52,7 +52,7 @@ export function MetricsPrimitive({ metrics, slot = 'primary', onFocus }: Metrics
   const isCluster = slot === 'primary' && metrics.length > 1;
 
   // A metric in a cluster expands itself: it marks the click or key handled
-  // and lets it bubble (FocusableSurface's rule), so the page still hears
+  // and lets it bubble (ExpandableSurface's rule), so the page still hears
   // the click as a gesture.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>, id: string) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;

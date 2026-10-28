@@ -54,9 +54,9 @@ export function LogPanel({ state }: { state: DebugState }) {
   const [levels, setLevels] = useState<Set<string>>(new Set(['ERROR', 'WARN', 'INFO', 'DEBUG']));
   const [target, setTarget] = useState('');
   const [text, setText] = useState('');
-  const [paused, setPaused] = useState(false);
-  const [frozen, setFrozen] = useState<readonly DebugLog[]>(state.logs);
-  const source = paused ? frozen : state.logs;
+  const [frozen, setFrozen] = useState<readonly DebugLog[] | null>(null);
+  const paused = frozen !== null;
+  const source = frozen ?? state.logs;
   const shown = useMemo(() => filterLogs(source, { levels, target, text }), [source, levels, target, text]);
   const tail = shown.length > SHOWN ? shown.slice(shown.length - SHOWN) : shown;
   const targets = useMemo(() => [...new Set(state.logs.map((log) => log.target))].sort(), [state.logs]);
@@ -99,8 +99,7 @@ export function LogPanel({ state }: { state: DebugState }) {
           className={`tech micro${paused ? ' on' : ''}`}
           aria-pressed={paused}
           onClick={() => {
-            if (!paused) setFrozen(state.logs);
-            setPaused(!paused);
+            setFrozen(paused ? null : state.logs);
           }}
         >
           {paused ? 'resume' : 'pause'}

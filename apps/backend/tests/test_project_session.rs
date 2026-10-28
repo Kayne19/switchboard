@@ -1146,6 +1146,34 @@ async fn a_prompt_sent_before_its_session_hears_the_link_close_ends_with_the_ses
     }
 }
 
+/// An abort that cannot go out leaves the session alive, where a command
+/// that cannot go out ends it (#381). Nothing awaits between the disconnect
+/// and the abort, so the pump has not read the link's close yet.
+#[tokio::test(flavor = "current_thread")]
+async fn an_abort_that_cannot_go_out_leaves_the_session_alive() {
+    let hosts = debug_hosts();
+    let fake = crate::hosts::FakeHostAgent::new(Box::new(|_, _| vec![]));
+    let _log = fake.serve(hosts.connect_fake("scriptorium"));
+    let launch = debug_launch(&crate::debug::DebugBus::new(), None);
+    let (session, _) = ProjectSession::create(&hosts, launch)
+        .await
+        .expect("the session opens");
+    hosts.disconnect_fake("scriptorium");
+
+    session.interrupt();
+    assert!(
+        session.alive(),
+        "the abort that could not go out ended the session"
+    );
+
+    let sent = within("the command", session.set_thinking("low")).await;
+    assert!(sent.is_err(), "the command found a link");
+    assert!(
+        !session.alive(),
+        "the command that could not go out left the session alive"
+    );
+}
+
 /// Where a project session's turn is when a row of the turn table's event
 /// arrives. The self-woken run the session holds is `auto-1`; a second
 /// self-woken run, which replaced it, is `auto-2`; the caller's turn,
@@ -1736,9 +1764,9 @@ Replaced           | SessionCloses           | end autonomous auto-2            
 Replaced           | PromptStarts            | start input t-in                                              | busy | autonomous | running «»                            | -
 
 # A prompt sent into the held run as a `follow_up`: the run swallows its frames, but the run's end reaches
-# the prompt too, which waits for it (#512).
-CallerInRun        | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
-CallerInRun        | StartsSelfWokenAdmitted | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | running «»                            | auto-1: run words
+# the prompt too, which waits for it (#512). A start that replaces the run ends the prompt too (#524).
+CallerInRun        | StartsSelfWoken         | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | returned «»                           | auto-1: run words
+CallerInRun        | StartsSelfWokenAdmitted | end autonomous auto-1 «run words»; start autonomous auto-3    | busy | autonomous | returned «»                           | auto-1: run words
 CallerInRun        | StartsInput             | start input t-2                                               | busy | autonomous | running «»                            | -
 CallerInRun        | RunText                 | -                                                             | busy | autonomous | running «more run words»              | -
 CallerInRun        | SecondText              | -                                                             | busy | autonomous | running «»                            | -
@@ -1747,7 +1775,7 @@ CallerInRun        | RunEnds                 | end autonomous auto-1 «run words
 CallerInRun        | SecondEnds              | -                                                             | busy | autonomous | running «»                            | -
 CallerInRun        | CallerEnds              | -                                                             | busy | autonomous | running «»                            | -
 CallerInRun        | SnapshotIdle            | end autonomous auto-1 «run words»                             | -    | -          | returned «last words»                 | auto-1: run words; -: last words
-CallerInRun        | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | running «»                            | auto-1: run words
+CallerInRun        | SnapshotOpen            | end autonomous auto-1 «run words»; start autonomous snap-1    | busy | autonomous | returned «»                           | auto-1: run words
 CallerInRun        | SessionCloses           | end autonomous auto-1                                         | -    | gone       | failed «the project session ended» «» | auto-1: run words
 CallerInRun        | PromptCancelled         | -                                                             | busy | autonomous | -                                     | -
 ";
@@ -1762,6 +1790,21 @@ async fn a_prompt_sent_into_a_held_run_returns_with_the_runs_words() {
     rig.reach(TurnAt::CallerInRun).await;
     rig.apply(TurnHappens::RunText).await;
     rig.apply(TurnHappens::RunEnds).await;
+    let seen = rig.seen().await;
+    assert_eq!(seen[3], "returned «more run words»", "{seen:?}");
+    rig.session.close();
+}
+
+/// A prompt sent into a held run as a `follow_up` waits for that run's
+/// `turn_end`. When another turn replaces the run first, that end never
+/// reached the service, so the replacement ends the prompt with the words
+/// it collected (#524).
+#[tokio::test]
+async fn a_prompt_sent_into_a_replaced_run_returns_with_its_words() {
+    let mut rig = TurnRig::new().await;
+    rig.reach(TurnAt::CallerInRun).await;
+    rig.apply(TurnHappens::RunText).await;
+    rig.apply(TurnHappens::StartsSelfWoken).await;
     let seen = rig.seen().await;
     assert_eq!(seen[3], "returned «more run words»", "{seen:?}");
     rig.session.close();

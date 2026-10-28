@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import { FOLLOWING, nextScroll, type PinnedScroll, type PinnedScrollEvent } from './pinnedScroll';
 
 // How far above its pin a log still counts as pinned: a fractional scroll
 // offset, or a nudge of a pixel or two, must not unpin it.
@@ -30,6 +31,8 @@ function pinTop(element: HTMLElement): number {
  * again. `content` is what the log renders; a change to it is new content.
  * With `enabled` false the surface is left where it is and its scrolling is
  * not read: a surface that is not a log, or a log the reader paused.
+ * Every pin and unpin is decided by `nextScroll` (`pinnedScroll.ts`); this
+ * maps the DOM's events to it and moves the element when it says to pin.
  * Every pin-to-bottom scroller in the tree, the page's and the debug
  * page's, is this hook (`apps/frontend/AGENTS.md`).
  * The live response's log (`SpokenLog`) and the history drawer
@@ -37,33 +40,34 @@ function pinTop(element: HTMLElement): number {
  */
 export function usePinnedScroll<T extends HTMLElement>(content: unknown, enabled = true) {
   const ref = useRef<T>(null);
-  const pinned = useRef(true);
-  const enabledRef = useRef(enabled);
-  enabledRef.current = enabled;
+  const state = useRef<PinnedScroll>(FOLLOWING);
+
+  const send = useCallback((event: PinnedScrollEvent) => {
+    const step = nextScroll(state.current, event);
+    state.current = step.state;
+    const element = ref.current;
+    if (step.effect === 'pin' && element) element.scrollTop = pinTop(element);
+  }, []);
 
   const onScroll = useCallback(() => {
     const element = ref.current;
-    if (!element || !enabledRef.current) return;
-    pinned.current = element.scrollTop >= pinTop(element) - PIN_SLACK_PX;
-  }, []);
+    if (element) send({ kind: 'scrolled', atPin: element.scrollTop >= pinTop(element) - PIN_SLACK_PX });
+  }, [send]);
 
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (element && enabled && pinned.current) element.scrollTop = pinTop(element);
-  }, [content, enabled]);
+  // Before the content effect: a log paused in the render that brings new content must not pin.
+  useLayoutEffect(() => send({ kind: enabled ? 'release' : 'hold' }), [enabled, send]);
+  useLayoutEffect(() => send({ kind: 'contentChanged' }), [content, send]);
 
   // The card growing or the text reflowing moves the pin without new
   // content; a pinned log follows it.
   useEffect(() => {
     const element = ref.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => {
-      if (enabledRef.current && pinned.current) element.scrollTop = pinTop(element);
-    });
+    const observer = new ResizeObserver(() => send({ kind: 'resized' }));
     observer.observe(element);
     if (element.firstElementChild) observer.observe(element.firstElementChild);
     return () => observer.disconnect();
-  }, []);
+  }, [send]);
 
   return { ref, onScroll };
 }

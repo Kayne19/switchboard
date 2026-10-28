@@ -183,7 +183,7 @@ async fn speech_worker_stitches_same_group_and_resets_unrelated_group() {
         SttAdapter::from_command(None),
         SttStreamAdapter::from_command(None),
     );
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     start_speech_worker_for_test(&state);
     let generation = state.0.coordinator.generation();
     let group = state.0.new_speech_group();
@@ -267,7 +267,7 @@ async fn speech_worker_duplicate_text_failure_keeps_newer_pending_drain() {
         SttAdapter::from_command(None),
         SttStreamAdapter::from_command(None),
     );
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     start_speech_worker_for_test(&state);
     let generation = state.0.coordinator.generation();
     let group = state.0.new_speech_group();
@@ -330,7 +330,7 @@ async fn speech_a_rescue_stops_is_not_shown_to_the_caller_as_an_error() {
         SttAdapter::from_command(None),
         SttStreamAdapter::from_command(None),
     );
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     start_speech_worker_for_test(&state);
     let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
@@ -421,7 +421,7 @@ async fn the_new_legs_speech_waits_for_what_the_old_leg_is_already_saying() {
         SttAdapter::from_command(None),
         SttStreamAdapter::from_command(None),
     );
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     start_speech_worker_for_test(&state);
     let admission = |text: &str, generation: u64| SpeechAdmission {
         text: text.into(),
@@ -840,7 +840,7 @@ async fn stale_final_response_does_not_emit_a_barrier() {
 #[tokio::test]
 async fn each_spoken_line_names_the_utterance_that_voices_it() {
     let state = speaking_state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
 
     for text in ["First line.", "Second line."] {
         let (code, _) = agent_call_json(&state, "/speak", json!({"text": text})).await;
@@ -868,7 +868,7 @@ async fn each_spoken_line_names_the_utterance_that_voices_it() {
 #[tokio::test]
 async fn a_voiced_reply_names_the_utterance_its_speech_starts_with() {
     let state = speaking_state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let reply = voiced_reply("First part. Second part.", &["First part.", "Second part."]);
 
@@ -890,7 +890,7 @@ async fn a_voiced_reply_names_the_utterance_its_speech_starts_with() {
 #[tokio::test]
 async fn a_voiced_page_reply_names_the_utterance_its_speech_starts_with() {
     let state = speaking_state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let reply = voiced_reply("Putting you through.", &["Putting you through."]);
 
@@ -913,7 +913,7 @@ async fn a_voiced_page_reply_names_the_utterance_its_speech_starts_with() {
 #[tokio::test]
 async fn a_log_that_keeps_nothing_still_sends_every_spoken_line() {
     let state = speaking_state_keeping(0);
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
 
     let (code, _) = agent_call_json(&state, "/speak", json!({"text": "From the agent."})).await;
     assert_eq!(code, StatusCode::OK);
@@ -937,7 +937,7 @@ async fn a_log_that_keeps_nothing_still_sends_every_spoken_line() {
 #[tokio::test]
 async fn a_clipped_speak_shows_the_caller_its_whole_text() {
     let state = speaking_state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let line = "The migration finished and every table moved across cleanly. \
                 The one thing you need to decide is whether to drop the old schema tonight.";
     assert!(state
@@ -966,7 +966,7 @@ async fn a_clipped_speak_shows_the_caller_its_whole_text() {
 #[tokio::test]
 async fn a_reply_with_nothing_to_say_aloud_names_no_utterance() {
     let state = speaking_state();
-    let (mut connection, _, _) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     let reply = voiced_reply("   ", &["   "]);
 

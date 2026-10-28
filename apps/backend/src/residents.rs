@@ -490,16 +490,14 @@ impl Switchboard {
         }
     }
 
-    /// Start one split part without changing the caller's foreground route.
+    /// Starts one split part on `project`, a registered project the caller
+    /// of this has already resolved, without changing the caller's
+    /// foreground route.
     pub(crate) async fn start_background_part(
         &mut self,
-        target: &str,
+        project: &crate::registry::Project,
         text: &str,
     ) -> Result<(), String> {
-        let project = match self.registry.resolve_detailed(target) {
-            crate::registry::ResolveResult::Exact(project) => project.clone(),
-            _ => return Err(format!("unknown project {target}")),
-        };
         self.set_agent_task(&project.id, text);
         if self
             .agent
@@ -522,15 +520,15 @@ impl Switchboard {
         }
         let plan = self
             .prewarm
-            .launch_plan(&project)
+            .launch_plan(project)
             .await
             .map_err(|error| error.to_string())?;
         let model = self
-            .select_transfer_model(&project, &plan.catalog, "", "")
+            .select_transfer_model(project, &plan.catalog, "", "")
             .map_err(|error| error.to_string())?;
         let token = uuid_like();
         let session = self
-            .start_agent_mode(&project, &model, &token, &plan, "background")
+            .start_agent_mode(project, &model, &token, &plan, "background")
             .await
             .map_err(|error| error.to_string())?;
         let intro = build_intro_prompt(
@@ -538,7 +536,7 @@ impl Switchboard {
                 exact_caller_transcript: text.to_owned(),
                 ..TransferContext::default()
             },
-            &project,
+            project,
             plan.prepare_report.as_ref(),
         );
         if !self

@@ -214,6 +214,12 @@ fn a_frame_that_is_no_command_is_unreadable_in_one_of_three_ways() {
         ("not json", UnreadableFrame::NotJson),
         ("", UnreadableFrame::NotJson),
         (r#"{"type":"ping""#, UnreadableFrame::NotJson),
+        // A typed draft with a lone surrogate: `JSON.stringify` writes the
+        // escape, and the whole frame is unreadable, with no id to answer by.
+        (
+            r#"{"type":"typed_turn","id":"typed-1","generation":1,"text":"\ud83d"}"#,
+            UnreadableFrame::NotJson,
+        ),
         ("null", UnreadableFrame::NotAnObject),
         ("42", UnreadableFrame::NotAnObject),
         (r#""ping""#, UnreadableFrame::NotAnObject),

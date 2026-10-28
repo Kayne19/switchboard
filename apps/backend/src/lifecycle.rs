@@ -538,7 +538,8 @@ impl Coordinator {
 
     /// The caller is back on the operator: the project, its model, session,
     /// thinking, and catalog are gone with its leg, and so is its token. The
-    /// line takes the operator's identity at the same generation.
+    /// line takes the operator's identity at the same generation, in
+    /// whatever phase it is in.
     pub fn return_to_operator(&self) {
         self.step(Event::ReturnToOperator)
             .expect("a return to the operator is admitted in every phase");
@@ -566,10 +567,6 @@ impl Coordinator {
                 .identity
                 .clone())
         })
-    }
-
-    pub fn is_candidate(&self) -> bool {
-        self.linearize(|state| matches!(state.line, Line::Starting { .. }))
     }
 
     /// Register a resident session that may continue while another agent is
@@ -774,6 +771,7 @@ impl Coordinator {
 
     /// Adopts the staged candidate if it is the leg `token` names: the PBX
     /// once its intro turn ends, or a sign of life from the candidate itself.
+    /// Whichever of the two lands second is answered as the same adoption.
     pub fn adopt_candidate(&self, token: &str) -> Result<LegIdentity, LifecycleError> {
         let intro = self.next_operation.fetch_add(1, Ordering::Relaxed);
         self.linearize(|state| {

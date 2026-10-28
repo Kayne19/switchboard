@@ -26,6 +26,10 @@ Playwright's WebKit is a Linux build. It is not iPadOS Safari:
 - It has no audio session, no autoplay policy of the iPad's, no real touch,
   and no Safari toolbars. The iPad's display is OLED: a fill a few levels
   above black can read as black there.
+- Only a gesture's own `play()` unlocks the single audio element, and
+  Playwright cannot make a real gesture. A tap during the first reply's
+  opening must unlock it, so the reply plays without a second tap (item 2
+  of the checklist, the first reply after page load).
 
 So the device checklist below stays.
 
@@ -60,9 +64,16 @@ change; `scripts/check_hygiene.mjs` refuses the one without the other.
 
 ## Engine-specific code in the tree
 
+`scripts/check_hygiene.mjs` reads this table. Each row starts with the
+repo-relative file as its first code span, and every `-webkit-` name in its
+Where and What cells is a claim that the file uses it. The script refuses a
+`-webkit-` name (or its camelCase style key, such as `WebkitLineClamp`) used in
+`apps/frontend/src` that no row lists for its file, and a row that lists one its
+file does not use.
+
 | Where | What | Why |
 |---|---|---|
-| `apps/frontend/src/styles/index.css`, `.calendar-event__title` | `display: -webkit-box` with `-webkit-line-clamp` | the prefixed form is the one both engines support for clamping lines |
+| `apps/frontend/src/styles/index.css`, `.calendar-event__title` | `display: -webkit-box` with `-webkit-box-orient` and `-webkit-line-clamp` | the prefixed form is the one both engines support for clamping lines |
 | `apps/frontend/src/styles/index.css`, `::-webkit-scrollbar` beside `scrollbar-width: none` | prefixed scrollbar hiding | Safari before 18.2 has no `scrollbar-width` |
 | `apps/frontend/src/debug/debug.css`, `summary::-webkit-details-marker` beside `list-style: none` (debug page only) | prefixed disclosure-marker hiding | WebKit draws a `<summary>`'s triangle through this pseudo-element, which `list-style: none` does not reach in every Safari the iPad may run |
 
@@ -86,7 +97,9 @@ Note the iPadOS version in the pull request.
    says HANDS-FREE, and the wake word still makes a turn. Ask to be put
    through to a project, and later back to the operator: after each
    hand-off MODE still says HANDS-FREE, the microphone light stays on, and
-   the wake word makes a turn with the new agent. On a fresh page, tap MODE,
+   the wake word makes a turn with the new agent. A regression guard, not proof
+   that the guarded branch ran: master gives the same result, so a pass
+   shows only that the page still recovers. On a fresh page, tap MODE,
    allow the microphone, and leave Safari at once. Come back: MODE says
    PUSH-TO-TALK, the status line shows no error, and the next MODE listens.
 5. Captions: the answer card's text follows what is said.

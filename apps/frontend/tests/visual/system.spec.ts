@@ -76,7 +76,7 @@ test('every control in the system view draws the page\'s focus ring', async ({ p
   const server = new DisplayFixtureServer({ initialGeneration: 3 });
   try {
     await openSystem(page, server);
-    for (const selector of ['.system__exit', 'select[name="route"]', 'select[name="model"]', 'select[name="thinking"]', '.system__hangup']) {
+    for (const selector of ['.system__header .return-control', 'select[name="route"]', 'select[name="model"]', 'select[name="thinking"]', '.system__hangup']) {
       await page.locator(`[data-scene="system"] ${selector}`).focus();
       // Focus from script draws :focus-visible only where the last input was the keyboard.
       await page.keyboard.press('Shift');
@@ -136,9 +136,9 @@ test('Esc and EXIT leave the system view for auto, and the report says so', asyn
     await expect(page.locator('.stage')).toHaveAttribute('data-scene-kind', 'training');
     await expect.poll(() => reportedView(server)).toBe('auto');
 
-    server.broadcast({ type: 'view', target: 'system', reason: '' });
+    server.broadcast({ type: 'view', target: 'system' });
     await expect(page.locator('.stage')).toHaveAttribute('data-view', 'system');
-    await page.locator('[data-scene="system"] .system__exit').click();
+    await page.locator('[data-scene="system"] .system__header .return-control').click();
     await expect(page.locator('.stage')).toHaveAttribute('data-view', 'auto');
     await expect.poll(() => reportedView(server)).toBe('auto');
   } finally {

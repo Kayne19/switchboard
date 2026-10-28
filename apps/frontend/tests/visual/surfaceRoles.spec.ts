@@ -30,7 +30,7 @@ const unnamed = () =>
 // view; a rule that places what a surface holds in a row of its grid
 // (`> *`) placed the button in that row too, and cut it to the row.
 const uncovered = () =>
-  [...document.querySelectorAll('.focusable-content__expand')].flatMap((button) => {
+  [...document.querySelectorAll('.expandable-surface__expand')].flatMap((button) => {
     const own = button.getBoundingClientRect();
     const surface = button.parentElement!.getBoundingClientRect();
     const off = Math.max(...(['top', 'right', 'bottom', 'left'] as const).map((side) => Math.abs(own[side] - surface[side])));
@@ -64,6 +64,6 @@ test('the surface opens its object in focus from its own button, by key and by a
   await expect(page.locator('.focus-layer')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.locator('.focus-layer')).toHaveCount(0);
-  await page.locator('.content-main .focusable-content').first().click({ position: { x: 40, y: 40 } });
+  await page.locator('.content-main .expandable-surface').first().click({ position: { x: 40, y: 40 } });
   await expect(page.locator('.focus-layer')).toBeVisible();
 });

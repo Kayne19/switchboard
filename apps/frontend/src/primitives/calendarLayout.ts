@@ -1,5 +1,5 @@
 import type { CalendarData, CalendarEvent } from '../controller/types';
-import { parseTimeValue } from '../controller/validation';
+import { parseTimeValue } from '../controller/validation/time';
 import { clockText, dayText, monthName, weekdayOf, type CivilDay } from './timeLabels';
 
 // Where every part of a calendar goes (docs/display-tool.md, "calendar"),

@@ -39,7 +39,7 @@ async fn shutdown_notifies_upgraded_connections_before_reaping_the_pbx() {
 #[tokio::test]
 async fn the_candidate_clear_notice_says_how_the_candidate_ended() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     begin_alpha_candidate(&state, "alpha-leg");
     let frames = frames_until(&mut connection, "candidate").await;
     assert_eq!(frames.last().unwrap()["route"], "alpha");

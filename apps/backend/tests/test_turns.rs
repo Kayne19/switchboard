@@ -2,7 +2,7 @@ use super::*;
 use crate::app_state::AppState;
 use crate::app_state::{
     assert_lifecycle_consistent, debug_events, next_event_of, scratch_root, state, state_on,
-    state_with_agents, state_with_agents_options, until_debug,
+    state_with_agents, state_with_agents_options, state_with_jev, until_debug,
 };
 use crate::audio::{Speaker, TestTtsGate};
 use crate::browser::PageFeed;
@@ -11,7 +11,7 @@ use crate::caller_input::assert_dropped_with_notice;
 use crate::delivery::Event;
 use crate::host_turns::{autonomous_turn, handle_project_turn};
 use crate::hosts::{FakeHostAgent, Step};
-use crate::jev::fake_jev_client;
+use crate::jev::{fake_jev_client, test_client};
 use crate::module_calls::{diagram_show, module_call, request_to_speak};
 use crate::page_controls::cancel_active_operations;
 use crate::pbx::{Switchboard, OPERATOR};
@@ -55,7 +55,7 @@ async fn queued_turn_from_before_page_rescue_never_reaches_the_new_leg() {
 #[tokio::test]
 async fn a_non_steered_continue_uses_one_jev_decision_for_one_utterance() {
     let (client, requests, _responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let mut events = PageFeed::open(&state);
     let generation = state.0.coordinator.generation();
 
@@ -117,7 +117,7 @@ async fn a_stale_queued_turn_removes_its_retained_jev_decision() {
 #[tokio::test]
 async fn steer_rechecks_generation_under_the_active_session_guard() {
     let (client, _requests, responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let mut events = PageFeed::open(&state);
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
@@ -181,7 +181,7 @@ async fn an_utterance_steers_a_turn_that_holds_the_pbx_lock() {
     // wait on it, or the utterance is routed only after the turn ends and is
     // queued instead of steered.
     let (client, _requests, _responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let mut events = PageFeed::open(&state);
     let session = PiSession::start(
         vec!["sh".into(), "-c".into(), "sleep 60".into()],
@@ -235,7 +235,7 @@ async fn an_utterance_steers_a_turn_that_holds_the_pbx_lock() {
 #[tokio::test]
 async fn a_turn_dropped_by_a_rescue_before_it_is_registered_is_dropped_with_notice() {
     let state = state();
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     // Hold the registry a turn joins when it is spawned, so a rescue can land
     // after the turn passed its stamp check and before it is registered.
     let registry = state.0.active_operations.lock().await;
@@ -282,7 +282,7 @@ async fn both_routing_authorities_down_emit_a_page_error_without_audio() {
         registry,
         std::sync::Arc::new(prewarm),
     ));
-    let (mut connection, _snapshot, _watermark) = state.register_connection().await;
+    let (mut connection, _) = state.register_connection().await;
     let generation = state.0.coordinator.generation();
     state.0.turns.routed_decisions.lock().await.insert(
         "down".into(),
@@ -320,7 +320,7 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
         "cwd": "/srv/alpha",
     }))
     .unwrap()]);
-    let state = state_with_jev(client, registry);
+    let state = sh_state_with_jev(client, registry);
     let host = state.0.switchboard.lock().await.hosts();
     let listed = std::sync::Arc::new(tokio::sync::Notify::new());
     let listed_for_host = listed.clone();
@@ -359,8 +359,8 @@ async fn a_slow_desk_host_does_not_hold_the_pbx_lock_during_routing_summary() {
 #[tokio::test]
 async fn routing_after_a_new_leg_sees_the_screen_the_gate_marked_stale() {
     let (client, _, _) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
-    let (connection, _snapshot, _watermark) = state.register_connection().await;
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
+    let (connection, _) = state.register_connection().await;
     crate::browser::handle_text_frame(
         &state,
         connection.epoch,
@@ -401,7 +401,7 @@ async fn takeover_desk_listing_does_not_hold_the_pbx_lock() {
         "cwd": "/srv/alpha",
     }))
     .unwrap()]);
-    let state = state_with_jev(client, registry);
+    let state = sh_state_with_jev(client, registry);
     let host = state.0.switchboard.lock().await.hosts();
     let listed = std::sync::Arc::new(tokio::sync::Notify::new());
     let listed_for_host = listed.clone();
@@ -502,18 +502,8 @@ async fn a_caller_message_steers_an_autonomous_project_turn() {
 #[tokio::test]
 async fn a_rescue_does_not_wait_for_the_host_to_answer_a_steer() {
     let root = scratch_root("steer-slow-host");
-    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
-        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
-    }));
-    // A half-open link: the steer is taken and never answered.
-    fake.on_command = Some(Box::new(|name, _| (name == "steer").then_some(None)));
-    let (state, host) = state_with_agents_and_jev(&root, fake);
-    let (_token, instance_id) = foreground_alpha_turn(&state).await;
-    alpha_host_event(
-        &state,
-        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-slow"}),
-    );
-    until_autonomous(&state, instance_id).await;
+    let (state, host, _instance_id) =
+        alpha_in_a_self_woken_run_on_a_silent_link(&root, "auto-slow").await;
     let generation = state.0.coordinator.generation();
     let dispatch = tokio::spawn({
         let state = state.clone();
@@ -522,13 +512,7 @@ async fn a_rescue_does_not_wait_for_the_host_to_answer_a_steer() {
                 .await;
         }
     });
-    timeout(Duration::from_secs(5), async {
-        while host.named("steer").is_empty() {
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
-    .await
-    .expect("the steer reached the host");
+    until_steers(&host, 1).await;
 
     // Hangup is the caller's way out; the steer's 30 s wait must not hold it.
     timeout(Duration::from_secs(1), cancel_active_operations(&state))
@@ -551,18 +535,8 @@ async fn a_rescue_does_not_wait_for_the_host_to_answer_a_steer() {
 #[tokio::test]
 async fn the_next_line_does_not_wait_for_the_host_to_answer_a_steer() {
     let root = scratch_root("steer-answer-off-worker");
-    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
-        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
-    }));
-    // A half-open link: each steer is taken and never answered.
-    fake.on_command = Some(Box::new(|name, _| (name == "steer").then_some(None)));
-    let (state, host) = state_with_agents_and_jev(&root, fake);
-    let (_token, instance_id) = foreground_alpha_turn(&state).await;
-    alpha_host_event(
-        &state,
-        json!({"kind":"turn_start","cause":"autonomous","turn_id":"auto-slow"}),
-    );
-    until_autonomous(&state, instance_id).await;
+    let (state, host, _instance_id) =
+        alpha_in_a_self_woken_run_on_a_silent_link(&root, "auto-slow").await;
     let generation = state.0.coordinator.generation();
 
     for (id, words) in [
@@ -576,13 +550,7 @@ async fn the_next_line_does_not_wait_for_the_host_to_answer_a_steer() {
         .await
         .expect("a line does not wait for the host to answer the steer before it");
     }
-    timeout(Duration::from_secs(5), async {
-        while host.named("steer").len() < 2 {
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
-    .await
-    .expect("both steers reached the host");
+    until_steers(&host, 2).await;
     assert_eq!(
         host.named("steer")
             .iter()
@@ -595,21 +563,57 @@ async fn the_next_line_does_not_wait_for_the_host_to_answer_a_steer() {
 
     // The link drops: both steers fail, and each line is queued as a turn.
     state.0.hosts.disconnect_fake("scriptorium");
-    timeout(Duration::from_secs(5), async {
-        while state.0.turns.queued_for_test() < 2 {
-            tokio::time::sleep(Duration::from_millis(2)).await;
-        }
-    })
-    .await
-    .expect("both lines were queued after their steers failed");
-    let mut receiver = state.0.turns.receiver.lock().await;
-    let receiver = receiver.as_mut().expect("no turn worker took the queue");
-    let order: Vec<String> = [receiver.try_recv(), receiver.try_recv()]
-        .into_iter()
-        .map(|queued| queued.expect("a queued line").0)
-        .collect();
+    until_queued(&state, 2).await;
     assert_eq!(
-        order,
+        queued_ids(&state).await,
+        vec!["first-line".to_owned(), "second-line".to_owned()]
+    );
+    state.0.switchboard.lock().await.shutdown().await;
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// A line that goes straight to the turn queue waits behind the unanswered
+/// steer of the line before it (`LineOrder::queue`), and the queue then
+/// holds the lines in the order they were spoken.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_queued_line_waits_behind_an_unanswered_steer_ahead_of_it() {
+    let root = scratch_root("queue-behind-steer");
+    let (state, host, instance_id) =
+        alpha_in_a_self_woken_run_on_a_silent_link(&root, "auto-ahead").await;
+    let generation = state.0.coordinator.generation();
+
+    timeout(
+        Duration::from_secs(1),
+        dispatch_routed_transcript(&state, "first-line", generation, "and the docs".into()),
+    )
+    .await
+    .expect("the first line does not wait for its steer's answer");
+    until_steers(&host, 1).await;
+    alpha_host_event(&state, json!({"kind":"turn_end","turn_id":"auto-ahead"}));
+    until_run_ended(&state, instance_id).await;
+
+    timeout(
+        Duration::from_secs(1),
+        dispatch_routed_transcript(&state, "second-line", generation, "and the tests".into()),
+    )
+    .await
+    .expect("the second line does not wait on the line ahead of it");
+    assert_eq!(
+        host.named("steer").len(),
+        1,
+        "the second line is not steered"
+    );
+    assert_eq!(
+        state.0.turns.queued_for_test(),
+        0,
+        "the second line waits behind the steer ahead of it"
+    );
+
+    state.0.hosts.disconnect_fake("scriptorium");
+    until_queued(&state, 2).await;
+    assert_eq!(
+        queued_ids(&state).await,
         vec!["first-line".to_owned(), "second-line".to_owned()]
     );
     state.0.switchboard.lock().await.shutdown().await;
@@ -1072,7 +1076,7 @@ async fn process_turns_settles_foreground_idle_once() {
             .await;
         assert_eq!(reply.route, "alpha");
     }
-    let (_connection, _, _) = state.register_connection().await;
+    let (_connection, _) = state.register_connection().await;
     let mut events = PageFeed::open(&state);
     while events.try_recv().is_ok() {}
     let id = "settled-idle-once";
@@ -1178,7 +1182,7 @@ async fn process_turns_settles_foreground_idle_once() {
 async fn a_routed_utterance_is_traced_from_jev_to_its_turn() {
     use crate::debug::DebugEvent;
     let (client, _requests, _responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let generation = state.0.coordinator.generation();
 
     dispatch_routed_transcript(&state, "clip-7", generation, "hello".into()).await;
@@ -1270,19 +1274,13 @@ async fn a_routed_utterance_is_traced_from_jev_to_its_turn() {
 #[tokio::test]
 async fn an_unavailable_jev_is_traced_as_the_fallback_rule() {
     use crate::debug::DebugEvent;
-    let client = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder(|_| async {
+    let client = test_client(|_| async {
         Err(crate::jev::JevError::Http {
             status: 503,
             body: "down".into(),
         })
     });
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
 
     route_transcript(&state, "clip-8", "hello").await;
 
@@ -1302,7 +1300,7 @@ async fn an_unavailable_jev_is_traced_as_the_fallback_rule() {
 #[tokio::test]
 async fn a_stale_routed_utterance_ends_its_trace() {
     let (client, _requests, _responded) = fake_jev_client();
-    let state = state_with_jev(client, Registry::new(vec![]));
+    let state = sh_state_with_jev(client, Registry::new(vec![]));
     let stamped = state.0.coordinator.generation();
     state.0.coordinator.begin_rescue("test rescue");
 
@@ -1657,15 +1655,9 @@ async fn assert_turn_at_rest(state: &AppState, id: &str) {
     assert!(state.0.coordinator.finish_operation(&probe));
 }
 
-fn state_with_jev(client: crate::jev::JevClient, registry: Registry) -> AppState {
+fn sh_state_with_jev(client: crate::jev::JevClient, registry: Registry) -> AppState {
     let config = crate::Config::for_tests(&[("SWITCHBOARD_PI_BINARY", "/bin/sh")]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("test catalog"),
-    );
-    let board = Switchboard::new_with_jev(&config, registry, std::sync::Arc::new(prewarm), client);
-    state_on(board)
+    state_with_jev(&config, registry, client)
 }
 
 /// A pi stand-in that answers every prompt with `reply`.
@@ -1705,6 +1697,79 @@ async fn until_autonomous(state: &AppState, instance_id: u64) {
     })
     .await
     .expect("the autonomous turn was admitted");
+}
+
+/// Alpha in a self-woken run (`turn_id`) on a half-open link: its host takes
+/// every steer and never answers it. Returns the state, the host's log and
+/// alpha's instance id.
+#[cfg(unix)]
+async fn alpha_in_a_self_woken_run_on_a_silent_link(
+    root: &std::path::Path,
+    turn_id: &str,
+) -> (AppState, crate::hosts::FakeLog, u64) {
+    let mut fake = FakeHostAgent::new(Box::new(|_, _| {
+        vec![Step::Event(json!({"kind":"text","text":"Alpha here."}))]
+    }));
+    fake.on_command = Some(Box::new(|name, _| (name == "steer").then_some(None)));
+    let (state, host) = state_with_agents_and_jev(root, fake);
+    let (_token, instance_id) = foreground_alpha_turn(&state).await;
+    alpha_host_event(
+        &state,
+        json!({"kind":"turn_start","cause":"autonomous","turn_id":turn_id}),
+    );
+    until_autonomous(&state, instance_id).await;
+    (state, host, instance_id)
+}
+
+/// Waits until `count` steers have reached the host.
+#[cfg(unix)]
+async fn until_steers(host: &crate::hosts::FakeLog, count: usize) {
+    timeout(Duration::from_secs(5), async {
+        while host.named("steer").len() < count {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the steers reached the host");
+}
+
+/// Waits until the self-woken run for `instance_id` has ended.
+#[cfg(unix)]
+async fn until_run_ended(state: &AppState, instance_id: u64) {
+    timeout(Duration::from_secs(1), async {
+        while state
+            .0
+            .host_turns
+            .holds_self_woken_for_test(instance_id)
+            .await
+        {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the self-woken run ended");
+}
+
+/// Waits until `count` lines are in the turn queue.
+#[cfg(unix)]
+async fn until_queued(state: &AppState, count: u64) {
+    timeout(Duration::from_secs(5), async {
+        while state.0.turns.queued_for_test() < count {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .expect("the lines were queued");
+}
+
+/// Takes the ids of the queued lines, in queue order.
+#[cfg(unix)]
+async fn queued_ids(state: &AppState) -> Vec<String> {
+    let mut receiver = state.0.turns.receiver.lock().await;
+    let receiver = receiver.as_mut().expect("no turn worker took the queue");
+    std::iter::from_fn(|| receiver.try_recv().ok())
+        .map(|queued| queued.0)
+        .collect()
 }
 
 /// The host settles the caller's turn and, at once, opens one nobody caused:

@@ -514,14 +514,10 @@ impl Line {
                 }
                 _ => unchanged(),
             },
-            // A call quiescing comes to rest on the operator. A turn still
-            // running (the operator is being told why the caller came back)
-            // stays open until it ends, and a staged candidate stays staged:
-            // it is not on the line yet.
-            Event::ReturnToOperator => match self {
-                Self::Quiescing { leg } => Ok((Self::at_rest(leg.returned()), None)),
-                _ => Ok((self.with_leg(leg.returned()), None)),
-            },
+            // The phase is kept: a running turn stays open, a staged
+            // candidate stays staged, and only the rescue's own settle ends
+            // a quiet (#462).
+            Event::ReturnToOperator => Ok((self.with_leg(leg.returned()), None)),
             Event::BeginCandidate(mut candidate) => {
                 match self {
                     Self::Shutdown { .. } => return Err(LifecycleError::Shutdown),
@@ -567,8 +563,11 @@ impl Line {
             // The candidate's own sign of life, or the PBX once its intro
             // turn ends. The caller's turn that ran the transfer, if still
             // open, is replaced by the intro: its owner's later
-            // `finish_operation` finds nothing to close.
+            // `finish_operation` finds nothing to close. The two arrive from
+            // different tasks, so the one that lands second finds the leg it
+            // names adopted already and is the same adoption (#449).
             Event::Adopt { token, intro } => match self {
+                Self::Adopted { leg, .. } if leg.identity.token == token => unchanged(),
                 Self::Starting {
                     leg,
                     candidate,

@@ -46,9 +46,11 @@ type Phase =
   | "lease_finishing";
 
 type Event =
-  | "enable"
-  | "enable, ptt held"
-  | "disable"
+  /** MODE: starts hands-free, or stops it where it is on. */
+  | "MODE"
+  | "MODE, ptt held"
+  /** The page stops hands-free, here for a hangup. */
+  | "stop"
   | "ptt press"
   | "ptt end"
   /** An epoch that hands the call to another leg or agent (a transfer, a return to the operator). */
@@ -124,6 +126,7 @@ const NOTHING: Seen = {
 };
 
 const OFF = "Hands-free is off.";
+const HUNG_UP = "Hands-free stopped for hangup.";
 const LISTENING = "Listening locally for “Damocles”.";
 const PAUSED = "Hands-free paused for push-to-talk.";
 const WAKE = "Wake word heard. Speak now.";
@@ -328,21 +331,24 @@ async function reach(phase: Phase): Promise<Harness> {
       break;
     case "error":
       h.holdPtt(true);
-      await h.instance.enable();
+      h.instance.toggle();
+      await settle();
       h.holdPtt(false);
       break;
     case "starting":
       h.holdModule();
-      void h.instance.enable();
+      h.instance.toggle();
       await settle();
       break;
     case "starting_at_grant":
       h.holdGrant();
-      void h.instance.enable();
+      h.instance.toggle();
       await settle();
       break;
     default: {
-      expect(await h.instance.enable()).toBe(true);
+      h.instance.toggle();
+      await settle();
+      expect(h.instance.currentState).toBe("armed");
       if (phase === "paused_ptt") {
         h.holdPtt(true);
         h.instance.pauseForPtt();
@@ -373,15 +379,15 @@ async function reach(phase: Phase): Promise<Harness> {
 
 async function apply(h: Harness, event: Event): Promise<void> {
   switch (event) {
-    case "enable":
-      void h.instance.enable();
+    case "MODE":
+      h.instance.toggle();
       return settle();
-    case "enable, ptt held":
+    case "stop":
+      return h.instance.stop("hangup");
+    case "MODE, ptt held":
       h.holdPtt(true);
-      void h.instance.enable();
+      h.instance.toggle();
       return settle();
-    case "disable":
-      return h.instance.disable();
     case "ptt press":
       h.holdPtt(true);
       return h.instance.pauseForPtt();
@@ -493,9 +499,9 @@ const LET_GO = { released: 1, closed: 1, resets: [1, 1] as [number, number] };
 const QUIET = { resets: [1, 1] as [number, number] };
 
 const rows: Row[] = [
-  { from: "off", event: "enable", seen: { published: ["starting", "armed"], said: LISTENING, asked: 1, ...QUIET }, then: "armed" },
-  { from: "off", event: "enable, ptt held", seen: { published: ["error"], said: PTT_FIRST }, then: "error" },
-  { from: "off", event: "disable", seen: { published: ["off"], said: OFF, ...QUIET }, then: "off" },
+  { from: "off", event: "MODE", seen: { published: ["starting", "armed"], said: LISTENING, asked: 1, ...QUIET }, then: "armed" },
+  { from: "off", event: "MODE, ptt held", seen: { published: ["error"], said: PTT_FIRST }, then: "error" },
+  { from: "off", event: "stop", seen: { published: ["off"], said: HUNG_UP, ...QUIET }, then: "off" },
   { from: "off", event: "ptt press", seen: {}, then: "off" },
   { from: "off", event: "ptt end", seen: {}, then: "off" },
   { from: "off", event: "epoch, rescue", seen: {}, then: "off" },
@@ -507,9 +513,9 @@ const rows: Row[] = [
   { from: "off", event: "speech start", seen: {}, then: "off" },
   { from: "off", event: "detector fails", seen: {}, then: "off" },
 
-  { from: "error", event: "enable", seen: { published: ["starting", "armed"], said: LISTENING, asked: 1, ...QUIET }, then: "armed" },
-  { from: "error", event: "enable, ptt held", seen: { published: ["error"], said: PTT_FIRST }, then: "error" },
-  { from: "error", event: "disable", seen: { published: ["off"], said: OFF, ...QUIET }, then: "off" },
+  { from: "error", event: "MODE", seen: { published: ["starting", "armed"], said: LISTENING, asked: 1, ...QUIET }, then: "armed" },
+  { from: "error", event: "MODE, ptt held", seen: { published: ["error"], said: PTT_FIRST }, then: "error" },
+  { from: "error", event: "stop", seen: { published: ["off"], said: HUNG_UP, ...QUIET }, then: "off" },
   { from: "error", event: "ptt press", seen: {}, then: "error" },
   { from: "error", event: "epoch, rescue", seen: {}, then: "error" },
   { from: "error", event: "epoch, handoff", seen: {}, then: "error" },
@@ -519,8 +525,7 @@ const rows: Row[] = [
   // releases it itself when its last wait ends (#261).
   { from: "starting", event: "start completes", seen: { published: ["armed"], said: LISTENING, ...QUIET }, then: "armed" },
   { from: "starting", event: "start fails", seen: { published: ["error"], said: START_FAILED, released: 1, closed: 1, ...QUIET }, then: "error" },
-  { from: "starting", event: "enable", seen: {}, then: "starting" },
-  { from: "starting", event: "disable", seen: { published: ["off"], said: OFF, ...QUIET }, then: "off" },
+  { from: "starting", event: "MODE", seen: { published: ["off"], said: OFF, ...QUIET }, then: "off" },
   { from: "starting", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...QUIET }, then: "paused_ptt" },
   { from: "starting", event: "epoch, rescue", seen: { published: ["off"], said: CALL_CHANGED, ...QUIET }, then: "off" },
   { from: "starting", event: "epoch, handoff", seen: {}, then: "starting" },
@@ -534,7 +539,7 @@ const rows: Row[] = [
 
   { from: "paused_ptt", event: "ptt end", seen: { published: ["starting", "armed"], said: LISTENING, asked: 1, ...QUIET }, then: "armed" },
   { from: "paused_ptt", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...QUIET }, then: "paused_ptt" },
-  { from: "paused_ptt", event: "disable", seen: { published: ["off"], said: OFF, ...QUIET }, then: "off" },
+  { from: "paused_ptt", event: "MODE", seen: { published: ["off"], said: OFF, ...QUIET }, then: "off" },
   { from: "paused_ptt", event: "epoch, rescue", seen: { published: ["off"], said: CALL_CHANGED, ...QUIET }, then: "off" },
   { from: "paused_ptt", event: "epoch, handoff", seen: {}, then: "paused_ptt" },
   { from: "paused_ptt", event: "detector fails", seen: { published: ["error"], said: DETECTOR_FAILED, ...QUIET }, then: "error" },
@@ -542,8 +547,7 @@ const rows: Row[] = [
   { from: "paused_ptt", event: "no reply", seen: {}, then: "paused_ptt" },
   { from: "paused_ptt", event: "frame", seen: {}, then: "paused_ptt" },
 
-  { from: "armed", event: "enable", seen: {}, then: "armed" },
-  { from: "armed", event: "disable", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
+  { from: "armed", event: "MODE", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
   { from: "armed", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...LET_GO }, then: "paused_ptt" },
   { from: "armed", event: "epoch, rescue", seen: { published: ["off"], said: CALL_CHANGED, ...LET_GO }, then: "off" },
   { from: "armed", event: "epoch, handoff", seen: { published: ["armed"], said: HANDED_OFF, ...QUIET }, then: "armed" },
@@ -566,7 +570,7 @@ const rows: Row[] = [
   { from: "wake_grace", event: "grace lapses", seen: { published: ["armed"], said: GRACE_LAPSED, ...QUIET }, then: "armed" },
   { from: "wake_grace", event: "wake", seen: {}, then: "wake_grace" },
   { from: "wake_grace", event: "follow-up", seen: { published: ["lease"], said: LEASE, resets: [0, 1] }, then: "lease" },
-  { from: "wake_grace", event: "disable", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
+  { from: "wake_grace", event: "MODE", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
   { from: "wake_grace", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...LET_GO }, then: "paused_ptt" },
   { from: "wake_grace", event: "epoch, handoff", seen: { published: ["armed"], said: HANDED_OFF, ...QUIET }, then: "armed" },
   { from: "wake_grace", event: "frame", seen: { heard: 1 }, then: "wake_grace" },
@@ -579,7 +583,7 @@ const rows: Row[] = [
   // The recorder stopped by itself before anything was recorded.
   { from: "capturing", event: "recorder stops", seen: { published: ["armed"], said: NOTHING_KEPT, ...QUIET }, then: "armed" },
   { from: "capturing", event: "recorder error", seen: { published: ["error"], said: RECORDING_FAILED, ...LET_GO }, then: "error" },
-  { from: "capturing", event: "disable", seen: { published: ["off"], said: OFF, stops: 1, ...LET_GO }, then: "off" },
+  { from: "capturing", event: "MODE", seen: { published: ["off"], said: OFF, stops: 1, ...LET_GO }, then: "off" },
   { from: "capturing", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, stops: 1, ...LET_GO }, then: "paused_ptt" },
   { from: "capturing", event: "epoch, rescue", seen: { published: ["off"], said: CALL_CHANGED, stops: 1, ...LET_GO }, then: "off" },
   { from: "capturing", event: "epoch, handoff", seen: { published: ["armed"], said: HANDED_OFF, stops: 1, ...QUIET }, then: "armed" },
@@ -593,7 +597,7 @@ const rows: Row[] = [
   { from: "finishing", event: "recorder stops", seen: { published: ["awaiting_response"], said: SENT, clips: 1 }, then: "awaiting_response" },
   { from: "finishing", event: "recorder stops, clip refused", seen: { published: ["armed"], said: NOT_SENT, clips: 1, ...QUIET }, then: "armed" },
   { from: "finishing", event: "recorder error", seen: { published: ["error"], said: RECORDING_FAILED, ...LET_GO }, then: "error" },
-  { from: "finishing", event: "disable", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
+  { from: "finishing", event: "MODE", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
   // A second stop before the recorder's `stop` event changes nothing: that
   // event ends the capture and sends its clip.
   { from: "finishing", event: "speech end", seen: {}, then: "finishing" },
@@ -610,7 +614,7 @@ const rows: Row[] = [
   { from: "awaiting_response", event: "speech start", seen: {}, then: "awaiting_response" },
   { from: "awaiting_response", event: "late stop", seen: {}, then: "awaiting_response" },
   { from: "awaiting_response", event: "frame", seen: {}, then: "awaiting_response" },
-  { from: "awaiting_response", event: "disable", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
+  { from: "awaiting_response", event: "MODE", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
   { from: "awaiting_response", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...LET_GO }, then: "paused_ptt" },
   { from: "awaiting_response", event: "epoch, rescue", seen: { published: ["off"], said: CALL_CHANGED, ...LET_GO }, then: "off" },
   { from: "awaiting_response", event: "epoch, handoff", seen: { published: ["armed"], said: HANDED_OFF, ...QUIET }, then: "armed" },
@@ -624,7 +628,7 @@ const rows: Row[] = [
   { from: "lease", event: "wake", seen: {}, then: "lease" },
   { from: "lease", event: "speech end", seen: {}, then: "lease" },
   { from: "lease", event: "frame", seen: {}, then: "lease" },
-  { from: "lease", event: "disable", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
+  { from: "lease", event: "MODE", seen: { published: ["off"], said: OFF, ...LET_GO }, then: "off" },
   { from: "lease", event: "ptt press", seen: { published: ["paused_ptt"], said: PAUSED, ...LET_GO }, then: "paused_ptt" },
   { from: "lease", event: "epoch, rescue", seen: { published: ["off"], said: CALL_CHANGED, ...LET_GO }, then: "off" },
   { from: "lease", event: "epoch, handoff", seen: { published: ["armed"], said: HANDED_OFF, ...QUIET }, then: "armed" },
@@ -638,7 +642,7 @@ const rows: Row[] = [
   { from: "lease_capturing", event: "recorder stops", seen: { published: ["armed"], said: NOTHING_KEPT, ...QUIET }, then: "armed" },
   { from: "lease_capturing", event: "recorder error", seen: { published: ["error"], said: RECORDING_FAILED, ...LET_GO }, then: "error" },
   { from: "lease_capturing", event: "follow-up", seen: {}, then: "lease_capturing" },
-  { from: "lease_capturing", event: "disable", seen: { published: ["off"], said: OFF, stops: 1, ...LET_GO }, then: "off" },
+  { from: "lease_capturing", event: "MODE", seen: { published: ["off"], said: OFF, stops: 1, ...LET_GO }, then: "off" },
   { from: "lease_capturing", event: "epoch, handoff", seen: { published: ["armed"], said: HANDED_OFF, stops: 1, ...QUIET }, then: "armed" },
 ];
 

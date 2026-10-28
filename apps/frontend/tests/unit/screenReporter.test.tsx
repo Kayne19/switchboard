@@ -14,53 +14,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ControllerProvider } from '../../src/controller/context';
 import { RuntimeIntegration } from '../../src/integration/runtime';
 import { helloAck, statusMessage } from '../fixtures/serverMessages';
+import { FakeSocket } from './fakeSocket';
 
 type Report = Record<string, unknown> & { object_ids?: string[] };
-
-class FakeSocket {
-  static all: FakeSocket[] = [];
-  readyState = 0;
-  binaryType = 'blob';
-  sent: unknown[] = [];
-  onopen: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-
-  constructor(readonly url: string) {
-    FakeSocket.all.push(this);
-  }
-
-  send(data: unknown) {
-    this.sent.push(data);
-  }
-
-  close() {
-    this.readyState = 3;
-  }
-
-  reports(): Report[] {
-    return this.sent
-      .filter((frame): frame is string => typeof frame === 'string')
-      .map((frame) => JSON.parse(frame) as Report)
-      .filter((frame) => frame.type === 'screen_state');
-  }
-}
 
 let host: HTMLDivElement;
 let root: Root;
 
-function socket(): FakeSocket {
-  return FakeSocket.all.at(-1)!;
-}
+const reports = (each: FakeSocket) => each.sentOfType('screen_state') as unknown as Report[];
 
-function frame(message: object): MessageEvent {
-  return { data: JSON.stringify(message) } as MessageEvent;
+function socket(): FakeSocket {
+  return FakeSocket.latest();
 }
 
 async function receive(...messages: object[]) {
   await act(async () => {
-    for (const message of messages) socket().onmessage?.(frame(message));
+    for (const message of messages) socket().receive(message);
   });
 }
 
@@ -82,15 +51,14 @@ function unknown(seq?: number) {
 
 async function open() {
   await act(async () => {
-    socket().readyState = 1;
-    socket().onopen?.({} as Event);
+    socket().open();
   });
   await receive(helloAck());
 }
 
 // Every report on every socket this page opened, oldest first.
 function sent(): Report[] {
-  return FakeSocket.all.flatMap((each) => each.reports());
+  return FakeSocket.instances.flatMap((each) => reports(each));
 }
 
 // What the reports sent since `mark` show, as object ids.
@@ -154,8 +122,7 @@ async function awaiting() {
 
 async function lineDown() {
   await act(async () => {
-    socket().readyState = 3;
-    socket().onclose?.({} as CloseEvent);
+    socket().drop();
   });
 }
 
@@ -169,8 +136,7 @@ async function reconnect() {
 
 beforeEach(async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-  FakeSocket.all = [];
-  vi.stubGlobal('WebSocket', FakeSocket);
+  FakeSocket.install();
   vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
   window.history.replaceState(null, '', '/?ws=ws://switchboard.test/ws');
@@ -340,8 +306,8 @@ describe('screen reports: phase x event', () => {
       // The agent's `view` moves the screen and moves it back within one
       // round trip; `view` frames carry no seq, so the report comes back to
       // the one on the wire.
-      await receive({ type: 'view', target: 'comms', reason: '' });
-      await receive({ type: 'view', target: 'auto', reason: '' });
+      await receive({ type: 'view', target: 'comms' });
+      await receive({ type: 'view', target: 'auto' });
       await receive(ack);
       // The page shows what `onTheWire` says, so nothing more goes.
       expect(onTheWire?.view).toBe('auto');
@@ -407,8 +373,8 @@ describe('screen reports: phase x event', () => {
       await reconnect();
       await receive({ type: 'epoch', generation: 1 }, status);
       await settle();
-      expect(socket()).not.toBe(FakeSocket.all[0]);
-      expect(socket().reports().length).toBeGreaterThan(0);
+      expect(socket()).not.toBe(FakeSocket.instances[0]);
+      expect(reports(socket()).length).toBeGreaterThan(0);
       expect(sent().slice(mark).every((report) => report.generation === 1)).toBe(true);
     });
   });
@@ -560,8 +526,8 @@ describe('screen reports: phase x event', () => {
       await reconnect();
       await receive({ type: 'epoch', generation: 1 }, status, show('a', 9));
       await settle();
-      expect(passedBeforeCarried(socket().reports(), [5])).toEqual([]);
-      expect(socket().reports().at(-1)?.applied_seq).toBe(9);
+      expect(passedBeforeCarried(reports(socket()), [5])).toEqual([]);
+      expect(reports(socket()).at(-1)?.applied_seq).toBe(9);
     });
   });
 

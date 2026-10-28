@@ -778,6 +778,26 @@ pub(crate) fn begin_alpha_candidate(state: &AppState, token: &str) {
         .unwrap();
 }
 
+/// The application around a board whose Jev is `jev`, with the models unavailable.
+#[cfg(test)]
+pub(crate) fn state_with_jev(
+    config: &crate::Config,
+    registry: Registry,
+    jev: crate::jev::JevClient,
+) -> AppState {
+    let prewarm = crate::prewarm::Prewarm::settled(
+        config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("test catalog"),
+    );
+    state_on(Switchboard::new_with_jev(
+        config,
+        registry,
+        std::sync::Arc::new(prewarm),
+        jev,
+    ))
+}
+
 /// The application around `board`, with no speech-to-text configured.
 #[cfg(test)]
 pub(crate) fn state_on(board: Switchboard) -> AppState {

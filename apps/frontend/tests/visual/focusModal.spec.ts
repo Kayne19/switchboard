@@ -35,13 +35,13 @@ for (const geometry of FRAME_GEOMETRIES) {
 
     test('focus moves into the layer, Tab stays in it, and closing gives focus back to the surface that opened it', async ({ page }) => {
       await openScene(page, 'results');
-      const surface = page.locator('.content-main .focusable-content__expand').first();
+      const surface = page.locator('.content-main .expandable-surface__expand').first();
       await surface.focus();
       await page.keyboard.press('Enter');
       await expect(page.locator('.focus-layer')).toBeVisible();
-      await expect(page.locator('.focus-layer__return')).toBeFocused();
+      await expect(page.locator('.focus-layer .return-control')).toBeFocused();
       // Opened from the keyboard, RETURN draws the page's ring.
-      expect(await page.locator('.focus-layer__return').evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+      expect(await page.locator('.focus-layer .return-control').evaluate((element) => element.matches(':focus-visible'))).toBe(true);
       // Two walks round the layer's controls: Tab never reaches behind it
       // (past its last control focus leaves for the browser, as a native
       // modal dialog's does, and comes back into the layer).
@@ -63,12 +63,12 @@ for (const geometry of FRAME_GEOMETRIES) {
 
     test('focus the agent opens while a surface holds focus gives it back to that surface', async ({ page }) => {
       await openScene(page, 'results');
-      const surface = page.locator('.content-main .focusable-content__expand').first();
+      const surface = page.locator('.content-main .expandable-surface__expand').first();
       await surface.focus();
       // The agent's update, not a key or a click: React runs its passive
       // effects after the browser has blurred the now inert surface.
       await runActions(page, [{ op: 'focus', id: 'test-matrix' }]);
-      await expect(page.locator('.focus-layer__return')).toBeFocused();
+      await expect(page.locator('.focus-layer .return-control')).toBeFocused();
       await page.keyboard.press('Escape');
       await expect(page.locator('.focus-layer')).toHaveCount(0);
       await expect(surface).toBeFocused();
@@ -77,10 +77,10 @@ for (const geometry of FRAME_GEOMETRIES) {
     test('focus the agent opens takes focus in, and gives it back to nothing', async ({ page }) => {
       await openScene(page, 'results');
       await runActions(page, [{ op: 'focus', id: 'test-matrix' }]);
-      await expect(page.locator('.focus-layer__return')).toBeFocused();
+      await expect(page.locator('.focus-layer .return-control')).toBeFocused();
       // No key was pressed: no ring on RETURN until one is.
-      expect(await page.locator('.focus-layer__return').evaluate((element) => element.matches(':focus-visible'))).toBe(false);
-      await page.locator('.focus-layer__return').click();
+      expect(await page.locator('.focus-layer .return-control').evaluate((element) => element.matches(':focus-visible'))).toBe(false);
+      await page.locator('.focus-layer .return-control').click();
       await expect(page.locator('.focus-layer')).toHaveCount(0);
       expect(await where(page)).toBe('nowhere');
     });
@@ -94,10 +94,10 @@ test.describe('normal motion', () => {
   test('closing gives focus back to the surface that opened it', async ({ page }) => {
     await openScene(page, 'results');
     await page.waitForTimeout(600);
-    const surface = page.locator('.content-main .focusable-content__expand').first();
+    const surface = page.locator('.content-main .expandable-surface__expand').first();
     await surface.focus();
     await page.keyboard.press('Enter');
-    await expect(page.locator('.focus-layer__return')).toBeFocused();
+    await expect(page.locator('.focus-layer .return-control')).toBeFocused();
     await page.waitForTimeout(600);
     await page.keyboard.press('Escape');
     await expect(page.locator('.focus-layer')).toHaveCount(0);
@@ -107,10 +107,10 @@ test.describe('normal motion', () => {
   test('closing while the layer still grows gives focus back once the slot shows again', async ({ page }) => {
     await openScene(page, 'results');
     await page.waitForTimeout(600);
-    const surface = page.locator('.content-main .focusable-content__expand').first();
+    const surface = page.locator('.content-main .expandable-surface__expand').first();
     await surface.focus();
     await page.keyboard.press('Enter');
-    await expect(page.locator('.focus-layer__return')).toBeFocused();
+    await expect(page.locator('.focus-layer .return-control')).toBeFocused();
     await page.waitForTimeout(100);
     await page.keyboard.press('Escape');
     await expect(page.locator('.focus-layer')).toHaveCount(0);
@@ -136,7 +136,7 @@ test('a closed demo panel keeps its controls out of the tab order', async ({ pag
   // Behind the focus layer, a modal, the open panel is inert and the scene keys wait.
   const kind = await page.evaluate(() => document.querySelector('.stage')?.getAttribute('data-scene-kind'));
   await runActions(page, [{ op: 'focus', id: 'test-matrix' }]);
-  await expect(page.locator('.focus-layer__return')).toBeFocused();
+  await expect(page.locator('.focus-layer .return-control')).toBeFocused();
   expect(await page.locator('.controller-panel').evaluate((element) => (element as HTMLElement).inert)).toBe(true);
   expect(await page.locator('.ir-drawer').evaluate((element) => (element as HTMLElement).inert)).toBe(true);
   await page.keyboard.press('j');

@@ -30,6 +30,8 @@ use serde::Deserialize;
 use serde_json::json;
 use std::future::Future;
 use tokio::sync::MutexGuard;
+use tokio::task::JoinError;
+use tracing::Instrument;
 
 pub(crate) fn current_status(state: &AppState) -> Status {
     state.0.coordinator.status()
@@ -423,6 +425,26 @@ impl Rescued {
     }
 }
 
+/// Runs a control's body on its own task and waits for it. hyper drops a
+/// handler's future when the client goes away while the response is
+/// pending (a reload, a suspended tab), and a control dropped between its
+/// rescue and its settle would leave the quiet with nothing to end it. The
+/// body runs to its settle whether or not anything reads its answer (#462).
+async fn detached<T: Send + 'static>(
+    body: impl Future<Output = T> + Send + 'static,
+) -> Result<T, JoinError> {
+    tokio::spawn(body.instrument(tracing::Span::current())).await
+}
+
+/// The answer to a control whose body panicked.
+fn did_not_finish(error: JoinError) -> Response {
+    tracing::error!(%error, "page control did not finish");
+    page_refusal(
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        "the control did not finish".into(),
+    )
+}
+
 /// `/connect`: cancel whatever is running, then run the PBX operation as a
 /// registered operation a newer rescue can cancel in turn, and deliver its
 /// reply.
@@ -522,6 +544,14 @@ pub(crate) async fn hangup(
         Ok(control) => control,
         Err(refused) => return refused.into_response(),
     };
+    detached(hang_up(state, control))
+        .await
+        .unwrap_or_else(did_not_finish)
+}
+
+/// `/hangup` once admitted: the rescue, the drop at the PBX, the line for
+/// the transcript, and the settle.
+async fn hang_up(state: AppState, control: Admitted) -> Response {
     // The process the rescue closed, and the leg the PBX then dropped.
     let (rescued, closed) = match control.rescue().await {
         Ok(rescued) => rescued,
@@ -645,11 +675,15 @@ pub(crate) async fn connect(
     // before taking the PBX lock; otherwise a direct connection can wait for
     // the very leg the caller is trying to leave.
     let board_state = state.clone();
-    let controlled = run_page_control(control, async move {
+    let controlled = match detached(run_page_control(control, async move {
         let mut board = board_state.0.switchboard.lock().await;
         board.dial(&req.project, &req.intent).await
-    })
-    .await;
+    }))
+    .await
+    {
+        Ok(controlled) => controlled,
+        Err(error) => Err(did_not_finish(error)),
+    };
     match controlled {
         Ok(reply) => {
             match &reply.error {
@@ -691,12 +725,14 @@ pub(crate) async fn thinking(
         Err(refused) => return refused.into_response(),
     };
     let redials = state.0.redial_planner();
-    let controlled =
-        run_redial_control(
-            control,
-            async move { redials.thinking_change(&req.level).await },
-        )
-        .await;
+    let controlled = match detached(run_redial_control(control, async move {
+        redials.thinking_change(&req.level).await
+    }))
+    .await
+    {
+        Ok(controlled) => controlled,
+        Err(error) => Err(did_not_finish(error)),
+    };
     match controlled {
         Ok(reply) => {
             let thinking = current_status(&state).thinking;
@@ -739,11 +775,14 @@ pub(crate) async fn model(
         Err(refused) => return refused.into_response(),
     };
     let redials = state.0.redial_planner();
-    let controlled = run_redial_control(
-        control,
-        async move { redials.model_change(&req.model).await },
-    )
-    .await;
+    let controlled = match detached(run_redial_control(control, async move {
+        redials.model_change(&req.model).await
+    }))
+    .await
+    {
+        Ok(controlled) => controlled,
+        Err(error) => Err(did_not_finish(error)),
+    };
     match controlled {
         Ok(reply) => {
             let model = current_status(&state).model_name;

@@ -4,6 +4,7 @@ import { fixtures } from '../../src/fixtures/scenes';
 import { besideVisuals, buildCompositionModel, deriveScreenState, VISUAL_TYPES } from '../../src/app/sceneModel';
 import { sceneKindOf } from './sceneKindOf';
 import type { ControllerAction, SceneObjectType } from '../../src/controller/types';
+import type { ViewName } from '../../src/protocol';
 
 const expected = {
   idle: 'idle',
@@ -131,21 +132,14 @@ describe('the view a screen-state report names is the one the page draws', () =>
   const chart: ControllerAction = { op: 'show', id: 'loss', type: 'chart', role: 'primary', data: { title: 'Loss', series: [] } };
   const stages = { empty: [] as ControllerAction[], chart: [chart] };
   // request -> stage -> [scene kind drawn, view reported]
-  const table: Record<string, Record<keyof typeof stages, [string, string]>> = {
+  const table: Record<ViewName, Record<keyof typeof stages, [string, string]>> = {
     auto: { empty: ['idle', 'auto'], chart: ['training', 'auto'] },
     visual: { empty: ['idle', 'auto'], chart: ['training', 'visual'] },
     comms: { empty: ['conversation', 'comms'], chart: ['conversation', 'comms'] },
     system: { empty: ['system', 'system'], chart: ['system', 'system'] },
     theater: { empty: ['idle', 'auto'], chart: ['theater', 'theater'] },
   };
-  // The older names the service and the page still take for the five.
-  const aliases: Record<string, keyof typeof table> = {
-    overview: 'auto', grid: 'auto', split: 'auto',
-    stage: 'visual', bay2: 'visual',
-    transcript: 'comms', bay3: 'comms',
-    magi: 'system', routing: 'system', bay1: 'system',
-  };
-  const requests = [...Object.keys(table).map((view) => [view, view] as const), ...Object.entries(aliases)];
+  const requests = (Object.keys(table) as ViewName[]).map((view) => [view, view] as const);
 
   for (const [request, view] of requests) {
     for (const stage of Object.keys(stages) as Array<keyof typeof stages>) {
@@ -164,7 +158,7 @@ describe('the view a screen-state report names is the one the page draws', () =>
     for (const [request] of requests) {
       for (const stage of Object.values(stages)) {
         const state = reduceActions(createInitialState(), [...stage, { op: 'set_view', view: request }]);
-        const again = reduceActions(createInitialState(), [...stage, { op: 'set_view', view: deriveScreenState(state, 1).view }]);
+        const again = reduceActions(createInitialState(), [...stage, { op: 'set_view', view: deriveScreenState(state, 1).view as ViewName }]);
         expect(sceneKindOf(again), request).toBe(sceneKindOf(state));
       }
     }

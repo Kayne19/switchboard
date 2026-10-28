@@ -80,7 +80,7 @@ function control(className: string): HTMLButtonElement {
 }
 
 const field = () => document.querySelector<HTMLInputElement>('.transcript__input');
-const returnButton = () => document.querySelector<HTMLButtonElement>('.transcript__return');
+const returnButton = () => document.querySelector<HTMLButtonElement>('.transcript .return-control');
 const opener = () => document.querySelector<HTMLButtonElement>('.opener')!;
 const elsewhere = () => document.querySelector<HTMLButtonElement>('.elsewhere')!;
 const link = () => document.querySelector<HTMLAnchorElement>('.transcript .rich-text__link')!;

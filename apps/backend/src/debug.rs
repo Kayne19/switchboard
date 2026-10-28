@@ -3,19 +3,8 @@
 //! The debug bus is deliberately independent from call control. Publishing is
 //! synchronous and bounded: it records a small in-memory copy and uses
 //! `broadcast::Sender::send`, so a slow browser can never hold up a call.
-use crate::api::refuse_cross_origin;
+use crate::debug_record::{Clip, MAX_RECORD_BYTES, RECORD_OVERHEAD_BYTES};
 use crate::protocol::AgentState;
-use axum::{
-    extract::{
-        ws::{Message, WebSocket},
-        State, WebSocketUpgrade,
-    },
-    http::{header, StatusCode},
-    middleware,
-    response::{IntoResponse, Response},
-    routing::get,
-    Router,
-};
 #[cfg(test)]
 use serde::Deserialize;
 use serde::Serialize;
@@ -30,110 +19,20 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    sync::{broadcast, watch, Semaphore},
-    time::{timeout, Duration, Instant},
+    sync::broadcast,
+    time::{Duration, Instant},
 };
 use tracing_subscriber::{layer::Context, registry::LookupSpan, Layer};
-
-/// The compiled debug page. It is embedded at build time so it is served only
-/// by the debug listener's router: the primary listener's static directory
-/// never holds it, so no path spelling there can reach it.
-pub(crate) const INDEX_HTML: &str = include_str!("../../../static-debug/index.html");
-pub(crate) const DEBUG_JS: &str = include_str!("../../../static-debug/debug.js");
-pub(crate) const DEBUG_CSS: &str = include_str!("../../../static-debug/debug.css");
-
-/// What the debug listener's routes share.
-#[derive(Clone)]
-struct Site {
-    bus: DebugBus,
-    agents: Arc<dyn Fn() -> Vec<AgentState> + Send + Sync>,
-    shutdown: watch::Receiver<bool>,
-    /// One permit per open socket (`MAX_CLIENTS`).
-    clients: Arc<Semaphore>,
-}
-
-/// The debug listener's whole router: the embedded page and the read-only
-/// WebSocket, behind the same origin check as the primary listener (a
-/// browser applies no CORS to a WebSocket, so any page it opens could
-/// otherwise read this stream). `agents` reads the current agent projection
-/// for snapshots; `shutdown` is the service's shutdown signal.
-pub(crate) fn router(
-    bus: DebugBus,
-    agents: impl Fn() -> Vec<AgentState> + Send + Sync + 'static,
-    shutdown: watch::Receiver<bool>,
-) -> Router {
-    asset_routes()
-        .route("/ws", get(ws))
-        .with_state(Site {
-            bus,
-            agents: Arc::new(agents),
-            shutdown,
-            clients: Arc::new(Semaphore::new(MAX_CLIENTS)),
-        })
-        .layer(middleware::from_fn(refuse_cross_origin))
-}
-
-/// The debug page's asset routes. Anything else is a 404.
-fn asset_routes<S>() -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    fn asset(content_type: &'static str, body: &'static str) -> Response {
-        (
-            [
-                (header::CONTENT_TYPE, content_type),
-                (header::CACHE_CONTROL, "no-cache"),
-            ],
-            body,
-        )
-            .into_response()
-    }
-    Router::new()
-        .route(
-            "/",
-            get(|| async { asset("text/html; charset=utf-8", INDEX_HTML) }),
-        )
-        .route(
-            "/debug.js",
-            get(|| async { asset("text/javascript; charset=utf-8", DEBUG_JS) }),
-        )
-        .route(
-            "/debug.css",
-            get(|| async { asset("text/css; charset=utf-8", DEBUG_CSS) }),
-        )
-}
 
 const EVENT_CAPACITY: usize = 4_000;
 const LOG_CAPACITY: usize = 2_000;
 const LIVE_CAPACITY: usize = 256;
-/// Bounds on one record, so a single event (a long prompt, a large tool
-/// result) cannot grow the rings by more than a few kilobytes.
-const MAX_FIELD_BYTES: usize = 4 * 1024;
-const MAX_RECORD_BYTES: usize = 16 * 1024;
-const MAX_JSON_ITEMS: usize = 64;
-/// Names and ids (an agent, a tool, a call id, a JSON key) are short in
-/// practice, but they come from hosts and models, so they are cut too.
-const MAX_NAME_BYTES: usize = 256;
-/// How far past a cut `Clip` still scrubs (`scrub_window`).
-const SCRUB_MARGIN: usize = 1024;
-/// What a record costs in a ring beyond its text: seq, timestamp, kind,
-/// numbers and the `Arc`.
-const RECORD_OVERHEAD_BYTES: usize = 256;
 /// Each ring's total size bound, from the records' estimated sizes. The
 /// oldest records go first past it, as past the ring's capacity.
 const EVENT_BUDGET_BYTES: usize = 32 << 20;
 const LOG_BUDGET_BYTES: usize = 8 << 20;
-const CLIP_MARKER: &str = "…[clipped]";
-/// A debug client that does not take a frame within this time is dropped; it
-/// can reconnect and get a fresh snapshot.
-const SEND_TIMEOUT: Duration = Duration::from_secs(5);
-/// The largest frame the debug socket accepts; it reads none. It bounds a
-/// frame as well as a message: the frame bound is checked on the header,
-/// before the payload is buffered, and the message bound only after.
-const MAX_INCOMING_BYTES: usize = 4096;
-/// The most debug sockets open at once. Each one costs a full snapshot when
-/// it opens and when it resyncs; a socket past this gets a 503.
-const MAX_CLIENTS: usize = 8;
+const _: () = assert!(EVENT_BUDGET_BYTES > 1000 * (MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES));
+const _: () = assert!(LOG_BUDGET_BYTES > 256 * (MAX_RECORD_BYTES + RECORD_OVERHEAD_BYTES));
 /// A client that falls behind twice within this time is closed instead of
 /// resynced again: each resync is a full snapshot.
 const RESYNC_INTERVAL: Duration = Duration::from_secs(10);
@@ -379,475 +278,6 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// Makes one record safe for the debug page, before it takes the publish
-/// lock. Each string, names and ids included, is first cut to what the
-/// record can keep (plus `SCRUB_MARGIN`), then scrubbed (`scrub_text`), then
-/// cut to its bound with a marker: 4 KiB for text, 256 bytes for a name, id
-/// or JSON key, and about 16 KiB for the whole record. A JSON value under a
-/// credential-like name (`secret_name`, `secret_value`) becomes
-/// `[redacted]`. So the cost of a record does not grow with its input. This
-/// is the only place debug records are scrubbed or clipped; producers
-/// publish raw values.
-struct Clip {
-    remaining: usize,
-    /// Bytes kept so far, cut markers included: the record's size estimate.
-    used: usize,
-    clipped: bool,
-}
-
-/// The longest prefix of `text` of at most `bytes` bytes.
-fn prefix(text: &str, bytes: usize) -> &str {
-    if text.len() <= bytes {
-        return text;
-    }
-    let mut cut = bytes;
-    while !text.is_char_boundary(cut) {
-        cut -= 1;
-    }
-    &text[..cut]
-}
-
-/// The part of a string `Clip` scrubs when it keeps at most `limit` bytes:
-/// the kept part and `SCRUB_MARGIN` more, so a credential that runs across
-/// the cut is still recognized up to it. The rest is dropped unread, so a
-/// field's cost does not grow with its input.
-fn scrub_window(text: &str, limit: usize) -> &str {
-    prefix(text, limit.saturating_add(SCRUB_MARGIN))
-}
-
-impl Clip {
-    fn new() -> Self {
-        Self {
-            remaining: MAX_RECORD_BYTES,
-            used: 0,
-            clipped: false,
-        }
-    }
-
-    /// The record's estimated size in a ring, for the byte budget.
-    fn bytes(&self) -> usize {
-        self.used + RECORD_OVERHEAD_BYTES
-    }
-
-    fn spend(&mut self, bytes: usize) {
-        self.used += bytes;
-        self.remaining = self.remaining.saturating_sub(bytes.max(1));
-    }
-
-    /// One JSON node kept in the record: a `Value` is this size in memory
-    /// whatever its text, so an empty string or array is not free.
-    fn node(&mut self) {
-        self.spend(std::mem::size_of::<Value>());
-    }
-
-    /// Scrubs `text` and keeps at most `field_limit` bytes of it, and no
-    /// more than the record has left. Only the window that can be kept is
-    /// scrubbed.
-    fn bounded(&mut self, text: &mut String, field_limit: usize) {
-        let limit = field_limit.min(self.remaining);
-        let window = scrub_window(text, limit);
-        let cut_input = window.len() < text.len();
-        let mut scrubbed = scrub_text(window);
-        if cut_input || scrubbed.len() > limit {
-            let kept = prefix(&scrubbed, limit).len();
-            scrubbed.truncate(kept);
-            scrubbed.push_str(CLIP_MARKER);
-            self.clipped = true;
-        }
-        *text = scrubbed;
-        self.spend(text.len());
-    }
-
-    fn text(&mut self, text: &mut String) {
-        self.bounded(text, MAX_FIELD_BYTES);
-    }
-
-    /// A name or id: scrubbed like text, and cut much shorter.
-    fn name(&mut self, name: &mut String) {
-        self.bounded(name, MAX_NAME_BYTES);
-    }
-
-    fn marker(&mut self, dropped: usize) -> Value {
-        let marker = format!("{CLIP_MARKER} {dropped} more");
-        self.node();
-        self.spend(marker.len());
-        self.clipped = true;
-        Value::String(marker)
-    }
-
-    fn json(&mut self, value: &mut Value) {
-        self.node();
-        match value {
-            Value::String(text) => self.text(text),
-            Value::Array(items) => {
-                self.spend(2);
-                let mut kept = 0;
-                for item in items.iter_mut() {
-                    if self.remaining == 0 || kept == MAX_JSON_ITEMS {
-                        break;
-                    }
-                    self.json(item);
-                    kept += 1;
-                }
-                if kept < items.len() {
-                    // A new buffer: `truncate` would keep the input's whole
-                    // allocation, which the byte estimate does not see.
-                    let dropped = items.len() - kept;
-                    let mut cut = Vec::with_capacity(kept + 1);
-                    cut.extend(items.drain(..kept));
-                    cut.push(self.marker(dropped));
-                    *items = cut;
-                }
-            }
-            Value::Object(map) => {
-                self.spend(2);
-                let entries = std::mem::take(map);
-                let total = entries.len();
-                let mut kept = 0;
-                for (mut key, mut value) in entries {
-                    if self.remaining == 0 || kept == MAX_JSON_ITEMS {
-                        break;
-                    }
-                    // Judge the name by its start: a key can be any length.
-                    let head = prefix(&key, MAX_NAME_BYTES);
-                    if secret_name(head) && secret_value(head, &value) {
-                        value = Value::String(REDACTED.to_owned());
-                    }
-                    self.name(&mut key);
-                    self.json(&mut value);
-                    map.insert(key, value);
-                    kept += 1;
-                }
-                if kept < total {
-                    let marker = self.marker(total - kept);
-                    map.insert("…".to_owned(), marker);
-                }
-            }
-            Value::Null | Value::Bool(_) | Value::Number(_) => self.spend(8),
-        }
-    }
-
-    fn opt_text(&mut self, text: &mut Option<String>) {
-        if let Some(text) = text {
-            self.text(text);
-        }
-    }
-
-    fn opt_json(&mut self, value: &mut Option<Value>) {
-        if let Some(value) = value {
-            self.json(value);
-        }
-    }
-
-    fn opt_name(&mut self, name: &mut Option<String>) {
-        if let Some(name) = name {
-            self.name(name);
-        }
-    }
-
-    /// The agent projection, as an `agents_state` event and a snapshot both
-    /// carry it.
-    fn agents(&mut self, agents: &mut [AgentState]) {
-        for agent in agents {
-            self.name(&mut agent.project);
-            self.name(&mut agent.state);
-            if let Some(request) = &mut agent.pending_request {
-                self.text(&mut request.message);
-                self.text(&mut request.reason);
-            }
-        }
-    }
-
-    /// Scrubs and clips every string in `event`. Names and ids come from
-    /// hosts and models too, so they are scrubbed like text (`name`). The
-    /// match names every field, so a new field does not compile until it is
-    /// handled here.
-    fn event(&mut self, event: &mut DebugEvent) {
-        match event {
-            DebugEvent::CallerUtterance {
-                utterance_id,
-                text,
-                talking_to,
-            } => {
-                self.name(utterance_id);
-                self.name(talking_to);
-                self.text(text);
-            }
-            DebugEvent::JevRequest {
-                utterance_id,
-                purpose,
-                state,
-                floor_id,
-            } => {
-                self.opt_name(utterance_id);
-                self.name(purpose);
-                self.opt_name(floor_id);
-                self.json(state);
-            }
-            DebugEvent::JevResponse {
-                utterance_id,
-                purpose,
-                latency_ms: _,
-                outcome,
-                answers,
-                error,
-                floor_id,
-            } => {
-                self.opt_name(utterance_id);
-                self.name(purpose);
-                self.name(outcome);
-                self.opt_name(floor_id);
-                self.opt_text(error);
-                self.json(answers);
-            }
-            DebugEvent::RouteDecision {
-                utterance_id,
-                rule,
-                reason,
-                action,
-                target,
-                mode,
-                decided_by,
-            } => {
-                self.name(utterance_id);
-                self.name(rule);
-                self.name(action);
-                self.opt_name(target);
-                self.name(mode);
-                self.name(decided_by);
-                self.text(reason);
-            }
-            DebugEvent::PbxBranch {
-                utterance_id,
-                branch,
-                reason,
-            } => {
-                self.name(utterance_id);
-                self.name(branch);
-                self.text(reason);
-            }
-            DebugEvent::UtilityRequest {
-                utterance_id,
-                attempt,
-                prompt,
-            } => {
-                self.name(utterance_id);
-                self.name(attempt);
-                self.text(prompt);
-            }
-            DebugEvent::UtilityDecision {
-                utterance_id,
-                attempt,
-                decision,
-                latency_ms: _,
-            } => {
-                self.name(utterance_id);
-                self.name(attempt);
-                self.json(decision);
-            }
-            DebugEvent::OperatorHop {
-                utterance_id,
-                text,
-                outcome,
-            } => {
-                self.name(utterance_id);
-                self.name(outcome);
-                self.text(text);
-            }
-            DebugEvent::OperatorRouteTool {
-                utterance_id,
-                target,
-                mode,
-                action,
-            } => {
-                self.name(utterance_id);
-                self.name(target);
-                self.name(mode);
-                self.name(action);
-            }
-            DebugEvent::Routed {
-                utterance_id,
-                to_agent,
-                text_part,
-                mode,
-                via,
-            } => {
-                self.name(utterance_id);
-                self.name(to_agent);
-                self.name(mode);
-                self.name(via);
-                self.text(text_part);
-            }
-            DebugEvent::AgentInput {
-                agent,
-                turn_id,
-                text,
-                source,
-                utterance_id,
-            } => {
-                self.name(agent);
-                self.opt_name(turn_id);
-                self.name(source);
-                self.opt_name(utterance_id);
-                self.text(text);
-            }
-            DebugEvent::AgentText {
-                agent,
-                turn_id,
-                text,
-                final_: _,
-            } => {
-                self.name(agent);
-                self.opt_name(turn_id);
-                self.text(text);
-            }
-            DebugEvent::ToolStart {
-                agent,
-                call_id,
-                tool,
-                args,
-                turn_id,
-            } => {
-                self.name(agent);
-                self.opt_name(call_id);
-                self.name(tool);
-                self.opt_name(turn_id);
-                self.opt_json(args);
-            }
-            DebugEvent::ToolEnd {
-                agent,
-                call_id,
-                tool,
-                result,
-                error,
-                turn_id,
-            } => {
-                self.name(agent);
-                self.opt_name(call_id);
-                self.name(tool);
-                self.opt_name(turn_id);
-                self.opt_text(error);
-                self.opt_json(result);
-            }
-            DebugEvent::ModuleCall {
-                agent,
-                call_id,
-                name,
-                args,
-                turn_id,
-            } => {
-                self.name(agent);
-                self.name(call_id);
-                self.name(name);
-                self.opt_name(turn_id);
-                self.json(args);
-            }
-            DebugEvent::ModuleResult {
-                agent,
-                call_id,
-                ok: _,
-                detail,
-            } => {
-                self.name(agent);
-                self.name(call_id);
-                self.json(detail);
-            }
-            DebugEvent::TurnStart {
-                agent,
-                turn_id,
-                generation: _,
-                utterance_id,
-            }
-            | DebugEvent::TurnEnd {
-                agent,
-                turn_id,
-                generation: _,
-                utterance_id,
-            } => {
-                self.name(agent);
-                self.name(turn_id);
-                self.opt_name(utterance_id);
-            }
-            DebugEvent::Rescue {
-                generation: _,
-                reason,
-                leg,
-            } => {
-                self.opt_name(leg);
-                self.text(reason);
-            }
-            DebugEvent::Speech {
-                agent,
-                text,
-                delivered: _,
-                reason,
-                floor_id,
-            } => {
-                self.name(agent);
-                self.opt_name(floor_id);
-                self.opt_text(reason);
-                self.text(text);
-            }
-            DebugEvent::FloorRequest {
-                agent,
-                message,
-                floor_id,
-            }
-            | DebugEvent::FloorHeld {
-                agent,
-                message,
-                floor_id,
-            } => {
-                self.name(agent);
-                self.opt_name(floor_id);
-                self.text(message);
-            }
-            DebugEvent::FloorGate {
-                agent,
-                answer,
-                latency_ms: _,
-                floor_id,
-            } => {
-                self.name(agent);
-                self.name(answer);
-                self.opt_name(floor_id);
-            }
-            DebugEvent::FloorRewrite {
-                agent,
-                original,
-                rewritten,
-                latency_ms: _,
-                floor_id,
-            } => {
-                self.name(agent);
-                self.opt_name(floor_id);
-                self.text(original);
-                self.text(rewritten);
-            }
-            DebugEvent::FloorReleased {
-                agent,
-                how,
-                floor_id,
-            } => {
-                self.name(agent);
-                self.name(how);
-                self.opt_name(floor_id);
-            }
-            DebugEvent::AgentsState { agents } => self.agents(agents),
-            DebugEvent::HostLink { host, connected: _ } => self.name(host),
-            DebugEvent::CallBoundary {
-                phase,
-                call_id,
-                reason,
-            } => {
-                self.name(phase);
-                self.name(call_id);
-                self.opt_text(reason);
-            }
-        }
-    }
-}
-
 /// The routing thresholds the page shows beside Jev's answers.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[cfg_attr(test, derive(Deserialize))]
@@ -1068,17 +498,16 @@ impl DebugBus {
             return 0;
         }
         let timestamp_ms = now_ms();
-        let mut clip = Clip::new();
-        clip.event(&mut event);
+        let bound = Clip::bound_event(&mut event);
         self.locked(|rings| {
             rings.last_seq += 1;
             let record = Arc::new(DebugRecord {
                 seq: rings.last_seq,
                 timestamp_ms,
-                clipped: clip.clipped,
+                clipped: bound.clipped,
                 event,
             });
-            rings.events.push(clip.bytes(), record.clone());
+            rings.events.push(bound.bytes, record.clone());
             let _ = self.0.live.send(LiveFrame::Event(record));
             rings.last_seq
         })
@@ -1095,11 +524,7 @@ impl DebugBus {
             return 0;
         }
         let timestamp_ms = now_ms();
-        let mut clip = Clip::new();
-        clip.name(&mut level);
-        clip.name(&mut target);
-        clip.text(&mut message);
-        clip.json(&mut fields);
+        let bound = Clip::bound_log(&mut level, &mut target, &mut message, &mut fields);
         self.locked(|rings| {
             rings.last_seq += 1;
             let log = Arc::new(DebugLog {
@@ -1109,9 +534,9 @@ impl DebugBus {
                 target,
                 message,
                 fields,
-                clipped: clip.clipped,
+                clipped: bound.clipped,
             });
-            rings.logs.push(clip.bytes(), log.clone());
+            rings.logs.push(bound.bytes, log.clone());
             let _ = self.0.live.send(LiveFrame::Log(log));
             rings.last_seq
         })
@@ -1218,79 +643,6 @@ impl Feed {
     }
 }
 
-/// The read-only debug stream. The origin check the router applies
-/// (`api::refuse_cross_origin`) keeps other sites' pages off it.
-async fn ws(State(site): State<Site>, upgrade: WebSocketUpgrade) -> Response {
-    let Ok(client) = site.clients.clone().try_acquire_owned() else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
-    // The page sends nothing; anything it sends is ignored.
-    upgrade
-        .max_frame_size(MAX_INCOMING_BYTES)
-        .max_message_size(MAX_INCOMING_BYTES)
-        .on_upgrade(move |socket| async move {
-            serve_socket(socket, site).await;
-            drop(client);
-        })
-}
-
-async fn send_text(socket: &mut WebSocket, text: String) -> Result<(), ()> {
-    match timeout(SEND_TIMEOUT, socket.send(Message::Text(text.into()))).await {
-        Ok(Ok(())) => Ok(()),
-        _ => Err(()),
-    }
-}
-
-/// Serializes a snapshot on the blocking pool: it can be megabytes, and the
-/// runtime workers also carry audio and turns. The agents are read from the
-/// projection, not the rings, so they are scrubbed and clipped here, as an
-/// `agents_state` record is.
-async fn send_snapshot(socket: &mut WebSocket, site: &Site, snapshot: Snapshot) -> Result<(), ()> {
-    let mut agents = (site.agents)();
-    let text = tokio::task::spawn_blocking(move || {
-        Clip::new().agents(&mut agents);
-        snapshot.to_json(&agents)
-    })
-    .await
-    .map_err(|_| ())?;
-    send_text(socket, text).await
-}
-
-async fn serve_socket(mut socket: WebSocket, site: Site) {
-    let mut shutdown = site.shutdown.clone();
-    if *shutdown.borrow_and_update() {
-        return;
-    }
-    let (mut feed, snapshot) = Feed::attach(site.bus.clone());
-    if send_snapshot(&mut socket, &site, snapshot).await.is_err() {
-        return;
-    }
-    loop {
-        let outgoing = tokio::select! {
-            outgoing = feed.next() => outgoing,
-            incoming = socket.recv() => match incoming {
-                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return,
-                Some(Ok(_)) => continue,
-            },
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    let _ = timeout(SEND_TIMEOUT, socket.send(Message::Close(None))).await;
-                    return;
-                }
-                continue;
-            }
-        };
-        let sent = match outgoing {
-            Some(Outgoing::Live(frame)) => send_text(&mut socket, frame.to_json()).await,
-            Some(Outgoing::Snapshot(snapshot)) => send_snapshot(&mut socket, &site, snapshot).await,
-            None => return,
-        };
-        if sent.is_err() {
-            return;
-        }
-    }
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1314,7 +666,7 @@ impl tracing::field::Visit for FieldsVisitor {
     }
     // Fields are kept as JSON numbers and booleans where they are ones, so
     // `Clip` can keep a count or a flag under a secret-like name
-    // (`*_token_budget`, `*_key_configured`); see `secret_value`.
+    // (`*_token_budget`, `*_key_configured`); see `debug_record::secret_value`.
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
         self.fields
             .insert(field.name().to_owned(), Value::from(value));
@@ -1381,6 +733,15 @@ where
     }
 }
 
+/// A small event for tests.
+#[cfg(test)]
+pub(crate) fn host_link(n: usize) -> DebugEvent {
+    DebugEvent::HostLink {
+        host: format!("host-{n}"),
+        connected: true,
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     static CAPTURE: std::cell::RefCell<Option<DebugLogLayer>> = const { std::cell::RefCell::new(None) };
@@ -1444,267 +805,6 @@ where
             }
         });
     }
-}
-
-/// What replaces a credential on the debug page. The page is
-/// unauthenticated; the journal keeps whatever the log line carried.
-const REDACTED: &str = "[redacted]";
-
-/// True for a field name that usually holds a credential: `token`,
-/// `call_token`, `api_key`, `apiKey`, `Authorization`, `client_secret` and so
-/// on. Case-insensitive. `key` counts only as a whole name part, so `keyboard`
-/// and `monkey` do not.
-fn secret_name(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    name.split(['_', '-', '.'])
-        .any(|part| part == "key" || part == "keys")
-        || [
-            "token",
-            "secret",
-            "password",
-            "passwd",
-            "apikey",
-            "privatekey",
-            "authorization",
-            "bearer",
-            "credential",
-            "cookie",
-        ]
-        .iter()
-        .any(|word| name.contains(word))
-}
-
-/// True when `value`, under the credential-like name `key`, is redacted
-/// whole: any string, array or object, and a number unless the name says it
-/// is a count (`jev_summary_token_budget`, `input_tokens`). A `null` or a
-/// boolean (`*_key_configured`) cannot carry a credential.
-fn secret_value(key: &str, value: &Value) -> bool {
-    const COUNT_WORDS: [&str; 10] = [
-        "budget", "count", "max", "limit", "chars", "bytes", "tokens", "size", "length", "total",
-    ];
-    match value {
-        Value::Null | Value::Bool(_) => false,
-        Value::Number(_) => {
-            let key = key.to_ascii_lowercase();
-            !COUNT_WORDS.iter().any(|word| key.contains(word))
-        }
-        Value::String(_) | Value::Array(_) | Value::Object(_) => true,
-    }
-}
-
-/// Replaces credential-looking parts of text: a PEM private key block, the
-/// value after a credential-like name and `=` or `:` (`API_KEY=...`,
-/// `"token": "..."`), the word after `Bearer`, words with a well-known key
-/// prefix or shape (`sk-`, `ghp_`, `AKIA`, `AIza`, `hf_`, a JWT, ...), and
-/// long random-looking words. A heuristic: it keeps a pasted `.env`, key
-/// file or auth header off the page, not every secret.
-pub(crate) fn scrub_text(text: &str) -> String {
-    let text = redact_private_keys(text);
-    scrub_words(&text)
-}
-
-/// Replaces each `-----BEGIN ... PRIVATE KEY-----` block through its
-/// `-----END ...-----` line. A block with no end (the text was cut) is
-/// redacted to the end of the text.
-fn redact_private_keys(text: &str) -> std::borrow::Cow<'_, str> {
-    const BEGIN: &str = "-----BEGIN ";
-    const DASHES: &str = "-----";
-    if !text.contains(BEGIN) {
-        return text.into();
-    }
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find(BEGIN) {
-        let after_begin = &rest[start + BEGIN.len()..];
-        let Some(label_end) = after_begin.find(DASHES) else {
-            break;
-        };
-        let label = &after_begin[..label_end];
-        let header_end = start + BEGIN.len() + label_end + DASHES.len();
-        if !label.contains("PRIVATE KEY") || label.contains('\n') {
-            out.push_str(&rest[..header_end]);
-            rest = &rest[header_end..];
-            continue;
-        }
-        out.push_str(&rest[..start]);
-        out.push_str(REDACTED);
-        let body = &rest[header_end..];
-        rest = match body.find("-----END ") {
-            Some(end) => {
-                let footer = &body[end + "-----END ".len()..];
-                match footer.find(DASHES) {
-                    Some(close) => &footer[close + DASHES.len()..],
-                    None => "",
-                }
-            }
-            None => "",
-        };
-    }
-    out.push_str(rest);
-    out.into()
-}
-
-/// A word that is a credential by its own shape, whatever surrounds it.
-/// `rest` is the text after the word, for the shapes that span punctuation
-/// (a JWT's `.`-separated segments).
-fn credential_word(word: &str, rest: &[char]) -> bool {
-    // Prefixes of provider keys. Each is followed by a long random part, so
-    // a short word that happens to start the same way (`sk-learn`) is kept.
-    const KEY_PREFIXES: [&str; 20] = [
-        "sk-",
-        "ghp_",
-        "gho_",
-        "ghu_",
-        "ghs_",
-        "ghr_",
-        "github_pat_",
-        "xoxa-",
-        "xoxb-",
-        "xoxp-",
-        "xoxr-",
-        "xoxs-",
-        "xapp-",
-        "glpat-",
-        "glsa_",
-        "hf_",
-        "npm_",
-        "AIza",
-        "pypi-",
-        "dop_v1_",
-    ];
-    if word.len() >= 16 && KEY_PREFIXES.iter().any(|prefix| word.starts_with(prefix)) {
-        return true;
-    }
-    // AWS access key ids: `AKIA` or `ASIA` and 16 upper-case letters or digits.
-    if word.len() == 20
-        && (word.starts_with("AKIA") || word.starts_with("ASIA"))
-        && word[4..]
-            .bytes()
-            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
-    {
-        return true;
-    }
-    // A JWT: base64url JSON (`eyJ`) and two more `.`-separated segments.
-    if word.len() >= 8 && word.starts_with("eyJ") {
-        let dots = rest
-            .iter()
-            .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-            .filter(|c| **c == '.')
-            .count();
-        if dots >= 2 {
-            return true;
-        }
-    }
-    random_looking(word)
-}
-
-/// A long word that looks generated rather than written: 32 or more
-/// characters mixing upper case, lower case and digits, with high entropy.
-/// Hex digests (`git` hashes) and UUIDs are lower case and kept, as are
-/// identifiers, whose letters repeat.
-fn random_looking(word: &str) -> bool {
-    const MIN_LEN: usize = 32;
-    const MIN_BITS_PER_CHAR: f64 = 4.2;
-    if word.len() < MIN_LEN {
-        return false;
-    }
-    let bytes = word.as_bytes();
-    let upper = bytes.iter().any(u8::is_ascii_uppercase);
-    let lower = bytes.iter().any(u8::is_ascii_lowercase);
-    let digit = bytes.iter().any(u8::is_ascii_digit);
-    if !(upper && lower && digit) {
-        return false;
-    }
-    let mut counts = [0usize; 256];
-    for byte in bytes {
-        counts[usize::from(*byte)] += 1;
-    }
-    let len = bytes.len() as f64;
-    let bits: f64 = counts
-        .iter()
-        .filter(|count| **count > 0)
-        .map(|count| {
-            let p = *count as f64 / len;
-            -p * p.log2()
-        })
-        .sum();
-    bits >= MIN_BITS_PER_CHAR
-}
-
-/// The word-level part of `scrub_text`.
-fn scrub_words(text: &str) -> String {
-    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
-    let is_value = |c: char| !c.is_whitespace() && !matches!(c, '"' | '\'' | ',' | '}' | ']');
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-    let mut redact_next_word = false;
-    while i < chars.len() {
-        let c = chars[i];
-        if !is_word(c) {
-            out.push(c);
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i < chars.len() && is_word(chars[i]) {
-            i += 1;
-        }
-        let word: String = chars[start..i].iter().collect();
-        if redact_next_word || credential_word(&word, &chars[i..]) {
-            redact_next_word = false;
-            // The rest of a value such as `abc.def/ghi` goes with it.
-            while i < chars.len() && is_value(chars[i]) {
-                i += 1;
-            }
-            out.push_str(REDACTED);
-            continue;
-        }
-        out.push_str(&word);
-        if word.eq_ignore_ascii_case("bearer") {
-            redact_next_word = chars.get(i).is_some_and(|c| *c == ' ');
-            continue;
-        }
-        if !secret_name(&word) {
-            continue;
-        }
-        // `name`, an optional closing quote, spaces, `=` or `:`, spaces and an
-        // optional opening quote, then the value.
-        let mut j = i;
-        if matches!(chars.get(j), Some('"' | '\'')) {
-            j += 1;
-        }
-        while matches!(chars.get(j), Some(' ' | '\t')) {
-            j += 1;
-        }
-        if !matches!(chars.get(j), Some('=' | ':')) {
-            continue;
-        }
-        j += 1;
-        while matches!(chars.get(j), Some(' ' | '\t')) {
-            j += 1;
-        }
-        if matches!(chars.get(j), Some('"' | '\'')) {
-            j += 1;
-        }
-        let value_start = j;
-        while j < chars.len() && is_value(chars[j]) {
-            j += 1;
-        }
-        // A count such as `tokens: 500` is not a credential.
-        let numeric = chars[value_start..j].iter().all(|c| c.is_ascii_digit());
-        if j > value_start && !numeric {
-            let value: String = chars[value_start..j].iter().collect();
-            // `Authorization: Bearer <token>`: the scheme, then the token.
-            redact_next_word = ["bearer", "basic"]
-                .iter()
-                .any(|scheme| value.eq_ignore_ascii_case(scheme));
-            out.extend(&chars[i..value_start]);
-            out.push_str(REDACTED);
-            i = j;
-        }
-    }
-    out
 }
 
 #[cfg(test)]

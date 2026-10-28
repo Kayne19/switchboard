@@ -62,10 +62,9 @@ export interface Load {
 	readonly kind: "load";
 }
 
-/** One start of the listening graph; `result` settles when it ends. */
+/** One start of the listening graph; the events it ends in name it. */
 export interface Attempt {
-	result: Promise<boolean>;
-	finish: (armed: boolean) => void;
+	readonly kind: "attempt";
 }
 
 /** One utterance being recorded, stamped with the epoch it began in. */
@@ -163,8 +162,6 @@ const STOPPED: Record<StopReason, string> = {
 export type HandsFreeEvent =
 	/** MODE. */
 	| { kind: "toggle" }
-	| { kind: "enable" }
-	| { kind: "turnOff"; message: string }
 	| { kind: "stop"; reason: StopReason }
 	/**
 	 * An `epoch`. `handoff`: the same call moved to another leg or agent (a
@@ -265,11 +262,7 @@ export function countdown(): Countdown {
 }
 
 function newAttempt(): Attempt {
-	let finish: (armed: boolean) => void = () => undefined;
-	const result = new Promise<boolean>((resolve) => {
-		finish = resolve;
-	});
-	return { result, finish };
+	return { kind: "attempt" };
 }
 
 function errorName(error: unknown): string {
@@ -378,7 +371,6 @@ type MachineEvent = Extract<
 	{
 		kind:
 			| "toggle"
-			| "enable"
 			| "stop"
 			| "callChanged"
 			| "pttActive"
@@ -413,10 +405,6 @@ export function step(
 				machine,
 				isEnabled(phase) ? turnOff(phase, OFF_MESSAGE) : turnOn(machine, page),
 			);
-		case "enable":
-			return isEnabled(phase) && phase.kind !== "paused_ptt"
-				? null
-				: moved(machine, machine, turnOn(machine, page));
 		case "stop":
 			// Every page stop drops a reply still waiting to drain. Before
 			// the first load there is nothing to stop and nothing to say.
@@ -552,8 +540,6 @@ function next(
 	page: PageReads,
 ): PhaseStep | null {
 	switch (event.kind) {
-		case "turnOff":
-			return turnOff(phase, event.message);
 		case "noReply":
 			return phase.kind === "awaiting_response"
 				? listen(phase.graph, NO_REPLY_MESSAGE)

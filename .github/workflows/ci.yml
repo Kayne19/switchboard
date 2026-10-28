@@ -89,7 +89,7 @@ jobs:
     # The same named release as `test`, and for the same reason.
     runs-on: ubuntu-24.04
     # About twice the slowest normal leg (6-17 min). Playwright's own
-    # globalTimeout (apps/frontend/playwright*.config.ts) ends the specs a
+    # globalTimeout (apps/frontend/playwright.base.ts) ends the specs a
     # little sooner, so the log names the tests that did not finish and the
     # traces are still uploaded.
     timeout-minutes: 35
@@ -130,6 +130,14 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ matrix.browser }}-${{ runner.os }}-${{ steps.release.outputs.release }}-${{ hashFiles('package-lock.json') }}
+
+      # The image's apt leaves a mirror only after 15 seconds with no data, so
+      # it stays on an azure.archive.ubuntu.com node that trickles packages
+      # without stalling. Delete this step, and its case in
+      # apps/frontend/tests/unit/browserCi.test.ts, when
+      # actions/runner-images#14823 is fixed.
+      - name: Drop the Azure apt mirror
+        run: sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
 
       - name: Install ${{ matrix.browser }}
         if: steps.playwright-cache.outputs.cache-hit != 'true'

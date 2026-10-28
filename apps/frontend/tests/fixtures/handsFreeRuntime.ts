@@ -16,7 +16,7 @@ import type { CallRuntimeOptions } from "../../src/runtime/callRuntime";
 type Callback = () => void;
 
 /**
- * The browser features `HandsFreeController.enable()` checks for, stubbed as
+ * The browser features a hands-free start checks for, stubbed as
  * globals so that `vi.unstubAllGlobals()` takes every one of them away again.
  */
 export function stubHandsFreeBrowser(): void {

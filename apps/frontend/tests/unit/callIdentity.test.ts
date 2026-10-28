@@ -270,7 +270,7 @@ function message(event: Trigger): object {
 
 function clipsSent(made: FakeSocket[]): number[] {
   return made.flatMap((socket) =>
-    socket.sentJson().filter((frame) => frame.type === "clip").map((frame) => Number(frame.generation)),
+    socket.sentOfType("clip").map((frame) => Number(frame.generation)),
   );
 }
 
@@ -484,7 +484,7 @@ const rows: Row[] = [
 ];
 
 beforeEach(() => {
-  FakeSocket.instances = [];
+  FakeSocket.install();
 });
 
 afterEach(() => {

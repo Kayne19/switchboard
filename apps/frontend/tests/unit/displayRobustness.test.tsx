@@ -18,6 +18,7 @@ import type { ControllerAction, ControllerState } from '../../src/controller/typ
 import { RUNTIME_CONVERSATION_ID } from '../../src/controller/types';
 import { fixtures } from '../../src/fixtures/scenes';
 import { mount, stubResizeObserver, unmountAll } from './sceneHarness';
+import { FakeSocket } from './fakeSocket';
 
 let dispatch: (action: ControllerAction) => void;
 let latest: ControllerState;
@@ -251,31 +252,9 @@ describe('a scene that throws during render', () => {
   });
 });
 
-class FakeSocket {
-  static latest: FakeSocket | null = null;
-  readyState = 0;
-  binaryType = 'blob';
-  closed = false;
-  onopen: ((event: Event) => void) | null = null;
-  onclose: ((event: CloseEvent) => void) | null = null;
-  onerror: ((event: Event) => void) | null = null;
-  onmessage: ((event: MessageEvent) => void) | null = null;
-
-  constructor(readonly url: string) {
-    FakeSocket.latest = this;
-  }
-
-  send() {}
-
-  close() {
-    this.closed = true;
-    this.readyState = 3;
-  }
-}
-
 describe('a display that fails outright', () => {
   beforeEach(() => {
-    vi.stubGlobal('WebSocket', FakeSocket);
+    FakeSocket.install();
     window.history.replaceState(null, '', '/?ws=ws://switchboard.test/ws');
   });
 
@@ -286,8 +265,7 @@ describe('a display that fails outright', () => {
 
   it('does not hang up the call', () => {
     const page = mountPage(<App />);
-    const socket = FakeSocket.latest;
-    expect(socket).not.toBeNull();
+    const socket = FakeSocket.latest();
 
     // A conversation with no data throws in the stage itself, outside every
     // scene and object surface.
@@ -295,6 +273,6 @@ describe('a display that fails outright', () => {
 
     expect(uncaughtErrors).toEqual([]);
     expect(page.querySelector('.stage-unavailable')?.textContent).toBe('DISPLAY / UNAVAILABLE');
-    expect(socket?.closed).toBe(false);
+    expect(socket.readyState).not.toBe(3);
   });
 });

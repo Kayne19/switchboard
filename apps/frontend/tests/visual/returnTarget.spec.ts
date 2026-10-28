@@ -33,10 +33,10 @@ for (const viewport of [{ width: 820, height: 1180 }, { width: 390, height: 844 
     test('RETURN in focus takes a tap 44px tall round its words', async ({ page }) => {
       await openScene(page, 'results');
       await runActions(page, [{ op: 'focus', id: 'test-matrix' }]);
-      const button = page.locator('.focus-layer__return');
+      const button = page.locator('.focus-layer .return-control');
       await expect(button).toBeVisible();
       await page.waitForTimeout(600);
-      expect(await reach(page, button, '.focus-layer__return')).toEqual(everywhere);
+      expect(await reach(page, button, '.focus-layer .return-control')).toEqual(everywhere);
       // A tap under the words, on no word of them, still returns.
       const box = (await button.boundingBox())!;
       await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2 + 18);
@@ -46,10 +46,10 @@ for (const viewport of [{ width: 820, height: 1180 }, { width: 390, height: 844 
     test('RETURN in the history takes a tap 44px tall round its words', async ({ page }) => {
       await openScene(page, 'conversation');
       await page.locator('.transcript-toggle').click();
-      const button = page.locator('.transcript__return');
+      const button = page.locator('.transcript .return-control');
       await expect(button).toBeVisible();
       await page.waitForTimeout(400);
-      expect(await reach(page, button, '.transcript__return')).toEqual(everywhere);
+      expect(await reach(page, button, '.transcript .return-control')).toEqual(everywhere);
     });
   });
 }

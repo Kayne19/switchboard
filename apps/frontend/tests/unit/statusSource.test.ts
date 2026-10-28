@@ -143,7 +143,7 @@ async function harness() {
     clip: async () => {
       sequence += 1;
       socket.receive({ type: "audio_start", generation: HELD_EPOCH, sequence, mime: "audio/mpeg", format: "mp3" });
-      socket.onmessage?.({ data: new TextEncoder().encode("speech").buffer } as MessageEvent);
+      socket.receiveRaw(new TextEncoder().encode("speech").buffer);
       socket.receive({ type: "audio_done", generation: HELD_EPOCH, sequence, done: true });
       await settle();
     },
@@ -166,7 +166,7 @@ interface Report {
 const REPORTS: Record<Writer, { error: Report; routine: Report }> = {
   connection: {
     // The socket reports an error and stays open.
-    error: { run: (h) => h.socket.onerror?.({} as Event), text: "Connection error." },
+    error: { run: (h) => h.socket.error(), text: "Connection error." },
     routine: {
       run: (h) => h.runtime.retry(),
       text: "Forcing a fresh connection and retrying...",
@@ -289,7 +289,7 @@ function expected(standing: Writer | null, writer: Writer, kind: "error" | "rout
 }
 
 beforeEach(() => {
-  FakeSocket.instances = [];
+  FakeSocket.install();
 });
 
 afterEach(() => {

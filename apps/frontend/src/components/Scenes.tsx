@@ -16,7 +16,7 @@ import { SpokenLog } from '../primitives/SpokenLog';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ChannelStack } from '../primitives/ChannelStack';
 import { SceneFooter } from '../primitives/SceneFooter';
-import { FocusableSurface } from '../primitives/FocusableSurface';
+import { ExpandableSurface } from '../primitives/ExpandableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ToolActivity } from '../primitives/ToolActivity';
 import { TranscriptToggle } from '../primitives/TranscriptToggle';
@@ -80,9 +80,9 @@ function AuxRow({
         >
           <TechFrame variant="panel" />
           <ObjectSurface object={object}>
-            <FocusableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
+            <ExpandableSurface onActivate={() => onFocus(object.id)} ariaLabel={`Expand ${object.type}`}>
               {renderObject(object, 'aux', { onStage, notes: drawn })}
-            </FocusableSurface>
+            </ExpandableSurface>
           </ObjectSurface>
         </ObjectMotion>
       ))}

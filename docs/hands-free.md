@@ -21,8 +21,8 @@ The page's one control for it is MODE, in the CHANNEL / MODE stack the scene
 shell draws in every page's bottom-left corner (#180,
 `apps/frontend/src/primitives/ChannelStack.tsx`). It reads `handsFree` from
 the registered voice runtime and switches it by calling `toggleHandsFree()`;
-while listening it names the wake word (`MODE / HANDS-FREE · HEY JARVIS`).
-The page holds no listening state of its own, and the refusals below stay the
+while listening it names the wake word (`MODE / HANDS-FREE · DAMOCLES`; the
+page wakes on `Damo` too). The page holds no listening state of its own, and the refusals below stay the
 runtime's. A switch while the line is down does nothing and says nothing.
 The controller is enabled from the first moment of MODE, so a switch while
 the detectors load or while the controller starts turns hands-free off: a
@@ -75,10 +75,10 @@ controller's 1,280-sample frames into Silero's 512-sample (32 ms) windows,
 scores each one, and reports a speech start and a speech end. Inference is
 asynchronous and queued, as the wake detector's is, and a reset stamps a new
 generation so a window scored before a reset cannot start or end a turn after
-it. The endpointer is reset where the wake detector is: on enable, on a wake
+it. The endpointer is reset where the wake detector is: on MODE on, on a wake
 grace period, when an expired grace period re-arms, when a turn brings no
 reply, on a follow-up lease, when a follow-up lease expires unused (#367), on
-a PTT pause, and on disable or an epoch change.
+a PTT pause, and on MODE off or an epoch change.
 
 The two detectors share one ONNX Runtime Web instance, and its `run` is not
 re-entrant across sessions: a session that runs while another session's run

@@ -564,7 +564,7 @@ async fn promoting_a_background_resident_ends_its_detached_prompt_before_foregro
     );
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "background work")
+        .start_background_part_on("beta", "background work")
         .await
         .expect("background resident");
     tokio::time::timeout(Duration::from_secs(1), entered.notified())
@@ -629,6 +629,40 @@ async fn foreground_continuation_publishes_busy_before_prompt() {
     board.shutdown().await;
 }
 
+/// Records the agent states the page is told, as `project:state`.
+#[cfg(unix)]
+fn record_agent_states(board: &mut Switchboard) -> Arc<StdMutex<Vec<String>>> {
+    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
+    let notices_for_callback = notices.clone();
+    board.set_agent_state_callback(Some(Arc::new(move |notice| {
+        let notices = notices_for_callback.clone();
+        Box::pin(async move {
+            notices
+                .lock()
+                .unwrap()
+                .push(format!("{}:{}", notice.project, notice.state));
+        })
+    })));
+    notices
+}
+
+/// Makes `fake` answer the first `command` after the returned switch is
+/// set with the error `code`.
+#[cfg(unix)]
+fn refuse_once(
+    fake: &mut FakeHostAgent,
+    command: &'static str,
+    code: &'static str,
+) -> Arc<std::sync::atomic::AtomicBool> {
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fails = Arc::clone(&armed);
+    fake.on_command = Some(Box::new(move |name, _| {
+        (name == command && fails.swap(false, std::sync::atomic::Ordering::AcqRel))
+            .then(|| Some(Err((code.into(), format!("{code} for the test")))))
+    }));
+    armed
+}
+
 /// A board on alpha whose host answers the next `prompt`, once armed, with
 /// the error `code`; the host's log, the arming switch, and the agent states
 /// the page was told.
@@ -642,24 +676,9 @@ async fn board_refusing_the_next_prompt(
     Arc<StdMutex<Vec<String>>>,
 ) {
     let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
-    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
-    let notices_for_callback = notices.clone();
-    board.set_agent_state_callback(Some(Arc::new(move |notice| {
-        let notices = notices_for_callback.clone();
-        Box::pin(async move {
-            notices
-                .lock()
-                .unwrap()
-                .push(format!("{}:{}", notice.project, notice.state));
-        })
-    })));
-    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let fails = Arc::clone(&armed);
+    let notices = record_agent_states(&mut board);
     let mut fake = FakeHostAgent::new(Box::new(|_, _| says("On it.")));
-    fake.on_command = Some(Box::new(move |name, _| {
-        (name == "prompt" && fails.swap(false, std::sync::atomic::Ordering::AcqRel))
-            .then(|| Some(Err((code.into(), format!("{code} for the test")))))
-    }));
+    let armed = refuse_once(&mut fake, "prompt", code);
     let log = fake.serve(board.hosts().connect_fake(HOST));
     (board, log, armed, notices)
 }
@@ -721,6 +740,49 @@ async fn a_caller_prompt_that_fails_ends_the_leg() {
     }
 }
 
+/// A project turn that fails with no words ends the leg like a failed prompt
+/// does: the caller is back on the operator and the session is killed.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_project_turn_that_fails_without_words_ends_the_leg() {
+    let failing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fails = Arc::clone(&failing);
+    let (mut board, log) = on_alpha(
+        &[],
+        Box::new(move |_, _| {
+            if fails.load(std::sync::atomic::Ordering::Acquire) {
+                vec![Step::Event(
+                    serde_json::json!({"kind": "error", "message": "retries exhausted"}),
+                )]
+            } else {
+                says("ready")
+            }
+        }),
+    )
+    .await;
+    let alpha = board.agent.clone().expect("alpha is on the line");
+    failing.store(true, std::sync::atomic::Ordering::Release);
+
+    let reply = board.handle_agent_ctx(&transcript("continue work")).await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert_eq!(
+        reply.text,
+        "alpha stopped responding, so I closed it.\n\nretries exhausted"
+    );
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("retries exhausted"),
+        "{reply:?}"
+    );
+    assert_eq!(
+        crate::pbx::until_named(&log, "kill").await,
+        [serde_json::json!({"session": "s1"})]
+    );
+    assert!(!alpha.alive());
+    board.shutdown().await;
+}
+
 /// A background prompt the host refuses fails alone (#423): the resident
 /// stays, and is published idle.
 #[cfg(unix)]
@@ -730,7 +792,7 @@ async fn a_background_prompt_the_host_refuses_keeps_the_resident() {
     armed.store(true, std::sync::atomic::Ordering::Release);
 
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("background resident");
     let resident = board.background_agents.get("alpha").unwrap().clone();
@@ -756,7 +818,7 @@ async fn a_background_prompt_that_fails_on_the_link_closes_the_resident() {
     armed.store(true, std::sync::atomic::Ordering::Release);
 
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("background resident");
     let resident = board.background_agents.get("alpha").unwrap().clone();
@@ -775,7 +837,15 @@ async fn a_background_prompt_that_fails_on_the_link_closes_the_resident() {
 #[cfg(unix)]
 #[tokio::test]
 async fn a_promotion_whose_host_refuses_a_command_returns_the_resident() {
-    let (mut board, resident, notices) = resident_failing_set_mode_once("daemon_error").await;
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let notices = record_agent_states(&mut board);
+    let (resident, _log) = resident_refusing_once(
+        &mut board,
+        "set_mode",
+        "daemon_error",
+        Box::new(|_, _| says("ready")),
+    )
+    .await;
 
     let reply = board
         .route_project_part(
@@ -799,12 +869,95 @@ async fn a_promotion_whose_host_refuses_a_command_returns_the_resident() {
     board.shutdown().await;
 }
 
+/// A promotion whose `join_call` the host refuses returns the resident to
+/// the background under the token the host still holds: its next request
+/// to speak carries that token and reaches the switchboard, and the
+/// coordinator still knows the token as alpha's (#555).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_promotion_whose_join_the_host_refuses_keeps_the_resident_on_the_call() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let calls = Arc::new(StdMutex::new(Vec::new()));
+    let seen = Arc::clone(&calls);
+    board.set_module_callback(Some(Arc::new(
+        move |call: crate::project_session::AgentCall| {
+            seen.lock().unwrap().push((call.call, call.token));
+            Box::pin(async { serde_json::json!({"status": "delivered"}) })
+        },
+    )));
+    let (resident, log) = resident_refusing_once(
+        &mut board,
+        "join_call",
+        "bad_request",
+        Box::new(|_, message| {
+            if message.contains("check the build") {
+                vec![Step::Call(
+                    "request_to_speak",
+                    serde_json::json!({"message": "The build is green.", "reason": "finished"}),
+                )]
+            } else {
+                says("ready")
+            }
+        }),
+    )
+    .await;
+    let held = resident.token();
+
+    let reply = board
+        .route_project_part(
+            "bring alpha forward",
+            "alpha",
+            crate::router::ConversationMode::Continue,
+            None,
+        )
+        .await;
+    assert!(reply.error.is_some(), "the promotion fails: {reply:?}");
+    assert!(board
+        .background_agents
+        .get("alpha")
+        .is_some_and(|session| session.same_session(&resident)));
+
+    board
+        .start_background_part_on("alpha", "check the build")
+        .await
+        .expect("the resident takes more work");
+    within("the request to speak is answered", async {
+        while log.module_replies().is_empty() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    assert_eq!(
+        (
+            calls.lock().unwrap().clone(),
+            log.module_replies()[0]["status"].clone(),
+            board
+                .coordinator()
+                .with_background(&held, |project| project.to_owned()),
+        ),
+        (
+            vec![("request_to_speak".to_owned(), held.clone())],
+            serde_json::json!("delivered"),
+            Some("alpha".to_owned()),
+        )
+    );
+    board.shutdown().await;
+}
+
 /// A command that fails on the link leaves the handle unusable (#291): that
 /// resident cannot go back, so it is closed and finished.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_promotion_whose_command_fails_on_the_link_closes_the_resident() {
-    let (mut board, resident, notices) = resident_failing_set_mode_once("stale_epoch").await;
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let notices = record_agent_states(&mut board);
+    let (resident, _log) = resident_refusing_once(
+        &mut board,
+        "set_mode",
+        "stale_epoch",
+        Box::new(|_, _| says("ready")),
+    )
+    .await;
 
     let reply = board
         .route_project_part(
@@ -825,44 +978,29 @@ async fn a_promotion_whose_command_fails_on_the_link_closes_the_resident() {
     board.shutdown().await;
 }
 
-/// A board with alpha resident in the background, on a host that answers
-/// the first `set_mode` after that with `code`, and the agent states the
-/// page was told.
+/// Puts alpha resident in the background on `board`, on a host running
+/// `on_prompt` that answers the first `command` after that with `code`; the
+/// resident and the host's log.
 #[cfg(unix)]
-async fn resident_failing_set_mode_once(
+async fn resident_refusing_once(
+    board: &mut Switchboard,
+    command: &'static str,
     code: &'static str,
+    on_prompt: crate::hosts::OnPrompt,
 ) -> (
-    Switchboard,
     crate::project_session::ProjectSession,
-    Arc<StdMutex<Vec<String>>>,
+    crate::hosts::FakeLog,
 ) {
-    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
-    let notices = Arc::new(StdMutex::new(Vec::<String>::new()));
-    let notices_for_callback = notices.clone();
-    board.set_agent_state_callback(Some(Arc::new(move |notice| {
-        let notices = notices_for_callback.clone();
-        Box::pin(async move {
-            notices
-                .lock()
-                .unwrap()
-                .push(format!("{}:{}", notice.project, notice.state));
-        })
-    })));
-    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let fails = Arc::clone(&armed);
-    let mut fake = FakeHostAgent::new(Box::new(|_, _| says("ready")));
-    fake.on_command = Some(Box::new(move |name, _| {
-        (name == "set_mode" && fails.swap(false, std::sync::atomic::Ordering::AcqRel))
-            .then(|| Some(Err((code.into(), format!("{code} for the test")))))
-    }));
-    fake.serve(board.hosts().connect_fake(HOST));
+    let mut fake = FakeHostAgent::new(on_prompt);
+    let armed = refuse_once(&mut fake, command, code);
+    let log = fake.serve(board.hosts().connect_fake(HOST));
     board
-        .start_background_part("alpha", "background work")
+        .start_background_part_on("alpha", "background work")
         .await
         .expect("background resident");
     let resident = board.background_agents.get("alpha").unwrap().clone();
     armed.store(true, std::sync::atomic::Ordering::Release);
-    (board, resident, notices)
+    (resident, log)
 }
 
 #[cfg(unix)]
@@ -884,7 +1022,7 @@ async fn failed_background_promotion_adoption_rolls_back_the_candidate() {
     );
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
     let resident = board.background_agents.get("beta").unwrap().clone();
@@ -906,7 +1044,7 @@ async fn failed_background_promotion_adoption_rolls_back_the_candidate() {
         .is_some_and(|session| session.same_session(&resident)));
     // A candidate left staged would hold the call in `Starting`, where the
     // coordinator refuses every later prompt.
-    assert!(!board.coordinator.is_candidate());
+    assert!(board.coordinator.candidate_identity().is_none());
     assert_eq!(board.coordinator.route(), "alpha");
     assert_eq!(
         board.agent.as_ref().map(|agent| agent.label().to_owned()),
@@ -951,7 +1089,7 @@ async fn a_promoted_agent_holds_the_session_guard_during_its_foreground_turn() {
     );
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
 
@@ -989,7 +1127,7 @@ async fn a_failed_promotion_turn_gives_the_session_guard_back() {
     fake.serve(board.hosts().connect_fake(HOST));
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
 
@@ -1029,7 +1167,7 @@ async fn a_promotion_whose_turn_fails_without_detail_reports_the_fallback() {
     fake.serve(board.hosts().connect_fake(HOST));
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
 
@@ -1092,7 +1230,7 @@ async fn a_promotion_and_a_transfer_commit_their_steps_in_one_order() {
 
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
     // Let the resident's own turn settle before recording.
@@ -1180,7 +1318,7 @@ async fn a_dead_background_resident_is_removed_before_a_later_split_part() {
     let creates = log.named("create_session").len();
 
     board
-        .start_background_part("beta", "beta after host close")
+        .start_background_part_on("beta", "beta after host close")
         .await
         .expect("a dead resident is replaced by a fresh session");
     let mut saw_fresh_prompt = false;
@@ -1387,6 +1525,50 @@ async fn a_stop_asked_before_a_hangup_is_not_confirmed_after_it() {
 }
 
 #[cfg(unix)]
+/// An operator that cannot start leaves the caller with a routing error and
+/// no spoken line.
+#[tokio::test]
+async fn an_operator_that_cannot_start_answers_that_routing_is_unavailable() {
+    let mut board = board_on(
+        vec![project("alpha", "")],
+        &[("SWITCHBOARD_PI_BINARY", "/nonexistent/switchboard-test-pi")],
+        two_model_catalog(),
+    );
+
+    let reply = board
+        .handle_decision(
+            "what's going on",
+            &decision(crate::router::Action::General, None, None),
+        )
+        .await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert_eq!(
+        reply.error.as_deref(),
+        Some("routing_unavailable"),
+        "{reply:?}"
+    );
+    assert!(reply.text.is_empty(), "{reply:?}");
+    board.shutdown().await;
+}
+
+/// A stop answers at once when no agent is on the line and none is named.
+#[tokio::test]
+async fn a_stop_with_nothing_on_the_line_says_nothing_is_running() {
+    let mut board = board_with(vec![project("alpha", "")], false);
+
+    let reply = board
+        .handle_decision(
+            "stop it",
+            &decision(crate::router::Action::Stop, None, None),
+        )
+        .await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert_eq!(reply.text, "Nothing is running to stop.");
+    board.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_operator_gets_the_call_state_once_per_utterance() {
     let root = scratch_dir("operator-call-state");
@@ -1453,6 +1635,41 @@ async fn a_route_to_an_unregistered_project_keeps_the_caller_on_the_line() {
     assert_eq!(reply.error.as_deref(), Some("unknown project \"ghost\""));
     assert_eq!(board.coordinator.route(), "alpha");
     assert_eq!(log.named("create_session").len(), creates);
+    board.shutdown().await;
+}
+
+/// An answer that names a background resident brings it forward with the
+/// caller's words, and the agent that was on the line goes to the background.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_answer_naming_a_background_resident_brings_it_forward_with_the_words() {
+    let mut board = board_with(vec![project("alpha", ""), project("beta", "")], false);
+    let log = serve(&board, Box::new(|_, _| says("handled")));
+    board.transfer_to(&transcript("alpha"), "alpha").await;
+    board
+        .start_background_part_on("beta", "beta part")
+        .await
+        .expect("beta resident");
+    let creates = log.named("create_session").len();
+
+    let answer = decision(crate::router::Action::AnswerWaiting, Some("beta"), None);
+    let reply = board.handle_decision("yes, ship the fix", &answer).await;
+
+    assert_eq!(reply.route, "beta", "{reply:?}");
+    assert!(
+        log.named("prompt")
+            .iter()
+            .any(|args| args["session"] == "s2"
+                && args["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("yes, ship the fix")),
+        "beta never heard the answer: {:?}",
+        log.named("prompt")
+    );
+    assert_eq!(log.named("create_session").len(), creates, "no new session");
+    assert!(board.background_agents.contains_key("alpha"));
+    assert!(!board.background_agents.contains_key("beta"));
     board.shutdown().await;
 }
 
@@ -1595,7 +1812,7 @@ async fn a_promoted_agent_is_told_it_is_in_the_foreground() {
     );
     board.transfer_to(&transcript("alpha"), "alpha").await;
     board
-        .start_background_part("beta", "beta chart")
+        .start_background_part_on("beta", "beta chart")
         .await
         .expect("beta resident");
     while let Some((_, message)) = within("prompt_rx", prompt_rx.recv()).await {
