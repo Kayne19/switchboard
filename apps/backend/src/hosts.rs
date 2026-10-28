@@ -1073,8 +1073,6 @@ pub(crate) struct FakeLink {
     host: String,
     pub(crate) epoch: u64,
     frames: mpsc::UnboundedReceiver<Message>,
-    /// Where a fake host agent records every frame it sends.
-    tap: Option<FakeLog>,
 }
 
 #[cfg(test)]
@@ -1093,7 +1091,6 @@ impl Hosts {
             host: host.to_owned(),
             epoch,
             frames,
-            tap: None,
         }
     }
 
@@ -1117,9 +1114,6 @@ impl Hosts {
 impl FakeLink {
     /// Delivers `frame` as the host agent sending it.
     pub(crate) fn send(&self, frame: Value) {
-        if let Some(tap) = &self.tap {
-            tap.0.lock().unwrap().frames.push(frame.clone());
-        }
         self.hosts
             .on_frame(&self.host, self.epoch, &frame.to_string());
     }
@@ -1215,6 +1209,21 @@ impl FakeLog {
     }
 }
 
+/// The frames and replies every peer of the host link is held to
+/// (`tests/fixtures/host-link.json`).
+#[cfg(test)]
+pub(crate) fn host_link_fixture() -> Value {
+    serde_json::from_str(include_str!("../../../tests/fixtures/host-link.json"))
+        .expect("the host link fixture is JSON")
+}
+
+/// Sends `frame` as the fake host agent and records it in `log`.
+#[cfg(test)]
+fn put(link: &FakeLink, log: &FakeLog, frame: Value) {
+    log.0.lock().unwrap().frames.push(frame.clone());
+    link.send(frame);
+}
+
 /// An in-process host agent on a `FakeLink`: it creates sessions, remembers
 /// their call tokens, and answers every command as `docs/host-link.md` says,
 /// with `turn_start`/`turn_end` around each prompt's steps.
@@ -1239,9 +1248,8 @@ impl FakeHostAgent {
     }
 
     /// Serves `link` until it closes; returns what it saw.
-    pub(crate) fn serve(self, mut link: FakeLink) -> FakeLog {
+    pub(crate) fn serve(self, link: FakeLink) -> FakeLog {
         let log = FakeLog::default();
-        link.tap = Some(log.clone());
         tokio::spawn(self.run(link, log.clone()));
         log
     }
@@ -1284,7 +1292,11 @@ impl FakeHostAgent {
             let session = args["session"].as_str().unwrap_or_default().to_owned();
             let mut event = |link: &FakeLink, session: &str, event: Value| {
                 cursor += 1;
-                link.send(json!({"type": "event", "session": session, "cursor": format!("boot:{cursor}"), "event": event}));
+                put(
+                    link,
+                    &log,
+                    json!({"type": "event", "session": session, "cursor": format!("boot:{cursor}"), "event": event}),
+                );
             };
             let answer = self
                 .on_command
@@ -1373,6 +1385,7 @@ impl FakeHostAgent {
             // none for it.
             let follow_up = frame["result"]["sent_as"] == "follow_up";
             // The real host announces each of these before it answers.
+            let mut opened_turn = None;
             if ok {
                 match name.as_str() {
                     "prompt" if !follow_up => {
@@ -1383,6 +1396,7 @@ impl FakeHostAgent {
                             &session,
                             json!({"kind": "turn_start", "cause": "input", "turn_id": turn_id}),
                         );
+                        opened_turn = Some(turn_id);
                     }
                     "set_model" | "set_thinking" => {
                         let mut state = frame["result"].clone();
@@ -1402,13 +1416,13 @@ impl FakeHostAgent {
                     _ => {}
                 }
             }
-            link.send(frame);
+            put(&link, &log, frame);
             if !ok {
                 continue;
             }
             match name.as_str() {
-                "prompt" if !follow_up => {
-                    let turn_id = format!("turn-{turns}");
+                "prompt" if opened_turn.is_some() => {
+                    let turn_id = opened_turn.unwrap_or_default();
                     let end = json!({"kind": "turn_end", "turn_id": turn_id});
                     let message = args["message"].as_str().unwrap_or_default().to_owned();
                     let mut settles = true;
@@ -1443,7 +1457,11 @@ impl FakeHostAgent {
                                             .unwrap()
                                             .commands
                                             .push(json!({"id": frame["id"], "name": wanted, "args": frame["args"]}));
-                                        link.send(json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": {"sent_as": wanted, "turn_id": turn_id}}));
+                                        put(
+                                            &link,
+                                            &log,
+                                            json!({"type": "reply", "id": frame["id"], "epoch": link.epoch, "ok": true, "result": {"sent_as": wanted, "turn_id": turn_id}}),
+                                        );
                                         break;
                                     }
                                     stash.push_back(frame);
@@ -1459,7 +1477,11 @@ impl FakeHostAgent {
                         };
                         calls += 1;
                         let call_id = format!("m{calls}");
-                        link.send(json!({"type": "module_call", "id": call_id, "session": session, "token": token, "turn_id": turn_id, "cause": "input", "call": call, "args": call_args}));
+                        put(
+                            &link,
+                            &log,
+                            json!({"type": "module_call", "id": call_id, "session": session, "token": token, "turn_id": turn_id, "cause": "input", "call": call, "args": call_args}),
+                        );
                         // The cell that made the call waits for its answer.
                         loop {
                             let Some(frame) = link.recv().await else {

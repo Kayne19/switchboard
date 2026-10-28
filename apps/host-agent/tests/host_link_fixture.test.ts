@@ -19,6 +19,10 @@ test("the fixture's protocol is the one the host agent speaks", () => {
 	assert.equal(fixture.welcome.protocol, HOST_LINK_PROTOCOL);
 });
 
+test("the fixture lists commands", () => {
+	assert.ok(Object.keys(fixture.commands).length > 0);
+});
+
 for (const [name, expected] of Object.entries(fixture.commands)) {
 	test(`the real host agent answers ${name} with the frames the fixture lists, in its order`, async () => {
 		const daemon = new FakeDaemon();
@@ -64,4 +68,3 @@ function withoutRouting(frame: Message, turn: unknown): Message {
 	const { session: _s, cursor: _c, id: _i, epoch: _e, replayed: _r, ...rest } = frame;
 	return JSON.parse(JSON.stringify(rest, (_key, value) => (typeof turn === "string" && value === turn ? "$turn" : value)));
 }
-

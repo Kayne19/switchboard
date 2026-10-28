@@ -78,6 +78,14 @@ every session name the host agent ever minted, so a restart keeps both:
 A WebSocket at the service's `/host`. Every frame is one JSON text message
 with a `type`.
 
+The frames below are held to one fixture, `tests/fixtures/host-link.json`:
+the welcome, the order of a command's events and its reply for `prompt`,
+`set_model`, `kill` and `detach`, and the module replies the service makes.
+The real host agent and the service's `module_reply` are tested against it,
+and the Rust fake host agent, the host agent's fake service and the skill's
+fake host agent are built from it, so a fake cannot drift from the peer it
+stands for.
+
 ### Identifiers
 
 - `session` is the daemon's live handle (`activeSessionId`). Every command

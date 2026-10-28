@@ -1,33 +1,96 @@
 {
+  "description": "The host link as the real peers speak it. A Rust test (hosts.rs welcome, the fake host agent, module_reply), the host agent tests (host_link_fixture.test.ts, and fake_service.ts welcomes from it) and the skill tests (test_host_link_fixture.py) all read it. Change an entry and both peers tests must pass: the real producer of each frame is checked against it, and the fake on the other side is built from it.",
   "protocol": 2,
-  "welcome": {"type": "welcome", "epoch": 1, "protocol": 2, "cursors": {}},
+  "welcome": {
+    "type": "welcome",
+    "epoch": 1,
+    "protocol": 2,
+    "cursors": {}
+  },
   "commands": {
     "prompt": {
-      "args": {"message": "hi"},
+      "args": {
+        "message": "hi"
+      },
       "frames": [
-        {"type": "event", "event": {"kind": "turn_start", "cause": "input", "turn_id": "$turn"}},
-        {"type": "reply", "ok": true, "result": {"sent_as": "prompt", "turn_id": "$turn"}}
+        {
+          "type": "event",
+          "event": {
+            "kind": "turn_start",
+            "cause": "input",
+            "turn_id": "$turn"
+          }
+        },
+        {
+          "type": "reply",
+          "ok": true,
+          "result": {
+            "sent_as": "prompt",
+            "turn_id": "$turn"
+          }
+        }
       ]
     },
     "set_model": {
-      "args": {"provider": "anthropic", "model": "claude-x"},
+      "args": {
+        "provider": "anthropic",
+        "model": "claude-x"
+      },
       "frames": [
-        {"type": "event", "event": {"kind": "state", "model": "anthropic/claude-x", "thinking": "medium"}},
-        {"type": "reply", "ok": true, "result": {"model": "anthropic/claude-x", "thinking": "medium"}}
+        {
+          "type": "event",
+          "event": {
+            "kind": "state",
+            "model": "anthropic/claude-x",
+            "thinking": "medium"
+          }
+        },
+        {
+          "type": "reply",
+          "ok": true,
+          "result": {
+            "model": "anthropic/claude-x",
+            "thinking": "medium"
+          }
+        }
       ]
     },
     "kill": {
       "args": {},
       "frames": [
-        {"type": "event", "event": {"kind": "session_closed", "reason": "killed"}},
-        {"type": "reply", "ok": true, "result": {"killed": true}}
+        {
+          "type": "event",
+          "event": {
+            "kind": "session_closed",
+            "reason": "killed"
+          }
+        },
+        {
+          "type": "reply",
+          "ok": true,
+          "result": {
+            "killed": true
+          }
+        }
       ]
     },
     "detach": {
       "args": {},
       "frames": [
-        {"type": "event", "event": {"kind": "session_closed", "reason": "detached"}},
-        {"type": "reply", "ok": true, "result": {"detached": true}}
+        {
+          "type": "event",
+          "event": {
+            "kind": "session_closed",
+            "reason": "detached"
+          }
+        },
+        {
+          "type": "reply",
+          "ok": true,
+          "result": {
+            "detached": true
+          }
+        }
       ]
     }
   },
@@ -36,27 +99,55 @@
       "name": "speak delivered",
       "call": "speak",
       "http_status": 200,
-      "body": {"delivered": true},
-      "reply": {"status": "delivered", "reason": null, "result": {"delivered": true}},
+      "body": {
+        "delivered": true
+      },
+      "reply": {
+        "status": "delivered",
+        "reason": null,
+        "result": {
+          "delivered": true
+        }
+      },
       "skill_line": "switchboard.speak: Spoken."
     },
     {
       "name": "speak while the caller is with another session",
       "call": "speak",
       "http_status": 200,
-      "body": {"delivered": false, "reason": "caller_away", "detail": "the caller is listening to another session"},
-      "reply": {"status": "refused", "reason": "caller_away", "result": {"delivered": false, "reason": "caller_away", "detail": "the caller is listening to another session"}},
+      "body": {
+        "delivered": false,
+        "reason": "caller_away",
+        "detail": "the caller is listening to another session; use request_to_speak with the actual words they should hear. While in the background, displays are held until the caller brings you forward; never say a display is on screen."
+      },
+      "reply": {
+        "status": "refused",
+        "reason": "caller_away",
+        "result": {
+          "delivered": false,
+          "reason": "caller_away",
+          "detail": "the caller is listening to another session; use request_to_speak with the actual words they should hear. While in the background, displays are held until the caller brings you forward; never say a display is on screen."
+        }
+      },
       "skill_line": "switchboard.speak: The caller is on other work; nothing was played. If it matters to them, send it with request_to_speak."
     },
     {
       "name": "display from a leg off the call",
       "call": "display",
       "http_status": 409,
-      "body": {"delivered": false, "code": "invalid_leg", "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"},
+      "body": {
+        "delivered": false,
+        "code": "invalid_leg",
+        "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"
+      },
       "reply": {
         "status": "refused",
         "reason": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller",
-        "result": {"delivered": false, "code": "invalid_leg", "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"}
+        "result": {
+          "delivered": false,
+          "code": "invalid_leg",
+          "detail": "this leg is no longer on the call: stop retrying, nothing you send reaches the caller"
+        }
       }
     }
   ]

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { DaemonCommandError, DaemonUnreachableError } from "../src/daemon_port.ts";
-import { HostLink } from "../src/link.ts";
+import { HOST_LINK_PROTOCOL, HostLink } from "../src/link.ts";
 import { clipDetail, type LinkEvent, type SentInput, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
 import { SkillSocket } from "../src/skill_socket.ts";
 import { FakeDaemon, flush } from "./fake_daemon.ts";
@@ -677,7 +677,7 @@ test("a host-agent restart reattaches from the daemon and sends each session a s
 	const daemon = new FakeDaemon();
 	const service = await FakeService.start();
 	const cursors: Record<string, string> = {};
-	service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: 1, cursors });
+	service.onHello = (l) => l.send({ type: "welcome", epoch: ++service.epoch, protocol: HOST_LINK_PROTOCOL, cursors });
 	const makeAgent = () => {
 		const manager: SessionManager = new SessionManager({ port: daemon, stateFile, emit: (h, e) => link.publish(h, e) });
 		const link: HostLink = new HostLink({

@@ -1646,9 +1646,10 @@ const SELF_WOKEN: &str = "no switchboard turn is running for this leg; this self
 // service's answer; the skill's fake host agent serves the same replies.
 #[tokio::test]
 async fn module_reply_makes_the_host_link_fixtures_replies() {
-    let fixture: Value =
-        serde_json::from_str(include_str!("../../../tests/fixtures/host-link.json")).unwrap();
-    for entry in fixture["module_replies"].as_array().unwrap() {
+    let fixture = crate::hosts::host_link_fixture();
+    let entries = fixture["module_replies"].as_array().unwrap();
+    assert!(!entries.is_empty(), "the fixture lists module replies");
+    for entry in entries {
         let status = StatusCode::from_u16(entry["http_status"].as_u64().unwrap() as u16).unwrap();
         let response = (status, axum::Json(entry["body"].clone())).into_response();
         assert_eq!(

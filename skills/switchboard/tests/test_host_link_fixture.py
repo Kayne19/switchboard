@@ -14,7 +14,9 @@ FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "
 
 def module_replies():
     with open(FIXTURE, encoding="utf-8") as fixture:
-        return json.load(fixture)["module_replies"]
+        replies = json.load(fixture)["module_replies"]
+    assert replies, "the fixture lists module replies"
+    return replies
 
 
 class HostLinkFixtureTest(base.ModuleTestCase):

@@ -199,13 +199,6 @@ async fn until_frame(agent: &mut HostAgent, want: impl Fn(&Value) -> bool) -> Va
     }
 }
 
-/// The frames and replies every peer of the host link is held to
-/// (`tests/fixtures/host-link.json`).
-fn host_link_fixture() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/host-link.json"))
-        .expect("the host link fixture is JSON")
-}
-
 /// Writes `$turn` where `turn` is, the way the fixture names a turn id.
 fn name_the_turn(value: &mut Value, turn: &Value) {
     match value {
@@ -221,7 +214,9 @@ fn name_the_turn(value: &mut Value, turn: &Value) {
 #[tokio::test]
 async fn the_fake_host_agent_sends_what_the_host_link_fixture_lists_in_its_order() {
     let fixture = host_link_fixture();
-    for (name, expected) in fixture["commands"].as_object().unwrap() {
+    let commands = fixture["commands"].as_object().unwrap();
+    assert!(!commands.is_empty(), "the fixture lists commands");
+    for (name, expected) in commands {
         let hosts = Hosts::new(tokens(), slow());
         let log =
             FakeHostAgent::new(Box::new(|_, _| vec![])).serve(hosts.connect_fake("scriptorium"));
@@ -229,10 +224,10 @@ async fn the_fake_host_agent_sends_what_the_host_link_fixture_lists_in_its_order
         let created = within(
             "create_session",
             hosts.command(
-            "scriptorium",
-            "create_session",
-            json!({"project": "homelab", "config": {"cwd": "/w", "provider": "anthropic", "model": "claude-x", "thinking": "medium"}}),
-            wait,
+                "scriptorium",
+                "create_session",
+                json!({"project": "homelab", "config": {"cwd": "/w", "provider": "anthropic", "model": "claude-x", "thinking": "medium"}}),
+                wait,
             ),
         )
         .await
