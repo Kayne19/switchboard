@@ -86,7 +86,9 @@ Note the iPadOS version in the pull request.
    says HANDS-FREE, and the wake word still makes a turn. Ask to be put
    through to a project, and later back to the operator: after each
    hand-off MODE still says HANDS-FREE, the microphone light stays on, and
-   the wake word makes a turn with the new agent.
+   the wake word makes a turn with the new agent. On a fresh page, tap MODE,
+   allow the microphone, and leave Safari at once. Come back: MODE says
+   PUSH-TO-TALK, the status line shows no error, and the next MODE listens.
 5. Captions: the answer card's text follows what is said.
 6. Frames: the answer card shows its dark fill and all four edges; the
    corner marks are whole; a chart, a document and a table show their
@@ -122,9 +124,18 @@ Note the iPadOS version in the pull request.
 12. Theater: ask the agent to give a chart the whole screen. The chart fills
     the stage with its note, and EXIT, MODE and Damocles are clear of the
     toolbars and the home indicator, in landscape and portrait. Tap Damocles
-    and speak: the turn goes as on any page. Tap EXIT: the page goes back to
-    the chart's own page.
+    and speak: the turn goes as on any page. Tap TRANSCRIPT HIDDEN under the
+    box: the history opens over the view, and RETURN puts you back in it.
+    Tap EXIT: the page goes back to the chart's own page.
 13. System: ask the agent for the system view. Each picker opens Safari's
     own picker; pick a thinking level and the line says so when the leg
-    confirms it. HANG UP puts you back with the operator. Rotate: the panel
-    stays clear of MODE and Damocles, and on a phone on its side it scrolls.
+    confirms it. HANG UP puts you back with the operator. Tap TRANSCRIPT
+    HIDDEN under the panel: the history opens over the view, and RETURN puts
+    you back in it. Rotate: the panel stays clear of MODE and Damocles, and
+    on a phone on its side it scrolls.
+
+## After a pin bump
+
+Once the bump has deployed, reload the page on the iPad and on any other
+device that had it open. The page never reloads itself, so a page left open
+keeps running the build it loaded against the new service.

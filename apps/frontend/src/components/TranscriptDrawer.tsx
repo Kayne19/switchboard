@@ -4,6 +4,7 @@ import type { MessageData } from '../controller/types';
 import { useModalFocus } from '../hooks/useModalFocus';
 import { usePinnedScroll } from '../hooks/usePinnedScroll';
 import { RichText } from '../primitives/RichText';
+import { MAX_TYPED_TURN_CHARS } from '../protocol';
 
 type TranscriptLine = NonNullable<MessageData['transcript']>[number];
 
@@ -21,9 +22,9 @@ interface TranscriptDrawerProps {
 }
 
 // The conversation history, opened over whichever scene is showing: from the
-// conversation scene's transcript toggle or from an explanation card beside
-// content. It belongs to the stage rather than to one scene so that opening it
-// never swaps the scene underneath. It covers the scene, and is a modal
+// transcript toggle or from an explanation card beside content. It belongs
+// to the stage rather than to one scene so that opening it never swaps the
+// scene underneath. It covers the scene, and is a modal
 // dialog that acts as one (`useModalFocus`, #268): the scene is inert behind
 // it (SceneRenderer), focus moves in as it opens -- to the field, so a
 // caller who will not speak can type at once, or to RETURN while the line
@@ -101,24 +102,30 @@ function TranscriptBody({ lines }: { lines: TranscriptLine[] }) {
 // once the server echoes it back.
 function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => boolean; inputRef: RefObject<HTMLInputElement | null> }) {
   const [draft, setDraft] = useState('');
-  const [notSent, setNotSent] = useState(false);
+  const [notSent, setNotSent] = useState<string | null>(null);
   const sendButton = useRef<HTMLButtonElement>(null);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!onSend || !draft.trim()) return;
+    const body = draft.trim();
+    if (!onSend || !body) return;
+    const codePoints = [...body].length;
+    if (codePoints > MAX_TYPED_TURN_CHARS) {
+      setNotSent(`NOT SENT / TOO LONG / ${codePoints} OF ${MAX_TYPED_TURN_CHARS} CHARACTERS`);
+      return;
+    }
     // SEND turns disabled with the draft gone. Focus on it then went to the
     // body, outside the dialog: it goes to the field, for the next turn.
     // Only focus on SEND moves: a send from the field leaves focus there,
     // and a tap that did not focus SEND (iPadOS Safari's) brings up no
     // touch keyboard the caller had put away.
     const fromSend = sendButton.current !== null && document.activeElement === sendButton.current;
-    if (onSend(draft)) {
+    if (onSend(body)) {
       setDraft('');
-      setNotSent(false);
+      setNotSent(null);
       if (fromSend) inputRef.current?.focus({ preventScroll: true });
     } else {
-      setNotSent(true);
+      setNotSent('NOT SENT / LINE DOWN');
     }
   };
 
@@ -130,7 +137,7 @@ function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => b
         value={draft}
         onChange={(event) => {
           setDraft(event.target.value);
-          setNotSent(false);
+          setNotSent(null);
         }}
         placeholder={onSend ? 'TYPE OR SPEAK' : 'LINE OFFLINE'}
         aria-label="Conversation input"
@@ -143,7 +150,7 @@ function TranscriptComposer({ onSend, inputRef }: { onSend?: (text: string) => b
       </button>
       {notSent ? (
         <div className="transcript__status tech micro" role="status">
-          NOT SENT / LINE DOWN
+          {notSent}
         </div>
       ) : null}
     </form>

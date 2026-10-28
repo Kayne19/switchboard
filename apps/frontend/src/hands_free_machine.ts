@@ -285,11 +285,7 @@ export function isEnabled(phase: Phase): boolean {
 	return phase.kind !== "off" && phase.kind !== "error";
 }
 
-/**
- * On and past the first load. A load in flight answers only to its own
- * result: a push-to-talk press, an epoch or a detector cannot reach it.
- */
-function isOn(phase: Phase): boolean {
+function isOnPastLoad(phase: Phase): boolean {
 	return isEnabled(phase) && phase.kind !== "loading";
 }
 
@@ -412,8 +408,6 @@ export function step(
 	const dropped = { ...machine, followUp: null };
 	switch (event.kind) {
 		case "toggle":
-			// MODE waits for the first load to land (#261).
-			if (phase.kind === "loading") return null;
 			return moved(
 				machine,
 				machine,
@@ -445,7 +439,7 @@ export function step(
 			);
 		case "pttActive":
 			if (event.active)
-				return isOn(phase)
+				return isOnPastLoad(phase)
 					? moved(machine, machine, go({ kind: "paused_ptt" }, QUIET))
 					: null;
 			return phase.kind === "paused_ptt" && detectors
@@ -577,7 +571,7 @@ function next(
 				? fail("could not start", event.error)
 				: null;
 		case "detectorFailed":
-			return isOn(phase)
+			return isOnPastLoad(phase)
 				? fail(`${event.what} failed`, event.error)
 				: null;
 		case "wake": {

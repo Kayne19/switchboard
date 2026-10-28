@@ -41,8 +41,12 @@ pub struct AgentCall {
 pub type ModuleCallback =
     Arc<dyn Fn(AgentCall) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
 
-/// A project session turn boundary reported by the host agent. The callback
-/// runs in the session pump, so a start is admitted before its module calls.
+/// A project session turn boundary, as the session's turn reports it
+/// (`session_turn.rs`). The callback runs in the session pump, so a start
+/// the host sent is admitted before its module calls. One report does not:
+/// the turn a prompt's reply names runs on the prompt's task, while the
+/// pump goes on answering module calls, so a call the host makes right
+/// after that reply can still be refused.
 #[derive(Clone, Debug)]
 pub struct ProjectTurn {
     pub instance_id: u64,
@@ -1020,13 +1024,21 @@ impl ProjectSession {
                 error: "the host did not say which turn the prompt went into".into(),
             });
         };
+        self.inner
+            .on_turn_frame(TurnEvent::PromptReplied {
+                turn_id: turn_id.to_owned(),
+            })
+            .await;
         Ok(self.collect(&mut frames, sent.seq, turn_id).await)
     }
 
     /// Collects the turn's text and signals until the `turn_end` of the
     /// prompt's turn, `turn_id`. Frames the host sent before the prompt's
     /// reply (`from`) belong to an earlier turn, such as the tail of one
-    /// that was aborted, and are skipped; so is another turn's end.
+    /// that was aborted, and are skipped; so is another turn's end. The
+    /// session's end is no turn's frame: a `session_closed` from before the
+    /// reply still ends the prompt, since the turn's frames no longer reach
+    /// it.
     async fn collect(
         &self,
         frames: &mut tokio::sync::mpsc::UnboundedReceiver<TurnFrame>,
@@ -1071,7 +1083,7 @@ impl ProjectSession {
                 }
                 TurnFrame::Event { seq, event } => (seq, event),
             };
-            if seq < from {
+            if seq < from && event["kind"] != "session_closed" {
                 continue;
             }
             match event["kind"].as_str() {

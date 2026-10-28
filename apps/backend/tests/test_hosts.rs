@@ -384,6 +384,52 @@ async fn hosts_fence_the_older_link_when_a_newer_one_is_accepted() {
         .await;
 }
 
+/// A link ends the same way whether it drops or a newer link of the host
+/// fences it, its hello ahead of the old socket's close: the host agent has
+/// taken every session off its call either way (`docs/host-link.md`,
+/// `join_call`). Each session the link carried hears `host_link_closed` once,
+/// and each command still waiting on it fails `link_lost`.
+#[tokio::test]
+async fn a_link_that_drops_or_is_fenced_ends_its_sessions_and_its_commands() {
+    for (fenced, how) in [(false, "dropped"), (true, "fenced")] {
+        let hosts = Hosts::new(tokens(), slow());
+        let older = hosts.connect_fake("scriptorium");
+        let (_subscription, mut frames) = hosts.subscribe("scriptorium", "a1b2");
+        let waiting = hosts
+            .send_command("scriptorium", "list_models", json!({}))
+            .expect("the host is linked");
+        if !fenced {
+            hosts.disconnect_fake("scriptorium");
+        }
+        let _newer = hosts.connect_fake("scriptorium");
+        let (_on_newer, mut newer_frames) = hosts.subscribe("scriptorium", "c3d4");
+        if fenced {
+            hosts.release("scriptorium", older.epoch, "fenced");
+        }
+
+        let Ok(SessionFrame::Event { event, .. }) = frames.try_recv() else {
+            panic!("{how}: a session the link carried is not told it ended");
+        };
+        assert_eq!(
+            event,
+            json!({"kind": "session_closed", "reason": "host_link_closed"}),
+            "{how}"
+        );
+        assert!(
+            frames.try_recv().is_err(),
+            "{how}: a session is told it ended twice"
+        );
+        assert!(
+            newer_frames.try_recv().is_err(),
+            "{how}: a session of the newer link was ended"
+        );
+        let error = within("the command's reply", waiting.reply(Duration::from_secs(5)))
+            .await
+            .expect_err("a command on a link that ended is not answered");
+        assert_eq!(error.code, "link_lost", "{how}");
+    }
+}
+
 #[tokio::test]
 async fn hosts_ignore_frames_from_a_fenced_link() {
     let hosts = Hosts::new(tokens(), slow());
@@ -885,15 +931,12 @@ async fn hosts_fail_a_command_whose_reply_they_cannot_read_at_once() {
 // the link goes on.
 #[tokio::test]
 async fn hosts_log_an_unreadable_frame_they_cannot_answer_and_go_on() {
-    use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
     let hosts = Hosts::new(tokens(), slow());
     let mut link = hosts.connect_fake("scriptorium");
     let (_subscription, mut frames) = hosts.subscribe("scriptorium", "a1");
     let bus = crate::debug::DebugBus::new();
-    let subscriber = tracing_subscriber::registry()
-        .with(EnvFilter::new("switchboard=info"))
-        .with(crate::debug::DebugLogLayer::new(bus.clone()));
-    tracing::subscriber::with_default(subscriber, || {
+    {
+        let _capture = crate::debug::capture_logs(&bus);
         hosts.on_frame(
             "scriptorium",
             link.epoch,
@@ -906,7 +949,7 @@ async fn hosts_log_an_unreadable_frame_they_cannot_answer_and_go_on() {
             link.epoch,
             r#"{"type":"module_call","session":"a1","call":"speak","args":{"text":"\ud83d"}}"#,
         );
-    });
+    }
     let logs: Vec<_> = bus
         .snapshot()
         .logs

@@ -216,6 +216,30 @@ async fn guard_label(board: &Switchboard) -> Option<String> {
         .map(|session| session.label().to_owned())
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_test_that_reaches_the_operator_without_its_fake_runs_no_pi_on_the_path() {
+    let root = scratch_dir("pi-on-path");
+    crate::pi_client::write_executable_script(
+        &root.join("pi"),
+        "while IFS= read -r _line; do :; done",
+    );
+    // The operator's process gets this PATH, and its spawn searches it for a
+    // bare name.
+    let mut board = board_on(
+        Vec::new(),
+        &[("PATH", &root.to_string_lossy())],
+        two_model_catalog(),
+    );
+    let error = board
+        .ensure_operator()
+        .await
+        .err()
+        .expect("the operator ran the pi on its PATH");
+    assert!(error.0.contains("fake_operator"), "{error}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// The two local processes, the operator and the routing utility, as one
 /// slot each: absent, live, or dead (its process ended or closed). Every
 /// slot reaches each phase and takes each event, and the table is what the

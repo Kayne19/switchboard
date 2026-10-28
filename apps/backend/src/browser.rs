@@ -238,12 +238,12 @@ async fn apply_screen_state(
             .unwrap_or_else(|| "the caller's screen could not render it".to_string());
         (rejection.seq, reason)
     });
-    state
-        .0
-        .display_gate
-        .lock()
-        .await
-        .report(report, command.applied_seq, rejected);
+    state.0.display_gate.lock().await.report(
+        report,
+        command.applied_seq,
+        rejected,
+        &state.0.delivery,
+    );
 
     send_message(state, epoch, ServerMessage::ScreenStateAck).await
 }

@@ -175,9 +175,7 @@ pub(crate) struct SpeechRequest {
     /// The active model snapshot captured when this request was admitted.
     /// A model swap invalidates the call's continuity chain.
     model: String,
-    /// Mid-turn and floor speech are written to the spoken transcript. Settled
-    /// replies already have their own Reply event and must not be duplicated.
-    log_spoken: bool,
+    transcript: Option<String>,
     result: oneshot::Sender<Result<Played, String>>,
     /// The `/speak` request it answers; the synthesis logs under it although
     /// the speech worker runs it.
@@ -502,9 +500,8 @@ fn joined(error: tokio::task::JoinError) -> SpeechOutcome {
 /// and `complete` consumes it, so a request is answered exactly once.
 struct PendingSpeech {
     utterance: Utterance,
-    /// `SpeechRequest`'s route, `log_spoken` and `result`.
     route: String,
-    log_spoken: bool,
+    transcript: Option<String>,
     result: oneshot::Sender<Result<Played, String>>,
     started: std::time::Instant,
 }
@@ -518,7 +515,7 @@ impl PendingSpeech {
         let Self {
             utterance,
             route,
-            log_spoken,
+            transcript,
             result,
             started,
         } = self;
@@ -526,12 +523,14 @@ impl PendingSpeech {
         match outcome {
             SpeechOutcome::Spoken { bytes, played } => {
                 tracing::info!(chars, bytes, ?played, elapsed = ?started.elapsed(), "synthesized a speech line");
-                if log_spoken {
-                    if let Some(entry) = state.0.transcript_log.lock().await.add_voiced(
-                        AGENT,
-                        &utterance.text,
-                        route,
-                    ) {
+                if let Some(text) = transcript {
+                    if let Some(entry) = state
+                        .0
+                        .transcript_log
+                        .lock()
+                        .await
+                        .add_voiced(AGENT, &text, route)
+                    {
                         // Emitted once its audio is out: the line names the
                         // utterance, and the page shows it when it plays.
                         emit_message(
@@ -754,7 +753,7 @@ async fn process_speech(state: AppState) {
             scope,
             group,
             model,
-            log_spoken,
+            transcript,
             result,
             span,
         } = request;
@@ -794,7 +793,7 @@ async fn process_speech(state: AppState) {
                 epoch,
             },
             route,
-            log_spoken,
+            transcript,
             result,
             started,
         };
@@ -1062,7 +1061,7 @@ pub(crate) struct SpeechAdmission {
     pub(crate) deadline: std::time::Instant,
     pub(crate) scope: ContinuationScope,
     pub(crate) group: SpeechGroup,
-    pub(crate) log_spoken: bool,
+    pub(crate) transcript: Option<String>,
 }
 
 /// The speech worker's queue and the state only this module reads: the
@@ -1231,7 +1230,7 @@ pub(crate) async fn send_speech(
         deadline,
         scope,
         group,
-        log_spoken,
+        transcript,
     } = admission;
     let ReservedSpeech {
         permit, sequence, ..
@@ -1246,7 +1245,7 @@ pub(crate) async fn send_speech(
         scope,
         group,
         model: state.0.coordinator.status().model,
-        log_spoken,
+        transcript,
         result: result_tx,
         span: tracing::Span::current(),
     });
@@ -1310,7 +1309,7 @@ async fn synthesize_reply_if_current(
                 deadline,
                 scope,
                 group,
-                log_spoken: false,
+                transcript: None,
             },
             first.take(),
         )

@@ -89,7 +89,12 @@ async function connectAt(
   return socket;
 }
 
+// Every test runs on the fake clock, so a stall watch or a ping a failing
+// test leaves armed is dropped by `useRealTimers` instead of firing in a
+// later test after its stubs are gone (docs/concurrency-and-test-hazards.md,
+// "A timer a test leaves armed").
 beforeEach(() => {
+  vi.useFakeTimers();
   FakeSocket.instances = [];
 });
 
@@ -216,7 +221,6 @@ describe("CallRuntime captions when playback fails", () => {
   // -- the line used to wait for ever: the caption log froze on an old line
   // while the transcript drawer had every later one.
   it("shows a line whose audio never arrives", async () => {
-    vi.useFakeTimers();
     const heard: string[] = [];
     const { runtime } = makeRuntime({
       onHeard: (line) => heard.push(line.text),
@@ -309,7 +313,6 @@ describe("CallRuntime connection", () => {
   });
 
   it("reconnects after the backend drops the socket", async () => {
-    vi.useFakeTimers();
     const { runtime, latestState } = makeRuntime();
     const socket = await connectAt(runtime);
     socket.drop();
@@ -326,7 +329,6 @@ describe("CallRuntime connection", () => {
   });
 
   it("pings every 20 seconds and reconnects when a pong is missed", async () => {
-    vi.useFakeTimers();
     const { runtime, latestState } = makeRuntime();
     const socket = await connectAt(runtime);
     vi.advanceTimersByTime(20_000);
@@ -350,7 +352,6 @@ describe("CallRuntime connection", () => {
   });
 
   it("retry opens exactly one fresh socket", async () => {
-    vi.useFakeTimers();
     const { runtime } = makeRuntime();
     await connectAt(runtime);
     runtime.retry();
@@ -361,7 +362,6 @@ describe("CallRuntime connection", () => {
   });
 
   it("dispose closes the socket without reconnecting or publishing", async () => {
-    vi.useFakeTimers();
     const { runtime, states } = makeRuntime();
     const socket = await connectAt(runtime);
     const published = states.length;
@@ -989,7 +989,6 @@ describe("CallRuntime hands-free", () => {
   });
 
   it("stops on a new epoch and opens the follow-up lease once playback drains", async () => {
-    vi.useFakeTimers();
     stubHandsFreeBrowser();
     const handsFree = realHandsFree(recorder);
     const { runtime } = makeRuntime(handsFree.options);

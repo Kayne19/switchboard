@@ -162,16 +162,16 @@ for (const file of markdown()) {
 //     them with the skill socket's line cap when a request is too large.
 //     Each link the action crosses leaves room around it: the
 //     skill socket's line holds the action and 1 MiB of envelope, and the
-//     host link's frame holds that line and 1 MiB more. The page keeps no
-//     more display rejections waiting to be sent than the service keeps per
-//     generation (`MAX_KEPT_REJECTIONS`). The corpus pins what the
-//     validators make of the caps; this pins the copies it cannot run.
+//     host link's frame holds that line and 1 MiB more. The page refuses a
+//     typed turn the service would refuse (`MAX_TYPED_TURN_CHARS`). The
+//     corpus pins what the validators make of the caps; this pins the
+//     copies it cannot run.
 {
 	// A cap as the source writes it: an integer or a product of integers (`8 * 1024 * 1024`).
 	const cap = (file, pattern) => {
 		const text = readFileSync(path.join(root, file), "utf8").match(pattern)?.[1];
 		if (!text || !/^\d[\d_]*(?:\s*\*\s*\d[\d_]*)*$/.test(text.trim())) {
-			findings.push(`image caps: could not read ${pattern.source} from ${file} (the check needs updating)`);
+			findings.push(`size caps: could not read ${pattern.source} from ${file} (the check needs updating)`);
 			return NaN;
 		}
 		return text.split("*").reduce((product, factor) => product * Number(factor.trim().replaceAll("_", "")), 1);
@@ -198,15 +198,15 @@ for (const file of markdown()) {
 		"skill_socket.ts": cap("apps/host-agent/src/skill_socket.ts", /^export const MAX_LINE_BYTES = ([^;]+);$/m),
 		"__init__.py": cap("skills/switchboard/src/switchboard/__init__.py", /^_MAX_LINE_BYTES = (.+)$/m),
 	};
-	const keptRejections = {
-		"screenReporter.ts": cap("apps/frontend/src/app/screenReporter.ts", /^export const MAX_KEPT_REJECTIONS = ([^;]+);$/m),
-		"display.rs": cap("apps/backend/src/display.rs", /^const MAX_KEPT_REJECTIONS: usize = ([^;]+);$/m),
+	const typedTurn = {
+		"protocol.ts": cap("apps/frontend/src/protocol.ts", /^export const MAX_TYPED_TURN_CHARS = ([^;]+);$/m),
+		"caller_input.rs": cap("apps/backend/src/caller_input.rs", /^pub\(crate\) const MAX_TYPED_TURN_CHARS: usize = ([^;]+);$/m),
 	};
 	const line = lineCaps["skill_socket.ts"];
 	const frame = cap("apps/backend/src/hosts.rs", /^const MAX_HOST_FRAME_BYTES: usize = ([^;]+);$/m);
 	const schema = JSON.parse(readFileSync(path.join(root, "docs/display-action-v1.schema.json"), "utf8"));
 	const base64 = schema.definitions?.ImageData?.properties?.bytes?.maxLength;
-	const read = [...Object.values(image), ...Object.values(action), ...Object.values(general), ...Object.values(lineCaps), ...Object.values(keptRejections), frame].every((value) => !Number.isNaN(value));
+	const read = [...Object.values(image), ...Object.values(action), ...Object.values(general), ...Object.values(lineCaps), ...Object.values(typedTurn), frame].every((value) => !Number.isNaN(value));
 	const same = (what, values) => {
 		if (new Set(Object.values(values)).size > 1) findings.push(`${what} differs: ${Object.entries(values).map(([file, value]) => `${file} ${value}`).join(", ")}`);
 	};
@@ -215,7 +215,7 @@ for (const file of markdown()) {
 		same("image action cap (MAX_IMAGE_ACTION_BYTES)", action);
 		same("action cap (MAX_ACTION_BYTES)", general);
 		same("skill socket line cap (MAX_LINE_BYTES)", lineCaps);
-		same("kept display rejections (MAX_KEPT_REJECTIONS)", keptRejections);
+		same("typed turn cap (MAX_TYPED_TURN_CHARS)", typedTurn);
 		const raw = image["validation.ts"];
 		if (base64 !== 4 * Math.ceil(raw / 3)) findings.push(`docs/display-action-v1.schema.json: ImageData.bytes maxLength ${base64} is not the base64 length of ${raw} bytes (${4 * Math.ceil(raw / 3)})`);
 		if (line < action["validation.ts"] + mib) findings.push(`apps/host-agent/src/skill_socket.ts: MAX_LINE_BYTES ${line} leaves less than 1 MiB around a ${action["validation.ts"]}-byte image action`);
@@ -408,8 +408,9 @@ const machines = [
 	{ file: "apps/backend/src/project_session.rs", writer: /\*lifecycle\s*=(?!=)/, max: 1, once: [] },
 	// floor-front (#421): `serve` takes the phase `step` gives; `leave` is the one teardown.
 	{ file: "apps/backend/src/floor.rs", writer: /\bphase\s*=\s*next\b/, max: 1, once: [/\bself\.leave\(/] },
-	// host-session (#404): the turn record is written only in `#turnStep`, on its three arms.
-	{ file: "apps/host-agent/src/sessions.ts", writer: /\bt\.turn\s*=(?!=)/, max: 3, once: [] },
+	// host-session (#404): the turn record is written only in `#turnStep`, on its three arms;
+	// its held failed call only in `#swapHeldFailedCall`, which `#turnStep` calls.
+	{ file: "apps/host-agent/src/sessions.ts", writer: /\bt\.turn\s*=(?!=)/, max: 3, once: [/\.heldFailedCall\s*=(?!=)/] },
 	// daemon-resync (#418): `#step` is the one writer of the keeper's phase.
 	{ file: "apps/host-agent/src/daemon_keeper.ts", writer: /\bthis\.#phase\s*=(?!=)/, max: 1, once: [] },
 	// call-line (#437): `CallLifecycle::step` writes the line; `step_locked` sends every candidate notice.
@@ -600,9 +601,21 @@ for (const row of owners) findings.push(...ownerFindings(row.file, lines(path.jo
 	}
 }
 
+// 23. A backend test captures logs with debug::capture_logs, never with a
+//     subscriber scoped to its thread. The scope is one thread, but tracing
+//     caches each callsite's interest for the whole process, from the thread
+//     that reaches it first: another test's thread, which has no subscriber,
+//     caches it as never, and the capturing test loses its line (#368;
+//     docs/concurrency-and-test-hazards.md).
+for (const start of ["apps/backend/src", "apps/backend/tests"]) {
+	for (const file of files(path.join(root, start), new Set([".rs"]))) {
+		scan(file, /\b(?:set|with)_default\b|\.with_subscriber\(/, "a subscriber scoped to one thread (capture logs with debug::capture_logs)");
+	}
+}
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render, one hook for a measured value");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render, one hook for a measured value, one log capture");

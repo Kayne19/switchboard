@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { type TestContext, test } from "node:test";
 import { DaemonKeeper } from "../src/daemon_keeper.ts";
-import { DaemonCommandError } from "../src/daemon_port.ts";
+import { DaemonUnreachableError } from "../src/daemon_port.ts";
 import { SessionManager } from "../src/sessions.ts";
 import { FakeDaemon, flush } from "./fake_daemon.ts";
 
@@ -36,7 +36,7 @@ test("keeper: after a daemon drop, a session that will not attach is retried alo
 		attempts.push(handle);
 		if (handle === a && refusals > 0) {
 			refusals--;
-			throw new DaemonCommandError("attach", "timed out after 60000ms");
+			throw new DaemonUnreachableError("attach", "timed out after 60000ms");
 		}
 		return attach(handle);
 	};
@@ -87,14 +87,14 @@ async function rig(t: TestContext, backoffInitialMs = 10) {
 		backoffInitialMs,
 		log: (message) => logs.push(message),
 	});
-	/** Attaches the daemon refuses, by handle; a refusal is `attach: timed out`. */
+	/** Attaches that time out, by handle. */
 	const refuse = new Set<string>();
 	const attach = daemon.attach.bind(daemon);
 	let gate: Promise<void> | null = null;
 	daemon.attach = async (handle: string) => {
 		const result = attach(handle);
 		if (gate) await gate;
-		if (refuse.has(handle)) throw new DaemonCommandError("attach", "timed out after 60000ms");
+		if (refuse.has(handle)) throw new DaemonUnreachableError("attach", "timed out after 60000ms");
 		return result;
 	};
 	/** How many of the next `list` calls fail. */
@@ -104,7 +104,7 @@ async function rig(t: TestContext, backoffInitialMs = 10) {
 		const sessions = await list();
 		if (failLists > 0) {
 			failLists--;
-			throw new DaemonCommandError("list", "timed out after 30000ms");
+			throw new DaemonUnreachableError("list", "timed out after 30000ms");
 		}
 		return sessions;
 	};

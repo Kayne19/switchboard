@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { DisplayFixtureServer } from "../integration/display-fixture-server.mjs";
+import { MAX_TYPED_TURN_CHARS } from "../../src/protocol";
 import { transcriptEntry } from "../fixtures/serverMessages";
 
 const longReply = [
@@ -197,6 +198,38 @@ test("explanations read Markdown, scroll, and open a history the caller can type
 
     await page.keyboard.press("Escape");
     await expect(drawer).toHaveCount(0);
+  } finally {
+    await fixtureServer.stop();
+  }
+});
+
+test("a typed turn over the service's cap stays in the field with the reason, and one at the cap in emoji goes whole", async ({ page }) => {
+  const fixtureServer = new DisplayFixtureServer({ initialGeneration: 4 });
+  const { wsUrl } = await fixtureServer.start();
+
+  try {
+    await page.goto(`/?ws=${encodeURIComponent(wsUrl)}&chrome=0`);
+    await expect.poll(() => fixtureServer.frames.some((frame) => frame.type === "hello")).toBe(true);
+    fixtureServer.broadcast({ type: "history", entries: [transcriptEntry({ role: "caller", text: "Show me the call path.", id: "clip-1" })] });
+    await page.locator(".transcript-toggle").click();
+    const drawer = page.getByRole("dialog", { name: "Conversation history" });
+    const input = drawer.getByRole("textbox", { name: "Conversation input" });
+    await expect(input).toBeFocused();
+
+    await input.fill("x".repeat(MAX_TYPED_TURN_CHARS + 1));
+    await input.press("Enter");
+    await expect(drawer.getByRole("status")).toHaveText(`NOT SENT / TOO LONG / ${MAX_TYPED_TURN_CHARS + 1} OF ${MAX_TYPED_TURN_CHARS} CHARACTERS`);
+    expect(await input.evaluate((field: HTMLInputElement) => field.value.length)).toBe(MAX_TYPED_TURN_CHARS + 1);
+    await expect(input).toBeFocused();
+
+    const rockets = "\u{1F680}".repeat(MAX_TYPED_TURN_CHARS);
+    await input.fill(rockets);
+    await input.press("Enter");
+    await expect(input).toHaveValue("");
+    await expect(drawer.getByRole("status")).toHaveCount(0);
+    await expect
+      .poll(() => fixtureServer.frames.filter((frame) => frame.type === "typed_turn").map((frame) => frame.text === rockets))
+      .toEqual([true]);
   } finally {
     await fixtureServer.stop();
   }

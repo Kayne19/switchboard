@@ -290,10 +290,13 @@ the operator; before adoption the route is still the old one, and the rescue
 has already abandoned the candidate.
 
 On the browser side an `epoch` drops what the old leg put on screen (its
-objects, speech, focus, activity, and any view it asked for) and keeps the
-conversation, which belongs to the call. The route label on it changes when the
-status arrives. A reconnect is followed by the history snapshot, which replaces
-the transcript and hides the conversation if the server has none.
+objects, speech, focus, activity and any view it asked for), the line's and
+the turn's errors, except on a reconnect's snapshot of the same generation,
+and playback's, except on a handoff. It keeps the conversation, which belongs to the call, and a
+microphone's error, which belongs to the device. The route label on it
+changes when the status arrives. A reconnect is followed by the history
+snapshot, which replaces the transcript and hides the conversation if the
+server has none.
 
 ## Delivery and picker ordering
 
@@ -315,7 +318,11 @@ and settled replies. Cancellation releases a slot so a stale TTS result cannot
 wedge later speech. The browser drops queued/playing audio and the outbox clips
 that never went out on a new epoch, and tells the caller about those. A stale
 clip that did go out stays until it receives its ID-bearing `stale_epoch`
-error, then is removed from the outbox rather than retried forever.
+error, then is removed from the outbox rather than retried forever. Both
+notices last only until the next epoch on the live line, and after a rescue
+by a page control (a hangup from a project leg, a `/connect`, a redial) that
+epoch follows at once: the new leg's, which takes them down
+(`apps/frontend/ARCHITECTURE.md`, "Transport boundary").
 
 The route/model/thinking pickers serialize their HTTP operations. A failed picker
 request restores the value that was selected before that request, unless a newer
@@ -443,6 +450,93 @@ reply to a `prompt` names the turn the prompt went into, so the prompt ends
 only on that turn's `turn_end`, never on another's (host-link protocol 2).
 A host agent that predates this is refused at hello.
 
+The turn the reply names can be one the host already had open. When the
+caller's operation wins the race above, the run is refused an operation of
+its own, and the caller's prompt reaches a session that is running it: the
+host sends the prompt into the run as a `follow_up`, and its reply names the
+run. The run is then the caller's answer (#512), but it opens no turn of its
+own, so no `turn_start` with cause `input` ever crossed to bind the caller's
+operation to it. Its `speak` and `display`, which the host stamps with the
+run's turn and cause, were refused as a self-woken call without authority
+while the caller waited for exactly that answer. So the session's turn
+reports the reply's turn as the caller turn's start
+(`TurnEvent::PromptReplied`, stepped by `prompt_as` on the prompt's task),
+and the one bind in `open_host_turn` binds the operation to it; a turn the
+host opened for the prompt reports its own start too, and the second bind
+of one id changes nothing. With the reply read before the run's end, the
+host's end of that turn then settles the operation as an `input` turn's end
+does, whatever the run's cause, and the rule above holds for a `follow_up`
+too. With the end read first (the reply is read on the prompt's task, the
+end on the pump's, and nothing orders them), the operation is not bound
+yet, so the end settles nothing: the operation closes when the prompt
+returns, as it did before this bind existed, and a run the host starts in
+that sliver is refused as before (#109). A bring-up has the same shape with
+no operation yet: a takeover of a busy desk session, or a transfer that
+resumes a saved session the host reattached busy after its restart, sends
+its first prompt into the open turn (#239). There the bind lands on the
+starting line (`Line::Starting`'s `intro_turn`), and adoption opens the
+intro operation bound to it; if the candidate's first sign of life adopts
+it before the reply is read, the bind lands on the intro operation
+directly, and both orders end the same way. It follows that a bring-up's
+intro operation is bound to its host turn now, where it was unbound before,
+whenever that turn is still open when the reply is read: a module call
+inside such an intro that names no turn, or another turn, is refused, as it
+is inside a bound caller turn. Protocol 2 hosts stamp every call made inside
+a turn with its id.
+
+The report runs on the prompt's task, not the pump's, so it is the one
+turn report not ordered before the turn's module calls: a call the host
+makes right after its reply can still be refused, as every such call was
+before. It also gives the locks one more edge: `prompt_as` holds the PBX
+lock and the session's `turn_lock` while the report takes
+`operation_transition`. The edge is safe because nothing that holds
+`operation_transition` waits on a prompt, on a `turn_lock`, or on the PBX
+lock; keep it so. The reply can also be read after the pump has taken the
+end of the turn it names: a turn the host opened for the prompt whose
+`turn_start` and `turn_end` both came first, or a `follow_up` run that
+ended first. The session's turn keeps, with the prompt being collected, the
+turns whose end it took since that prompt went out (`session_turn.rs`,
+`Prompt::ended`), and a reply naming one of them reports nothing. Without
+that, the `follow_up` case bound the still-open,
+unbound operation to a turn that was over, and the ended run spoke with the
+caller's authority until the prompt returned. The check runs when the
+reply is stepped, not when its bind takes `operation_transition`, so one
+order is still open (#542): the reply is stepped before the run's end, the
+pump steps and reports that end before the reply's report takes the lock,
+and the bind then lands on the ended turn, which keeps the caller's
+operation until the prompt returns. A reply naming a turn that
+ended before the prompt went out is not caught: the reply names the turn
+the prompt went into, so no protocol-2 host sends one. The report cannot
+stamp a stale turn on a newer caller operation either, because the turn
+worker is the one production caller of `begin_prompt` and runs turns one
+at a time; a second caller of `begin_prompt` would have to keep that true.
+`a_caller_prompt_sent_into_a_self_woken_run_can_answer` in
+`apps/backend/tests/test_turns.rs` drives the caller's case, and checks
+that the run's end settled the operation.
+`a_reply_read_after_its_run_ended_binds_nothing` there has the service
+step the run's end before the reply, and checks that the ended run has no
+authority. Like the clip tests in "A clip on the wire when the leg is
+adopted", which order their steps with a gated sidecar or a held session
+guard, it decides that order with something it owns, not with the
+scheduler: it sends the end, then a module call, and replies only once the
+pump has answered that call. The pump reads the session's frames in order,
+so by then it has taken the end. A host sends a `follow_up`'s reply ahead
+of the run's end; here the end goes first. The prompt skips the frames sent
+before its reply, so an idle snapshot ends it instead, and its return shows
+that its task has stepped the reply.
+The session-turn table's `PromptIntoEndedRun` row
+(`apps/backend/tests/test_project_session.rs`) pins the unreported start the
+same way: the rig sends the run's end before the host's reply, waits for
+the pump to read it, replies, and ends the prompt with an idle snapshot.
+`a_busy_desk_takeover_prompt_can_answer` and
+`a_busy_resumed_session_prompt_can_answer` drive the two bring-ups and
+accept whichever order the reply and the adoption land in; the fake replies
+at once and the sign of life follows, so in practice they run the reply
+first. The adopted-first bind is pinned at the coordinator by the call-line
+table row `adopted | bind_turn => bound`, and
+`a_candidates_intro_turn_binds_the_intro_operation` in
+`apps/backend/tests/test_lifecycle.rs` pins the candidate's bind alone.
+
 `a_turn_resumed_after_an_external_abort_can_speak` and
 `a_caller_message_steers_a_turn_woken_as_the_caller_turn_settles` in
 `apps/backend/tests/test_turns.rs` send the two frames back to back.
@@ -531,6 +625,100 @@ make it private: another test can send the same kind of message. If no
 per-test seam exists, add one that production also uses, as the debug bus is,
 rather than a `#[cfg(test)]` global.
 
+## A log capture scoped to one thread
+
+A few backend tests assert on a log line, because the journal is the only
+place that says it: the mime a caller's browser recorded, or why a host frame
+was dropped. They used to capture the line with a subscriber scoped to the
+test's thread (`tracing::subscriber::set_default` or `with_default`, with an
+`EnvFilter` and a `DebugLogLayer` on the test's own bus).
+`an_arriving_clip_is_logged_with_the_mime_the_browser_recorded` failed now and
+then under load with `left: []`: the `clip arrived` line never reached the
+capture (#368, #427, #211).
+
+The scope is one thread, but tracing keeps what it learns about a callsite for
+the whole process. Each `info!` is a callsite. The first time any thread
+reaches it, tracing asks whether a subscriber wants its events and stores the
+answer, the callsite's interest, in the callsite. While one subscriber is live
+in the process, tracing-core asks only the default of the thread that reached
+the callsite. A test that captures nothing, on another thread, has no default.
+So when it reaches `clip arrived` first, while the capturing test's subscriber
+is the only one live, the callsite is cached as never until the next
+subscriber is created, and the capturing test's own line is skipped. The test
+passes alone and fails beside a test that uploads a clip at the wrong moment:
+the interest cache is a process-global that every test shares, the hazard
+above in another form.
+
+Measured on master: a test that lets another thread reach the callsite first
+fails 10 runs in 10 when run alone. Under load, each round ran four full test
+binaries at once, two built from master and two built with the fix, so both
+saw the same load. The 1-minute load average at the start of a round was 30
+to 82, except for two rounds at 13 and 26. Master's binary failed 10 of 260
+runs, each one in this test. None of the 260 fix runs failed this test. Only
+60 of them ran the code that landed, at 51107365. The other 200 ran two
+earlier builds of the same capture, one from before review and a pilot build
+that also held two more repro tests. Two of the 260 fix runs failed in
+another test, once each, and neither test is touched by this change.
+
+`debug::capture_logs(&bus)` (`apps/backend/src/debug.rs`) is the fix. Its
+first call installs the test binary's only subscriber, as the global default:
+an `EnvFilter` of `switchboard=info` and a layer that hands each line to the
+capture of the thread that logged it. Each call puts a `DebugLogLayer` on the
+test's bus in its thread's slot, and the guard it returns empties the slot
+when dropped. With a global subscriber, every thread's default is that
+subscriber, so no callsite is cached as never for want of one.
+
+The subscriber is a `#[cfg(test)]` global, which the rule above says to avoid.
+It is one here because tracing's dispatch is process-global already:
+production installs one global subscriber too. The test still observes
+through what it owns. It reads
+its own bus, the line reaches it through production's `DebugLogLayer`, and the
+slot is keyed by thread, so no test reads another's lines.
+
+The install has one window of its own. It enables `info` before it publishes
+the subscriber, and a callsite another thread registers in between finds no
+subscriber and is cached as never. `capture_logs` has tracing work out every
+interest again right after the install. That repairs such a callsite, unless
+the other thread looked for the subscriber before the install published it
+and stores its answer after the repair. That window is a few instructions
+wide, and it has not been seen.
+
+The capture is per thread, as the scoped subscriber was. A `#[tokio::test]`
+runs its tasks on the test's thread, so their lines are captured. A line
+logged on another thread is not: a `#[tokio::test(flavor = "multi_thread")]`
+worker, a `spawn_blocking` closure, a thread the test starts. A test of code
+that logs there runs it on the default current-thread runtime, or reads the
+fact from something it owns, such as an event on its bus.
+
+The rule: a backend test captures logs with `capture_logs`, never with a
+subscriber of its own. `scripts/check_hygiene.mjs` refuses `set_default`,
+`with_default` and `.with_subscriber(` in `apps/backend`.
+
+## A test that runs the machine's pi
+
+The operator and the routing utility are local processes started from
+`SWITCHBOARD_PI_BINARY`, whose default is `pi`, looked up on the PATH.
+`Config::for_tests` used to take that default too, so a test that reached
+the operator without naming a fake ran whatever `pi` the PATH held: the real
+one on a development box, none on CI. Such a test passed on the box and
+failed on CI, or, if it never looked at the operator's answer, passed on
+both while it prompted the real pi on the box.
+`a_caller_turn_never_goes_to_another_projects_session` was the second kind:
+the turn it drives returns the caller to the operator.
+
+`Config::for_tests` now sets the operator's runtime to a path that does not
+exist (`NO_PI` in `apps/backend/src/main.rs`) unless the test names one. The
+start fails where it fails on CI, at the spawn, on a missing file, and the
+path names `fake_operator`. A turn that reaches the operator sees it
+unavailable on both machines alike. The service's own default is still `pi`.
+
+The rule: a test that reaches the operator or the routing utility names its
+runtime, such as `fake_operator`, `fake_routing_process`, or a script of its
+own written through `write_executable_script`.
+`a_test_that_reaches_the_operator_without_its_fake_runs_no_pi_on_the_path` in
+`apps/backend/tests/test_operator.rs` puts a `pi` on the PATH the operator is
+given, names no runtime, and checks that the operator does not start.
+
 ## A time budget measured on the wall clock
 
 Some unit tests hold work to a time budget: a layout that went quadratic, a
@@ -561,6 +749,45 @@ test about the page clock uses vitest's fake timers
 (`vi.setSystemTime`, `vi.advanceTimersByTime`), never the real one, and reads
 the fake time with `vi.getMockedSystemTime()` or `new Date()`, since the gate
 refuses `Date.now` whatever clock it reads.
+
+## A timer a test leaves armed
+
+A playback whose clip is meant to be sounding arms a stall watch
+(`ProgressWatch`, 3 s by default) on the real clock. `audioPlayback.test.ts`
+runs in node, and each of its tests stubs what a browser has
+(`requestAnimationFrame`, `MediaSource`, object URLs) for itself; `afterEach`
+removes the stubs. Eighteen of its tests ran on the real clock, ended with a
+clip sounding or opening, and never disposed the playback, so the watch
+outlived the test.
+
+Vitest runs each file in a worker of its own and ends the worker with the
+file, so a watch still armed when the file ends never fires. Unloaded, the
+file's tests take a second or two. On a loaded machine they can run past 3 s,
+and then a watch an early test left fires during a later test in the same
+file, after the early test's stubs are gone. In one `npm test` run such a
+watch reached the level meter's `cancelAnimationFrame` and threw. Every test
+passed, and the uncaught error failed the run.
+
+Every test in the file now runs on vitest's fake clock, and `afterEach` drops
+whatever timers are left with `vi.useRealTimers()`, so none can fire in a
+later test. Before that, `afterEach` disposes every playback the test made
+through `playbackForTest` (`AudioPlayback.dispose` cancels every timer a
+playback holds) and fails the test if a timer is still armed.
+
+`callRuntime.test.ts` had the same shape on its failure path: each test
+disposes its runtime after its expects, so a failing expect skipped the
+dispose and left the playback's watch armed, and the same `ReferenceError`
+followed. Its `beforeEach` now puts every test on the fake clock too.
+
+The rule: a unit test whose code under test arms timers runs on the fake
+clock, and ends what it started (a playback, a runtime) before its stubs go.
+`audioPlayback.test.ts` and `callRuntime.test.ts` follow it. In the other
+node unit files no passing test leaves a real timer armed after its teardown.
+`pushToTalk.test.ts` runs on the real clock and stays there: `PushToTalk`
+arms no timer (its level meter runs on `requestAnimationFrame`, which the
+tests stub with one that schedules nothing), and the file's only timer is its
+own `settle`, a `setTimeout(0)` every caller awaits, so a failing expect
+cannot leave one armed.
 
 ## A test await with no deadline
 
@@ -613,6 +840,42 @@ for merely the first report. The replay test waits for the metric row to be
 visible and then polls until the newest report carries the generation,
 `has_visual` and the object id it expects. That is the shape the same spec
 already uses for every later drawing in it.
+
+## A test that reads the scene that is leaving
+
+A scene change does not take the old scene away at once. The stage keeps
+the scene that is leaving in the document through its exit, about 400 ms
+and longer on a loaded runner, and marks it inert from the frame it starts
+to leave (`apps/frontend/src/components/Scenes.tsx`). Until the exit ends
+the stage holds two scenes, or three, and the leaving one usually comes
+first. So `document.querySelector('.content-grid > .content-main')`
+returns the leaving scene's column. `openScene` is a scene change too: the
+fixture loads after the page's first render, so the idle scene is leaving
+for the first 400 ms or so.
+
+At 390x844, from the architecture fixture to a short plan, the leaving
+column is 488 px and the plan's is 498 px from its first frame; the rails
+under them differ by those 10 px. A spec that read once, 600 ms in,
+measured the leaving column whenever the exit outlasted the wait:
+progress.spec found the panel 4.9 px off its column's centre (#341), and
+composition.spec found the aux row 9.8 px past the column (CI, WebKit at
+390x844). #391 took the switch from one column to the other for a page
+relayout. There is none: the plan's column never moves.
+
+The hazard is a one-shot `document.querySelector` read, in the page, of a
+part the leaving scene can also hold: a column, an aux row, a rail, a
+heading. A strict Playwright locator (`toBeVisible`, `locator.evaluate`)
+fails at once on two matches instead of reading the wrong one, and a count
+assertion retries until the exit ends. A read of an object only the new
+scene shows finds that one.
+
+The rule: a spec reads a scene's parts from `CURRENT_SCENE`
+(`apps/frontend/tests/visual/helpers.ts`), the scene that is not inert, and
+scopes the wait in front of that read the same way. It does not wait the
+exit out. A read anchored on an element takes the scene that holds it,
+`element.closest('.scene')`. Behind a modal (focus, the history) every
+scene is inert and `CURRENT_SCENE` matches nothing; a spec that reads
+the scene there selects it by its kind (`[data-scene="..."]`).
 
 ## A test that reads what the page is sent
 
@@ -756,8 +1019,8 @@ requester, writes the spoken line, or shows the page a speech error.
 | draining | a rescue aborts it | `Stopped(Cancelled)` | not spoken | no | no |
 | draining | the call hands off before any of its audio reached the page | `Stopped(Superseded)` | not spoken | no | no |
 | draining | the body fails, or the task panics | `Failed` | the error | at the current generation | no |
-| draining | the speech deadline cuts the body after a browser took some of its audio | `Spoken` (`Played::CutShort`) | spoken, cut short | no | if `log_spoken` |
-| draining | the body ends, and a browser took some of its slot | `Spoken` (`Played::Whole`) | spoken | no | if `log_spoken` |
+| draining | the speech deadline cuts the body after a browser took some of its audio | `Spoken` (`Played::CutShort`) | spoken, cut short | no | if it carries a `transcript` line |
+| draining | the body ends, and a browser took some of its slot | `Spoken` (`Played::Whole`) | spoken | no | if it carries a `transcript` line |
 | draining | the body ends, and no browser took any of its slot | `NotDelivered` | not delivered | no | no |
 | draining | the body ends behind an open slot, and the call hands off before that slot closes | `Stopped(Superseded)` | not spoken | no | no |
 

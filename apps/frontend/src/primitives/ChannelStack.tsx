@@ -1,3 +1,4 @@
+import type { Ref } from 'react';
 import { WAKE_PHRASE } from '../hands_free';
 
 /**
@@ -13,10 +14,30 @@ import { WAKE_PHRASE } from '../hands_free';
  * so the page cannot disagree with the transport about what the microphone
  * is doing. Without a runtime -- the demo page -- there is nothing to
  * switch, and the control is disabled rather than silently inert.
+ *
+ * A standing line error -- the microphone refused, the line lost, a server
+ * error -- heads the stack as LINE / ERROR, above the control it is about.
  */
-export function ChannelStack({ handsFree, onToggleMode }: { handsFree: boolean; onToggleMode?: () => void }) {
+export function ChannelStack({
+  handsFree,
+  onToggleMode,
+  lineError,
+  errorRef,
+}: {
+  handsFree: boolean;
+  onToggleMode?: () => void;
+  lineError: string | null;
+  /** The error's box, which the shell measures for the room the page gives it. */
+  errorRef: Ref<HTMLDivElement>;
+}) {
   return (
     <div className="channel-stack tech micro">
+      {lineError === null ? null : (
+        <div ref={errorRef} className="channel-stack__error">
+          <span>LINE / ERROR</span>
+          <span className="channel-stack__error-text">{lineError}</span>
+        </div>
+      )}
       <span className="channel-stack__channel">CHANNEL / VOICE</span>
       <button
         className="channel-stack__mode"

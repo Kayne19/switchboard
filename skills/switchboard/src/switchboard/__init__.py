@@ -610,6 +610,11 @@ def display(action=None, **fields):
                     f"The caller's screen could not show it: {data.get('reason') or 'it gave no reason'}. "
                     "Adjust the payload and try again."
                 )
+            if data.get("reason") == "new_leg":
+                return (
+                    "Not shown: the caller's screen moved to a new leg of the call before it confirmed this, "
+                    "and that cleared the screen. Draw it again if it still matters; do not say it's on screen."
+                )
             if data.get("rendered") is False:
                 reason = f" ({data['reason']})" if data.get("reason") else ""
                 return f"Sent, but the caller's screen has not confirmed it{reason}; it may not be visible yet."

@@ -9,7 +9,7 @@
 //   the service's cursor per session, or send a fresh snapshot.
 
 import { randomBytes } from "node:crypto";
-import { DaemonCommandError } from "./daemon_port.ts";
+import { DaemonCommandError, DaemonUnreachableError } from "./daemon_port.ts";
 import { CommandError, type LinkEvent } from "./sessions.ts";
 
 /**
@@ -49,7 +49,7 @@ export interface HostLinkOptions {
 	gitSha: string;
 	/** Versions reported in the hello. */
 	versions: () => { prime_agent_client: string | null; prime_agent_daemon: string | null; daemon_protocol: number | null };
-	/** Runs one command; throws CommandError or DaemonCommandError to refuse. */
+	/** Runs one command; what it throws becomes the reply's error (`errorOf`). */
 	command: (name: string, args: Record<string, unknown>) => Promise<unknown>;
 	/** The sessions whose events the service should know about. */
 	sessions: () => string[];
@@ -128,6 +128,7 @@ export function parseCursor(cursor: unknown): { bootId: string; seq: number } | 
 function errorOf(error: unknown): { code: string; message: string } {
 	if (error instanceof CommandError) return { code: error.code, message: error.message };
 	if (error instanceof DaemonCommandError) return { code: error.unsupported ? "unsupported" : "daemon_error", message: error.message };
+	if (error instanceof DaemonUnreachableError) return { code: "daemon_unreachable", message: error.message };
 	return { code: "failed", message: error instanceof Error ? error.message : String(error) };
 }
 
@@ -414,8 +415,16 @@ export class HostLink {
 		this.#status({ state: "linked", epoch });
 		const cursors = (message.cursors ?? {}) as Record<string, unknown>;
 		const tracked = new Set(this.#o.sessions());
+		await Promise.all(this.#catchUp(cursors, tracked));
+		if (this.#ws !== ws) return;
+		// Buffers of sessions no longer tracked are not needed after a sync.
+		for (const handle of [...this.#buffers.keys()]) if (!tracked.has(handle)) this.#buffers.delete(handle);
+		this.#send({ type: "synced", epoch });
+	}
+
+	#catchUp(cursors: Record<string, unknown>, tracked: Set<string>): Promise<void>[] {
+		const snapshots: Promise<void>[] = [];
 		for (const handle of new Set([...tracked, ...Object.keys(cursors)])) {
-			if (this.#ws !== ws) return;
 			const cursor = parseCursor(cursors[handle]);
 			const buffer = this.#buffers.get(handle);
 			const canReplay = cursor !== null && buffer !== undefined && cursor.bootId === this.bootId && cursor.seq >= buffer.evictedThrough;
@@ -424,17 +433,14 @@ export class HostLink {
 					if (b.seq > cursor.seq) this.#send({ type: "event", session: handle, cursor: formatCursor(this.bootId, b.seq), event: b.event, replayed: true });
 				}
 			} else if (tracked.has(handle)) {
-				await this.sendSnapshot(handle);
+				snapshots.push(this.sendSnapshot(handle));
 			} else {
 				// The service knows a session this host agent no longer tracks.
 				const seq = ++this.#seq;
 				this.#send({ type: "event", session: handle, cursor: formatCursor(this.bootId, seq), event: { kind: "session_closed", reason: "gone" } });
 			}
 		}
-		if (this.#ws !== ws) return;
-		// Buffers of sessions no longer tracked are not needed after a sync.
-		for (const handle of [...this.#buffers.keys()]) if (!tracked.has(handle)) this.#buffers.delete(handle);
-		this.#send({ type: "synced", epoch });
+		return snapshots;
 	}
 
 	#beat(ws: SocketLike): void {

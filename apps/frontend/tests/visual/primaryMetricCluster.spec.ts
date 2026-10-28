@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openScene } from './helpers';
+import { CURRENT_SCENE, openScene } from './helpers';
 
 test.describe('Primary metric cluster layout and behavior (#38)', () => {
   test('renders 2 primary metrics as a 2-column grid in landscape', async ({ page }) => {
@@ -198,9 +198,9 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
 
       await expect(page.locator('.composed-primary-object--cluster .metric-row')).toHaveCount(8);
       await expect(page.locator('.content-rail__details .metrics')).toHaveCount(0);
-      await expect.poll(() => page.evaluate(() => {
-        const main = document.querySelector('.content-main')!.getBoundingClientRect();
-        const rows = [...document.querySelectorAll('.composed-primary-object--cluster .metric-row')];
+      await expect.poll(() => page.locator(CURRENT_SCENE).evaluate((scene) => {
+        const main = scene.querySelector('.content-main')!.getBoundingClientRect();
+        const rows = [...scene.querySelectorAll('.composed-primary-object--cluster .metric-row')];
         return {
           spilled: rows.map((row) => row.getBoundingClientRect())
             .filter((row) => row.top < main.top - 0.5 || row.bottom > main.bottom + 0.5 || row.right > main.right + 0.5).length,
@@ -242,9 +242,9 @@ test.describe('Primary metric cluster layout and behavior (#38)', () => {
       await expect(railMetrics.locator('.metric-row__label')).toHaveText('METRIC 0');
 
       // Rows outside the main column are clipped: count them once layout settles.
-      await expect.poll(() => page.evaluate(() => {
-        const main = document.querySelector('.content-main')!.getBoundingClientRect();
-        return [...document.querySelectorAll('.composed-primary-object--cluster .metric-row')]
+      await expect.poll(() => page.locator(CURRENT_SCENE).evaluate((scene) => {
+        const main = scene.querySelector('.content-main')!.getBoundingClientRect();
+        return [...scene.querySelectorAll('.composed-primary-object--cluster .metric-row')]
           .map((row) => row.getBoundingClientRect())
           .filter((row) => row.bottom > main.bottom + 0.5 || row.right > main.right + 0.5).length;
       })).toBe(0);

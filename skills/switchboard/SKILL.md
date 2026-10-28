@@ -41,9 +41,10 @@ as numpy arrays, are sent as lists.
 
 A display's line says where it went: "On screen." only when the caller's
 screen confirmed it. Otherwise it says it was held for when the caller
-brings you forward, sent but not yet confirmed, or kept with no screen
-connected (it appears when their page reconnects). Say it is on screen only
-after "On screen.".
+brings you forward, sent but not yet confirmed, kept with no screen
+connected (it appears when their page reconnects), or not shown because
+the call moved on and cleared the screen (draw it again if it still
+matters). Say it is on screen only after "On screen.".
 
 ## Functions
 
@@ -53,13 +54,18 @@ after "On screen.".
   A line that runs past the speech deadline is cut off there: its result is
   `delivered` with reason `cut_short`, and the caller heard only the start.
   Do not repeat the whole line. If the rest matters, say it in a shorter one.
+  One line is voiced up to 700 characters (`SWITCHBOARD_MAX_SPOKEN_CHARS`).
+  A longer line is cut there, at a sentence end when one is near, and the
+  caller hears "there's more on screen". Their screen shows the whole line,
+  but they may not look, so keep what they must hear inside the cap.
 - `request_to_speak(message, reason)`: while the caller is on other work,
   queue what they should hear. `reason` is `finished`, `needs_decision` or
   `problem`. `message` is the real content, said the way you would say it: the
   result, the question with its options, or what went wrong and what you need.
   Not a teaser. The service fits it into the conversation and plays it at a
-  good moment. A newer request replaces one of yours that is still waiting,
-  so send the whole update each time.
+  good moment. The line it makes of your message is voiced under the same
+  700-character cap as `speak`, so leave room. A newer request replaces one
+  of yours that is still waiting, so send the whole update each time.
 - `display(action)` or `display(**action)`: one display action per call. See
   "Display".
 - `view(target=None)`: with no target, report what is on the caller's screen.

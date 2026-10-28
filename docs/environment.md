@@ -30,7 +30,7 @@ means unset.
 | `SWITCHBOARD_AGENT_THINKING` | `medium` | Thinking level a project leg starts at unless the caller names one. |
 | `SWITCHBOARD_MODEL_SWAPS` | `1` | `0`, `false`, or `no` turns off mid-call model and thinking changes. |
 | `SWITCHBOARD_PERSONA` | empty | The spoken character. The service puts it in the operator's and the utility's system prompts and in each project session's voice brief, and still passes it in `join_call` (see `docs/host-link.md`). |
-| `SWITCHBOARD_MAX_SPOKEN_CHARS` | `700` | Longest reply the switchboard voices; longer text is clipped, at a sentence end when one is near. |
+| `SWITCHBOARD_MAX_SPOKEN_CHARS` | `700` | Longest line the switchboard voices: each line of a reply, a `speak`, or a `request_to_speak` as the floor plays it. A longer line is clipped, at a sentence end when one is near, and voiced with "there's more on screen"; the caller's screen shows the whole line. |
 | `SWITCHBOARD_SPEECH_DEADLINE_MS` | `25000` | Deadline for one synthesized utterance, 1–120000 ms; any other value stops startup (see below). Also given to each project session when it joins the call. The service starts it when it admits a `speak`; the host agent waits it and 5 s more for the service's answer (`SPEAK_REPLY_MARGIN_MS`), so the service's answer decides. |
 | `SWITCHBOARD_HISTORY_LIMIT` | `200` | Transcript entries kept for page reloads; `0` keeps none. |
 | `SWITCHBOARD_JEV_KEY_FILE` | `/etc/switchboard/secrets/typesafe-api-key` | Secret file path. The Jev bearer key is read from this file and never logged or returned in errors. |

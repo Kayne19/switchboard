@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { FRAME_GEOMETRIES, openScene, runActions } from './helpers';
+import { CURRENT_SCENE, FRAME_GEOMETRIES, openScene, runActions } from './helpers';
 
 // A stepped progress where the unit tests cannot see it: jsdom draws no
 // boxes. As the primary it is framed to its own height; in the rail it reads
@@ -14,13 +14,14 @@ const steps = (count: number, firstOpen: number) => Array.from({ length: count }
 async function show(page: Page, actions: unknown[]) {
   await openScene(page, 'architecture');
   await runActions(page, [{ op: 'clear' }, ...actions]);
+  await expect(page.locator(`${CURRENT_SCENE} .composed-primary-object--progress`)).toBeVisible();
   await page.waitForTimeout(600);
 }
 
 async function primaryGeometry(page: Page) {
-  return page.evaluate(() => {
-    const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-    const list = document.querySelector<HTMLElement>('.composed-primary-object--progress .progress-primitive__steps')!;
+  return page.locator(CURRENT_SCENE).evaluate((scene) => {
+    const box = (selector: string) => scene.querySelector(selector)!.getBoundingClientRect();
+    const list = scene.querySelector<HTMLElement>('.composed-primary-object--progress .progress-primitive__steps')!;
     return {
       column: box('.content-grid > .content-main'),
       panel: box('.composed-primary-object--progress'),
@@ -35,17 +36,8 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   test(`a short plan as the primary is framed to its height and centred / ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await show(page, [{ op: 'show', id: 'plan', type: 'progress', role: 'primary', data: { label: 'SHIP', steps: steps(4, 2) } }]);
-    // The column reaches its height a moment after the scene changes: at
-    // 390x844 it is 488 px, then 498 px some 450 to 560 ms after the actions
-    // on a loaded WebKit, while the panel is placed for the settled column
-    // from its first frame. A single read 600 ms in found the column still
-    // short and the panel 4.9 px off its centre (#341); polled, the centring
-    // is read once the column settles.
-    await expect.poll(async () => {
-      const { column, panel } = await primaryGeometry(page);
-      return Math.abs((panel.top + panel.bottom) / 2 - (column.top + column.bottom) / 2);
-    }).toBeLessThanOrEqual(2);
     const { column, panel, listScrolls } = await primaryGeometry(page);
+    expect(Math.abs((panel.top + panel.bottom) / 2 - (column.top + column.bottom) / 2)).toBeLessThanOrEqual(2);
     expect(panel.height).toBeLessThan(column.height * 0.8);
     expect(listScrolls).toBe(false);
   });
@@ -53,19 +45,35 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
   test(`a long plan as the primary fills the column and scrolls its list inside / ${size}`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await show(page, [{ op: 'show', id: 'plan', type: 'progress', role: 'primary', data: { label: 'MIGRATION', steps: steps(30, 12) } }]);
-    // The panel is placed for the settled column, which at 390x844 gains its
-    // last 10 px late (the short plan's test above, #391): read once, the
-    // panel stood 9.8 px past a column still short, 2 runs in 20 on a loaded
-    // WebKit. Polled, it is read once the column settles.
-    await expect.poll(async () => {
-      const { column, panel } = await primaryGeometry(page);
-      return Math.max(column.top - panel.top, panel.bottom - column.bottom);
-    }).toBeLessThanOrEqual(1);
     const { column, panel, listScrolls } = await primaryGeometry(page);
+    expect(Math.max(column.top - panel.top, panel.bottom - column.bottom)).toBeLessThanOrEqual(1);
     expect(panel.height).toBeGreaterThan(column.height - 2);
     expect(listScrolls).toBe(true);
   });
 }
+
+test('through a scene change one scene is current in every frame, and the column a short plan is framed in keeps one height / 390x844', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openScene(page, 'architecture');
+  const frames = await page.evaluate(({ current, plan }) => new Promise<{ current: number; column: number }[]>((resolve) => {
+    const seen: { current: number; column: number }[] = [];
+    const start = performance.now();
+    const look = () => {
+      if (document.querySelector('.composed-primary-object--progress')) {
+        const scenes = document.querySelectorAll(current);
+        seen.push({ current: scenes.length, column: scenes[0]?.querySelector('.content-grid > .content-main')?.getBoundingClientRect().height ?? NaN });
+      }
+      if (performance.now() - start < 1200) requestAnimationFrame(look);
+      else resolve(seen);
+    };
+    window.SwitchboardController!.run([{ op: 'clear' }, { op: 'show', id: 'plan', type: 'progress', role: 'primary', data: { label: 'SHIP', steps: plan } }]);
+    requestAnimationFrame(look);
+  }), { current: CURRENT_SCENE, plan: steps(4, 2) });
+  expect(frames.length).toBeGreaterThan(0);
+  expect(frames.map((frame) => frame.current), 'current scenes in each frame').toEqual(frames.map(() => 1));
+  const heights = frames.map((frame) => frame.column);
+  expect(Math.max(...heights) - Math.min(...heights), 'the column\'s change in height').toBeLessThanOrEqual(0.5);
+});
 
 const railSteps = Array.from({ length: 7 }, (_, i) => ({ label: `STEP ${i + 1}`, state: i < 4 ? 'done' : i === 4 ? 'active' : 'todo' }));
 
@@ -80,11 +88,11 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
       { op: 'show', id: 'plan', type: 'progress', data: { label: 'SHIP', steps: railSteps } },
     ]);
     await expect(page.locator('.rail-progress .progress-primitive--rail')).toBeVisible();
-    const rows = await page.evaluate(() => {
-      const metric = document.querySelector<HTMLElement>('.metrics--rail .metric-row')!;
-      const head = document.querySelector<HTMLElement>('.progress-primitive__head')!;
+    const rows = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+      const metric = scene.querySelector<HTMLElement>('.metrics--rail .metric-row')!;
+      const head = scene.querySelector<HTMLElement>('.progress-primitive__head')!;
       const label = (row: HTMLElement) => getComputedStyle(row.querySelector('.metric-row__label')!);
-      const step = getComputedStyle(document.querySelector('.rail-progress .progress-step')!);
+      const step = getComputedStyle(scene.querySelector('.rail-progress .progress-step')!);
       return {
         metricHeight: metric.getBoundingClientRect().height,
         headHeight: head.getBoundingClientRect().height,
@@ -107,9 +115,9 @@ for (const geometry of FRAME_GEOMETRIES) {
     await page.setViewportSize({ width: geometry.width, height: geometry.height });
     for (const label of ['/home/kayne19/projects/switchboard/apps/frontend/src/primitives/notePlacement.ts', 'P'.repeat(128)]) {
       await show(page, [{ op: 'show', id: 'run', type: 'progress', role: 'primary', data: { label, value: 27 } }]);
-      const boxes = await page.evaluate(() => {
-        const box = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
-        return { label: box('.scene .progress-primitive__label'), strong: box('.scene .progress-primitive__label strong'), track: box('.scene .progress-primitive__track'), frame: box('.scene [data-testid="progress"]') };
+      const boxes = await page.locator(CURRENT_SCENE).evaluate((scene) => {
+        const box = (selector: string) => scene.querySelector(selector)!.getBoundingClientRect();
+        return { label: box('.progress-primitive__label'), strong: box('.progress-primitive__label strong'), track: box('.progress-primitive__track'), frame: box('[data-testid="progress"]') };
       });
       expect(boxes.strong.right, label).toBeLessThanOrEqual(boxes.label.right + 1);
       expect(boxes.strong.right, label).toBeLessThanOrEqual(boxes.track.left);

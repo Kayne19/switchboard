@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { FRAME_GEOMETRIES, openScene, runActions } from './helpers';
+import { CURRENT_SCENE, FRAME_GEOMETRIES, openScene, runActions } from './helpers';
 
 // A metric primary with a chart beside it. On a phone on its side (844x390)
 // the chart's cell ran past the main column and the stage's foot, its x axis
@@ -17,11 +17,11 @@ for (const size of FRAME_GEOMETRIES) {
     await page.setViewportSize({ width: size.width, height: size.height });
     await openScene(page, 'idle');
     await runActions(page, actions);
-    await expect(page.locator('.composed-aux [data-testid="chart"]')).toBeVisible();
+    await expect(page.locator(`${CURRENT_SCENE} .composed-aux [data-testid="chart"]`)).toBeVisible();
     await page.waitForTimeout(600);
-    const boxes = await page.evaluate(() => {
+    const boxes = await page.locator(CURRENT_SCENE).evaluate((scene) => {
       const box = (selector: string) => {
-        const { top, bottom, left, right } = document.querySelector(selector)!.getBoundingClientRect();
+        const { top, bottom, left, right } = scene.querySelector(selector)!.getBoundingClientRect();
         return { top, bottom, left, right };
       };
       return { main: box('.content-grid > .content-main'), row: box('.composed-aux'), chart: box('.composed-aux [data-testid="chart"] svg'), card: box('.composed-primary-object') };
@@ -46,11 +46,11 @@ for (const size of [{ width: 844, height: 390 }, { width: 2560, height: 1080 }])
       actions[0],
       { op: 'show', id: 'p50', type: 'metric', role: 'primary', data: { label: 'P50 LATENCY', value: '83 ms' } },
     ]);
-    await expect(page.locator('.composed-primary-object')).toBeVisible();
+    await expect(page.locator(`${CURRENT_SCENE} .composed-primary-object`)).toBeVisible();
     await page.waitForTimeout(400);
-    const widths = await page.evaluate(() => ({
-      main: document.querySelector('.content-grid > .content-main')!.getBoundingClientRect().width,
-      card: document.querySelector('.composed-primary-object')!.getBoundingClientRect().width,
+    const widths = await page.locator(CURRENT_SCENE).evaluate((scene) => ({
+      main: scene.querySelector('.content-grid > .content-main')!.getBoundingClientRect().width,
+      card: scene.querySelector('.composed-primary-object')!.getBoundingClientRect().width,
     }));
     // A cluster spans the column (composed-primary-object--cluster).
     expect(widths.card).toBeGreaterThan(widths.main - 2);

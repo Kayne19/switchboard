@@ -129,7 +129,9 @@ On success the service answers `welcome`:
 ```
 
 - `epoch` is the link epoch. The service gives each accepted link of a host a
-  larger epoch; a newer link fences older ones.
+  larger epoch; a newer link fences older ones. The service ends a fenced
+  link as it ends one that drops: its unanswered commands fail and its
+  sessions end (`host_link_closed`, under "Session events").
 - `cursors` holds, per session, the last event cursor the service received
   from this host. A session the service never heard of is absent.
 
@@ -144,8 +146,15 @@ session:
   the buffered events (ending with `session_closed`) when it can, or else
   sends a new `session_closed` event with reason `gone`.
 
-Then it sends `{ "type": "synced", "epoch": 7 }`. The buffer keeps the last
-1000 events per session.
+It starts all of these as soon as the welcome arrives, before any other
+frame or event is handled: the replays and `session_closed` events go out
+at once, and every snapshot is started at once. So an event published
+during the sync goes out after its session's replay or snapshot (see
+"Snapshots"), never ahead of it, and never again inside the replay.
+
+Then, once the snapshots it started are out, it sends
+`{ "type": "synced", "epoch": 7 }`. The buffer keeps the last 1000 events
+per session.
 
 ### Heartbeat
 
@@ -191,19 +200,23 @@ Error codes:
 | `not_found` | The session is not tracked by this host agent. |
 | `refused` | Not allowed (kill of a session the service did not create, `open_session` of a non-`sb-` session, `set_mode` off a call). |
 | `unsupported` | The daemon does not support the command (per-command compatibility); other commands keep working. |
-| `daemon_error` | The daemon ran the command and it failed; `message` has the daemon's text. |
+| `daemon_error` | Nothing changed on the daemon: it ran the command and it failed (`message` has the daemon's text), or the host agent had no daemon connection and did not send it. |
+| `daemon_unreachable` | The host agent cannot say what the command left the daemon in: it sent the command and got no answer (the connection closed, or the request timed out), so the daemon may have run it; or the daemon applied the change and the request after it failed (the read-back of a `set_model` or `set_thinking`, or the attach of a `create_session` or `open_session`). |
 | `failed` | Anything else. |
 
 A refusal of one command (`refused`, `unsupported`, `daemon_error`,
-`bad_request`, `unknown_command`) fails that command alone: the session
-stays usable, and other commands keep working (#423). A refused caller
-prompt keeps the caller on the leg (they hear that it could not take that,
-with the host's words on screen); a refused background prompt keeps the
-resident, published idle; a refused model change keeps the leg as it was,
-and a level refused after the model changed keeps the new model. The service stops
-using a session after any other failed command to it (`stale_epoch`,
-`not_found`, `failed`, a failure on its own side: `not_connected`,
-`link_lost`, `unreadable_reply`, or no reply within its 30 s wait), but it
+`bad_request`, `unknown_command`) changed nothing, except an `open_session`
+refused by its name check after the daemon had already reopened the session.
+A refusal fails that command alone: the session stays usable, and other commands keep working (#423).
+`daemon_error` includes a command the host agent could not send to its
+daemon. A refused caller prompt keeps the caller on the leg (they hear that
+it could not take that, with the host's words on screen); a refused
+background prompt keeps the resident, published idle; a refused model change
+keeps the leg as it was, and a level refused after the model changed keeps
+the new model. The service stops using a session after any other failed
+command to it (`stale_epoch`, `not_found`, `daemon_unreachable`, `failed`, a
+failure on its own side: `not_connected`, `link_lost`, `unreadable_reply`,
+or no reply within its 30 s wait), but it
 still releases the session: it sends `kill` for one it created and `abort`
 then `detach` for one it took over. Only a `session_closed` event tells it the session is
 already gone; then it sends no `kill`, and still sends `abort` then
@@ -296,8 +309,14 @@ model does not have). `call_mode` is `null` when the session is not on a call.
   a call".
 - **`join_call`** puts a tracked session on a call: the skill module's hello
   then returns the token, persona and speech deadline given here. `mode`
-  defaults to `foreground`. `detach` and `kill` take it off. The service
-  sends a new token for every call.
+  defaults to `foreground`. `detach` and `kill` take it off, and so does
+  the end of the link. Whenever its link to the service closes, for any
+  reason, the host agent takes every session off its call
+  (`SessionManager.clearCalls` in `apps/host-agent/src/sessions.ts`). A
+  fenced link is one it closed already, before it dialled again, or one the
+  fence closes. So the service ends the sessions of a link that drops or is
+  fenced (`host_link_closed`), and a call does not outlive the link it was
+  joined on. The service sends a new token for every call.
 - **`set_mode`** changes the mode of a session on a call: `foreground`,
   `background` or `active`. See "Delivery" below.
 - **`set_model`** and **`set_thinking`** read the state back and return the
@@ -345,23 +364,36 @@ The host agent sends every session event with its cursor:
 
 | `event.kind` | Fields | Meaning |
 |---|---|---|
-| `turn_start` | `cause`: `input` \| `autonomous` \| `unknown`, `turn_id` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). `turn_id` is stable for the turn. A busy snapshot rebuilt after a host-agent restart uses `unknown`: it has an id, but its cause gives it no delivery authority. |
+| `turn_start` | `cause`: `input` \| `autonomous` \| `unknown`, `turn_id` | A turn opened: after an input, or an `agent_start` nobody caused (a subagent finished, a schedule, a heartbeat). `turn_id` is stable for the turn. A busy snapshot rebuilt after a host-agent restart uses `unknown`: it has an id, but its cause gives it no delivery authority of its own; it gets the caller's when a `prompt` is sent into it as a `follow_up`. |
 | `turn_end` | `turn_id`, `error?` | The turn settled: `wait_for_idle`, sent after the last input, resolved. `error` is set when that wait failed. |
 | `tool_start` | `tool`, `call_id`, `args?`, `turn_id?` | A tool call started. `args` is the call's arguments. |
 | `tool_end` | `tool`, `call_id`, `error`, `result?`, `turn_id?` | A tool call ended. `error` is true when the tool failed; `result` is what the tool returned. |
-| `text` | `text`, `turn_id?` | An assistant message ended with this text. Inside a turn the host stamps that turn's id; a message that ends with no turn open has none. |
-| `error` | `message` | A model error, or retries exhausted. |
+| `text` | `text`, `turn_id?` | An assistant message ended with this text. Inside a turn the host stamps that turn's id; a message that ends with no turn open has none. The text of a failed model call is sent just before its `error`, and not at all if pi retries the call. |
+| `error` | `message` | A model call failed and pi did not retry it, or pi gave up retrying (one `error`, with pi's final error). A call pi retries is not sent. |
 | `compaction` | `phase`: `start` \| `end`, `reason` | The daemon compacted the context. The service resends the voice brief on the next routed line after `end`. |
 | `state` | `model`, `thinking` | Model and effective thinking level after `set_model` or `set_thinking`. |
-| `session_closed` | `reason`: `killed` \| `detached` \| `gone` \| `host_link_closed` | The host agent stopped tracking the session (`gone`: the daemon no longer has it — it was missing at a resync, or the daemon announced its close, as it does when another client kills it). `host_link_closed` never crosses the wire: the service synthesizes it for every subscribed session when the host's link drops, so a subscriber sees the session end the same way whether the host let go of it or went away. |
+| `session_closed` | `reason`: `killed` \| `detached` \| `gone` \| `host_link_closed` | The host agent stopped tracking the session (`gone`: the daemon no longer has it — it was missing at a resync, or the daemon announced its close, as it does when another client kills it). `host_link_closed` never crosses the wire: the service synthesizes it for every subscribed session when the host's link drops or a newer link of the host fences it (see `join_call`), so a subscriber sees the session end the same way whether the host let go of it or went away. |
 
 A turn is not ended by `agent_end`: the daemon repeats it within one turn.
 Only `turn_end` means settled.
 
+pi may retry a failed model call. To retry, pi sends `auto_retry_start`,
+or, for a context overflow, compacts and sends `compaction_end` with
+`willRetry`, and it removes the failed call from the model's context.
+pi decides only after the failed call's message has ended. So inside a
+turn, the host agent holds that message's text and error, and discards
+them when pi retries. The host agent sends them once pi has shown it will
+not retry the call: at the next assistant message, when pi gives up
+(`auto_retry_end` with `success: false`, sent as one `error` with pi's
+final error), when the session closes, or just before `turn_end`. A retry
+that succeeds leaves no `error` in the turn. A failed call that ends with
+no turn open is sent at once.
+
 On the host agent, a tracked session's turn is one record,
 `Tracked.turn` in `apps/host-agent/src/sessions.ts`: idle (`null`), or open
-with its `turn_id` and `cause`. `SessionManager.#turnStep` is its only
-writer, and it sends `turn_start` and `turn_end`:
+with its `turn_id`, its `cause` and any held failed call.
+`SessionManager.#turnStep` is its only writer, and it sends `turn_start`,
+`turn_end`, and each assistant message's `text` and `error`:
 
 | Turn | Event | Next | Sent |
 |---|---|---|---|
@@ -373,15 +405,17 @@ writer, and it sends `turn_start` and `turn_end`:
 | idle | `abort` | idle | `resume_queue`; no `wait_for_idle` |
 | open | `abort` | open | `resume_queue`, then a new `wait_for_idle` |
 | open | `agent_start` | open | nothing: one more run of the same turn |
-| open | the latest `wait_for_idle` resolves | idle | `turn_end` |
-| open | the latest `wait_for_idle` fails | idle | `turn_end` with `error` |
+| open | the latest `wait_for_idle` resolves | idle | a held failed call's `text` and `error`, then `turn_end` |
+| open | the latest `wait_for_idle` fails | idle | a held failed call's `text` and `error`, then `turn_end` with `error` |
 | open | an earlier `wait_for_idle` answers | open | nothing |
-| any | `kill`, `detach`, the daemon's close, or a resync that finds it gone | untracked | `session_closed` only; it stands for the turn's end |
+| any | `kill`, `detach`, the daemon's close, or a resync that finds it gone | untracked | a held failed call's `text` and `error`, then `session_closed`; it stands for the turn's end |
 
 Each `wait_for_idle` carries the input count it was sent after; an answer
 settles the turn only if no input came after it and the session is still
 the same record. The table test in `apps/host-agent/tests/sessions.test.ts`
-("turn table") holds every row.
+("turn table") holds every row. The held failed call's own transitions are
+in the paragraph above the table, not in its rows; the failed model call
+tests in the same file hold them.
 
 `args`, `result` and the `turn_id` on tool events are additive and optional.
 They feed the service's debug page (`docs/debug-page.md`) and nothing else; an
@@ -402,9 +436,11 @@ The service keeps one turn state per project session: `TurnState` in
 It runs under the turn's lock and returns what is left to do (hand a frame
 to the caller's prompt, report a turn boundary to the application, ask the
 application to admit a self-woken start, or end a self-woken run), which
-the session's pump does once the lock is released. The application's
-answer to an admission comes back as an event of its own, so nothing
-waits under the lock.
+whoever stepped it does once the lock is released: the session's pump for
+the host's events and snapshots, the prompt's own task for the prompt's
+start, end and the host's reply to it. The application's answer to an
+admission comes back as an event of its own, so nothing waits under the
+lock.
 
 | Phase | Busy | A frame of no turn the session holds | A module call that names no turn |
 |---|---|---|---|
@@ -418,6 +454,7 @@ waits under the lock.
 |---|---|---|---|
 | idle | a prompt starts | caller | |
 | self-woken | a prompt starts | caller and self-woken | |
+| caller, caller and self-woken, caller settled | the host's reply to the prompt names the turn it went into | unchanged | that turn reported as a caller turn's start (`input`): the application binds the prompt's operation to it, so a run the prompt joined as a `follow_up` answers with the caller's authority, and its end settles that operation. Nothing is reported if the turn's end was taken since the prompt went out: the turn is over, and the reply binds nothing |
 | caller, caller settled | the prompt returns or is cancelled | idle | |
 | caller and self-woken | the prompt returns or is cancelled | self-woken | |
 | idle | `turn_start`, `autonomous` or `unknown` | self-woken | start reported; the answer is not used |
@@ -425,7 +462,7 @@ waits under the lock.
 | self-woken, caller and self-woken | `turn_start`, `autonomous` or `unknown`, of another turn | unchanged, the new run held in the old one's place | the old run's final text published; its end reported with the new start, taken together |
 | any | `turn_start`, `input` | unchanged | start reported |
 | self-woken, caller and self-woken | `text` of the run | unchanged | the run keeps it; it goes to the prompt too, which keeps it only if the prompt went into the run as a `follow_up` (its reply names the run) |
-| self-woken, caller and self-woken | `turn_end` of the run | idle, caller settled | final text published; end reported with it; goes to the prompt, which it ends if the prompt went into the run as a `follow_up` (its reply names the run) |
+| self-woken, caller and self-woken | `turn_end` of the run | idle, caller settled | final text published; end reported with it (the application closes the run's operation, or, for a run it never held, settles the caller's operation bound to it); goes to the prompt, which it ends if the prompt went into the run as a `follow_up` (its reply names the run) |
 | self-woken, caller and self-woken | an idle snapshot (it names no turn) | idle, caller settled | final text published; end reported with it (the snapshot's `last_text` stands in for none); the snapshot goes to the prompt |
 | self-woken, caller and self-woken | a snapshot with another turn open | unchanged, that turn held in the run's place | as for another self-woken start |
 | self-woken, caller and self-woken | `session_closed` | idle, caller settled | final text published; end reported without it, marked cut short (the application ends the run when it retires the leg); goes to the prompt |
@@ -475,10 +512,13 @@ is its table and `ProjectInner::end` its only writer.
 
 A refused command is one the host answered `refused`, `unsupported`,
 `daemon_error`, `bad_request` or `unknown_command`
-(`CommandError::is_refusal`); only that command failed. A failed command
-is any other error code above, or no reply within the 30 s wait. A session
-that is no longer open refuses every command itself, so neither reaches
-the host. `session_closed` includes the service's own `host_link_closed`.
+(`CommandError::is_refusal`), including one the host agent could not send
+to its daemon; only that command failed, and nothing changed (except an
+`open_session` refused by its name check after the daemon reopened the
+session). A failed
+command is any other error code above, or no reply within the 30 s wait. A
+session that is no longer open refuses every command itself, so neither
+reaches the host. `session_closed` includes the service's own `host_link_closed`.
 "The application is told" is the session-closed callback, which evicts a
 background resident at once; the owner's close is not reported back to
 it. Entering released sends the release: `kill` for a session the service
@@ -580,9 +620,10 @@ agent's clock, decide. A delivered reply's `reason` is taken from its result
 as a refused or failed reply's is (its `reason`, else its `detail`), and is
 `null` when the result has neither: `cut_short` for a `speak` the speech
 deadline cut after its start went out (`m7`; the caller heard only the
-start), or why the caller's screen has not confirmed a `display`. An
-accepted reply's `reason` is always `null`; a held `display` says why in its
-result. A call that cannot
+start), or why the caller's screen has not confirmed a `display`. Any
+other `accepted` reply's `reason` is `null`, but a `display` answered
+`accepted` without being rendered (held in the background, or no browser
+connected) takes its reason from its result as well. A call that cannot
 go out because the link's socket is already closing gets `failed` at once.
 
 Each wait on a `speak` has one owner, and each is longer than the one it
@@ -739,6 +780,15 @@ service decides those: it holds a background display (`accepted`, with
 `held: true` in the result) and refuses a background `view` with a target.
 A refusal reaches the module with its code as `reason` (`caller_away`); the
 service's explanation stays in `result.detail`.
+
+A delivered `display` reply carries the same reason at the top level and in
+`result.reason`, and the module reads why it is not on screen from the
+result. That is the code
+`new_leg` when a transfer or a rescue moved the call to a new generation
+before the caller's screen confirmed it, and a sentence for every other
+unrendered answer (the page's rejection reason, or "no confirmation from
+the browser"). "The display call's result" in `docs/visual-channel.md`
+lists each answer and what the module says for it.
 
 `active` currently delivers like `foreground`. A background agent may ask
 what the caller sees, not change it: the screen belongs to whoever the caller

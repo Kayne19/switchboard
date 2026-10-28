@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { DaemonCommandError } from "../src/daemon_port.ts";
+import { DaemonCommandError, DaemonUnreachableError } from "../src/daemon_port.ts";
 import { HostLink } from "../src/link.ts";
 import { clipDetail, type LinkEvent, type SentInput, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
 import { SkillSocket } from "../src/skill_socket.ts";
@@ -539,6 +539,104 @@ test("compaction, errors and session_closed are forwarded as events", async () =
 	);
 });
 
+type DaemonEventBody = Parameters<FakeDaemon["emit"]>[1];
+
+function assistantEnd(text: string, error?: string): DaemonEventBody {
+	const content = text ? [{ type: "text", text }] : [];
+	return { type: "message_end", message: { role: "assistant", content, ...(error === undefined ? { stopReason: "stop" } : { stopReason: "error", errorMessage: error }) } };
+}
+
+async function heardOverTurn(run: DaemonEventBody[]): Promise<string[]> {
+	const { daemon, manager, events } = setup();
+	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	const { turn_id: turnId } = await manager.prompt(s, "hello");
+	for (const event of run) daemon.emit(s, event);
+	daemon.idle(s);
+	await flush();
+	return events
+		.filter((e) => e.handle === s)
+		.map(({ event }) => {
+			if (event.kind === "text") return event.turn_id === turnId ? `text ${event.text}` : `text ${event.text} outside the turn`;
+			if (event.kind === "error") return `error ${event.message}`;
+			if (event.kind === "compaction") return `compaction ${event.phase}`;
+			return event.kind;
+		});
+}
+
+test("a model call pi retries successfully is not an error, and its cut-off words are not sent", async () => {
+	const heard = await heardOverTurn([
+		{ type: "agent_start" },
+		assistantEnd("Checking the", "503 overloaded"),
+		{ type: "agent_end" },
+		{ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: "503 overloaded" },
+		{ type: "agent_start" },
+		assistantEnd("done"),
+		{ type: "auto_retry_end", success: true, attempt: 1 },
+		{ type: "agent_end" },
+	]);
+	assert.deepEqual(heard, ["turn_start", "text done", "turn_end"]);
+});
+
+test("a context overflow pi compacts and retries is not an error", async () => {
+	const heard = await heardOverTurn([
+		{ type: "agent_start" },
+		assistantEnd("", "prompt is too long: 210000 tokens > 200000 maximum"),
+		{ type: "agent_end" },
+		{ type: "compaction_start", reason: "overflow" },
+		{ type: "compaction_end", reason: "overflow", aborted: false, willRetry: true },
+		{ type: "agent_start" },
+		assistantEnd("done"),
+		{ type: "agent_end" },
+	]);
+	assert.deepEqual(heard, ["turn_start", "compaction start", "compaction end", "text done", "turn_end"]);
+});
+
+test("when pi gives up retrying, the service hears one error, with the last attempt's words", async () => {
+	const failedRun = (text: string) => [{ type: "agent_start" }, assistantEnd(text, "503 overloaded"), { type: "agent_end" }];
+	const heard = await heardOverTurn([
+		...failedRun(""),
+		{ type: "auto_retry_start", attempt: 1, maxAttempts: 2, delayMs: 2000, errorMessage: "503 overloaded" },
+		...failedRun(""),
+		{ type: "auto_retry_start", attempt: 2, maxAttempts: 2, delayMs: 4000, errorMessage: "503 overloaded" },
+		...failedRun("Half an"),
+		{ type: "auto_retry_end", success: false, attempt: 2, finalError: "503 overloaded_error: Overloaded" },
+	]);
+	assert.deepEqual(heard, ["turn_start", "text Half an", "error 503 overloaded_error: Overloaded", "turn_end"]);
+});
+
+test("a retry cancelled before it runs is one error, without the words of the call pi dropped", async () => {
+	const heard = await heardOverTurn([
+		{ type: "agent_start" },
+		assistantEnd("Checking the", "503 overloaded"),
+		{ type: "agent_end" },
+		{ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 2000, errorMessage: "503 overloaded" },
+		{ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" },
+	]);
+	assert.deepEqual(heard, ["turn_start", "error Retry cancelled", "turn_end"]);
+});
+
+test("a failed model call pi does not retry reaches the service before the turn ends", async () => {
+	const heard = await heardOverTurn([{ type: "agent_start" }, assistantEnd("Part", "400 invalid request"), { type: "agent_end" }]);
+	assert.deepEqual(heard, ["turn_start", "text Part", "error 400 invalid request", "turn_end"]);
+});
+
+test("a later run in the same turn is heard after a failed call pi did not retry", async () => {
+	const heard = await heardOverTurn([
+		{ type: "agent_start" },
+		assistantEnd("Part", "400 invalid request"),
+		{ type: "agent_end" },
+		{ type: "agent_start" },
+		assistantEnd("Answer"),
+		{ type: "agent_end" },
+	]);
+	assert.deepEqual(heard, ["turn_start", "text Part", "error 400 invalid request", "text Answer", "turn_end"]);
+});
+
+test("a failed model call reaches the service before its session closes", async () => {
+	const heard = await heardOverTurn([{ type: "agent_start" }, assistantEnd("Part", "503 overloaded"), { type: "agent_end" }, { type: "session_closed", reason: "killed" }]);
+	assert.deepEqual(heard, ["turn_start", "text Part", "error 503 overloaded", "session_closed"]);
+});
+
 test("a daemon that reports one command unsupported fails that command cleanly; others work", async () => {
 	const { daemon, manager } = setup();
 	daemon.unsupported.add("setThinking");
@@ -676,7 +774,7 @@ test("resync: a session the daemon still lists but will not attach stays tracked
 	const attach = daemon.attach.bind(daemon);
 	let refuse = true;
 	daemon.attach = async (handle: string) => {
-		if (handle === a && refuse) throw new DaemonCommandError("attach", "timed out after 60000ms");
+		if (handle === a && refuse) throw new DaemonUnreachableError("attach", "timed out after 60000ms");
 		return attach(handle);
 	};
 	const first = await manager.resync();
@@ -714,7 +812,7 @@ test("resync: a session detached while its reattach is in flight stays detached"
 			if (handle === a) {
 				attaching();
 				await gate;
-				if (outcome === "fails") throw new DaemonCommandError("attach", "timed out after 60000ms");
+				if (outcome === "fails") throw new DaemonUnreachableError("attach", "timed out after 60000ms");
 			}
 			return attach(handle);
 		};

@@ -12,11 +12,6 @@ interface TranscriptToggleProps {
   reveal?: TranscriptToggleReveal;
 }
 
-// The stage's way into the conversation history, set low and centred. The
-// conversation scene shows it at rest; the idle stage hides it in the bottom
-// band so a caller who will not speak can still reach the typed line without
-// the empty stage showing any chrome around the glyph. One toggle for both,
-// so the two cannot drift apart in place, type, or behaviour.
 export function TranscriptToggle({ onOpen, reveal = 'resting' }: TranscriptToggleProps) {
   const toggle = (
     <button

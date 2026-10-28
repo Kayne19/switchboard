@@ -22,6 +22,14 @@ export const FRAME_GEOMETRIES = [
   { name: 'landscape-hd', width: 1280, height: 720 },
 ] as const;
 
+/**
+ * The scene on screen, for a spec to read a scene's parts from: through a
+ * scene change the scene that is leaving stays in the document, inert, until
+ * its exit ends (docs/concurrency-and-test-hazards.md). Behind a modal
+ * (focus, the history) every scene is inert, and this matches nothing.
+ */
+export const CURRENT_SCENE = '.stage > .scene:not([inert])';
+
 /** Opens a canonical fixture scene without the page chrome, and waits for the fixture. */
 export async function openScene(page: Page, scene: string): Promise<void> {
   await page.goto(`/?scene=${scene}&chrome=0`);
