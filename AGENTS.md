@@ -106,8 +106,9 @@ commit.
   says in its pull request what it does on WebKit. One implementation
   serves both engines: no user-agent checks and no WebKit-only CSS. A
   user-agent branch that cannot be avoided names the WebKit bug it works
-  around in a comment and is listed in `docs/ipad.md`, which also holds the
-  device checklist to run before a pin bump.
+  around in a comment and is listed in `docs/ipad.md`, as is each prefixed
+  `-webkit-` rule in the CSS; the same file holds the device checklist to run
+  before a pin bump.
 - A `static/` or `static-debug/` merge conflict is resolved by rebuilding from the merged source
   (`npm ci && npm run build`), never by picking a side (see #37).
 - `master` requires a passing CI `test` check on an up-to-date head. If

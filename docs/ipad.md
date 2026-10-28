@@ -60,9 +60,16 @@ change; `scripts/check_hygiene.mjs` refuses the one without the other.
 
 ## Engine-specific code in the tree
 
+`scripts/check_hygiene.mjs` reads this table. Each row starts with the
+repo-relative file as its first code span, and every `-webkit-` name in its
+Where and What cells is a claim that the file uses it. The script refuses a
+`-webkit-` name (or its camelCase style key, such as `WebkitLineClamp`) used in
+`apps/frontend/src` that no row lists for its file, and a row that lists one its
+file does not use.
+
 | Where | What | Why |
 |---|---|---|
-| `apps/frontend/src/styles/index.css`, `.calendar-event__title` | `display: -webkit-box` with `-webkit-line-clamp` | the prefixed form is the one both engines support for clamping lines |
+| `apps/frontend/src/styles/index.css`, `.calendar-event__title` | `display: -webkit-box` with `-webkit-box-orient` and `-webkit-line-clamp` | the prefixed form is the one both engines support for clamping lines |
 | `apps/frontend/src/styles/index.css`, `::-webkit-scrollbar` beside `scrollbar-width: none` | prefixed scrollbar hiding | Safari before 18.2 has no `scrollbar-width` |
 | `apps/frontend/src/debug/debug.css`, `summary::-webkit-details-marker` beside `list-style: none` (debug page only) | prefixed disclosure-marker hiding | WebKit draws a `<summary>`'s triangle through this pseudo-element, which `list-style: none` does not reach in every Safari the iPad may run |
 
