@@ -380,16 +380,80 @@ pub(crate) fn emit_stale_clip(state: &AppState, id: &str) {
 /// value the browser cannot have learned yet simply fails the equality check
 /// later and the clip is dropped, so a wrong number can only discard speech,
 /// never route it somewhere it does not belong.
-pub(crate) type ClipHeader = (String, String, u64);
-pub(crate) type StreamChunkHeader = (String, u64, u64);
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct ClipHeader {
+    clip: ClipRef,
+    mime: String,
+}
+
+pub(crate) struct StreamChunkHeader {
+    clip: ClipRef,
+    sequence: u64,
+}
 
 /// The longest clip id a page may send. One rule for every command that names
 /// a clip: the complete-clip header, a typed turn, and the streaming commands.
 pub(crate) const MAX_CLIP_ID_CHARS: usize = 128;
 
 /// Whether `id` may name a clip: not empty and within `MAX_CLIP_ID_CHARS`.
-pub(crate) fn is_clip_id(id: &str) -> bool {
+fn is_clip_id(id: &str) -> bool {
     !id.is_empty() && id.chars().count() <= MAX_CLIP_ID_CHARS
+}
+
+/// A usable clip id and the generation it was made under.
+#[derive(Debug, PartialEq, Eq)]
+struct ClipRef {
+    id: String,
+    generation: u64,
+}
+
+enum ClipRefusal {
+    InvalidId,
+    NoGeneration { id: String },
+}
+
+/// What a command's refusals say. The page keys only on whether the error
+/// carries an id (`callRuntime.ts`); the words are the caller's status text,
+/// pinned by `test_caller_input.rs`.
+struct ClipWords {
+    invalid_id: &'static str,
+    no_generation: &'static str,
+}
+
+const CLIP_WORDS: ClipWords = ClipWords {
+    invalid_id: "Invalid clip id.",
+    no_generation: "Clip has no generation.",
+};
+const STREAM_START_WORDS: ClipWords = ClipWords {
+    invalid_id: "Invalid streaming clip id.",
+    no_generation: "Streaming clip has no generation.",
+};
+const STREAM_CHUNK_WORDS: ClipWords = ClipWords {
+    invalid_id: "Invalid streaming clip id.",
+    no_generation: "Streaming chunk has no generation.",
+};
+
+impl ClipRef {
+    /// The one admission for a command that names a clip. The generation is
+    /// required, never defaulted (`AGENTS.md`, the browser command rule).
+    fn admit(id: Option<String>, generation: Option<u64>) -> Result<ClipRef, ClipRefusal> {
+        let Some(id) = id.filter(|id| is_clip_id(id)) else {
+            return Err(ClipRefusal::InvalidId);
+        };
+        match generation {
+            Some(generation) => Ok(ClipRef { id, generation }),
+            None => Err(ClipRefusal::NoGeneration { id }),
+        }
+    }
+}
+
+impl ClipRefusal {
+    fn into_message(self, words: &ClipWords) -> ServerMessage {
+        match self {
+            ClipRefusal::InvalidId => ServerMessage::error(words.invalid_id),
+            ClipRefusal::NoGeneration { id } => ServerMessage::error_for(id, words.no_generation),
+        }
+    }
 }
 
 /// A clip header, or the error that refuses it: one with no usable id is
@@ -402,17 +466,23 @@ pub(crate) fn parse_clip_header(
     mime: Option<String>,
     generation: Option<u64>,
 ) -> Result<ClipHeader, Box<ServerMessage>> {
-    let Some(id) = id.filter(|id| is_clip_id(id)) else {
-        return Err(Box::new(ServerMessage::error("Invalid clip id.")));
-    };
-    let Some(generation) = generation else {
-        return Err(Box::new(ServerMessage::error_for(
-            id,
-            "Clip has no generation.",
-        )));
-    };
+    let clip = ClipRef::admit(id, generation)
+        .map_err(|refusal| Box::new(refusal.into_message(&CLIP_WORDS)))?;
     let mime = mime.unwrap_or_default().chars().take(100).collect();
-    Ok((id, mime, generation))
+    Ok(ClipHeader { clip, mime })
+}
+
+/// A `stt_chunk` header, or the error that refuses it, on the same terms as
+/// `parse_clip_header`.
+pub(crate) fn parse_stream_chunk_header(
+    clip_id: Option<String>,
+    generation: Option<u64>,
+    sequence: Option<u64>,
+) -> Result<StreamChunkHeader, Box<ServerMessage>> {
+    let clip = ClipRef::admit(clip_id, generation)
+        .map_err(|refusal| Box::new(refusal.into_message(&STREAM_CHUNK_WORDS)))?;
+    let sequence = sequence.unwrap_or(u64::MAX);
+    Ok(StreamChunkHeader { clip, sequence })
 }
 
 /// The longest turn a caller may type, in code points once trimmed.
@@ -431,12 +501,11 @@ pub(crate) fn parse_typed_turn(
     generation: Option<u64>,
     text: Option<&str>,
 ) -> Option<(String, u64, String)> {
-    let id = id.filter(|id| is_clip_id(id))?;
-    let generation = generation?;
+    let ClipRef { id, generation } = ClipRef::admit(id.map(str::to_owned), generation).ok()?;
     let text = text
         .map(str::trim)
         .filter(|text| !text.is_empty() && text.chars().count() <= MAX_TYPED_TURN_CHARS)?;
-    Some((id.to_owned(), generation, text.to_owned()))
+    Some((id, generation, text.to_owned()))
 }
 
 /// `stt_start`: opens a streaming clip for this connection, or resumes one it
@@ -454,22 +523,14 @@ pub(crate) async fn start_stream_clip(
     generation: Option<u64>,
     mime: Option<String>,
 ) -> Result<(), ()> {
-    let Some(id) = clip_id.as_deref().filter(|id| is_clip_id(id)) else {
-        return send_message(
-            state,
-            epoch,
-            ServerMessage::error("Invalid streaming clip id."),
-        )
-        .await;
+    let clip = match ClipRef::admit(clip_id, generation) {
+        Ok(clip) => clip,
+        Err(refusal) => {
+            return send_message(state, epoch, refusal.into_message(&STREAM_START_WORDS)).await;
+        }
     };
-    let Some(generation) = generation else {
-        return send_message(
-            state,
-            epoch,
-            ServerMessage::error_for(id.to_owned(), "Streaming clip has no generation."),
-        )
-        .await;
-    };
+    let id = clip.id.as_str();
+    let generation = clip.generation;
     if let Some(replayed) = replay_clip_verdict(state, epoch, id).await {
         return replayed;
     }
@@ -573,9 +634,10 @@ pub(crate) async fn end_stream_clip(
     clip_id: Option<String>,
     generation: Option<u64>,
 ) -> Result<(), ()> {
-    let (Some(id), Some(generation)) = (clip_id.as_deref(), generation) else {
+    let Ok(ClipRef { id, generation }) = ClipRef::admit(clip_id, generation) else {
         return Ok(());
     };
+    let id = id.as_str();
     let valid = {
         let mut clips = state.0.clips.streams.lock().await;
         match clips.get(id).copied() {
@@ -631,9 +693,10 @@ pub(crate) async fn cancel_stream_clip(
     clip_id: Option<String>,
     generation: Option<u64>,
 ) -> Result<(), ()> {
-    let (Some(id), Some(generation)) = (clip_id.as_deref(), generation) else {
+    let Ok(ClipRef { id, generation }) = ClipRef::admit(clip_id, generation) else {
         return Ok(());
     };
+    let id = id.as_str();
     let should_cancel = {
         let mut clips = state.0.clips.streams.lock().await;
         match clips.get(id).copied() {
@@ -707,7 +770,11 @@ pub(crate) async fn handle_audio_frame(
     pending_stream_chunk: &mut Option<StreamChunkHeader>,
     audio: Vec<u8>,
 ) -> Result<(), ()> {
-    if let Some((id, generation, sequence)) = pending_stream_chunk.take() {
+    if let Some(StreamChunkHeader {
+        clip: ClipRef { id, generation },
+        sequence,
+    }) = pending_stream_chunk.take()
+    {
         let admitted = {
             let mut clips = state.0.clips.streams.lock().await;
             match clips.get_mut(&id) {
@@ -757,7 +824,11 @@ pub(crate) async fn handle_audio_frame(
         }
         return Ok(());
     }
-    let Some((id, mime, generation)) = pending_header.take() else {
+    let Some(ClipHeader {
+        clip: ClipRef { id, generation },
+        mime,
+    }) = pending_header.take()
+    else {
         tracing::warn!(bytes = audio.len(), "audio arrived without a clip header");
         return send_message(
             state,
