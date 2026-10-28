@@ -179,7 +179,7 @@ export function ListViewport({ children, lead, head, className, scrollClassName,
   });
 
   // The keys that scroll a focused list scroll it here, and each one it
-  // takes is marked handled (FocusableSurface's rule: a child marks an
+  // takes is marked handled (ExpandableSurface's rule: a child marks an
   // event with preventDefault and never stops it), so the surface around it
   // leaves Space alone rather than expanding the object, and Enter, which
   // the list does not take, still expands it. They move it down, or, in a

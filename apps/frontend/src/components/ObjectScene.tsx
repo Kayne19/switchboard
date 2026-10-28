@@ -11,7 +11,7 @@ import { besideVisuals, cast, objectsOfType } from '../app/sceneModel';
 import { calendarFrame } from '../primitives/CalendarPrimitive';
 import { countText } from '../primitives/countText';
 import { ObjectMotion } from '../primitives/ObjectMotion';
-import { FocusableSurface } from '../primitives/FocusableSurface';
+import { ExpandableSurface } from '../primitives/ExpandableSurface';
 import { TechFrame, type FrameVariant } from '../primitives/TechFrame';
 import { mayCarryCallout } from './DiagramObject';
 import { renderObject } from './renderObject';
@@ -46,9 +46,9 @@ export function objectContent({ state, composition, onFocus }: SceneProps): Scen
       <ObjectMotion objectId={primary.id} className={`content-main ${primary.type}-object`}>
         {outline ? <TechFrame variant={outline} /> : null}
         <ObjectSurface object={primary}>
-          <FocusableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
+          <ExpandableSurface onActivate={() => onFocus(primary.id)} ariaLabel={`Expand ${primary.type}`}>
             {renderObject(primary, 'primary', { onStage: state.agentObjects, notes: [...(note ? [note] : []), ...moreNotes.map((object) => object.data)] })}
-          </FocusableSurface>
+          </ExpandableSurface>
         </ObjectSurface>
       </ObjectMotion>
     ),

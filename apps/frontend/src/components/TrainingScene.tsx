@@ -18,7 +18,7 @@ import { chartKind } from '../primitives/chartGeometry';
 import { NOTES_PLACED_IN_FULL } from '../primitives/notePlacement';
 import { ObjectMotion } from '../primitives/ObjectMotion';
 import { ProgressPrimitive } from '../primitives/ProgressPrimitive';
-import { FocusableSurface } from '../primitives/FocusableSurface';
+import { ExpandableSurface } from '../primitives/ExpandableSurface';
 import { TechFrame } from '../primitives/TechFrame';
 import { ChartNotes, chartNoteAnchors, type ChartNote } from './ChartNotes';
 import { SurfaceBoundary } from './SurfaceBoundary';
@@ -152,9 +152,9 @@ export function trainingContent(
                 <ObjectMotion key={chart.id} objectId={chart.id} className="chart-object" data-chart-id={chart.id}>
                   <TechFrame variant="panel" />
                   <ObjectSurface object={chart}>
-                    <FocusableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
+                    <ExpandableSurface onActivate={() => onFocus(chart.id)} ariaLabel={`Expand ${chart.data.title ?? 'chart'}`}>
                       <ChartPrimitive data={chart.data} named={chartNoteAnchors(chart, notes)} led={chartNoteAnchors(chart, led)} />
-                    </FocusableSurface>
+                    </ExpandableSurface>
                   </ObjectSurface>
                   {onChart.length > 0 ? (
                     <ChartNotes
@@ -190,9 +190,9 @@ export function trainingContent(
         {progress ? (
           <ObjectMotion objectId={progress.id} className="training-progress">
             <ObjectSurface object={progress}>
-              <FocusableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
+              <ExpandableSurface onActivate={() => onFocus(progress.id)} ariaLabel="Expand progress">
                 <ProgressPrimitive data={progress.data} />
-              </FocusableSurface>
+              </ExpandableSurface>
             </ObjectSurface>
           </ObjectMotion>
         ) : null}

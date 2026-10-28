@@ -387,7 +387,7 @@ export function DrawingViewport({
 
   // The keys that scroll a focused viewport move it from stop to stop, so
   // it rests between its parts as it does after any other input. Each key
-  // it takes is marked handled (FocusableSurface's rule): the surface
+  // it takes is marked handled (ExpandableSurface's rule): the surface
   // around it leaves Space alone rather than expanding the object, and
   // Enter, which it does not take, still expands it. The arrows move along
   // their own axis; the page keys, Home and End along the one it is read

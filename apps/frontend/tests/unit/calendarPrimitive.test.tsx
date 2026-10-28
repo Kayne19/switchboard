@@ -11,7 +11,7 @@ import { act } from 'react';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { CalendarData } from '../../src/controller/types';
 import { CalendarPrimitive, chooseLayout } from '../../src/primitives/CalendarPrimitive';
-import { FocusableSurface } from '../../src/primitives/FocusableSurface';
+import { ExpandableSurface } from '../../src/primitives/ExpandableSurface';
 import type { Slot } from '../../src/primitives/slot';
 import { assistantAgenda, assistantAgendaWeek, assistantDay, assistantMonth, assistantWeek } from '../../src/fixtures/scenes';
 import { mount, stubResizeObserver, unmountAll } from './sceneHarness';
@@ -145,9 +145,9 @@ describe('the week', () => {
     let expanded = 0;
     bodySize = { width: 330, height: 480 };
     const host = mount(
-      <FocusableSurface onActivate={() => (expanded += 1)} ariaLabel="Expand calendar">
+      <ExpandableSurface onActivate={() => (expanded += 1)} ariaLabel="Expand calendar">
         <CalendarPrimitive data={assistantWeek} slot="aux" />
-      </FocusableSurface>,
+      </ExpandableSurface>,
     );
     const heads = () => [...host.querySelectorAll('.calendar-grid__weekday')].map((cell) => cell.textContent);
     const pages = host.querySelector('.calendar-pages') as HTMLElement;
@@ -378,13 +378,13 @@ describe('the panel frame round a calendar', () => {
     // its height, which the layout sets), not a padding in stage units.
     // It is the panel rule, which a type keeping more room than the inset
     // widens (--slot-top, --slot-bottom); the calendar keeps none.
-    const slot = '.calendar-object > .focusable-content';
+    const slot = '.calendar-object > .expandable-surface';
     expect(declared(slot, 'grid-template-rows')).toEqual(['max(var(--panel-inset), var(--slot-top, 0px)) minmax(0, 1fr) max(var(--panel-inset), var(--slot-bottom, 0px))']);
-    expect(declared('.calendar-object .focusable-content', '--slot-top')).toEqual([]);
-    expect(declared('.calendar-object .focusable-content', '--slot-bottom')).toEqual([]);
-    expect(declared('.calendar-object .focusable-content', 'padding')).toEqual(['0 clamp(18px, 2.2cqw, 38px)']);
+    expect(declared('.calendar-object .expandable-surface', '--slot-top')).toEqual([]);
+    expect(declared('.calendar-object .expandable-surface', '--slot-bottom')).toEqual([]);
+    expect(declared('.calendar-object .expandable-surface', 'padding')).toEqual(['0 clamp(18px, 2.2cqw, 38px)']);
     // What the slot holds, not the surface's own button, which covers it all (#269).
-    expect(declared(`${slot} > :not(.focusable-content__expand)`, 'grid-row')).toEqual(['2']);
+    expect(declared(`${slot} > :not(.expandable-surface__expand)`, 'grid-row')).toEqual(['2']);
   });
 
   it('keeps it clear of the steps of an aux cell as tall as the aux row may grow, in an inset the row is asked for', () => {
@@ -393,10 +393,10 @@ describe('the panel frame round a calendar', () => {
     // shrink a step at a time): the step of the tallest cell the row allows.
     const cap = /^fit-content\((\d+)%\)$/.exec(declared('.composed-main', 'grid-auto-rows')[0] ?? '')?.[1];
     expect(cap).toBeDefined();
-    expect(declared('.composed-aux-object--calendar > .focusable-content', 'padding-block')).toEqual([
+    expect(declared('.composed-aux-object--calendar > .expandable-surface', 'padding-block')).toEqual([
       `max(clamp(12px, 1.4cqw, 22px), calc(var(--panel-step-share) * ${cap}cqh + 4px))`,
     ]);
-    expect(declared('.composed-aux-object--calendar > .focusable-content', 'grid-template-rows')).toEqual([]);
+    expect(declared('.composed-aux-object--calendar > .expandable-surface', 'grid-template-rows')).toEqual([]);
   });
 });
 

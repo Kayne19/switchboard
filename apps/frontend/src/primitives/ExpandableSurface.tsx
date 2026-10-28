@@ -1,6 +1,6 @@
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 
-interface FocusableSurfaceProps {
+interface ExpandableSurfaceProps {
   children: ReactNode;
   onActivate: () => void;
   /** The name of the surface's own button, which opens the object in focus: "Expand table". */
@@ -28,7 +28,7 @@ interface FocusableSurfaceProps {
 // as the gesture that unlocks audio (callRuntime), and a stopped click
 // would be a tap the page never heard. Enter or Space in a scroll it holds
 // opens the object as a tap would, unless the scroll took the key.
-export function FocusableSurface({ children, onActivate, ariaLabel, className }: FocusableSurfaceProps) {
+export function ExpandableSurface({ children, onActivate, ariaLabel, className }: ExpandableSurfaceProps) {
   const handleClick = (event: MouseEvent<HTMLDivElement>) => {
     if (event.defaultPrevented) return;
     onActivate();
@@ -45,8 +45,8 @@ export function FocusableSurface({ children, onActivate, ariaLabel, className }:
   };
 
   return (
-    <div className={`focusable-content${className ? ` ${className}` : ''}`} onClick={handleClick} onKeyDown={handleKeyDown}>
-      <button className="focusable-content__expand" type="button" tabIndex={0} aria-label={ariaLabel} />
+    <div className={`expandable-surface${className ? ` ${className}` : ''}`} onClick={handleClick} onKeyDown={handleKeyDown}>
+      <button className="expandable-surface__expand" type="button" tabIndex={0} aria-label={ariaLabel} />
       {children}
     </div>
   );
