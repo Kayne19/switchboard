@@ -654,11 +654,12 @@ fails 10 runs in 10 when run alone. Under load, each round ran four full test
 binaries at once, two built from master and two built with the fix, so both
 saw the same load. The 1-minute load average at the start of a round was 30
 to 82, except for two rounds at 13 and 26. Master's binary failed 10 of 260
-runs, each one in this test. None of the 260 fix runs failed this test. Only
-60 of them ran the code that landed, at 51107365. The other 200 ran two
-earlier builds of the same capture, one from before review and a pilot build
-that also held two more repro tests. Two of the 260 fix runs failed in
-another test, once each, and neither test is touched by this change.
+full runs, each one in this test. None of the 260 fix runs failed this test.
+That is a count of this test failing, not of failed runs: the fix runs
+failed two other tests, once each, and neither test is touched by this
+change. Only 60 of the 260 fix runs ran the code that landed, at 51107365.
+The other 200 ran two earlier builds of the same capture, one from before
+review and a pilot build that also held two more repro tests.
 
 `debug::capture_logs(&bus)` (`apps/backend/src/debug.rs`) is the fix. Its
 first call installs the test binary's only subscriber, as the global default:

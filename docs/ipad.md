@@ -86,7 +86,9 @@ Note the iPadOS version in the pull request.
    says HANDS-FREE, and the wake word still makes a turn. Ask to be put
    through to a project, and later back to the operator: after each
    hand-off MODE still says HANDS-FREE, the microphone light stays on, and
-   the wake word makes a turn with the new agent. On a fresh page, tap MODE,
+   the wake word makes a turn with the new agent. A regression guard, not proof
+   that the guarded branch ran: master gives the same result, so a pass
+   shows only that the page still recovers. On a fresh page, tap MODE,
    allow the microphone, and leave Safari at once. Come back: MODE says
    PUSH-TO-TALK, the status line shows no error, and the next MODE listens.
 5. Captions: the answer card's text follows what is said.
