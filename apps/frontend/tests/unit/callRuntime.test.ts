@@ -9,6 +9,7 @@ import {
 } from "../../src/runtime/callRuntime";
 import type { HelloAckMessage, ServerMessage } from "../../src/protocol";
 import { AudioPlayback } from "../../src/runtime/audioPlayback";
+import { MAX_OUTBOX_CLIPS } from "../../src/runtime/outbox";
 import { CAPTION_WAIT_MS } from "../../src/runtime/spokenLines";
 import { helloAck, statusMessage } from "../fixtures/serverMessages";
 import { realHandsFree, stubHandsFreeBrowser } from "../fixtures/handsFreeRuntime";
@@ -729,6 +730,49 @@ describe("CallRuntime voice clips", () => {
     runtime.talk();
     await settle();
     expect(getUserMedia).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
+
+  it("says whether a queued line joined the running turn, is next, or waits with others", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime);
+    const statusAfter = async (waiting: number, steered: boolean) => {
+      socket.receive({ type: "queued", id: "clip", waiting, steered });
+      await settle();
+      return latestState();
+    };
+    expect(await statusAfter(0, true)).toMatchObject({
+      status: "Added that to the turn already in progress.",
+      statusError: false,
+    });
+    expect(await statusAfter(1, false)).toMatchObject({
+      status: "Got it — you're next, once this turn finishes.",
+      statusError: false,
+    });
+    expect(await statusAfter(3, false)).toMatchObject({
+      status: "Got it — 3 waiting their turn.",
+      statusError: false,
+    });
+    runtime.dispose();
+  });
+
+  it("refuses a recording the outbox cannot hold, as an error", async () => {
+    const { runtime, latestState } = makeRuntime();
+    const socket = await connectAt(runtime);
+    const recordOneClip = async () => {
+      runtime.talk();
+      await settle();
+      runtime.send();
+      await settle();
+    };
+    for (let index = 0; index < MAX_OUTBOX_CLIPS; index += 1) await recordOneClip();
+    expect(latestState().statusError).toBe(false);
+    await recordOneClip();
+    expect(latestState()).toMatchObject({
+      status: "Too many unsent voice clips; reconnect before recording again.",
+      statusError: true,
+    });
+    expect(socket.sentJson().filter((frame) => frame.type === "clip")).toHaveLength(MAX_OUTBOX_CLIPS);
     runtime.dispose();
   });
 });
