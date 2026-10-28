@@ -1584,13 +1584,113 @@ async fn every_page_control_exit_leaves_the_line_as_the_table_says() {
     assert_eq!(rows, expected);
 }
 
+/// Posts a control, waits until `reached` holds (a step after its rescue),
+/// then drops the request the way hyper drops a handler whose client went
+/// away while the response was pending (a reload, a suspended tab, a
+/// Wi-Fi drop), runs `release`, and returns the line once it has settled,
+/// or as it stands two seconds later.
+#[cfg(unix)]
+async fn line_after_a_dropped_control(
+    call: &AlphaCall,
+    body: Value,
+    path: &str,
+    reached: impl Fn() -> bool,
+    release: impl FnOnce(),
+) -> String {
+    let state = &call.state;
+    let before = state.0.coordinator.generation();
+    let request = post(state, path, at_generation(state, body));
+    until(reached).await;
+    request.abort();
+    assert!(within("request", request).await.unwrap_err().is_cancelled());
+    release();
+    let _ = timeout(Duration::from_secs(2), async {
+        while line_after(state, before).contains("quiescing") {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await;
+    line_after(state, before)
+}
+
+/// A control's request can end before the control does: hyper drops the
+/// handler's future when the client goes away while the response is
+/// pending, and the control's rescue has already begun a quiet that only
+/// the control's own settle ends. The control runs on to that settle
+/// without its request, or the caller is refused every utterance until
+/// another control lands (#462). One probe per control that rescues.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dropped_connect_to_a_project_settles_its_quiet() {
+    // Dropped once the dial has hung alpha up and waits on the project's
+    // prepare, which then fails.
+    let call = call_on_alpha(&[]).await;
+    call.prewarm
+        .settle_prepare(&call.project, crate::prewarm::PrepareState::Pending);
+    let line = line_after_a_dropped_control(
+        &call,
+        json!({"project":"alpha"}),
+        "/connect",
+        || call.state.0.coordinator.route() == OPERATOR,
+        || {
+            call.prewarm.settle_prepare(
+                &call.project,
+                crate::prewarm::PrepareState::InfrastructureFailed {
+                    reason: "the prepare runner is gone".into(),
+                },
+            );
+        },
+    )
+    .await;
+    assert_eq!(line, "+1 settled operator");
+    call.hang_up().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dropped_connect_to_the_operator_settles_its_quiet() {
+    // Dropped once the dial has hung alpha up and waits to deliver its
+    // answer.
+    let call = call_on_alpha(&[]).await;
+    let transition = call.state.0.operation_transition.lock().await;
+    let line = line_after_a_dropped_control(
+        &call,
+        json!({"project":"operator"}),
+        "/connect",
+        || call.state.0.coordinator.route() == OPERATOR,
+        || drop(transition),
+    )
+    .await;
+    assert_eq!(line, "+1 settled operator");
+    call.hang_up().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dropped_hangup_settles_its_quiet() {
+    // Dropped once it has dropped alpha and waits to write its line into
+    // the transcript.
+    let call = call_on_alpha(&[]).await;
+    let transcript = call.state.0.transcript_log.lock().await;
+    let line = line_after_a_dropped_control(
+        &call,
+        json!({}),
+        "/hangup",
+        || call.state.0.coordinator.route() == OPERATOR,
+        || drop(transcript),
+    )
+    .await;
+    assert_eq!(line, "+1 settled operator");
+    call.hang_up().await;
+}
+
 const PAGE_CONTROL_TABLE: &str = r#"
 connect | admitted | no generation => 400 {"detail":"connection attempt was refused: it carries no generation"} | +0 settled alpha
 connect | admitted | the line moved on => 409 {"detail":"connection attempt was refused: the line moved on (the page held generation 1, the call is at 2)"} | +0 settled alpha
 connect | rescued | the dial is delivered => 200 {"error":null,"route":"operator"} | +1 settled operator
 connect | rescued | a newer rescue lands while it releases the leg => 409 {"detail":"connection attempt was cancelled"} | +2 quiescing alpha
 connect | running | a newer rescue cancels the dial => 409 {"detail":"connection attempt was cancelled"} | +2 quiescing alpha
-connect | delivering | a newer rescue supersedes the reply => 409 {"detail":"connection attempt was superseded"} | +2 settled operator
+connect | delivering | a newer rescue supersedes the reply => 409 {"detail":"connection attempt was superseded"} | +2 quiescing operator
 hangup | admitted | no generation => 400 {"detail":"hangup was ignored: it carries no generation"} | +0 settled alpha
 hangup | admitted | the line moved on => 409 {"detail":"hangup was ignored: the line moved on (the page held generation 1, the call is at 2)"} | +0 settled alpha
 hangup | rescued | the leg is dropped => 200 {"hungup":true,"left":"alpha"} | +1 settled operator

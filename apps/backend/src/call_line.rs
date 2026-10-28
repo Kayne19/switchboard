@@ -514,14 +514,10 @@ impl Line {
                 }
                 _ => unchanged(),
             },
-            // A call quiescing comes to rest on the operator. A turn still
-            // running (the operator is being told why the caller came back)
-            // stays open until it ends, and a staged candidate stays staged:
-            // it is not on the line yet.
-            Event::ReturnToOperator => match self {
-                Self::Quiescing { leg } => Ok((Self::at_rest(leg.returned()), None)),
-                _ => Ok((self.with_leg(leg.returned()), None)),
-            },
+            // The phase is kept: a running turn stays open, a staged
+            // candidate stays staged, and only the rescue's own settle ends
+            // a quiet (#462).
+            Event::ReturnToOperator => Ok((self.with_leg(leg.returned()), None)),
             Event::BeginCandidate(mut candidate) => {
                 match self {
                     Self::Shutdown { .. } => return Err(LifecycleError::Shutdown),

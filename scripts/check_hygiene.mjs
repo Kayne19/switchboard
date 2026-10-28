@@ -841,6 +841,29 @@ const checks = [
 		violations: [{ "apps/backend/tests/a.rs": "let _g = tracing::subscriber::set_default(s);\n" }, { "apps/backend/src/a.rs": "fut.with_subscriber(s);\n" }],
 		clean: [{ "apps/backend/tests/a.rs": "let logs = debug::capture_logs(&bus);\n" }],
 	},
+	{
+		// Every page control runs its body through detached(): hyper drops a
+		// handler's future when the client goes away while the response is
+		// pending, and a control dropped between its rescue and its settle
+		// would leave the quiet with nothing to end it (#462;
+		// docs/concurrency-and-test-hazards.md). A handler is a function under
+		// the `http` instrument attribute; its body ends at the first `}` in
+		// column 0.
+		name: "detached page controls",
+		run(ctx) {
+			const file = "apps/backend/src/page_controls.rs";
+			const text = lines(ctx, file);
+			text.forEach((line, index) => {
+				if (!/#\[tracing::instrument\(name = "http"/.test(line)) return;
+				const name = /async fn (\w+)\(/.exec(text[index + 1] ?? "")?.[1] ?? "?";
+				let end = index + 1;
+				while (end < text.length && text[end] !== "}") end += 1;
+				if (!text.slice(index, end).some((body) => /\bdetached\(/.test(body))) ctx.report(`${file}:${index + 2}: page control ${name} awaits its body inline (run it through detached(), so a dropped request still reaches its settle)`);
+			});
+		},
+		violations: [{ "apps/backend/src/page_controls.rs": '#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    run_page_control(control, body).await\n}\n' }],
+		clean: [{ "apps/backend/src/page_controls.rs": '#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    detached(run_page_control(control, body))\n        .await\n}\n\nasync fn helper() {\n    run_page_control(control, body).await\n}\n' }],
+	},
 ];
 
 

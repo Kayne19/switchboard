@@ -496,14 +496,19 @@ fn return_to_operator_clears_the_leg_from_every_phase() {
     // The generation is the leg's, not the route's: a return keeps it.
     assert_eq!(call.generation(), generation);
 
-    // Quiescing: a page rescue, then the hangup that follows it.
+    // Quiescing: a page rescue, then the hangup that follows it. The leg is
+    // cleared; the quiet is the rescue's to end.
     let call = coordinator();
     on_alpha(&call);
-    call.begin_rescue("page rescue");
+    let rescued = call.begin_rescue("page rescue");
     assert_eq!(phase(&call), "quiescing");
     call.return_to_operator();
+    assert_eq!(phase(&call), "quiescing");
+    assert_on_the_operator(&call);
+    assert!(call.settle(rescued));
     assert_eq!(phase(&call), "operator");
     assert_on_the_operator(&call);
+    assert!(call.begin_prompt(&call.current_identity()).is_ok());
 
     // Mid-turn: the operator is being told why the caller came back, and the
     // turn settles the phase when it ends.
@@ -1829,7 +1834,7 @@ quiescing | begin_rescue => cand-rescue-2-rescue-3@3 | quiescing alpha cand-resc
 quiescing | begin_rescue_of => cand-rescue-2-rescue-3@3 | quiescing alpha cand-rescue-2-rescue-3@3 - thinking:medium []
 quiescing | settle => alpha | active alpha cand-rescue-2@2 - thinking:medium []
 quiescing | settle another rescue => false | quiescing alpha cand-rescue-2@2 - thinking:medium []
-quiescing | return_to_operator => () | operator operator operator@2 - thinking: []
+quiescing | return_to_operator => () | quiescing operator operator@2 - thinking: []
 quiescing | begin_candidate => gamma-leg@3 | starting alpha cand-rescue-2@2 - startup thinking:medium [gamma@2 staged]
 quiescing | thinking from the line => StaleLeg | quiescing alpha cand-rescue-2@2 - thinking:medium []
 quiescing | thinking from the candidate => StaleLeg | quiescing alpha cand-rescue-2@2 - thinking:medium []

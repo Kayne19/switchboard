@@ -521,10 +521,10 @@ through them.
 
 | phase | carries | entered by | left by |
 |---|---|---|---|
-| `Open` | the leg on the line; the turn running on it, if any | the call starts here; `settle`, `finish_intro`, a rollback, `return_to_operator` from `Quiescing` | `begin_candidate`, a rescue, `begin_shutdown` |
+| `Open` | the leg on the line; the turn running on it, if any | the call starts here; `settle`, `finish_intro`, a rollback | `begin_candidate`, a rescue, `begin_shutdown` |
 | `Starting` | the leg, which still answers; the staged candidate, private until adopted; the leg's turn (a transfer runs inside the caller's) | `begin_candidate` | `adopt_candidate`; a rollback (to `Open`, the turn kept); a rescue or shutdown, which abandon the candidate and retire its generation |
 | `Adopted` | the adopted leg and its intro (or later) turn; the leg it `replaced` | `adopt_candidate` | `finish_intro` (to `Open`); a rollback (`replaced` comes back); a rescue; a shutdown; another `begin_candidate` |
-| `Quiescing` | the leg under the rescue's new identity; no turn | a rescue | a settle naming that rescue's generation (`settle`, `settle_at`), `return_to_operator`, `begin_candidate`, a shutdown |
+| `Quiescing` | the leg at the rescue's generation (under its retired identity, or the operator's after a return); no turn | a rescue | a settle naming that rescue's generation (`settle`, `settle_at`), `begin_candidate`, a shutdown |
 | `Shutdown` | the leg; no turn, no startup | `begin_shutdown` | nothing |
 
 Entering `Starting` announces the candidate (`candidate`); leaving it
@@ -617,11 +617,15 @@ changes to the legs.
 machine: each step consumes the control and returns the next, and the
 coordinator's rescue token (`lifecycle::Rescued`) is the only generation a
 step after the rescue gets, so none can read the current one again
-(#263, #369).
+(#263, #369). A control's body runs on its own task
+(`page_controls::detached`), and the handler only waits for it: hyper
+drops a handler's future when the client goes away while the response is
+pending, and the body still reaches its settle (#462).
 
 | step | holds | on failure |
 |---|---|---|
 | `PageControl::admit` | `Admitted`: the generation the page held, which is the call's | 400 with none, 409 for one the call has left: "refused" (a picker), "ignored" (a hangup) |
+| `detached` | the body's task, from the rescue to the settle | the body panicked: 500 "the control did not finish" (`did_not_finish`); a panic outside a registered operation leaves its quiet until the next control |
 | `Admitted::decide` (a redial only) | the decision, registered at the admitted generation; running work is left alone | as `run`, at the admitted generation, but a failure settles nothing; an answer that needs no redial (a refusal, a setting on the operator) is delivered there, nothing is rescued, and nothing is settled: a quiet on the line is another control's to end (#461) |
 | `Admitted::rescue` (`begin_rescue_at`), `rescue_for` (`begin_rescue_of`, a redial) | `Rescued`: the token, after the leg's work is released | nothing rescued: 409 ("cancelled", "ignored", "superseded") |
 | `Rescued::run` (the dial, the redial) | the operation, registered at the token's generation | 409 "cancelled" if a newer rescue retired it (that one settles); 500 and a settle if it failed |
