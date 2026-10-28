@@ -634,7 +634,7 @@
       "type": "object",
       "properties": {
         "language": {
-          "description": "Chooses the line-comment marker (docs/display-tool.md, 'Code v1 rules'); a language the page does not name marks no comment.",
+          "description": "Chooses the line-comment marker (docs/display-tool.md, 'Code v1 rules'); a language the page does not name is drawn as plain text.",
           "type": "string",
           "maxLength": 64
         },
