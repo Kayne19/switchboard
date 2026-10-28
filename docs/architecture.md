@@ -367,7 +367,7 @@ A flag, a nullable slot, a timer or a token added to a lifecycle owner, or a
 third copy of its end, means the lifecycle has stopped being one state type
 with one writer: extract the machine first, in its own PR (`AGENTS.md`,
 "Working here"; the "one writer per machine" and "no new lifecycle flags"
-checks in `scripts/check_hygiene.mjs`).
+checks in `scripts/hygiene_lifecycle.mjs`).
 
 The same holds across a contract. The complete-clip `SWITCHBOARD_STT_COMMAND`
 contract and the optional long-lived `SWITCHBOARD_STT_STREAM_COMMAND` are two
