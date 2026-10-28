@@ -72,9 +72,12 @@ browser mic / page controls
           +--> prewarm.rs: setup per host and project as each host links
           |       (model catalogs, prepare)
           |
-          +--> audio.rs: STT/TTS ports and adapters
+          +--> stt.rs: STT sidecar adapters
           |       |
           |       +--> STT command or long-lived STT worker
+          |
+          +--> tts.rs: the TTS client
+          |       |
           |       +--> ElevenLabs or local TTS transport
           |
           +--> display.rs: the stage projection and its confirmation gate
@@ -243,13 +246,20 @@ closed.
 
 ### 4. Audio is an adapter boundary
 
-`apps/backend/src/audio.rs` owns speech transport and worker mechanics:
+`apps/backend/src/stt.rs` and `apps/backend/src/tts.rs` own speech transport and
+worker mechanics. `stt.rs` holds:
 
 - `SttAdapter` for complete-clip compatibility
 - `SttStreamAdapter` for long-lived streaming STT
+- worker framing, output bounds, and process cleanup
+
+`tts.rs` holds:
+
 - `TtsTransport` for provider transport
 - `Speaker` for speech request policy and limits
-- worker framing, deadlines, output bounds, and process cleanup
+- request deadlines and the response size bound
+
+The two share nothing: each has its own error type (`SttError`, `TtsError`).
 
 Audio adapters may report partial, final, failed, or cancelled results. They do
 not decide which project receives a transcript or whether a caller is
@@ -490,7 +500,8 @@ removes the real coupling; do not create interfaces for ceremony.
 | `pi_client.rs` | the operator's and the utility's Pi process/RPC transport and its phase (`ProcessState`: idle, sending, prompting, abandoned, closed; moved only by `PiSession::transition` through the `step` table, with the release on entry to closed), process-tree cleanup, `LegSession` (the leg on the line, operator or project, as the controls see it) | project sessions, route authority or deployment registry |
 | `project_session.rs` | a project session over the host link: its commands, the caller turn it collects, the frame pump and what each turn step leaves to do (reports, admission, frames to the prompt), module-call answers, and its end of life (`Lifecycle`, written only by `ProjectInner::end`; `docs/host-link.md`, "A project session's end"): its release on the host and the subscription to its frames | the host link itself (`hosts.rs`), which leg is on the line, route authority |
 | `session_turn.rs` | a project session's turn (`TurnState`: idle, caller, self-woken, caller and self-woken, caller settled; written only by `TurnState::step`, which is pure and returns its effects; `docs/host-link.md`, "A project session's turn") | the host link, the session's end of life, admission policy (the application answers it) |
-| `audio.rs` | STT/TTS transports, workers, bounds, deadlines | project selection or persistence policy |
+| `stt.rs` | STT sidecar adapters, the stream worker, bounds, process cleanup | project selection or persistence policy |
+| `tts.rs` | the TTS transport, `Speaker`, bounds, deadlines | project selection or persistence policy |
 | `display.rs` | the stage projection (`DisplayProjection`); the display gate (`DisplayGateState`: the stage of the leg on the line, the page's `ScreenReport` and its confirmations, whose methods are their only writers); the display-precedence rule for `view` and the snapshot | generation checks, HTTP/WebSocket handling |
 | `delivery.rs` | the event envelope, per-connection framing (`DeliveryState`), and the ordered audio queue | route authority, generation checks |
 | `models.rs` | catalog parsing and spoken model/thinking resolution | where catalogs come from |

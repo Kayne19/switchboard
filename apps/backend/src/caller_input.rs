@@ -3,10 +3,10 @@
 //! their results, typed turns, and the verdict each clip is settled with.
 use crate::app_state::emit_message;
 use crate::app_state::AppState;
-use crate::audio::StreamResult;
 use crate::browser::send_message;
 use crate::history::CALLER;
 use crate::protocol::{ErrorCode, ServerMessage};
+use crate::stt::StreamResult;
 use crate::turns::dispatch_routed_transcript;
 #[cfg(test)]
 use serde_json::Value;
