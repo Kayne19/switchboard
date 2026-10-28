@@ -64,7 +64,7 @@ change; `scripts/check_hygiene.mjs` refuses the one without the other.
 
 ## Engine-specific code in the tree
 
-`scripts/check_hygiene.mjs` reads this table. Each row starts with the
+`scripts/hygiene_engine.mjs` reads this table. Each row starts with the
 repo-relative file as its first code span, and every `-webkit-` name in its
 Where and What cells is a claim that the file uses it. The script refuses a
 `-webkit-` name (or its camelCase style key, such as `WebkitLineClamp`) used in
