@@ -1082,6 +1082,17 @@ impl ProjectSession {
                     break;
                 }
                 TurnFrame::Event { seq, event } => (seq, event),
+                TurnFrame::RunReplaced {
+                    seq,
+                    turn_id: replaced,
+                } => {
+                    if seq < from || replaced.as_deref() != Some(turn_id) {
+                        continue;
+                    }
+                    tracing::info!(%label, turn_id, "the run the prompt went into was replaced without its turn_end");
+                    settled_turn = replaced;
+                    break;
+                }
             };
             if seq < from && event["kind"] != "session_closed" {
                 continue;
