@@ -1110,3 +1110,63 @@ fn audio_starts(frames: &[Value]) -> Vec<u64> {
         .map(|frame| frame["sequence"].as_u64().unwrap())
         .collect()
 }
+
+/// d6-coverage: a synthesis failure that lands after a rescue has retired
+/// its generation (the rescue bumps the generation before it aborts the
+/// work) is reported to the agent that asked, but the page, which has moved
+/// on, is shown no error for it.
+#[tokio::test]
+async fn a_synthesis_failure_after_a_rescue_is_not_shown_to_the_caller() {
+    let config = crate::Config::for_tests(&[]);
+    let registry = Registry::new(vec![]);
+    let prewarm = crate::prewarm::Prewarm::settled(
+        &config,
+        &registry,
+        crate::models::ModelCatalog::unavailable("no projects are registered"),
+    );
+    let gate = TestTtsGate::new();
+    gate.fail_first();
+    let state = AppState::new(
+        Switchboard::new(&config, registry, std::sync::Arc::new(prewarm)),
+        TranscriptLog::new(10),
+        Speaker::test_gated(100, Duration::from_millis(25_000), gate.clone()),
+        SttAdapter::from_command(None),
+        SttStreamAdapter::from_command(None),
+    );
+    let (_connection, _, _) = state.register_connection().await;
+    start_speech_worker_for_test(&state);
+    let mut events = PageFeed::open(&state);
+    let generation = state.0.coordinator.generation();
+    let speaking = tokio::spawn({
+        let state = state.clone();
+        let admission = SpeechAdmission {
+            text: "A line that will fail.".into(),
+            route: OPERATOR.into(),
+            generation,
+            deadline: std::time::Instant::now() + Duration::from_secs(1),
+            scope: ContinuationScope::FreshTurn,
+            group: state.0.new_speech_group(),
+            log_spoken: false,
+        };
+        async move { queue_speech(&state, admission, None).await }
+    });
+    timeout(Duration::from_secs(1), gate.wait_started())
+        .await
+        .expect("the speech started");
+
+    state.0.coordinator.begin_rescue("hang up");
+    gate.release();
+
+    assert!(
+        within("speaking", speaking).await.unwrap().is_err(),
+        "the failed speech reports that it was not spoken"
+    );
+    while let Ok(event) = events.try_recv() {
+        if let Event::Json(value) = event {
+            assert_ne!(
+                value["type"], "error",
+                "a retired generation's failure reached the page: {value}"
+            );
+        }
+    }
+}
