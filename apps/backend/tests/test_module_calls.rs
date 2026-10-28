@@ -266,8 +266,7 @@ async fn a_refused_reason_or_target_lists_the_names_it_takes() {
             json!({"detail": "invalid reason: expected one of finished, needs_decision, problem"})
         );
     }
-    // The names the page once took for the five, and the five as sent in
-    // another case or padded, are all refused: the target is compared as sent.
+    // Target matching is exact: old aliases, other case and padding are refused.
     for target in [
         "screen",
         "stage",
@@ -317,7 +316,6 @@ async fn a_request_to_speak_reaches_the_debug_bus() {
 
 #[tokio::test]
 async fn a_view_call_with_an_unknown_field_is_refused_with_the_reason() {
-    // `reason` was a field of `view` until the page stopped reading it.
     for field in ["colour", "reason"] {
         let (code, body) =
             agent_call_json(&state(), "/view", json!({"target": "", field: "red"})).await;
