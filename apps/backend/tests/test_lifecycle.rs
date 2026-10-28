@@ -755,7 +755,7 @@ fn activity_is_classified_by_the_leg_it_came_from() {
     assert_eq!(call.classify_activity("cand"), Publish);
     assert_eq!(call.classify_activity("operator"), Discard);
     assert_eq!(
-        call.adopt_candidate("cand"),
+        call.adopt_candidate("stray"),
         Err(LifecycleError::NoCandidate)
     );
 
@@ -778,6 +778,34 @@ fn activity_is_classified_by_the_leg_it_came_from() {
     .unwrap();
     call.begin_rescue("hangup mid-startup");
     assert_eq!(call.classify_activity("beta-leg"), Discard);
+}
+
+/// A candidate is adopted twice over: by its own first sign of life, from
+/// the session pump's task, and by `Startup::commit`, from the PBX's. The
+/// one that lands second finds the leg it names already on the line, and
+/// is that same adoption: it moves nothing, sends no notice, and names the
+/// leg. Refusing it made the commit abandon a healthy leg (#449).
+#[test]
+fn an_adoption_that_lands_second_is_the_same_adoption() {
+    let (call, notices) = coordinator_with_notices();
+    call.begin_candidate(alpha_candidate()).unwrap();
+    let adopted = call.adopt_candidate("cand").unwrap();
+    let intro = open_turn(&call).expect("adoption opens the intro turn");
+    notices.lock().unwrap().clear();
+
+    assert_eq!(call.adopt_candidate("cand"), Ok(adopted));
+    assert_eq!(phase(&call), "turn running");
+    assert_eq!(open_turn(&call), Some(intro), "the intro turn is kept");
+    assert!(call.startup_in_flight(), "the intro still ends the startup");
+    assert!(notices.lock().unwrap().is_empty(), "the page heard it once");
+
+    // Another leg's token is still no adoption.
+    assert_eq!(
+        call.adopt_candidate("stray"),
+        Err(LifecycleError::NoCandidate)
+    );
+    assert!(call.finish_intro());
+    assert_eq!(phase(&call), "active");
 }
 
 #[test]
