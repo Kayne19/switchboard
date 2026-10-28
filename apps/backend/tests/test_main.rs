@@ -116,7 +116,9 @@ fn speech_deadline_is_parsed_once_with_its_default() {
 }
 
 #[test]
-#[should_panic(expected = "SWITCHBOARD_SPEECH_DEADLINE_MS must be a positive integer")]
+#[should_panic(
+    expected = "SWITCHBOARD_SPEECH_DEADLINE_MS must be a whole number of milliseconds from 1 to 120000"
+)]
 fn invalid_speech_deadline_stops_startup() {
     Config::for_tests(&[("SWITCHBOARD_SPEECH_DEADLINE_MS", "invalid")]);
 }
@@ -200,7 +202,9 @@ fn a_bad_duration_only_the_service_enforces_falls_back_to_its_default() {
 }
 
 #[test]
-#[should_panic(expected = "SWITCHBOARD_SPEECH_DEADLINE_MS must be a positive integer")]
+#[should_panic(
+    expected = "SWITCHBOARD_SPEECH_DEADLINE_MS must be a whole number of milliseconds from 1 to 120000"
+)]
 fn an_out_of_range_speech_deadline_stops_startup() {
     Config::for_tests(&[("SWITCHBOARD_SPEECH_DEADLINE_MS", "120001")]);
 }
@@ -266,4 +270,80 @@ fn the_debug_listener_is_off_unless_an_address_is_set() {
     let values = HashMap::from([("SWITCHBOARD_DEBUG_BIND".into(), " 0.0.0.0:8766 ".into())]);
     let config = Config::from_values(&values, PathBuf::from("/tmp/env"));
     assert_eq!(config.debug_bind.as_deref(), Some("0.0.0.0:8766"));
+}
+
+#[test]
+fn a_numeric_setting_outside_its_range_falls_back_to_its_default() {
+    let config = Config::for_tests(&[
+        ("SWITCHBOARD_JEV_ACTION_THRESHOLD", "NaN"),
+        ("SWITCHBOARD_MAX_SPOKEN_CHARS", "0"),
+        ("SWITCHBOARD_JEV_SUMMARY_TOKEN_BUDGET", "0"),
+    ]);
+    assert_eq!(config.jev_action_threshold, 0.6);
+    assert_eq!(config.max_spoken_chars, 700);
+    assert_eq!(config.jev_summary_token_budget, 8_000);
+    for bad in ["1.5", "-0.1"] {
+        assert_eq!(
+            Config::for_tests(&[("SWITCHBOARD_JEV_ACTION_THRESHOLD", bad)]).jev_action_threshold,
+            0.6,
+            "{bad}"
+        );
+        let lower = Config::for_tests(&[("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER", bad)]);
+        assert_eq!(lower.jev_for_current_agent_lower, 0.3, "{bad}");
+        let upper = Config::for_tests(&[("SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER", bad)]);
+        assert_eq!(upper.jev_for_current_agent_upper, 0.7, "{bad}");
+    }
+    let edges = Config::for_tests(&[
+        ("SWITCHBOARD_JEV_ACTION_THRESHOLD", "1"),
+        ("SWITCHBOARD_HISTORY_LIMIT", "0"),
+        ("SWITCHBOARD_MAX_SPOKEN_CHARS", "1"),
+    ]);
+    assert_eq!(edges.jev_action_threshold, 1.0);
+    assert_eq!(edges.history_limit, 0);
+    assert_eq!(edges.max_spoken_chars, 1);
+}
+
+#[test]
+fn the_jev_summary_token_budget_is_clamped_to_the_per_question_limit() {
+    let config = Config::for_tests(&[("SWITCHBOARD_JEV_SUMMARY_TOKEN_BUDGET", "99999")]);
+    assert_eq!(
+        config.jev_summary_token_budget,
+        crate::router::MAX_STATE_TOKENS
+    );
+}
+
+#[test]
+fn a_rejected_numeric_setting_is_logged_with_what_it_accepts() {
+    for (name, bad, accepts) in [
+        (
+            "SWITCHBOARD_JEV_ACTION_THRESHOLD",
+            "2",
+            "a fraction from 0 to 1",
+        ),
+        ("ELEVENLABS_SPEED", "inf", "a finite number"),
+        ("SWITCHBOARD_HISTORY_LIMIT", "-1", "a whole number"),
+        (
+            "SWITCHBOARD_MAX_SPOKEN_CHARS",
+            "0",
+            "a positive whole number",
+        ),
+        (
+            "SWITCHBOARD_JEV_TIMEOUT_MS",
+            "0",
+            "a whole number of milliseconds from 1 to 120000",
+        ),
+    ] {
+        let bus = crate::debug::DebugBus::new();
+        {
+            let _capture = crate::debug::capture_logs(&bus);
+            Config::for_tests(&[(name, bad)]);
+        }
+        let logs = bus.snapshot().logs;
+        assert!(
+            logs.iter().any(|log| log.level == "WARN"
+                && log.message == format!("setting is not {accepts}; using the default")
+                && log.fields["setting"] == name),
+            "{name}: {logs:?}"
+        );
+    }
 }

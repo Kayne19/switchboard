@@ -40,8 +40,11 @@ mod visual_protocol;
 
 use std::collections::HashMap;
 use std::env;
+use std::fmt::Display;
 use std::fs;
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// The commit this binary was built from, stamped by `build.rs`: the
 /// `SWITCHBOARD_GIT_SHA` the build was given, else `git describe`, else
@@ -156,9 +159,9 @@ impl Config {
                     .as_str(),
                 "0" | "false" | "no"
             ),
-            max_spoken_chars: usize_value(values, "SWITCHBOARD_MAX_SPOKEN_CHARS", 700, false),
+            max_spoken_chars: number(values, "SWITCHBOARD_MAX_SPOKEN_CHARS", 700, &POSITIVE_COUNT),
             speech_deadline_ms: bounded_ms(values, "SWITCHBOARD_SPEECH_DEADLINE_MS", 25_000),
-            history_limit: usize_value(values, "SWITCHBOARD_HISTORY_LIMIT", 200, true),
+            history_limit: number(values, "SWITCHBOARD_HISTORY_LIMIT", 200, &COUNT),
             jev_key_file: PathBuf::from(get(
                 values,
                 "SWITCHBOARD_JEV_KEY_FILE",
@@ -169,30 +172,39 @@ impl Config {
                 "SWITCHBOARD_JEV_URL",
                 "https://api.typesafe.ai/v1/systemone",
             ),
-            jev_timeout_ms: ms_value(values, "SWITCHBOARD_JEV_TIMEOUT_MS", 2_000),
+            jev_timeout_ms: number(values, "SWITCHBOARD_JEV_TIMEOUT_MS", 2_000, &MILLIS),
             jev_for_current_agent_lower,
             jev_for_current_agent_upper,
-            jev_action_threshold: fraction_value(values, "SWITCHBOARD_JEV_ACTION_THRESHOLD", 0.6),
-            jev_summary_token_budget: usize_value(
+            jev_action_threshold: number(
+                values,
+                "SWITCHBOARD_JEV_ACTION_THRESHOLD",
+                0.6,
+                &FRACTION,
+            ),
+            // Above the per-question limit the budget is clamped to it, not
+            // replaced by the default (`docs/environment.md`); the router
+            // enforces that limit too.
+            jev_summary_token_budget: number(
                 values,
                 "SWITCHBOARD_JEV_SUMMARY_TOKEN_BUDGET",
                 8_000,
-                false,
+                &POSITIVE_COUNT,
             )
-            .min(32_000),
-            floor_quiet_threshold_ms: ms_value(
+            .min(router::MAX_STATE_TOKENS),
+            floor_quiet_threshold_ms: number(
                 values,
                 "SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS",
                 10_000,
+                &MILLIS,
             ),
             tts: audio::TtsSettings {
                 api_key: get(values, "ELEVENLABS_API_KEY", ""),
                 voice_id: get(values, "ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"),
                 model_id: get(values, "ELEVENLABS_MODEL_ID", "eleven_multilingual_v2"),
-                stability: f32_value(values, "ELEVENLABS_STABILITY", 0.5),
-                similarity_boost: f32_value(values, "ELEVENLABS_SIMILARITY_BOOST", 0.75),
-                style: f32_value(values, "ELEVENLABS_STYLE", 0.0),
-                speed: f32_value(values, "ELEVENLABS_SPEED", 1.0),
+                stability: number(values, "ELEVENLABS_STABILITY", 0.5, &FINITE),
+                similarity_boost: number(values, "ELEVENLABS_SIMILARITY_BOOST", 0.75, &FINITE),
+                style: number(values, "ELEVENLABS_STYLE", 0.0, &FINITE),
+                speed: number(values, "ELEVENLABS_SPEED", 1.0, &FINITE),
             },
             environment: values.clone(),
         }
@@ -262,35 +274,61 @@ fn get(values: &HashMap<String, String>, name: &str, default: &str) -> String {
 fn optional(values: &HashMap<String, String>, name: &str) -> Option<String> {
     setting(values, name).map(str::to_owned)
 }
-/// The longest duration a millisecond setting accepts.
-const MAX_MS: u64 = 120_000;
-
-/// A whole number of milliseconds from 1 to `MAX_MS`, or `None`.
-fn parse_ms(raw: &str) -> Option<u64> {
-    raw.parse::<u64>()
-        .ok()
-        .filter(|value| (1..=MAX_MS).contains(value))
+/// What a numeric setting accepts, and how its log line says so.
+struct Rule<T> {
+    range: RangeInclusive<T>,
+    text: &'static str,
 }
+const FRACTION: Rule<f64> = Rule {
+    range: RangeInclusive::new(0.0, 1.0),
+    text: "a fraction from 0 to 1",
+};
+/// `contains` is false for NaN and the infinities, so this range is a finite number.
+const FINITE: Rule<f32> = Rule {
+    range: RangeInclusive::new(f32::MIN, f32::MAX),
+    text: "a finite number",
+};
+const COUNT: Rule<usize> = Rule {
+    range: RangeInclusive::new(0, usize::MAX),
+    text: "a whole number",
+};
+const POSITIVE_COUNT: Rule<usize> = Rule {
+    range: RangeInclusive::new(1, usize::MAX),
+    text: "a positive whole number",
+};
+const MILLIS: Rule<u64> = Rule {
+    range: RangeInclusive::new(1, 120_000),
+    text: "a whole number of milliseconds from 1 to 120000",
+};
 /// A deadline the host agent also enforces (only
 /// `SWITCHBOARD_SPEECH_DEADLINE_MS`): a value the service silently replaced
 /// with its default would leave the two sides disagreeing, so a malformed one
 /// stops startup instead.
 fn bounded_ms(values: &HashMap<String, String>, name: &str, default: u64) -> u64 {
     setting(values, name).map_or(default, |raw| {
-        parse_ms(raw)
-            .unwrap_or_else(|| panic!("{name} must be a positive integer from 1 to {MAX_MS} ms"))
+        raw.parse()
+            .ok()
+            .filter(|value| MILLIS.range.contains(value))
+            .unwrap_or_else(|| panic!("{name} must be {}", MILLIS.text))
     })
 }
-/// A duration only this service uses: a value that is not a whole number of
-/// milliseconds from 1 to `MAX_MS` is logged and replaced by the default.
-fn ms_value(values: &HashMap<String, String>, name: &str, default: u64) -> u64 {
+/// A numeric setting that does not parse, or is outside its rule, is logged and replaced by its default.
+fn number<T: FromStr + PartialOrd + Display>(
+    values: &HashMap<String, String>,
+    name: &str,
+    default: T,
+    rule: &Rule<T>,
+) -> T {
     let Some(raw) = setting(values, name) else {
         return default;
     };
-    parse_ms(raw).unwrap_or_else(|| {
-        tracing::warn!(setting = name, value = raw, %default, "setting is not a whole number of milliseconds from 1 to {MAX_MS}; using the default");
-        default
-    })
+    match raw.parse::<T>() {
+        Ok(value) if rule.range.contains(&value) => value,
+        _ => {
+            tracing::warn!(setting = name, value = raw, %default, "setting is not {}; using the default", rule.text);
+            default
+        }
+    }
 }
 /// `SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER` and `_UPPER`, each a fraction.
 /// A band whose lower bound exceeds its upper one is logged and replaced by
@@ -298,8 +336,18 @@ fn ms_value(values: &HashMap<String, String>, name: &str, default: u64) -> u64 {
 /// can cross the other's default), so neither is kept.
 fn current_agent_band(values: &HashMap<String, String>) -> (f64, f64) {
     const DEFAULT: (f64, f64) = (0.3, 0.7);
-    let lower = fraction_value(values, "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER", DEFAULT.0);
-    let upper = fraction_value(values, "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER", DEFAULT.1);
+    let lower = number(
+        values,
+        "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_LOWER",
+        DEFAULT.0,
+        &FRACTION,
+    );
+    let upper = number(
+        values,
+        "SWITCHBOARD_JEV_FOR_CURRENT_AGENT_UPPER",
+        DEFAULT.1,
+        &FRACTION,
+    );
     if lower <= upper {
         return (lower, upper);
     }
@@ -313,52 +361,6 @@ fn current_agent_band(values: &HashMap<String, String>) -> (f64, f64) {
     );
     DEFAULT
 }
-fn fraction_value(values: &HashMap<String, String>, name: &str, default: f64) -> f64 {
-    let Some(raw) = setting(values, name) else {
-        return default;
-    };
-    match raw.parse::<f64>() {
-        Ok(value) if value.is_finite() && (0.0..=1.0).contains(&value) => value,
-        _ => {
-            tracing::warn!(setting = name, value = raw, %default, "setting is not a fraction from 0 to 1; using the default");
-            default
-        }
-    }
-}
-
-/// A setting that must be a finite number. Blank is unset; anything else that
-/// is not a finite number is logged and replaced by the default.
-fn f32_value(values: &HashMap<String, String>, name: &str, default: f32) -> f32 {
-    let Some(raw) = setting(values, name) else {
-        return default;
-    };
-    match raw.parse::<f32>() {
-        Ok(value) if value.is_finite() => value,
-        _ => {
-            tracing::warn!(setting = name, value = raw, %default, "setting is not a finite number; using the default");
-            default
-        }
-    }
-}
-
-fn usize_value(
-    values: &HashMap<String, String>,
-    name: &str,
-    default: usize,
-    allow_zero: bool,
-) -> usize {
-    let Some(raw) = setting(values, name) else {
-        return default;
-    };
-    match raw.parse::<usize>() {
-        Ok(parsed) if allow_zero || parsed > 0 => parsed,
-        _ => {
-            tracing::warn!(setting = name, value = raw, %default, "setting is not a whole number; using the default");
-            default
-        }
-    }
-}
-
 fn load_env_file(path: &PathBuf) -> HashMap<String, String> {
     let mut result = HashMap::new();
     let Ok(contents) = fs::read_to_string(path) else {

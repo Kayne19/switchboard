@@ -61,6 +61,8 @@ logged and both bounds are replaced by their defaults.
 relayed `speak` by the same deadline (plus its margin), so a value the service
 would replace with its default would leave the two sides disagreeing, and
 startup stops instead.
+`SWITCHBOARD_JEV_SUMMARY_TOKEN_BUDGET` is the other: above the per-question limit it
+is clamped to the limit, not replaced by its default.
 
 ### Host tokens file
 
