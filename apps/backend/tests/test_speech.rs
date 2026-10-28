@@ -529,6 +529,9 @@ enum SpeechEvent {
     HandedOffWhileHeldThenAheadCloses,
     /// The provider's body fails partway.
     BodyFails,
+    /// The same, landing after a rescue retired the generation and before the
+    /// rescue aborted the drain: the page has moved on, so it is not told.
+    BodyFailsAfterRetirement,
     /// The speech deadline cuts the body after its first audio went out.
     CutByDeadline,
     /// The same, with no browser connected.
@@ -585,9 +588,13 @@ async fn complete_one_request(event: SpeechEvent, with_transcript: bool) -> Spee
         | SpeechEvent::HandedOffBeforeItsStartWentOut
         | SpeechEvent::HandedOffWhileHeld
         | SpeechEvent::HandedOffWhileHeldThenAheadCloses
-        | SpeechEvent::BodyFails => Speaker::test_gated(100, deadline, gate.clone()),
+        | SpeechEvent::BodyFails
+        | SpeechEvent::BodyFailsAfterRetirement => Speaker::test_gated(100, deadline, gate.clone()),
     };
-    if matches!(event, SpeechEvent::BodyFails) {
+    if matches!(
+        event,
+        SpeechEvent::BodyFails | SpeechEvent::BodyFailsAfterRetirement
+    ) {
         gate.fail_first();
     }
     let state = AppState::new(
@@ -658,13 +665,18 @@ async fn complete_one_request(event: SpeechEvent, with_transcript: bool) -> Spee
             | SpeechEvent::HandedOffBeforeItsStartWentOut
             | SpeechEvent::HandedOffWhileHeld
             | SpeechEvent::HandedOffWhileHeldThenAheadCloses
-            | SpeechEvent::BodyFails => {
+            | SpeechEvent::BodyFails
+            | SpeechEvent::BodyFailsAfterRetirement => {
                 timeout(Duration::from_secs(1), gate.wait_until_read())
                     .await
                     .expect("the drain started");
                 match event {
                     SpeechEvent::RescueDuringDrain => {
                         cancel_active_operations(&state).await;
+                        gate.release();
+                    }
+                    SpeechEvent::BodyFailsAfterRetirement => {
+                        state.0.coordinator.begin_rescue("test rescue");
                         gate.release();
                     }
                     SpeechEvent::HandedOffDuringDrain | SpeechEvent::HandedOffBeforeHeard => {
@@ -857,6 +869,14 @@ async fn every_end_of_a_speech_request_completes_it_once() {
             with_transcript: true,
             answer: Err("gated test failure"),
             page_error: true,
+            spoken_line: false,
+        },
+        Row {
+            phase: "draining",
+            event: SpeechEvent::BodyFailsAfterRetirement,
+            with_transcript: true,
+            answer: Err("gated test failure"),
+            page_error: false,
             spoken_line: false,
         },
         Row {
