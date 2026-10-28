@@ -12,6 +12,7 @@ use crate::jev::fake_jev_client;
 use crate::module_calls::request_to_speak;
 use crate::pbx::Switchboard;
 use crate::registry::{Project, Registry};
+use crate::within;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use tokio::time::{timeout, Duration};
@@ -861,16 +862,7 @@ async fn stale_floor_request_is_dropped_before_audio_reservation() {
     state.0.coordinator.begin_rescue("new foreground leg");
     let outcome = release_floor(
         &state,
-        FloorRequest {
-            floor_id: 0,
-            project: "grapes".into(),
-            token: "grapes-token".into(),
-            generation,
-            context: "caller: previous line".into(),
-            message: "stale update".into(),
-            reason: "finished".into(),
-            held_display: false,
-        },
+        grapes_release(generation, "stale update"),
         "stale update".into(),
     )
     .await;
@@ -890,37 +882,108 @@ async fn a_floor_release_that_waited_for_its_place_drops_a_leg_change_at_once() 
         .coordinator
         .register_background("grapes", "grapes-token");
     let generation = state.0.coordinator.generation();
-    // Every place in the worker's queue is taken, so the release must wait.
-    let taken: Vec<_> = std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect();
+    let taken = take_every_speech_place(&state);
     assert!(!taken.is_empty());
+    let release = spawn_waiting_release(&state, generation, "late update").await;
+    // The leg changes while it waits; then the queue has room.
+    state.0.coordinator.begin_rescue("new foreground leg");
+    drop(taken);
+    let outcome = within("release", release).await.unwrap();
+    assert_eq!(outcome, ReleaseOutcome::Drop);
+}
+
+fn grapes_release(generation: u64, message: &str) -> FloorRequest {
+    FloorRequest {
+        floor_id: 0,
+        project: "grapes".into(),
+        token: "grapes-token".into(),
+        generation,
+        context: "caller: previous line".into(),
+        message: message.into(),
+        reason: "finished".into(),
+        held_display: false,
+    }
+}
+
+/// Holds every place in the speech worker's queue until the result drops.
+fn take_every_speech_place(state: &AppState) -> Vec<impl Sized + '_> {
+    // The collect holds each permit; without it the iterator frees them as it goes.
+    std::iter::from_fn(|| state.0.speech.try_reserve().ok()).collect()
+}
+
+/// Starts a release that finds the worker's queue full and waits for a place.
+async fn spawn_waiting_release(
+    state: &AppState,
+    generation: u64,
+    message: &'static str,
+) -> tokio::task::JoinHandle<ReleaseOutcome> {
     let release_state = state.clone();
     let release = tokio::spawn(async move {
         release_floor(
             &release_state,
-            FloorRequest {
-                floor_id: 0,
-                project: "grapes".into(),
-                token: "grapes-token".into(),
-                generation,
-                context: "caller: previous line".into(),
-                message: "late update".into(),
-                reason: "finished".into(),
-                held_display: false,
-            },
-            "late update".into(),
+            grapes_release(generation, message),
+            message.into(),
         )
         .await
     });
     tokio::task::yield_now().await;
     assert!(!release.is_finished(), "the release waits for a place");
-    // The leg changes while it waits; then the queue has room.
-    state.0.coordinator.begin_rescue("new foreground leg");
+    release
+}
+
+/// A background update with no page to hear it waits for the page (`Retry`)
+/// and reserves no audio slot, even with the worker's queue full.
+#[tokio::test]
+async fn a_floor_release_with_no_page_keeps_the_update_for_the_page() {
+    let state = state();
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let generation = state.0.coordinator.generation();
+    let _taken = take_every_speech_place(&state);
+
+    let outcome = within(
+        "release",
+        release_floor(
+            &state,
+            grapes_release(generation, "unheard update"),
+            "unheard update".into(),
+        ),
+    )
+    .await;
+
+    assert_eq!(outcome, ReleaseOutcome::Retry);
+    assert!(
+        state.0.audio.lock().await.slots.is_empty(),
+        "the release kept an audio slot"
+    );
+}
+
+/// The page goes while the release waits for its place. The update waits for
+/// the page, neither spoken to an empty room nor dropped, and its audio slot
+/// is closed.
+#[tokio::test]
+async fn a_floor_release_whose_page_goes_while_it_waits_closes_its_audio_slot() {
+    let state = state();
+    let (connection, _, _) = state.register_connection().await;
+    state
+        .0
+        .coordinator
+        .register_background("grapes", "grapes-token");
+    let generation = state.0.coordinator.generation();
+    let taken = take_every_speech_place(&state);
+    let release = spawn_waiting_release(&state, generation, "late update").await;
+
+    state.retire_connection(connection.epoch).await;
     drop(taken);
-    let outcome = tokio::time::timeout(Duration::from_secs(5), release)
-        .await
-        .expect("the release settles once it has its place")
-        .unwrap();
-    assert_eq!(outcome, ReleaseOutcome::Drop);
+
+    let outcome = within("release", release).await.unwrap();
+    assert_eq!(outcome, ReleaseOutcome::Retry);
+    assert!(
+        state.0.audio.lock().await.slots.is_empty(),
+        "the audio slot was left open"
+    );
 }
 
 #[tokio::test]
