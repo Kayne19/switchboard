@@ -614,3 +614,45 @@ async fn a_model_change_waits_for_the_leg_to_finish_coming_up() {
     let mut board = board;
     board.shutdown().await;
 }
+
+/// d6-coverage: a model change the host refuses keeps the leg only if the
+/// kept session can rejoin the call under the line's token. When the host
+/// refuses that `join_call` too, the leg is lost cleanly: the caller is back
+/// on the operator, told why, and the session is ended on its host.
+#[tokio::test]
+async fn a_refused_change_whose_session_cannot_rejoin_the_call_loses_the_leg() {
+    let mut board = board_on(vec![project("alpha", "")], &[], two_model_catalog());
+    let mut host = FakeHostAgent::new(Box::new(|_, _| says("On it.")));
+    let mut refused_model = false;
+    host.on_command = Some(Box::new(move |name, _| match name {
+        "set_model" => {
+            refused_model = true;
+            Some(Some(Err(("refused".into(), "refused for the test".into()))))
+        }
+        "join_call" if refused_model => Some(Some(Err((
+            "daemon_error".into(),
+            "join refused for the test".into(),
+        )))),
+        _ => None,
+    }));
+    let log = host.serve(board.hosts().connect_fake(HOST));
+    let reply = board
+        .transfer_to(&transcript("look at alpha"), "alpha")
+        .await;
+    assert_eq!(reply.route, "alpha", "{reply:?}");
+    let live = board.agent.clone().expect("alpha is on the line");
+
+    let decided = board.planner.model_change("anthropic/next").await;
+    let reply = redialed_after_its_rescue(&mut board, decided).await;
+
+    assert_eq!(reply.route, OPERATOR, "{reply:?}");
+    assert!(reply.error.is_some(), "{reply:?}");
+    assert_eq!(board.coordinator.route(), OPERATOR);
+    assert!(board.agent.is_none(), "the PBX still holds the lost leg");
+    assert_eq!(
+        crate::pbx::until_named(&log, "kill").await,
+        [serde_json::json!({"session": "s1"})]
+    );
+    assert!(!live.alive());
+    board.shutdown().await;
+}
