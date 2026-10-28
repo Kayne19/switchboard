@@ -567,6 +567,43 @@ describe("AudioPlayback streaming", () => {
     expect(player.playCalls.length, "and it started playing").toBe(1);
   });
 
+  it("a tap before a stream's first append leaves streaming on (#563)", () => {
+    const { player, playback } = streamingPlayback(undefined, undefined, 1000);
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.handleGesture(null);
+    expect(player.playCalls.length, "the tap unlocks the element").toBe(1);
+    vi.advanceTimersByTime(5000);
+    expect(playback.streamingEnabled, "and does not start a verdict on the wait").toBe(true);
+    playback.receiveAudioChunk(bytes("late"));
+    expect(playback.isPlaying, "the first append plays it").toBe(true);
+  });
+
+  it("a tap's pending play() does not stop the first append from arming the silence watch", () => {
+    const { player, playback } = streamingPlayback(undefined, undefined, 1000);
+    player.play = () => {
+      player.playCalls.push(player.src);
+      return new Promise<void>(() => undefined);
+    };
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.handleGesture(null);
+    playback.receiveAudioChunk(bytes("late"));
+    vi.advanceTimersByTime(5000);
+    expect(playback.streamingEnabled, "a stream that never sounds still falls back").toBe(false);
+  });
+
+  it("a tap's refused play() leaves the stream waiting for its first append", async () => {
+    const { player, playback } = streamingPlayback(undefined, undefined, 1000);
+    player.play = () => {
+      player.playCalls.push(player.src);
+      return Promise.reject(new DOMException("blocked", "NotAllowedError"));
+    };
+    playback.receiveAudioStart({ generation: 0, sequence: 1, mime: "audio/mpeg" });
+    playback.handleGesture(null);
+    await Promise.resolve();
+    vi.advanceTimersByTime(5000);
+    expect(playback.streamingEnabled).toBe(true);
+  });
+
   it("plays each utterance through its own MediaSource as it arrives", () => {
     const { player, urls, playback } = streamingPlayback();
     expect(playback.streamingEnabled).toBe(true);
@@ -2555,7 +2592,7 @@ describe("AudioPlayback holder: phase x event", () => {
       "play rejects":
         "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
       "gesture":
-        "stream (no bytes); sounding; busy; metered; plays +1; reached []; said []",
+        "stream (no bytes); silent; busy; unmetered; plays +1; reached []; said []",
       "2.5 s, no progress":
         "stream (no bytes); silent; busy; unmetered; plays +0; reached []; said []",
       "3 arrives":

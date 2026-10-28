@@ -26,6 +26,10 @@ Playwright's WebKit is a Linux build. It is not iPadOS Safari:
 - It has no audio session, no autoplay policy of the iPad's, no real touch,
   and no Safari toolbars. The iPad's display is OLED: a fill a few levels
   above black can read as black there.
+- Only a gesture's own `play()` unlocks the single audio element, and
+  Playwright cannot make a real gesture. A tap during the first reply's
+  opening must unlock it, so the reply plays without a second tap (item 2
+  of the checklist, the first reply after page load).
 
 So the device checklist below stays.
 
