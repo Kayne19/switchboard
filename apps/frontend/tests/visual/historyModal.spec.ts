@@ -48,7 +48,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 820, height: 1180
       await expect(drawer).toHaveAttribute('aria-modal', 'true');
       await expect(scene(page)).toHaveAttribute('inert', '');
       // The field cannot take focus while the line is down: RETURN does.
-      await expect(page.locator('.transcript__return')).toBeFocused();
+      await expect(page.locator('.transcript .return-control')).toBeFocused();
       const seen = await walk(page);
       expect([...seen].filter((place) => place.startsWith('outside')), 'Tab reaches nothing behind the history').toEqual([]);
       expect(seen.has('history')).toBe(true);

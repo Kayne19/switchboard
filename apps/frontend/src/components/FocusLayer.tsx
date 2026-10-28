@@ -4,6 +4,7 @@ import type { ControllerState, NoteData, SceneObject } from '../controller/types
 import { noteTarget } from '../app/noteItems';
 import { anchoredNote, objectsOfType } from '../app/sceneModel';
 import { AnnotationCard } from '../primitives/AnnotationCard';
+import { ReturnControl } from '../primitives/ReturnControl';
 import { useLayoutMotion } from '../hooks/useLayoutMotion';
 import { useModalFocus } from '../hooks/useModalFocus';
 import { ObjectView } from './renderObject';
@@ -73,7 +74,7 @@ export function StagedObject({
     >
       <div className={`focus-layer__header tech micro${theater ? ' theater__header' : ''}`}>
         <span>{label}</span>
-        <button ref={actionRef} className={`focus-layer__return${theater ? ' theater__exit' : ''}`} type="button" onClick={onAction}>{action}</button>
+        <ReturnControl label={action} onClose={onAction} buttonRef={actionRef} />
       </div>
       <SurfaceBoundary surfaceId={object.id} resetKey={object}>
         <ObjectView object={object} slot="focus" onStage={objects} notes={notes.map((note) => note.data)} />

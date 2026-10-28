@@ -83,7 +83,7 @@ describe('the focus ring', () => {
     const { classes, tags, where } = tagged(/<button\b(?:=>|[^>])*>/gs);
     expect(where).toEqual([]);
     expect(classes).toHaveLength(tags);
-    expect(classes).toEqual(expect.arrayContaining(['focus-layer__return', 'transcript__return', 'transcript__send', 'annotation-card__history', 'live-chat-card__history', 'damocles-presence__button', 'transcript-toggle', 'channel-stack__mode']));
+    expect(classes).toEqual(expect.arrayContaining(['return-control', 'transcript__send', 'annotation-card__history', 'live-chat-card__history', 'damocles-presence__button', 'transcript-toggle', 'channel-stack__mode']));
     // An object's surface's button draws it over the surface (#269).
     expect(classes.filter((name) => !control.selectors.includes(`.${name}:focus-visible`) && !drawnOver(name))).toEqual([]);
     expect(classes).toContain('focusable-content__expand');

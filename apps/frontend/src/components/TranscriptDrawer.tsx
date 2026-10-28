@@ -4,6 +4,7 @@ import type { MessageData } from '../controller/types';
 import { useModalFocus } from '../hooks/useModalFocus';
 import { usePinnedScroll } from '../hooks/usePinnedScroll';
 import { RichText } from '../primitives/RichText';
+import { ReturnControl } from '../primitives/ReturnControl';
 import { MAX_TYPED_TURN_CHARS } from '../protocol';
 
 type TranscriptLine = NonNullable<MessageData['transcript']>[number];
@@ -58,7 +59,7 @@ export function TranscriptDrawer({ open, lines, onClose, onSend, behindFocus = f
         >
           <div className="transcript__header tech micro">
             <span>CONVERSATION / HISTORY</span>
-            <button ref={returnButton} className="transcript__return" type="button" onClick={onClose}>RETURN / ESC</button>
+            <ReturnControl label="RETURN / ESC" onClose={onClose} buttonRef={returnButton} />
           </div>
           <TranscriptBody lines={lines} />
           <TranscriptComposer onSend={onSend} inputRef={input} />

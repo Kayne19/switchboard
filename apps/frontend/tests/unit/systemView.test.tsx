@@ -99,7 +99,7 @@ describe('the system view', () => {
 
   it('leaves for auto on EXIT, and the report says so', () => {
     renderScene([...fixtures.code, system], <OnCall controls={line()} />);
-    act(() => panel().querySelector<HTMLButtonElement>('.system__exit')!.click());
+    act(() => panel().querySelector<HTMLButtonElement>('.system__header .return-control')!.click());
     expect(stage().getAttribute('data-scene-kind')).toBe('code');
     expect(deriveScreenState(controllerState(), 1).view).toBe('auto');
   });

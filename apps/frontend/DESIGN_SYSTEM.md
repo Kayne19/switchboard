@@ -63,6 +63,7 @@ The model controls semantic intent. The frontend controls composition, geometry,
 |---|---|
 | `DamoclesPresence` | identity, float, listening, voice indicator, caption |
 | `TechFrame` | approved frame paths and frame construction motion |
+| `ReturnControl` | the exit button of a dialog or view: its styling, its hit area and its focus ring (the label is the caller's) |
 | `ChartPrimitive` + `chartGeometry` | chart kinds (line, bar, area, scatter), the frame a chart is drawn in for its slot (never text below the page's type floors), geometry, round value ticks, axes and category labels (wrapped down the left), the legend (on at most a quarter of the frame's height, the series past it counted in one last item), traces, a marked bar's outline and printed value, the marker's ring and a hollow ring on a point whose note is off the chart, semantic series colors |
 | `DiagramPrimitive` + `diagramLayout` | node layout, edge routing, portrait and landscape topology, a graph recomposed for its viewport, node corner tags inside the frame |
 | `SequencePrimitive` + `sequenceLayout` | actor columns, lifelines, message rows, arrowheads by kind, label wrapping over a span, a sequence recomposed to its viewport's width, headers in full or compact by the share of the view they would take pinned, the NOTE marker in the header of the actor a note names |
