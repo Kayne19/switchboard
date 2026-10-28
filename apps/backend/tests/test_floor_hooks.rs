@@ -1,5 +1,7 @@
 use super::*;
-use crate::app_state::{assert_lifecycle_consistent, debug_events, state, state_on, until_debug};
+use crate::app_state::{
+    assert_lifecycle_consistent, debug_events, state, state_with_jev, until_debug,
+};
 use crate::app_state::{spawn_workers, AppState};
 use crate::audio::{Speaker, SttAdapter, SttStreamAdapter};
 use crate::browser::frames_until;
@@ -8,7 +10,7 @@ use crate::delivery::DeliveryConnection;
 use crate::floor::{FloorRequest, ReleaseOutcome};
 use crate::history::TranscriptLog;
 use crate::hosts::{FakeHostAgent, Step};
-use crate::jev::fake_jev_client;
+use crate::jev::{answer_for, fake_jev_client, routing_answers, test_client};
 use crate::module_calls::request_to_speak;
 use crate::pbx::Switchboard;
 use crate::registry::{Project, Registry};
@@ -29,17 +31,7 @@ async fn floor_good_moment_gate_does_not_query_desk_hosts() {
         "cwd": "/srv/alpha",
     }))
     .unwrap()]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("test catalog"),
-    );
-    let state = state_on(Switchboard::new_with_jev(
-        &config,
-        registry,
-        std::sync::Arc::new(prewarm),
-        client,
-    ));
+    let state = state_with_jev(&config, registry, client);
     let host = state.0.switchboard.lock().await.hosts();
     let listed = std::sync::Arc::new(tokio::sync::Notify::new());
     let listed_for_host = listed.clone();
@@ -119,17 +111,7 @@ async fn floor_update_queued_with_utility(
         ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
     ]);
     let registry = Registry::new(vec![]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("test catalog"),
-    );
-    let state = state_on(Switchboard::new_with_jev(
-        &config,
-        registry,
-        std::sync::Arc::new(prewarm),
-        client,
-    ));
+    let state = state_with_jev(&config, registry, client);
     let (connection, _) = state.register_connection().await;
     state
         .0
@@ -241,13 +223,7 @@ done
     let gate_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let gate_wait = foreground_release.clone();
     let gate_count = gate_calls.clone();
-    let jev = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder(move |request| {
+    let jev = test_client(move |request| {
         let gate_wait = gate_wait.clone();
         let gate_count = gate_count.clone();
         async move {
@@ -257,21 +233,9 @@ done
                 // unbounded: the fake holds the gate until the test opens it.
                 gate_wait.notified().await;
             }
-            let answers = if request.questions.contains_key("good_moment") {
-                serde_json::json!({
-                    "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
-                })
-            } else {
-                serde_json::json!({
-                    "action": {"type":"choice","choice":"general","probabilities":{"general":1.0},"confidence":1.0},
-                    "for_current_agent": {"type":"noul","noul":0.0},
-                    "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
-                    "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
-                    "multi_target": {"type":"noul","noul":1.0}
-                })
-            };
-            Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
-                .expect("fixture response"))
+            let mut routing = routing_answers("general");
+            routing["multi_target"] = serde_json::json!({"type":"noul","noul":1.0});
+            answer_for(&request, routing)
         }
     });
     let config = crate::Config::for_tests(&[
@@ -432,45 +396,13 @@ esac
 done
 "##;
     crate::pi_client::write_executable_script(&utility, script);
-    let jev = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder(|request| async move {
-        let answers = if request.questions.contains_key("good_moment") {
-            serde_json::json!({
-                "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
-            })
-        } else {
-            serde_json::json!({
-                "action": {"type":"choice","choice":"general","probabilities":{"general":1.0},"confidence":1.0},
-                "for_current_agent": {"type":"noul","noul":0.0},
-                "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
-                "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
-                "multi_target": {"type":"noul","noul":0.0}
-            })
-        };
-        Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
-            .expect("fixture response"))
-    });
+    let jev =
+        test_client(|request| async move { answer_for(&request, routing_answers("general")) });
     let config = crate::Config::for_tests(&[
         ("SWITCHBOARD_PI_BINARY", &utility.to_string_lossy()),
         ("SWITCHBOARD_FLOOR_QUIET_THRESHOLD_MS", "1"),
     ]);
-    let registry = Registry::new(vec![]);
-    let prewarm = crate::prewarm::Prewarm::settled(
-        &config,
-        &registry,
-        crate::models::ModelCatalog::unavailable("test catalog"),
-    );
-    let state = state_on(Switchboard::new_with_jev(
-        &config,
-        registry,
-        std::sync::Arc::new(prewarm),
-        jev,
-    ));
+    let state = state_with_jev(&config, Registry::new(vec![]), jev);
     let (_connection, _) = state.register_connection().await;
     state
         .0
@@ -765,13 +697,7 @@ async fn an_older_residents_dropped_request_keeps_a_newer_residents_mark() {
 async fn an_agent_whose_newer_request_still_waits_stays_waiting_after_its_first_is_spoken() {
     let gate_open = std::sync::Arc::new(tokio::sync::Notify::new());
     let gates = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let jev = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder({
+    let jev = test_client({
         let gate_open = gate_open.clone();
         let gates = gates.clone();
         move |_request| {

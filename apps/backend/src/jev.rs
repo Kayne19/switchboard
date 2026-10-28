@@ -236,42 +236,66 @@ fn redact(value: &str) -> String {
     value.to_owned()
 }
 
+/// A client that answers from `responder` and reaches no network.
 #[cfg(test)]
-pub(crate) fn fake_jev_client() -> (
-    crate::jev::JevClient,
-    std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    std::sync::Arc<tokio::sync::Notify>,
-) {
-    let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let responded = std::sync::Arc::new(tokio::sync::Notify::new());
-    let count = requests.clone();
-    let notice = responded.clone();
-    let client = crate::jev::JevClient::new(
+pub(crate) fn test_client<F, Fut>(responder: F) -> JevClient
+where
+    F: Fn(JevRequest) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<JevResponse, JevError>> + Send + 'static,
+{
+    JevClient::new(
         "http://unused.invalid/v1/systemone",
         "/nonexistent/typesafe-api-key",
         Duration::from_secs(1),
     )
     .expect("client")
-    .with_test_responder(move |request| {
+    .with_test_responder(responder)
+}
+
+/// The answers to the routing questions for a decision of `action`.
+#[cfg(test)]
+pub(crate) fn routing_answers(action: &str) -> Value {
+    serde_json::json!({
+        "action": {"type":"choice","choice":action,"probabilities":{action:1.0},"confidence":1.0},
+        "for_current_agent": {"type":"noul","noul":0.0},
+        "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
+        "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
+        "multi_target": {"type":"noul","noul":0.0}
+    })
+}
+
+/// A response to `request`: "yes" when it asks for a good moment, else `routing`.
+#[cfg(test)]
+pub(crate) fn answer_for(request: &JevRequest, routing: Value) -> Result<JevResponse, JevError> {
+    let answers = if request.questions.contains_key("good_moment") {
+        serde_json::json!({
+            "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
+        })
+    } else {
+        routing
+    };
+    Ok(
+        serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
+            .expect("fixture response"),
+    )
+}
+
+/// A client that routes every utterance as `continue`, with the number of
+/// requests it has answered and a notice for each.
+#[cfg(test)]
+pub(crate) fn fake_jev_client() -> (
+    JevClient,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<tokio::sync::Notify>,
+) {
+    let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let responded = Arc::new(tokio::sync::Notify::new());
+    let count = requests.clone();
+    let notice = responded.clone();
+    let client = test_client(move |request| {
         count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         notice.notify_one();
-        async move {
-            let answers = if request.questions.contains_key("good_moment") {
-                serde_json::json!({
-                    "good_moment": {"type":"choice","choice":"yes","probabilities":{"yes":1.0},"confidence":1.0}
-                })
-            } else {
-                serde_json::json!({
-                    "action": {"type":"choice","choice":"continue","probabilities":{"continue":1.0},"confidence":1.0},
-                    "for_current_agent": {"type":"noul","noul":0.0},
-                    "target": {"type":"choice","choice":"none","probabilities":{"none":1.0},"confidence":1.0},
-                    "continue_or_fresh": {"type":"choice","choice":"not_applicable","probabilities":{"not_applicable":1.0},"confidence":1.0},
-                    "multi_target": {"type":"noul","noul":0.0}
-                })
-            };
-            Ok(serde_json::from_value(serde_json::json!({"model":"jev-test","answers":answers}))
-                .expect("fixture response"))
-        }
+        async move { answer_for(&request, routing_answers("continue")) }
     });
     (client, requests, responded)
 }

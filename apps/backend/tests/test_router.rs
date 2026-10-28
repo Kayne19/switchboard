@@ -1,5 +1,5 @@
 use super::*;
-use crate::jev::JevResponse;
+use crate::jev::{test_client, JevResponse};
 use crate::registry::{Project, Registry};
 use serde_json::json;
 use std::sync::Arc;
@@ -498,13 +498,7 @@ fn every_threshold_rule_is_named_with_its_numbers() {
 async fn a_routing_call_keeps_the_raw_answers_and_its_latency() {
     let raw = answers("general", 0.9, 0.0);
     let response = raw.clone();
-    let client = crate::jev::JevClient::new(
-        "http://unused.invalid/v1/systemone",
-        "/nonexistent/typesafe-api-key",
-        std::time::Duration::from_secs(1),
-    )
-    .expect("client")
-    .with_test_responder(move |_| {
+    let client = test_client(move |_| {
         let response = response.clone();
         async move { Ok(response) }
     });
