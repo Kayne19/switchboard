@@ -34,7 +34,7 @@ impl LegAnnouncer {
     }
 
     /// Adopts the candidate leg `token` names and announces it. False when
-    /// that leg is not the one staged.
+    /// that leg is neither the one staged nor the one just adopted.
     pub(crate) async fn promote_candidate(&self, token: &str) -> bool {
         // Held from adoption until the epoch is out, so a display from the
         // new leg cannot be applied ahead of its own scene reset.

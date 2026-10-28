@@ -568,10 +568,6 @@ impl Coordinator {
         })
     }
 
-    pub fn is_candidate(&self) -> bool {
-        self.linearize(|state| matches!(state.line, Line::Starting { .. }))
-    }
-
     /// Register a resident session that may continue while another agent is
     /// foreground. Its token is still valid for display and request calls, but
     /// not for speech.
@@ -774,6 +770,7 @@ impl Coordinator {
 
     /// Adopts the staged candidate if it is the leg `token` names: the PBX
     /// once its intro turn ends, or a sign of life from the candidate itself.
+    /// Whichever of the two lands second is answered as the same adoption.
     pub fn adopt_candidate(&self, token: &str) -> Result<LegIdentity, LifecycleError> {
         let intro = self.next_operation.fetch_add(1, Ordering::Relaxed);
         self.linearize(|state| {

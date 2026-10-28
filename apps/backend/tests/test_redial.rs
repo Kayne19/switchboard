@@ -371,7 +371,7 @@ async fn a_kept_model_change_whose_adoption_fails_announces_finished_once() {
         "{notices:?}"
     );
     assert_eq!(board.coordinator.route(), OPERATOR);
-    assert!(!board.coordinator.is_candidate());
+    assert!(board.coordinator.candidate_identity().is_none());
     board.shutdown().await;
 }
 
@@ -458,7 +458,7 @@ async fn a_redial_whose_leg_has_moved_since_it_was_planned_is_refused() {
         LifecycleError::StaleLeg
     );
     assert_eq!(&board.coordinator.current_identity(), rescued.identity());
-    assert!(!board.coordinator.is_candidate());
+    assert!(board.coordinator.candidate_identity().is_none());
     assert_eq!(board.coordinator.status().model, "anthropic/current:medium");
     assert!(board
         .agent

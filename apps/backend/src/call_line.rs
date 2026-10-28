@@ -567,8 +567,11 @@ impl Line {
             // The candidate's own sign of life, or the PBX once its intro
             // turn ends. The caller's turn that ran the transfer, if still
             // open, is replaced by the intro: its owner's later
-            // `finish_operation` finds nothing to close.
+            // `finish_operation` finds nothing to close. The two arrive from
+            // different tasks, so the one that lands second finds the leg it
+            // names adopted already and is the same adoption (#449).
             Event::Adopt { token, intro } => match self {
+                Self::Adopted { leg, .. } if leg.identity.token == token => unchanged(),
                 Self::Starting {
                     leg,
                     candidate,

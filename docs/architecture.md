@@ -530,7 +530,10 @@ through them.
 Entering `Starting` announces the candidate (`candidate`); leaving it
 announces how it ended (`candidate_cleared` with `adopted`,
 `rolled_back` or `rescued`; a shutdown ends it as a rescue does), and a
-rollback of an adopted leg announces `rolled_back` again.
+rollback of an adopted leg announces `rolled_back` again. A candidate is
+adopted from two tasks, its own first sign of life and the PBX's commit,
+and whichever lands second is answered as the same adoption: the line and
+its intro turn are unchanged, and no notice is sent (#449).
 `the_call_line_phase_by_event` in `apps/backend/tests/test_lifecycle.rs`
 pins every phase against every event. A new way to move the call is an
 `Event` and its arms in `Line::next`, never a field beside the line.
