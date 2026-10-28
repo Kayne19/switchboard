@@ -1,5 +1,6 @@
 // An in-process fake of the switchboard service's /host endpoint.
 import { type WebSocket, WebSocketServer } from "ws";
+import { hostLinkFixture } from "./host_link_fixture.ts";
 
 export type Message = Record<string, unknown>;
 
@@ -23,7 +24,7 @@ export class FakeService {
 
 	private constructor(server: WebSocketServer) {
 		this.server = server;
-		this.onHello = (link) => link.send({ type: "welcome", epoch: ++this.epoch, protocol: 1, cursors: {} });
+		this.onHello = (link) => link.send({ ...hostLinkFixture().welcome, epoch: ++this.epoch });
 		server.on("connection", (socket) => {
 			const received: Message[] = [];
 			const waiters: { predicate: (m: Message) => boolean; resolve: (m: Message) => void }[] = [];
