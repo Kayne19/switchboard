@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { loadSuite, suiteNames } from './playwrightSuites';
 
 // CI runs the browser specs, all but the pixel goldens, in Chromium and in
 // WebKit. jsdom lays nothing out, so a spec that measures a frame, a focus
@@ -22,6 +23,10 @@ function job(name: string): string {
   const end = lines.findIndex((line, index) => index > start && /^ {2}\S/.test(line));
   return lines.slice(start, end < 0 ? undefined : end).join('\n');
 }
+
+const ciConfigs = () => Promise.all(suiteNames.map(async (name) => [name, await loadSuite(name, { CI: 'true' })] as const));
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('the CI browser job', () => {
   it('keeps the `test` job master requires, and adds a browser job beside it', () => {
@@ -71,18 +76,34 @@ describe('the CI browser job', () => {
     const browser = job('browser');
     expect(browser).toContain('browser: [chromium, webkit]');
     expect(browser).toContain('--project=${{ matrix.browser }}');
-    for (const config of ['apps/frontend/playwright.config.ts', 'apps/frontend/playwright.production.config.ts']) {
-      const source = read(config);
-      expect(source, config).toContain("browserName: 'chromium'");
-      expect(source, config).toContain("browserName: 'webkit'");
+  });
+
+  it('has a Chromium project and a WebKit project in both suites', async () => {
+    for (const name of suiteNames) {
+      const projects = (await loadSuite(name)).projects ?? [];
+      expect(projects.map((project) => [project.name, project.use?.browserName]), name).toEqual([
+        ['chromium', 'chromium'],
+        ['webkit', 'webkit'],
+      ]);
     }
   });
 
   // A focused test left in a spec would make each leg run it alone and pass:
   // the browser job would go green with the rest of its specs unrun.
-  it('fails a run on CI that finds a focused test', () => {
-    for (const config of ['apps/frontend/playwright.config.ts', 'apps/frontend/playwright.production.config.ts']) {
-      expect(read(config), config).toContain('forbidOnly: !!process.env.CI,');
+  it('fails a run on CI that finds a focused test', async () => {
+    for (const [name, config] of await ciConfigs()) expect(config.forbidOnly, name).toBe(true);
+  });
+
+  // The specs' timing checks measure one page at a time.
+  it('runs one worker, in both suites', async () => {
+    for (const [name, config] of await ciConfigs()) expect(config.workers, name).toBe(1);
+  });
+
+  // A failed leg uploads test-results/, so both suites keep a screenshot and a trace in it.
+  it('keeps a screenshot and a trace of a failed test on CI, in both suites', async () => {
+    for (const [name, config] of await ciConfigs()) {
+      expect(config.use?.screenshot, name).toBe('only-on-failure');
+      expect(config.use?.trace, name).toBe('retain-on-failure');
     }
   });
 });
@@ -104,17 +125,14 @@ describe('the CI triggers', () => {
 // upload; the host-agent tests each have a default deadline.
 describe('the CI time limits', () => {
   const minutes = (name: string) => Number(/^ {4}timeout-minutes: (\d+)$/m.exec(job(name))?.[1]);
-  const globalTimeout = (config: string) => /globalTimeout: process\.env\.CI \? (\d+) \* 60_000 : 0,/.exec(read(config))?.[1];
-
   it('bounds every job', () => {
     for (const name of ['test', 'browser']) expect(minutes(name), name).toBeGreaterThan(0);
   });
 
-  it('stops Playwright on CI before the browser job\'s own limit', () => {
-    for (const config of ['apps/frontend/playwright.config.ts', 'apps/frontend/playwright.production.config.ts']) {
-      const limit = Number(globalTimeout(config));
-      expect(limit, config).toBeGreaterThan(0);
-      expect(limit, config).toBeLessThan(minutes('browser'));
+  it('stops Playwright on CI before the browser job\'s own limit', async () => {
+    for (const [name, config] of await ciConfigs()) {
+      expect(config.globalTimeout, name).toBeGreaterThan(0);
+      expect(config.globalTimeout, name).toBeLessThan(minutes('browser') * 60_000);
     }
   });
 
@@ -127,8 +145,9 @@ describe('the pixel goldens', () => {
   const dir = path.join(root, 'apps/frontend/tests/visual');
   const specs = readdirSync(dir).filter((file) => file.endsWith('.spec.ts'));
 
-  it('are Chromium\'s alone: the WebKit project leaves them out', () => {
-    expect(read('apps/frontend/playwright.config.ts')).toContain("{ name: 'webkit', use: { browserName: 'webkit' }, grepInvert: /@golden/ }");
+  it('are Chromium\'s alone: the WebKit project leaves them out', async () => {
+    const projects = (await loadSuite('browser')).projects ?? [];
+    expect(projects.find((project) => project.name === 'webkit')?.grepInvert).toEqual(/@golden/);
   });
 
   it('are taken in visual.spec.ts alone, so the tag there is what keeps them out of CI', () => {
