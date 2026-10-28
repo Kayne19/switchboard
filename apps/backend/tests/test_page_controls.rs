@@ -1595,7 +1595,7 @@ async fn line_after_a_dropped_control(
     body: Value,
     path: &str,
     reached: impl Fn() -> bool,
-    release: impl Future<Output = ()>,
+    release: impl FnOnce(),
 ) -> String {
     let state = &call.state;
     let before = state.0.coordinator.generation();
@@ -1603,7 +1603,7 @@ async fn line_after_a_dropped_control(
     until(reached).await;
     request.abort();
     assert!(within("request", request).await.unwrap_err().is_cancelled());
-    release.await;
+    release();
     let _ = timeout(Duration::from_secs(2), async {
         while line_after(state, before).contains("quiescing") {
             tokio::time::sleep(Duration::from_millis(2)).await;
@@ -1632,7 +1632,7 @@ async fn a_dropped_connect_to_a_project_settles_its_quiet() {
         json!({"project":"alpha"}),
         "/connect",
         || call.state.0.coordinator.route() == OPERATOR,
-        async {
+        || {
             call.prewarm.settle_prepare(
                 &call.project,
                 crate::prewarm::PrepareState::InfrastructureFailed {
@@ -1658,7 +1658,7 @@ async fn a_dropped_connect_to_the_operator_settles_its_quiet() {
         json!({"project":"operator"}),
         "/connect",
         || call.state.0.coordinator.route() == OPERATOR,
-        async { drop(transition) },
+        || drop(transition),
     )
     .await;
     assert_eq!(line, "+1 settled operator");
@@ -1677,7 +1677,7 @@ async fn a_dropped_hangup_settles_its_quiet() {
         json!({}),
         "/hangup",
         || call.state.0.coordinator.route() == OPERATOR,
-        async { drop(transcript) },
+        || drop(transcript),
     )
     .await;
     assert_eq!(line, "+1 settled operator");

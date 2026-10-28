@@ -614,11 +614,15 @@ changes to the legs.
 machine: each step consumes the control and returns the next, and the
 coordinator's rescue token (`lifecycle::Rescued`) is the only generation a
 step after the rescue gets, so none can read the current one again
-(#263, #369).
+(#263, #369). A control's body runs on its own task
+(`page_controls::detached`), and the handler only waits for it: hyper
+drops a handler's future when the client goes away while the response is
+pending, and the body still reaches its settle (#462).
 
 | step | holds | on failure |
 |---|---|---|
 | `PageControl::admit` | `Admitted`: the generation the page held, which is the call's | 400 with none, 409 for one the call has left: "refused" (a picker), "ignored" (a hangup) |
+| `detached` | the body's task, from the rescue to the settle | the body panicked: 500 "the control did not finish" (`did_not_finish`); a panic outside a registered operation leaves its quiet until the next control |
 | `Admitted::decide` (a redial only) | the decision, registered at the admitted generation; running work is left alone | as `run`, at the admitted generation, but a failure settles nothing; an answer that needs no redial (a refusal, a setting on the operator) is delivered there, nothing is rescued, and nothing is settled: a quiet on the line is another control's to end (#461) |
 | `Admitted::rescue` (`begin_rescue_at`), `rescue_for` (`begin_rescue_of`, a redial) | `Rescued`: the token, after the leg's work is released | nothing rescued: 409 ("cancelled", "ignored", "superseded") |
 | `Rescued::run` (the dial, the redial) | the operation, registered at the token's generation | 409 "cancelled" if a newer rescue retired it (that one settles); 500 and a settle if it failed |

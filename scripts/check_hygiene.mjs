@@ -613,9 +613,35 @@ for (const start of ["apps/backend/src", "apps/backend/tests"]) {
 	}
 }
 
+// 24. Every page control runs its body through detached(): hyper drops a
+//     handler's future when the client goes away while the response is
+//     pending, and a control dropped between its rescue and its settle
+//     would leave the quiet with nothing to end it (#462;
+//     docs/concurrency-and-test-hazards.md). A handler is a function under
+//     the `http` instrument attribute; its body ends at the first `}` in
+//     column 0.
+function detachedFindings(file, text) {
+	const found = [];
+	text.forEach((line, index) => {
+		if (!/#\[tracing::instrument\(name = "http"/.test(line)) return;
+		const name = /async fn (\w+)\(/.exec(text[index + 1] ?? "")?.[1] ?? "?";
+		let end = index + 1;
+		while (end < text.length && text[end] !== "}") end += 1;
+		if (!text.slice(index, end).some((body) => /\bdetached\(/.test(body))) found.push(`${file}:${index + 2}: page control ${name} awaits its body inline (run it through detached(), so a dropped request still reaches its settle)`);
+	});
+	return found;
+}
+selfTest(
+	24,
+	(text) => detachedFindings("sample.rs", text),
+	'#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    run_page_control(control, body).await\n}',
+	'#[tracing::instrument(name = "http", skip_all, fields(endpoint = "/x"))]\npub(crate) async fn x(State(state): State<AppState>) -> Response {\n    detached(run_page_control(control, body))\n        .await\n}\n\nasync fn helper() {\n    run_page_control(control, body).await\n}',
+);
+findings.push(...detachedFindings("apps/backend/src/page_controls.rs", lines(path.join(root, "apps/backend/src/page_controls.rs"))));
+
 if (findings.length > 0) {
 	console.error(`check_hygiene: ${findings.length} finding(s):`);
 	for (const finding of findings) console.error(`  ${finding}`);
 	process.exit(1);
 }
-console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render, one hook for a measured value, one log capture");
+console.log("check_hygiene: private modules, no allowances, one Config, documented environment, one fake writer, one skill socket path, live doc paths, live doc routes, documented doc settings, one frame depth, one set of size caps, CPU-time budgets, no focused tests, no engine checks, bounded test awaits, no page under the notch, one runtime ID prefix, stage-relative sizes, one writer per machine, no new lifecycle flags, one composition a render, one hook for a measured value, one log capture, detached page controls");
