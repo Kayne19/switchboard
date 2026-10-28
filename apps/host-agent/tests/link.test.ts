@@ -568,6 +568,28 @@ test("a module call that cannot go out fails at once, not at its deadline", asyn
 	}
 });
 
+test("a module call pending when the link drops fails at once, not at its deadline", async () => {
+	const service = await FakeService.start();
+	const { link } = makeLink(service);
+	let guard: NodeJS.Timeout | undefined;
+	try {
+		link.start();
+		const l = await service.link(0);
+		await l.next((m) => m.type === "synced");
+		const pending = link.relayModuleCall("a1", "tok", "speak", { text: "hi" }, 30_000);
+		await l.next((m) => m.type === "module_call");
+		l.socket.terminate();
+		const waited = new Promise((resolve) => {
+			guard = setTimeout(() => resolve("waited out its deadline"), 5_000);
+		});
+		assert.deepEqual(await Promise.race([pending, waited]), { status: "failed", reason: "failed" });
+	} finally {
+		clearTimeout(guard);
+		link.stop();
+		await service.close();
+	}
+});
+
 test("a frame the host agent cannot use is logged with the reason", async () => {
 	const service = await FakeService.start();
 	const logged: string[] = [];

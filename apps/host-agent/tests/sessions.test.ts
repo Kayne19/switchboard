@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { DaemonCommandError, DaemonUnreachableError } from "../src/daemon_port.ts";
 import { HOST_LINK_PROTOCOL, HostLink } from "../src/link.ts";
-import { clipDetail, type LinkEvent, type SentInput, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
+import { clipDetail, CommandError, type LinkEvent, type SentInput, SessionManager, TOOL_DETAIL_LIMIT } from "../src/sessions.ts";
 import { SkillSocket } from "../src/skill_socket.ts";
 import { FakeDaemon, flush } from "./fake_daemon.ts";
 import { command, FakeService, type Message } from "./fake_service.ts";
@@ -496,6 +496,20 @@ test("a busy session gets follow_up, not prompt; abort is followed by resume_que
 	assert.equal((await manager.prompt(s, "three")).sent_as, "follow_up");
 });
 
+test("the steer command steers the running turn and names it; one without a message is refused", async () => {
+	const { daemon, manager } = setup();
+	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
+	const { turn_id: turnId } = (await manager.handle("prompt", { session: s, message: "hello" })) as SentInput;
+	const sent = await manager.handle("steer", { session: s, message: "and the docs" });
+	assert.deepEqual(sent, { sent_as: "steer", turn_id: turnId });
+	assert.deepEqual(daemon.calls.find((c) => c.op === "steer")?.args, [s, "and the docs"]);
+	await assert.rejects(
+		manager.handle("steer", { session: s }),
+		(e: unknown) => e instanceof CommandError && e.code === "bad_request",
+	);
+	assert.equal(daemon.calls.filter((c) => c.op === "steer").length, 1);
+});
+
 test("set_thinking reports the effective (clamped) level; set_model reads back the model", async () => {
 	const { manager, events } = setup();
 	const s = String(((await manager.createSession("homelab", CONFIG)) as Message).session);
@@ -613,6 +627,17 @@ test("a retry cancelled before it runs is one error, without the words of the ca
 		{ type: "auto_retry_end", success: false, attempt: 1, finalError: "Retry cancelled" },
 	]);
 	assert.deepEqual(heard, ["turn_start", "error Retry cancelled", "turn_end"]);
+});
+
+test("a retry that gives up without naming a cause is one error, retries exhausted", async () => {
+	const heard = await heardOverTurn([
+		{ type: "agent_start" },
+		assistantEnd("", "503 overloaded"),
+		{ type: "agent_end" },
+		{ type: "auto_retry_start", attempt: 1, maxAttempts: 1, delayMs: 2000, errorMessage: "503 overloaded" },
+		{ type: "auto_retry_end", success: false, attempt: 1 },
+	]);
+	assert.deepEqual(heard, ["turn_start", "error retries exhausted", "turn_end"]);
 });
 
 test("a failed model call pi does not retry reaches the service before the turn ends", async () => {
